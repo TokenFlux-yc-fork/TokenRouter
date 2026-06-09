@@ -53,7 +53,12 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key,
+      t: (key: string, params?: Record<string, string | number>) => {
+        if (key === 'marketplace.recentRequestSummary') {
+          return `${params?.success}/${params?.total} succeeded`
+        }
+        return key
+      },
     }),
   }
 })
@@ -271,11 +276,8 @@ describe('ModelMarketplaceView', () => {
     expect(gptCards[0].text()).toContain('OpenAI')
     expect(gptCards[0].text()).toContain(`3 marketplace.groupsStat`)
     expect(gptCards[0].text()).toContain('x1')
-    expect(gptCards[0].find('.card-health-summary').exists()).toBe(false)
-    expect(gptCards[0].find('.marketplace-status-dot').exists()).toBe(false)
-    expect(gptCards[0].find('.card-recent-health-dots').exists()).toBe(false)
-    expect(gptCards[0].text()).not.toContain('marketplace.healthGood')
-    expect(gptCards[0].text()).not.toContain('marketplace.healthModerate')
+    expect(gptCards[0].findAll('.card-recent-health-dot.is-success')).toHaveLength(2)
+    expect(gptCards[0].findAll('.card-recent-health-dot.is-failed')).toHaveLength(1)
   })
 
   it('按品牌、分组、搜索和计费类型过滤品牌分区卡片', async () => {
@@ -321,10 +323,6 @@ describe('ModelMarketplaceView', () => {
     expect(overlay.textContent).toContain('gpt-5.5')
     expect(availabilityCards()).toHaveLength(3)
     expect(availabilityCards()[0].text()).toContain('Plus')
-    expect(availabilityCards()[0].find('.status-dot').exists()).toBe(false)
-    expect(availabilityCards()[0].find('.uptime-percent').exists()).toBe(false)
-    expect(availabilityCards()[0].find('.uptime-bars-wrapper').exists()).toBe(false)
-    expect(overlay.querySelector('.marketplace-request-segment')).toBeNull()
     expect(overlay.textContent).toContain('Plus marketplace.groupPricingDetail')
 
     await availabilityCards()[1].trigger('click')

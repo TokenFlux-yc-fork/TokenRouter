@@ -77,6 +77,7 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementReadRepository,
 	NewUsageLogRepository,
 	wire.Bind(new(service.UsageLogRepository), new(*usageLogRepository)),
+	wire.Bind(new(service.ModelMarketplaceRecentRequestRepository), new(*usageLogRepository)),
 	NewDataShareSessionRepository,
 	NewUsageBillingRepository,
 	NewIdempotencyRepository,

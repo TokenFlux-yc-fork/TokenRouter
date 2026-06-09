@@ -190,6 +190,16 @@
                     <span>{{ availableAvailabilityCount(model) }}/{{ model.availabilities.length }} {{ t('marketplace.groupsStat') }}</span>
                     <span>{{ t('marketplace.lowestGroupPricing') }} {{ formatMultiplier(lowestRateMultiplier(model)) }}</span>
                   </span>
+                  <span class="card-health-summary" :title="modelRecentHealthTitle(model)" :aria-label="modelRecentHealthTitle(model)">
+                    <span><span :class="modelStatusDotClass(model)"></span>{{ modelStateLabel(model) }}</span>
+                    <span class="card-recent-health-dots" aria-hidden="true">
+                      <span
+                        v-for="dot in modelRecentHealthDots(model)"
+                        :key="dot.key"
+                        :class="dot.class"
+                      ></span>
+                    </span>
+                  </span>
                 </div>
               </article>
             </div>
@@ -258,7 +268,27 @@
                   @keydown.enter.prevent="selectAvailability(availability.key)"
                   @keydown.space.prevent="selectAvailability(availability.key)"
                 >
-                  <div class="group-title">{{ availability.group.name }}</div>
+                  <div class="uptime-header">
+                    <div class="group-title">
+                      <span :class="availabilityStatusDotClass(availability)"></span>
+                      {{ availability.group.name }}
+                    </div>
+                    <div class="uptime-percent">{{ requestSuccessSummary(availability) }}</div>
+                  </div>
+
+                  <div
+                    :ref="(el) => setRequestBarRef(availability.key, el)"
+                    class="uptime-bars-wrapper"
+                    :class="{ 'is-empty': !hasRecentRequests(availability) }"
+                    :title="requestStatusBarTitle(availability)"
+                    :aria-label="requestStatusBarTitle(availability)"
+                  >
+                    <span
+                      v-for="bar in availabilityRequestSegments(availability)"
+                      :key="bar.key"
+                      :class="bar.class"
+                    ></span>
+                  </div>
 
                   <div class="metrics-row">
                     <div class="concurrency-wrapper">
@@ -493,6 +523,20 @@ interface MarketplaceBrandView {
   models: MarketplaceModelView[]
 }
 
+interface MarketplaceRequestSegment {
+  key: string
+  class: string
+}
+
+interface MarketplaceRecentHealthDot {
+  key: string
+  class: string
+}
+
+const requestSegmentWidth = 6
+const requestSegmentGap = 2
+const fallbackRequestSegmentCount = 24
+
 const { t } = useI18n()
 const { balanceUnitName, balanceUnitSymbol } = useBalanceDisplay()
 const { copyToClipboard } = useClipboard()
@@ -510,6 +554,10 @@ const selectedGroupId = ref<number | 'all'>('all')
 const selectedPricing = ref<SelectedPricingModel | null>(null)
 const selectedModelKey = ref<string | null>(null)
 const selectedAvailabilityKey = ref<string | null>(null)
+const requestBarWidths = ref<Record<string, number>>({})
+const requestBarElements = new Map<string, HTMLElement>()
+const requestBarKeysByElement = new WeakMap<HTMLElement, string>()
+let requestBarResizeObserver: ResizeObserver | null = null
 
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 const isAdmin = computed(() => authStore.isAdmin)
@@ -1019,6 +1067,12 @@ function groupCardClass(availability: MarketplaceModelAvailability): string {
   return `group-card${selectedMarketplaceAvailability.value?.key === availability.key ? ' active' : ''}`
 }
 
+function availabilityStatusDotClass(availability: MarketplaceModelAvailability): string {
+  const percent = availabilityPercent(availability)
+  const state = percent >= 85 ? 'good' : percent >= 35 ? 'warn' : 'bad'
+  return `status-dot is-${state}`
+}
+
 function availabilityProgressClass(availability: MarketplaceModelAvailability): string {
   const ratio = capacityUsageRatio(availability.group)
   if (ratio >= 0.85 || availability.status === 'busy') {
@@ -1034,10 +1088,96 @@ function availableAvailabilityCount(model: MarketplaceModelView): number {
   return model.availabilities.filter((availability) => availability.status === 'available').length
 }
 
+function availableRatioForAvailability(availability: MarketplaceModelAvailability): number {
+  if (availability.status === 'unpriced') {
+    return 0
+  }
+  if (availability.status === 'busy') {
+    return 0.12
+  }
+  return 1 - capacityUsageRatio(availability.group)
+}
+
+function availabilityPercent(availability: MarketplaceModelAvailability): number {
+  return Math.round(availableRatioForAvailability(availability) * 1000) / 10
+}
+
+function modelAvailabilityPercent(model: MarketplaceModelView): number {
+  if (model.availabilities.length === 0) {
+    return 0
+  }
+  const average = model.availabilities.reduce((total, availability) => (
+    total + availableRatioForAvailability(availability)
+  ), 0) / model.availabilities.length
+  return Math.round(average * 1000) / 10
+}
+
 function bestPricedAvailability(model: MarketplaceModelView): MarketplaceModelAvailability | null {
   return model.availabilities.find((availability) => availability.status === 'available' && hasDisplayPricing(availability.model.pricing))
     ?? model.availabilities.find((availability) => hasDisplayPricing(availability.model.pricing))
     ?? null
+}
+
+function modelState(model: MarketplaceModelView): 'good' | 'warn' | 'bad' {
+  const percent = modelAvailabilityPercent(model)
+  if (availableAvailabilityCount(model) === 0 || percent < 35) {
+    return 'bad'
+  }
+  if (percent < 85 || availableAvailabilityCount(model) < model.availabilities.length) {
+    return 'warn'
+  }
+  return 'good'
+}
+
+function modelStateLabel(model: MarketplaceModelView): string {
+  const state = modelState(model)
+  if (state === 'good') {
+    return t('marketplace.healthGood')
+  }
+  if (state === 'bad') {
+    return t('marketplace.statusBusy')
+  }
+  return t('marketplace.healthModerate')
+}
+
+function modelStatusDotClass(model: MarketplaceModelView): string {
+  return `marketplace-status-dot is-${modelState(model)}`
+}
+
+function recentRequestsForModel(model: MarketplaceModelView) {
+  return model.availabilities
+    .flatMap((availability) => availability.model.recent_requests ?? [])
+    .sort((left, right) => new Date(left.created_at).getTime() - new Date(right.created_at).getTime())
+}
+
+function modelRecentHealthDots(model: MarketplaceModelView): MarketplaceRecentHealthDot[] {
+  const recentRequests = recentRequestsForModel(model).slice(-3)
+  const leadingEmptyCount = Math.max(0, 3 - recentRequests.length)
+  return Array.from({ length: 3 }, (_, index) => {
+    const request = recentRequests[index - leadingEmptyCount]
+    if (!request) {
+      return {
+        key: `${model.key}-recent-empty-${index}`,
+        class: 'card-recent-health-dot is-empty',
+      }
+    }
+    return {
+      key: `${model.key}-recent-${index}-${request.created_at}`,
+      class: `card-recent-health-dot is-${request.success ? 'success' : 'failed'}`,
+    }
+  })
+}
+
+function modelRecentHealthTitle(model: MarketplaceModelView): string {
+  const recentRequests = recentRequestsForModel(model).slice(-3)
+  if (recentRequests.length === 0) {
+    return `${t('marketplace.recentThreeRequests')} · ${t('marketplace.noRecentRequests')}`
+  }
+  const successCount = recentRequests.filter((request) => request.success).length
+  return `${t('marketplace.recentThreeRequests')} · ${t('marketplace.recentRequestSummary', {
+    success: successCount,
+    total: recentRequests.length,
+  })}`
 }
 
 function modelPricingKindLabel(model: MarketplaceModelView): string {
@@ -1050,6 +1190,100 @@ function capacityMetricLabel(used?: number, max?: number): string {
     return t('marketplace.capacityUnlimited')
   }
   return `${used ?? 0}/${max}`
+}
+
+function requestSegmentCountForAvailability(availability: MarketplaceModelAvailability): number {
+  const width = requestBarWidths.value[availability.key]
+  if (!width || width <= 0) {
+    return fallbackRequestSegmentCount
+  }
+  return Math.max(1, Math.floor((width + requestSegmentGap) / (requestSegmentWidth + requestSegmentGap)))
+}
+
+function recentRequestsForAvailability(availability: MarketplaceModelAvailability) {
+  return availability.model.recent_requests ?? []
+}
+
+function hasRecentRequests(availability: MarketplaceModelAvailability): boolean {
+  return recentRequestsForAvailability(availability).length > 0
+}
+
+function availabilityRequestSegments(availability: MarketplaceModelAvailability): MarketplaceRequestSegment[] {
+  const segmentCount = requestSegmentCountForAvailability(availability)
+  const recentRequests = recentRequestsForAvailability(availability)
+  if (recentRequests.length === 0) {
+    return Array.from({ length: segmentCount }, (_, index) => ({
+      key: `${availability.key}-request-empty-${index}`,
+      class: 'marketplace-request-segment is-empty',
+    }))
+  }
+
+  const visibleRequests = recentRequests.slice(-segmentCount)
+  const leadingEmptyCount = Math.max(0, segmentCount - visibleRequests.length)
+  return Array.from({ length: segmentCount }, (_, index) => {
+    const request = visibleRequests[index - leadingEmptyCount]
+    if (!request) {
+      return {
+        key: `${availability.key}-request-pad-${index}`,
+        class: 'marketplace-request-segment is-empty',
+      }
+    }
+    return {
+      key: `${availability.key}-request-${index}-${request.created_at}`,
+      class: `marketplace-request-segment is-${request.success ? 'success' : 'failed'}`,
+    }
+  })
+}
+
+function requestSuccessSummary(availability: MarketplaceModelAvailability): string {
+  const recentRequests = recentRequestsForAvailability(availability)
+  if (recentRequests.length === 0) {
+    return t('marketplace.noRecentRequests')
+  }
+  const successCount = recentRequests.filter((request) => request.success).length
+  return t('marketplace.recentRequestSummary', {
+    success: successCount,
+    total: recentRequests.length,
+  })
+}
+
+function updateRequestBarWidth(key: string, element: HTMLElement) {
+  const width = Math.round(element.getBoundingClientRect().width)
+  if (width > 0 && requestBarWidths.value[key] !== width) {
+    requestBarWidths.value = { ...requestBarWidths.value, [key]: width }
+  }
+}
+
+function setRequestBarRef(key: string, element: unknown) {
+  const previous = requestBarElements.get(key)
+
+  if (!(element instanceof HTMLElement)) {
+    if (previous) {
+      requestBarResizeObserver?.unobserve(previous)
+      requestBarKeysByElement.delete(previous)
+      requestBarElements.delete(key)
+    }
+    return
+  }
+
+  if (previous === element) {
+    updateRequestBarWidth(key, element)
+    return
+  }
+
+  if (previous) {
+    requestBarResizeObserver?.unobserve(previous)
+    requestBarKeysByElement.delete(previous)
+  }
+
+  requestBarElements.set(key, element)
+  requestBarKeysByElement.set(element, key)
+  requestBarResizeObserver?.observe(element)
+  updateRequestBarWidth(key, element)
+}
+
+function requestStatusBarTitle(availability: MarketplaceModelAvailability): string {
+  return `${t('marketplace.requestStatusSource')} · ${requestSuccessSummary(availability)}`
 }
 
 function lowestRateMultiplier(model: MarketplaceModelView): number {
@@ -1348,6 +1582,25 @@ async function fetchMarketplace() {
 
 onMounted(async () => {
   initTheme()
+  if (typeof ResizeObserver !== 'undefined') {
+    requestBarResizeObserver = new ResizeObserver((entries) => {
+      const nextWidths: Record<string, number> = {}
+      for (const entry of entries) {
+        const element = entry.target instanceof HTMLElement ? entry.target : null
+        const key = element ? requestBarKeysByElement.get(element) : undefined
+        if (key) {
+          nextWidths[key] = Math.round(entry.contentRect.width)
+        }
+      }
+      if (Object.keys(nextWidths).length > 0) {
+        requestBarWidths.value = { ...requestBarWidths.value, ...nextWidths }
+      }
+    })
+    for (const [key, element] of requestBarElements.entries()) {
+      requestBarResizeObserver.observe(element)
+      updateRequestBarWidth(key, element)
+    }
+  }
   window.addEventListener('keydown', handleMarketplaceKeydown)
   authStore.checkAuth()
   if (!appStore.publicSettingsLoaded) {
@@ -1358,6 +1611,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleMarketplaceKeydown)
+  requestBarResizeObserver?.disconnect()
+  requestBarResizeObserver = null
+  requestBarElements.clear()
 })
 </script>
 
@@ -1734,6 +1990,71 @@ onUnmounted(() => {
   color: rgb(148, 163, 184);
 }
 
+.card-health-summary {
+  gap: 8px;
+}
+
+.card-health-summary > span:first-child {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-recent-health-dots {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.card-recent-health-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgb(16, 185, 129);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, .12);
+}
+
+.card-recent-health-dot.is-failed {
+  background: rgb(239, 68, 68);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, .12);
+}
+
+.card-recent-health-dot.is-empty {
+  background: rgb(203, 213, 225);
+  box-shadow: none;
+  opacity: .62;
+}
+
+.dark .card-recent-health-dot.is-empty {
+  background: rgb(71, 85, 105);
+  opacity: .72;
+}
+
+.marketplace-status-dot,
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  margin-right: 4px;
+  border-radius: 999px;
+  background: rgb(16, 185, 129);
+}
+
+.marketplace-status-dot.is-warn,
+.status-dot.is-warn {
+  background: rgb(251, 191, 36);
+}
+
+.marketplace-status-dot.is-bad,
+.status-dot.is-bad {
+  background: rgb(239, 68, 68);
+}
+
 .detail-overlay {
   position: fixed;
   inset: 0;
@@ -2012,6 +2333,14 @@ onUnmounted(() => {
   background: rgb(14, 165, 233);
 }
 
+.uptime-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
 .group-title {
   display: flex;
   min-width: 0;
@@ -2027,6 +2356,58 @@ onUnmounted(() => {
 
 .dark .group-title {
   color: rgb(255, 255, 255);
+}
+
+.uptime-percent {
+  flex-shrink: 0;
+  color: rgb(107, 114, 128);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+}
+
+.dark .uptime-percent {
+  color: rgb(148, 163, 184);
+}
+
+.uptime-bars-wrapper {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 2px;
+  width: 100%;
+  height: 32px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.marketplace-request-segment {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 100%;
+  min-width: 6px;
+  border-radius: 2px;
+  background: rgb(16, 185, 129);
+  opacity: .90;
+  transition: opacity .2s ease, filter .2s ease, transform .2s ease;
+}
+
+.marketplace-request-segment:hover {
+  opacity: 1;
+  filter: brightness(1.1);
+}
+
+.marketplace-request-segment.is-failed {
+  background: rgb(239, 68, 68);
+}
+
+.marketplace-request-segment.is-empty {
+  background: rgb(229, 231, 235);
+  opacity: .65;
+}
+
+.dark .marketplace-request-segment.is-empty {
+  background: rgb(51, 65, 85);
+  opacity: .75;
 }
 
 .metrics-row {
@@ -2254,6 +2635,7 @@ onUnmounted(() => {
 
   .brand-section-header,
   .detail-modal-header,
+  .uptime-header,
   .metrics-row {
     align-items: flex-start;
     flex-direction: column;
@@ -2285,6 +2667,7 @@ onUnmounted(() => {
   .detail-overlay,
   .detail-modal,
   .group-card,
+  .marketplace-request-segment,
   .close-btn {
     transition-duration: 1ms;
   }
