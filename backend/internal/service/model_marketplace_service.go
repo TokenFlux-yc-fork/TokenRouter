@@ -50,7 +50,6 @@ func NewModelMarketplaceService(
 	gatewayService *GatewayService,
 	billingService *BillingService,
 	capacityService *GroupCapacityService,
-	_ any,
 ) *ModelMarketplaceService {
 	return &ModelMarketplaceService{
 		groupRepo:       groupRepo,
