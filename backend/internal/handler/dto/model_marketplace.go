@@ -1,10 +1,6 @@
 package dto
 
-import (
-	"time"
-
-	"github.com/TokenFlux/TokenRouter/internal/service"
-)
+import "github.com/TokenFlux/TokenRouter/internal/service"
 
 type ModelMarketplaceStats struct {
 	TodayTokens int64 `json:"today_tokens"`
@@ -48,10 +44,9 @@ type ModelMarketplacePricingInterval struct {
 }
 
 type ModelMarketplaceModel struct {
-	ID             string                          `json:"id"`
-	DisplayName    string                          `json:"display_name"`
-	Pricing        ModelMarketplacePricing         `json:"pricing"`
-	RecentRequests []ModelMarketplaceRecentRequest `json:"recent_requests,omitempty"`
+	ID          string                  `json:"id"`
+	DisplayName string                  `json:"display_name"`
+	Pricing     ModelMarketplacePricing `json:"pricing"`
 }
 
 type ModelMarketplaceCapacity struct {
@@ -61,11 +56,6 @@ type ModelMarketplaceCapacity struct {
 	SessionsMax     int `json:"sessions_max"`
 	RPMUsed         int `json:"rpm_used"`
 	RPMMax          int `json:"rpm_max"`
-}
-
-type ModelMarketplaceRecentRequest struct {
-	Success   bool      `json:"success"`
-	CreatedAt time.Time `json:"created_at"`
 }
 
 type ModelMarketplaceGroup struct {
@@ -89,19 +79,10 @@ func ModelMarketplaceGroupsFromService(groups []service.ModelMarketplaceGroup) [
 	for _, group := range groups {
 		models := make([]ModelMarketplaceModel, 0, len(group.Models))
 		for _, model := range group.Models {
-			recentRequests := make([]ModelMarketplaceRecentRequest, 0, len(model.RecentRequests))
-			for _, request := range model.RecentRequests {
-				recentRequests = append(recentRequests, ModelMarketplaceRecentRequest{
-					Success:   request.Success,
-					CreatedAt: request.CreatedAt,
-				})
-			}
-
 			models = append(models, ModelMarketplaceModel{
-				ID:             model.ID,
-				DisplayName:    model.DisplayName,
-				Pricing:        modelMarketplacePricingFromService(model.Pricing),
-				RecentRequests: recentRequests,
+				ID:          model.ID,
+				DisplayName: model.DisplayName,
+				Pricing:     modelMarketplacePricingFromService(model.Pricing),
 			})
 		}
 
