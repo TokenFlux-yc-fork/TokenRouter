@@ -41,6 +41,7 @@ func TestModelMarketplaceServiceListPublicDoesNotReadRecentRequestHealth(t *test
 		nil,
 		nil,
 		nil,
+		struct{}{},
 	)
 
 	groups, err := svc.ListPublic(context.Background())
