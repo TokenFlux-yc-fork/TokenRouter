@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -2776,6 +2777,9 @@ func (a *qoderOpenAIToolCallAccumulator) AppendDelta(event qoder.SSEEvent) []any
 		return []any{}
 	}
 	event = normalizeQoderOutboundToolCallEvent(event)
+	if qoderToolCallDeltaIsEmptyPlaceholder(event) {
+		return []any{}
+	}
 	if event.ToolCallID == "" && !event.HasToolCallIndex && event.ToolName == "" && event.ToolType == "" && event.Arguments != "" && len(a.calls) > 1 {
 		return []any{}
 	}
@@ -2856,12 +2860,24 @@ func (a *qoderOpenAIToolCallAccumulator) resolveIndex(event qoder.SSEEvent) int 
 	if event.HasToolCallIndex && event.ToolCallIndex >= 0 {
 		if index, ok := a.slotByUpstreamIndex[event.ToolCallIndex]; ok && index >= 0 && index < len(a.calls) {
 			if event.ToolCallID == "" || a.calls[index].ID == "" || a.calls[index].ID == event.ToolCallID {
+				if a.shouldStartNewToolCallInSlot(event, index) {
+					return len(a.calls)
+				}
 				return index
+			}
+			if event.ToolCallID != "" && a.calls[index].ID != "" && a.calls[index].ID != event.ToolCallID {
+				return len(a.calls)
 			}
 		}
 	}
 	if event.HasToolCallIndex && event.ToolCallIndex >= 0 && event.ToolCallID == "" && (event.ToolName != "" || event.ToolType != "") {
+		if event.ToolCallIndex < len(a.calls) && a.shouldStartNewToolCallInSlot(event, event.ToolCallIndex) {
+			return len(a.calls)
+		}
 		return event.ToolCallIndex
+	}
+	if a.shouldStartImplicitToolCall(event) {
+		return len(a.calls)
 	}
 	if len(a.calls) > 0 {
 		last := &a.calls[len(a.calls)-1]
@@ -2876,6 +2892,38 @@ func (a *qoderOpenAIToolCallAccumulator) resolveIndex(event qoder.SSEEvent) int 
 		return 0
 	}
 	return len(a.calls)
+}
+
+func (a *qoderOpenAIToolCallAccumulator) shouldStartImplicitToolCall(event qoder.SSEEvent) bool {
+	if a == nil || len(a.calls) == 0 || event.ToolCallID != "" || event.HasToolCallIndex {
+		return false
+	}
+	return a.shouldStartNewToolCallInSlot(event, len(a.calls)-1)
+}
+
+func (a *qoderOpenAIToolCallAccumulator) shouldStartNewToolCallInSlot(event qoder.SSEEvent, index int) bool {
+	if a == nil || index < 0 || index >= len(a.calls) || event.ToolCallID != "" {
+		return false
+	}
+	if event.ToolName == "" && event.ToolType == "" {
+		return false
+	}
+	existing := a.calls[index]
+	if existing.ID == "" && existing.Name == "" && existing.Arguments == "" {
+		return false
+	}
+	if qoderToolArgumentsAreCompleteJSON(existing.Arguments) {
+		return true
+	}
+	return existing.Name != "" && existing.Arguments == "" && event.Arguments == ""
+}
+
+func qoderToolArgumentsAreCompleteJSON(arguments string) bool {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" {
+		return false
+	}
+	return json.Valid([]byte(trimmed))
 }
 
 func mergeQoderToolArguments(existing string, delta string) string {
@@ -2894,6 +2942,10 @@ func mergeQoderToolArguments(existing string, delta string) string {
 	return existing + delta
 }
 
+func qoderToolCallDeltaIsEmptyPlaceholder(event qoder.SSEEvent) bool {
+	return event.ToolCallID == "" && event.ToolName == "" && event.Arguments == "" && event.ToolType != ""
+}
+
 func (a *qoderOpenAIToolCallAccumulator) bindUpstreamIndex(event qoder.SSEEvent, slot int) {
 	if a == nil || !event.HasToolCallIndex || event.ToolCallIndex < 0 || slot < 0 || slot >= len(a.calls) {
 		return
@@ -2905,6 +2957,7 @@ func (a *qoderOpenAIToolCallAccumulator) bindUpstreamIndex(event qoder.SSEEvent,
 		existingID := a.calls[existingSlot].ID
 		slotID := a.calls[slot].ID
 		if existingID != "" && slotID != "" && existingID != slotID {
+			a.slotByUpstreamIndex[event.ToolCallIndex] = slot
 			return
 		}
 	}
@@ -3379,7 +3432,13 @@ func WriteQoderResponsesStreamResponse(ctx context.Context, c *gin.Context, mode
 		return nil
 	}
 	closeTools := func() error {
-		for index, state := range toolStates {
+		indexes := make([]int, 0, len(toolStates))
+		for index := range toolStates {
+			indexes = append(indexes, index)
+		}
+		sort.Ints(indexes)
+		for _, index := range indexes {
+			state := toolStates[index]
 			if state == nil {
 				continue
 			}

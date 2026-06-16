@@ -30,6 +30,56 @@ const qoderDSMLToolCallFixture = `<｜｜DSML｜｜tool_calls>
 </｜｜DSML｜｜invoke>
 </｜｜DSML｜｜tool_calls>`
 
+func qoderNoIndexNamedParallelToolCallEventsForTest() []qoder.SSEEvent {
+	return []qoder.SSEEvent{
+		{Type: "tool_call_delta", ToolName: "Bash", Arguments: `{"command":"pwd && date \"+%Y-%m-%d %H:%M:%S\" && uname -srm","description":"Show current dir, time, system info"}`},
+		{Type: "tool_call_delta", ToolName: "Bash", Arguments: `{"command":"ls -la","description":"List files in current directory"}`},
+		{Type: "tool_call_delta", ToolName: "glob", Arguments: `{"pattern":"**/*.md"}`},
+		{IsDone: true},
+	}
+}
+
+func qoderNoIndexNamedParallelToolCallsWrappedSSEForTest(t *testing.T) string {
+	t.Helper()
+	return qoderWrappedSSELineForTest(t, map[string]any{"choices": []any{
+		map[string]any{"delta": map[string]any{"tool_calls": []any{
+			map[string]any{"type": "function", "function": map[string]any{"name": "Bash", "arguments": `{"command":"pwd && date \"+%Y-%m-%d %H:%M:%S\" && uname -srm","description":"Show current dir, time, system info"}`}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "Bash", "arguments": `{"command":"ls -la","description":"List files in current directory"}`}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "glob", "arguments": `{"pattern":"**/*.md"}`}},
+		}}},
+	}}) +
+		"data: {\"body\":\"[DONE]\"}\n\n"
+}
+
+func qoderRepeatedIndexNamedParallelToolCallEventsForTest() []qoder.SSEEvent {
+	return []qoder.SSEEvent{
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolName: "Bash", Arguments: `{"command":"pwd","description":"Print working directory"}`},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolName: "Bash", Arguments: `{"command":"printf OPENCODE_PARALLEL_OK","description":"Print parallel OK string"}`},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolName: "glob", Arguments: `{"pattern":"docs/*.md"}`},
+		{IsDone: true},
+	}
+}
+
+func qoderRepeatedIndexNamedParallelToolCallsWrappedSSEForTest(t *testing.T) string {
+	t.Helper()
+	return qoderWrappedSSELineForTest(t, map[string]any{"choices": []any{
+		map[string]any{"delta": map[string]any{"tool_calls": []any{
+			map[string]any{"index": 0, "type": "function", "function": map[string]any{"name": "Bash", "arguments": `{"command":"pwd","description":"Print working directory"}`}},
+		}}},
+	}}) +
+		qoderWrappedSSELineForTest(t, map[string]any{"choices": []any{
+			map[string]any{"delta": map[string]any{"tool_calls": []any{
+				map[string]any{"index": 0, "type": "function", "function": map[string]any{"name": "Bash", "arguments": `{"command":"printf OPENCODE_PARALLEL_OK","description":"Print parallel OK string"}`}},
+			}}},
+		}}) +
+		qoderWrappedSSELineForTest(t, map[string]any{"choices": []any{
+			map[string]any{"delta": map[string]any{"tool_calls": []any{
+				map[string]any{"index": 0, "type": "function", "function": map[string]any{"name": "glob", "arguments": `{"pattern":"docs/*.md"}`}},
+			}}},
+		}}) +
+		"data: {\"body\":\"[DONE]\"}\n\n"
+}
+
 var qoderCachedUsageEventForTest = qoder.SSEEvent{
 	Type:             "usage",
 	PromptTokens:     66637,
@@ -598,6 +648,40 @@ func TestQoderGatewayResponsesMapsUpstreamToolNameToDeclaredFunctionCall(t *test
 	require.Equal(t, "bash", tools[0].(map[string]any)["function"].(map[string]any)["name"])
 }
 
+func TestQoderGatewayAssemblesResponsesKeepsNoIndexNamedParallelFunctionCalls(t *testing.T) {
+	body, err := BuildQoderResponsesResponse("claude-opus-4-6", qoderNoIndexNamedParallelToolCallEventsForTest())
+	require.NoError(t, err)
+
+	functionCalls := gjson.GetBytes(body, `output.#(type=="function_call")#`).Array()
+	require.Len(t, functionCalls, 3, string(body))
+	require.Equal(t, "Bash", functionCalls[0].Get("name").String())
+	require.JSONEq(t, `{"command":"pwd && date \"+%Y-%m-%d %H:%M:%S\" && uname -srm","description":"Show current dir, time, system info"}`, functionCalls[0].Get("arguments").String())
+	require.Equal(t, "Bash", functionCalls[1].Get("name").String())
+	require.JSONEq(t, `{"command":"ls -la","description":"List files in current directory"}`, functionCalls[1].Get("arguments").String())
+	require.Equal(t, "glob", functionCalls[2].Get("name").String())
+	require.JSONEq(t, `{"pattern":"**/*.md"}`, functionCalls[2].Get("arguments").String())
+	for _, call := range functionCalls {
+		require.NotContains(t, call.Get("arguments").String(), `}{`)
+	}
+}
+
+func TestQoderGatewayAssemblesResponsesKeepsRepeatedIndexNamedParallelFunctionCalls(t *testing.T) {
+	body, err := BuildQoderResponsesResponse("claude-opus-4-6", qoderRepeatedIndexNamedParallelToolCallEventsForTest())
+	require.NoError(t, err)
+
+	functionCalls := gjson.GetBytes(body, `output.#(type=="function_call")#`).Array()
+	require.Len(t, functionCalls, 3, string(body))
+	require.Equal(t, "Bash", functionCalls[0].Get("name").String())
+	require.JSONEq(t, `{"command":"pwd","description":"Print working directory"}`, functionCalls[0].Get("arguments").String())
+	require.Equal(t, "Bash", functionCalls[1].Get("name").String())
+	require.JSONEq(t, `{"command":"printf OPENCODE_PARALLEL_OK","description":"Print parallel OK string"}`, functionCalls[1].Get("arguments").String())
+	require.Equal(t, "glob", functionCalls[2].Get("name").String())
+	require.JSONEq(t, `{"pattern":"docs/*.md"}`, functionCalls[2].Get("arguments").String())
+	for _, call := range functionCalls {
+		require.NotContains(t, call.Get("arguments").String(), `}{`)
+	}
+}
+
 func TestQoderGatewayResponsesStreamsDeclaredFunctionCallEvents(t *testing.T) {
 	account, svc, client := newQoderGatewayForwardTestService()
 	client.body = qoderWrappedSSELineForTest(t, map[string]any{"choices": []any{
@@ -633,6 +717,74 @@ func TestQoderGatewayResponsesStreamsDeclaredFunctionCallEvents(t *testing.T) {
 	require.Equal(t, "bash", added.Get("item.name").String())
 	require.JSONEq(t, `{"command":"pwd"}`, argsDone.Get("arguments").String())
 	require.NotContains(t, response, `"name":"Bash"`)
+}
+
+func TestQoderGatewayWritesResponsesStreamKeepsNoIndexNamedParallelFunctionCalls(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	resp := &http.Response{
+		Body: io.NopCloser(bytes.NewBufferString(qoderNoIndexNamedParallelToolCallsWrappedSSEForTest(t))),
+	}
+
+	result, err := WriteQoderResponsesStreamResponse(context.Background(), c, "claude-opus-4-6", resp)
+	require.NoError(t, err)
+	require.True(t, result.HasOutput)
+
+	events := qoderResponsesStreamEventsForTest(t, rec.Body.String())
+	addedNames := make([]string, 0)
+	argsDone := make([]string, 0)
+	for _, event := range events {
+		switch event.Get("type").String() {
+		case "response.output_item.added":
+			if event.Get("item.type").String() == "function_call" {
+				addedNames = append(addedNames, event.Get("item.name").String())
+			}
+		case "response.function_call_arguments.done":
+			arguments := event.Get("arguments").String()
+			require.NotContains(t, arguments, `}{`)
+			argsDone = append(argsDone, arguments)
+		}
+	}
+	require.Equal(t, []string{"Bash", "Bash", "glob"}, addedNames)
+	require.Len(t, argsDone, 3)
+	require.JSONEq(t, `{"command":"pwd && date \"+%Y-%m-%d %H:%M:%S\" && uname -srm","description":"Show current dir, time, system info"}`, argsDone[0])
+	require.JSONEq(t, `{"command":"ls -la","description":"List files in current directory"}`, argsDone[1])
+	require.JSONEq(t, `{"pattern":"**/*.md"}`, argsDone[2])
+}
+
+func TestQoderGatewayWritesResponsesStreamKeepsRepeatedIndexNamedParallelFunctionCalls(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	resp := &http.Response{
+		Body: io.NopCloser(bytes.NewBufferString(qoderRepeatedIndexNamedParallelToolCallsWrappedSSEForTest(t))),
+	}
+
+	result, err := WriteQoderResponsesStreamResponse(context.Background(), c, "claude-opus-4-6", resp)
+	require.NoError(t, err)
+	require.True(t, result.HasOutput)
+
+	events := qoderResponsesStreamEventsForTest(t, rec.Body.String())
+	addedNames := make([]string, 0)
+	argsDone := make([]string, 0)
+	for _, event := range events {
+		switch event.Get("type").String() {
+		case "response.output_item.added":
+			if event.Get("item.type").String() == "function_call" {
+				addedNames = append(addedNames, event.Get("item.name").String())
+			}
+		case "response.function_call_arguments.done":
+			arguments := event.Get("arguments").String()
+			require.NotContains(t, arguments, `}{`)
+			argsDone = append(argsDone, arguments)
+		}
+	}
+	require.Equal(t, []string{"Bash", "Bash", "glob"}, addedNames)
+	require.Len(t, argsDone, 3)
+	require.JSONEq(t, `{"command":"pwd","description":"Print working directory"}`, argsDone[0])
+	require.JSONEq(t, `{"command":"printf OPENCODE_PARALLEL_OK","description":"Print parallel OK string"}`, argsDone[1])
+	require.JSONEq(t, `{"pattern":"docs/*.md"}`, argsDone[2])
 }
 
 func TestQoderGatewayClaudeRequestsWithoutSessionDoNotReuseByFirstText(t *testing.T) {
@@ -2015,6 +2167,128 @@ func TestQoderGatewayWritesAnthropicToolUseStreamKeepsSplitArgumentsInOneBlock(t
 	require.Contains(t, body, `"stop_reason":"tool_use"`)
 }
 
+func TestQoderGatewayWritesAnthropicToolUseStreamKeepsNoIndexNamedParallelToolCalls(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	err := WriteQoderAnthropicStream(c, "claude-opus-4-6", qoderNoIndexNamedParallelToolCallEventsForTest())
+	require.NoError(t, err)
+
+	streamEvents := qoderAnthropicStreamEventsForTest(t, rec.Body.String())
+	toolNames := make([]string, 0)
+	inputDeltas := make([]string, 0)
+	for _, event := range streamEvents {
+		switch event.Event {
+		case "content_block_start":
+			block, _ := event.Data["content_block"].(map[string]any)
+			if block["type"] == "tool_use" {
+				toolNames = append(toolNames, block["name"].(string))
+			}
+		case "content_block_delta":
+			delta, _ := event.Data["delta"].(map[string]any)
+			if delta["type"] == "input_json_delta" {
+				partial := delta["partial_json"].(string)
+				require.NotContains(t, partial, `}{`)
+				inputDeltas = append(inputDeltas, partial)
+			}
+		}
+	}
+	require.Equal(t, []string{"Bash", "Bash", "glob"}, toolNames)
+	require.Len(t, inputDeltas, 3)
+	require.JSONEq(t, `{"command":"pwd && date \"+%Y-%m-%d %H:%M:%S\" && uname -srm","description":"Show current dir, time, system info"}`, inputDeltas[0])
+	require.JSONEq(t, `{"command":"ls -la","description":"List files in current directory"}`, inputDeltas[1])
+	require.JSONEq(t, `{"pattern":"**/*.md"}`, inputDeltas[2])
+	require.Contains(t, rec.Body.String(), `"stop_reason":"tool_use"`)
+}
+
+func TestQoderGatewayWritesAnthropicToolUseStreamKeepsRepeatedIndexNamedParallelToolCalls(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	err := WriteQoderAnthropicStream(c, "claude-opus-4-6", qoderRepeatedIndexNamedParallelToolCallEventsForTest())
+	require.NoError(t, err)
+
+	streamEvents := qoderAnthropicStreamEventsForTest(t, rec.Body.String())
+	toolNames := make([]string, 0)
+	inputDeltas := make([]string, 0)
+	for _, event := range streamEvents {
+		switch event.Event {
+		case "content_block_start":
+			block, _ := event.Data["content_block"].(map[string]any)
+			if block["type"] == "tool_use" {
+				toolNames = append(toolNames, block["name"].(string))
+			}
+		case "content_block_delta":
+			delta, _ := event.Data["delta"].(map[string]any)
+			if delta["type"] == "input_json_delta" {
+				partial := delta["partial_json"].(string)
+				require.NotContains(t, partial, `}{`)
+				inputDeltas = append(inputDeltas, partial)
+			}
+		}
+	}
+	require.Equal(t, []string{"Bash", "Bash", "glob"}, toolNames)
+	require.Len(t, inputDeltas, 3)
+	require.JSONEq(t, `{"command":"pwd","description":"Print working directory"}`, inputDeltas[0])
+	require.JSONEq(t, `{"command":"printf OPENCODE_PARALLEL_OK","description":"Print parallel OK string"}`, inputDeltas[1])
+	require.JSONEq(t, `{"pattern":"docs/*.md"}`, inputDeltas[2])
+	require.Contains(t, rec.Body.String(), `"stop_reason":"tool_use"`)
+}
+
+func TestQoderGatewayWritesAnthropicToolUseStreamKeepsSameIndexNewIDSplitArgumentsAligned(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	events := []qoder.SSEEvent{
+		{Type: "reasoning_delta", Text: "thinking"},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolCallID: "call_1", ToolType: "function", ToolName: "bash"},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolType: "function"},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, Arguments: `{"command":"pwd`},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, Arguments: `"}`},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolCallID: "call_2", ToolType: "function", ToolName: "bash"},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolType: "function"},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, Arguments: `{"command":"printf OPENCODE_`},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, Arguments: `PARALLEL_OK"}`},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolCallID: "call_3", ToolType: "function", ToolName: "glob"},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, ToolType: "function"},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, Arguments: `{"pattern":"docs/*.md`},
+		{Type: "tool_call_delta", ToolCallIndex: 0, HasToolCallIndex: true, Arguments: `"}`},
+		{IsDone: true},
+	}
+
+	err := WriteQoderAnthropicStream(c, "claude-opus-4-6", events)
+	require.NoError(t, err)
+
+	streamEvents := qoderAnthropicStreamEventsForTest(t, rec.Body.String())
+	toolNames := make([]string, 0)
+	inputDeltas := make([]string, 0)
+	for _, event := range streamEvents {
+		switch event.Event {
+		case "content_block_start":
+			block, _ := event.Data["content_block"].(map[string]any)
+			if block["type"] == "tool_use" {
+				toolNames = append(toolNames, block["name"].(string))
+				require.NotEmpty(t, block["id"], rec.Body.String())
+			}
+		case "content_block_delta":
+			delta, _ := event.Data["delta"].(map[string]any)
+			if delta["type"] == "input_json_delta" {
+				inputDeltas = append(inputDeltas, delta["partial_json"].(string))
+			}
+		}
+	}
+	require.Equal(t, []string{"bash", "bash", "glob"}, toolNames)
+	require.Len(t, inputDeltas, 3)
+	require.JSONEq(t, `{"command":"pwd"}`, inputDeltas[0])
+	require.JSONEq(t, `{"command":"printf OPENCODE_PARALLEL_OK"}`, inputDeltas[1])
+	require.JSONEq(t, `{"pattern":"docs/*.md"}`, inputDeltas[2])
+	require.NotContains(t, rec.Body.String(), `"name":""`)
+	require.NotContains(t, rec.Body.String(), `}{`)
+}
+
 func TestQoderGatewayWritesAnthropicToolUseStreamKeepsParallelCallIndexes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -2319,6 +2593,44 @@ func TestQoderGatewayAssemblesNonStreamingAnthropicMessageWithToolUse(t *testing
 	require.Equal(t, "call_1", gjson.GetBytes(body, "content.0.id").String())
 	require.Equal(t, "bash", gjson.GetBytes(body, "content.0.name").String())
 	require.Equal(t, "pwd", gjson.GetBytes(body, "content.0.input.cmd").String())
+}
+
+func TestQoderGatewayAssemblesNonStreamingAnthropicMessageKeepsNoIndexNamedParallelToolCalls(t *testing.T) {
+	body, err := BuildQoderAnthropicMessage("claude-opus-4-6", qoderNoIndexNamedParallelToolCallEventsForTest())
+	require.NoError(t, err)
+
+	require.Equal(t, "tool_use", gjson.GetBytes(body, "stop_reason").String(), string(body))
+	require.Equal(t, int64(3), gjson.GetBytes(body, "content.#").Int(), string(body))
+	require.Equal(t, "tool_use", gjson.GetBytes(body, "content.0.type").String(), string(body))
+	require.Equal(t, "Bash", gjson.GetBytes(body, "content.0.name").String(), string(body))
+	require.Equal(t, "pwd && date \"+%Y-%m-%d %H:%M:%S\" && uname -srm", gjson.GetBytes(body, "content.0.input.command").String(), string(body))
+	require.Equal(t, "Bash", gjson.GetBytes(body, "content.1.name").String(), string(body))
+	require.Equal(t, "ls -la", gjson.GetBytes(body, "content.1.input.command").String(), string(body))
+	require.Equal(t, "glob", gjson.GetBytes(body, "content.2.name").String(), string(body))
+	require.Equal(t, "**/*.md", gjson.GetBytes(body, "content.2.input.pattern").String(), string(body))
+	require.False(t, gjson.GetBytes(body, "content.0.input.raw").Exists(), string(body))
+	require.False(t, gjson.GetBytes(body, "content.1.input.raw").Exists(), string(body))
+	require.False(t, gjson.GetBytes(body, "content.2.input.raw").Exists(), string(body))
+	require.NotContains(t, string(body), `}{`)
+}
+
+func TestQoderGatewayAssemblesNonStreamingAnthropicMessageKeepsRepeatedIndexNamedParallelToolCalls(t *testing.T) {
+	body, err := BuildQoderAnthropicMessage("claude-opus-4-6", qoderRepeatedIndexNamedParallelToolCallEventsForTest())
+	require.NoError(t, err)
+
+	require.Equal(t, "tool_use", gjson.GetBytes(body, "stop_reason").String(), string(body))
+	require.Equal(t, int64(3), gjson.GetBytes(body, "content.#").Int(), string(body))
+	require.Equal(t, "tool_use", gjson.GetBytes(body, "content.0.type").String(), string(body))
+	require.Equal(t, "Bash", gjson.GetBytes(body, "content.0.name").String(), string(body))
+	require.Equal(t, "pwd", gjson.GetBytes(body, "content.0.input.command").String(), string(body))
+	require.Equal(t, "Bash", gjson.GetBytes(body, "content.1.name").String(), string(body))
+	require.Equal(t, "printf OPENCODE_PARALLEL_OK", gjson.GetBytes(body, "content.1.input.command").String(), string(body))
+	require.Equal(t, "glob", gjson.GetBytes(body, "content.2.name").String(), string(body))
+	require.Equal(t, "docs/*.md", gjson.GetBytes(body, "content.2.input.pattern").String(), string(body))
+	require.False(t, gjson.GetBytes(body, "content.0.input.raw").Exists(), string(body))
+	require.False(t, gjson.GetBytes(body, "content.1.input.raw").Exists(), string(body))
+	require.False(t, gjson.GetBytes(body, "content.2.input.raw").Exists(), string(body))
+	require.NotContains(t, string(body), `}{`)
 }
 
 func TestQoderGatewayAssemblesNonStreamingAnthropicMessageParsesXMLTextToolCall(t *testing.T) {
@@ -2767,6 +3079,45 @@ func TestQoderGatewayStreamsAnthropicResponseMapsFlatToolCallInput(t *testing.T)
 	require.Equal(t, "call_1", toolStart["id"])
 	require.Equal(t, "Bash", toolStart["name"])
 	require.JSONEq(t, `{"command":"pwd"}`, partialJSON)
+	require.Contains(t, rec.Body.String(), `"stop_reason":"tool_use"`)
+}
+
+func TestQoderGatewayWritesAnthropicResponseKeepsNoIndexNamedParallelToolCalls(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	resp := &http.Response{
+		Body: io.NopCloser(bytes.NewBufferString(qoderNoIndexNamedParallelToolCallsWrappedSSEForTest(t))),
+	}
+
+	result, err := WriteQoderAnthropicStreamResponse(context.Background(), c, "claude-opus-4-6", resp)
+	require.NoError(t, err)
+	require.True(t, result.HasOutput)
+
+	streamEvents := qoderAnthropicStreamEventsForTest(t, rec.Body.String())
+	toolNames := make([]string, 0)
+	inputDeltas := make([]string, 0)
+	for _, event := range streamEvents {
+		switch event.Event {
+		case "content_block_start":
+			block, _ := event.Data["content_block"].(map[string]any)
+			if block["type"] == "tool_use" {
+				toolNames = append(toolNames, block["name"].(string))
+			}
+		case "content_block_delta":
+			delta, _ := event.Data["delta"].(map[string]any)
+			if delta["type"] == "input_json_delta" {
+				partial := delta["partial_json"].(string)
+				require.NotContains(t, partial, `}{`)
+				inputDeltas = append(inputDeltas, partial)
+			}
+		}
+	}
+	require.Equal(t, []string{"Bash", "Bash", "glob"}, toolNames)
+	require.Len(t, inputDeltas, 3)
+	require.JSONEq(t, `{"command":"pwd && date \"+%Y-%m-%d %H:%M:%S\" && uname -srm","description":"Show current dir, time, system info"}`, inputDeltas[0])
+	require.JSONEq(t, `{"command":"ls -la","description":"List files in current directory"}`, inputDeltas[1])
+	require.JSONEq(t, `{"pattern":"**/*.md"}`, inputDeltas[2])
 	require.Contains(t, rec.Body.String(), `"stop_reason":"tool_use"`)
 }
 
