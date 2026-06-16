@@ -133,6 +133,12 @@
             />
             {{ t('admin.accounts.usageWindow.activeQuery') }}
           </button>
+          <span
+            v-if="openAIQuotaAutoPaused"
+            class="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+          >
+            {{ t('admin.accounts.usageWindow.quotaAutoPaused') }}
+          </span>
         </div>
       </div>
       <div v-else-if="loading" class="space-y-1.5">
@@ -574,6 +580,11 @@ const geminiUsageAvailable = computed(() => {
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+})
+
+const openAIQuotaAutoPaused = computed(() => {
+  if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
+  return usageInfo.value?.quota_auto_paused ?? props.account.quota_auto_paused ?? false
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
@@ -1209,6 +1220,7 @@ watch(openAIUsageRefreshKey, (nextKey, prevKey) => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
 
   _usageCache.delete(props.account.id)
+  usageInfo.value = null
   requestAutoLoad()
 })
 

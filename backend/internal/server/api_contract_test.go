@@ -855,6 +855,8 @@ func TestAPIContracts(t *testing.T) {
 					"affiliate_rebate_duration_days": 0,
 					"affiliate_rebate_per_invitee_cap": 0,
 					"usd_exchange_rate": 0,
+					"marketplace_availability_bucket_minutes": 120,
+					"marketplace_availability_window_days": 7,
 					"table_default_page_size": 20,
 						"table_page_size_options": [10, 20, 50, 100],
 					"usage_ranking_limit": 20,
@@ -872,13 +874,17 @@ func TestAPIContracts(t *testing.T) {
 					"web_search_emulation_enabled": false,
 					"payment_visible_method_alipay_source": "easypay_alipay",
 					"payment_visible_method_wxpay_source": "official_wxpay",
-						"payment_visible_method_alipay_enabled": true,
-						"payment_visible_method_wxpay_enabled": false,
-						"openai_advanced_scheduler_enabled": true,
-						"openai_allow_claude_code_codex_plugin": false,
-						"openai_fast_policy_settings": {
-							"rules": []
-						},
+							"payment_visible_method_alipay_enabled": true,
+							"payment_visible_method_wxpay_enabled": false,
+							"openai_advanced_scheduler_enabled": true,
+							"openai_account_quota_auto_pause": {
+								"default_threshold_5h": 0,
+								"default_threshold_7d": 0
+							},
+							"openai_allow_claude_code_codex_plugin": false,
+							"openai_fast_policy_settings": {
+								"rules": []
+							},
 					"custom_menu_items": [],
 					"custom_endpoints": [],
 					"payment_enabled": false,
@@ -1087,6 +1093,8 @@ func TestAPIContracts(t *testing.T) {
 					"affiliate_rebate_duration_days": 0,
 					"affiliate_rebate_per_invitee_cap": 0,
 					"usd_exchange_rate": 0,
+					"marketplace_availability_bucket_minutes": 120,
+					"marketplace_availability_window_days": 7,
 					"table_default_page_size": 20,
 					"table_page_size_options": [10, 20, 50],
 					"usage_ranking_limit": 20,
@@ -1121,13 +1129,17 @@ func TestAPIContracts(t *testing.T) {
 					"web_search_emulation_enabled": false,
 					"payment_visible_method_alipay_source": "",
 					"payment_visible_method_wxpay_source": "",
-						"payment_visible_method_alipay_enabled": false,
-						"payment_visible_method_wxpay_enabled": false,
-						"openai_advanced_scheduler_enabled": false,
-						"openai_allow_claude_code_codex_plugin": false,
-						"openai_fast_policy_settings": {
-							"rules": []
-						},
+							"payment_visible_method_alipay_enabled": false,
+							"payment_visible_method_wxpay_enabled": false,
+							"openai_advanced_scheduler_enabled": false,
+							"openai_account_quota_auto_pause": {
+								"default_threshold_5h": 0,
+								"default_threshold_7d": 0
+							},
+							"openai_allow_claude_code_codex_plugin": false,
+							"openai_fast_policy_settings": {
+								"rules": []
+							},
 					"payment_enabled": false,
 					"payment_min_amount": 0,
 					"payment_max_amount": 0,

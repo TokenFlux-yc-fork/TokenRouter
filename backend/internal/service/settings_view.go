@@ -153,19 +153,21 @@ type SystemSettings struct {
 	DefaultConcurrency int
 	DefaultBalance     float64
 	// RiskControlEnabled 控制风控中心入口和网关内容审计总开关。
-	RiskControlEnabled           bool
-	AffiliateEnabled             bool
-	AffiliateRebateRate          float64
-	AffiliateRebateFreezeHours   int
-	AffiliateRebateDurationDays  int
-	AffiliateRebatePerInviteeCap float64
-	DefaultUserRPMLimit          int
-	DefaultSubscriptions         []DefaultSubscriptionSetting
-	BalanceUnitName              string
-	BalanceUnitSymbol            string
-	BalanceIconSVG               string
-	ReasoningPointRMBUnitPrice   float64
-	USDExchangeRate              float64
+	RiskControlEnabled                   bool
+	AffiliateEnabled                     bool
+	AffiliateRebateRate                  float64
+	AffiliateRebateFreezeHours           int
+	AffiliateRebateDurationDays          int
+	AffiliateRebatePerInviteeCap         float64
+	DefaultUserRPMLimit                  int
+	DefaultSubscriptions                 []DefaultSubscriptionSetting
+	BalanceUnitName                      string
+	BalanceUnitSymbol                    string
+	BalanceIconSVG                       string
+	ReasoningPointRMBUnitPrice           float64
+	USDExchangeRate                      float64
+	MarketplaceAvailabilityWindowDays    int
+	MarketplaceAvailabilityBucketMinutes int
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`
@@ -215,6 +217,10 @@ type SystemSettings struct {
 
 	// OpenAI 账号调度
 	OpenAIAdvancedSchedulerEnabled bool
+	// OpenAIQuotaAutoPauseSettings 是 OpenAI 账号配额自动暂停的全局默认阈值，存储在 ops_advanced_settings 中。
+	OpenAIQuotaAutoPauseSettings OpsOpenAIAccountQuotaAutoPauseSettings
+	// OpenAIQuotaAutoPauseSettingsSet 标记本次系统设置更新是否显式带了配额自动暂停配置，避免旧客户端误覆盖。
+	OpenAIQuotaAutoPauseSettingsSet bool
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled     bool

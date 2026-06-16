@@ -1670,6 +1670,17 @@ type openAIQuotaAutoPauseDecision struct {
 }
 
 func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) (bool, openAIQuotaAutoPauseDecision) {
+	return evaluateOpenAIQuotaAutoPause(ctx, account, time.Now())
+}
+
+// EvaluateOpenAIQuotaAutoPause 返回 OpenAI 账号当前是否因 5h/7d 配额阈值被自动暂停。
+// 这是给展示层和容量统计使用的无副作用派生判断，不能在这里写数据库或修改调度缓存。
+func EvaluateOpenAIQuotaAutoPause(ctx context.Context, account *Account) bool {
+	paused, _ := evaluateOpenAIQuotaAutoPause(ctx, account, time.Now())
+	return paused
+}
+
+func evaluateOpenAIQuotaAutoPause(ctx context.Context, account *Account, now time.Time) (bool, openAIQuotaAutoPauseDecision) {
 	if account == nil || !account.IsOpenAI() {
 		return false, openAIQuotaAutoPauseDecision{}
 	}
@@ -1679,7 +1690,6 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 	disabled5h := resolveAccountExtraBool(account.Extra, "auto_pause_5h_disabled")
 	disabled7d := resolveAccountExtraBool(account.Extra, "auto_pause_7d_disabled")
 	threshold5h, threshold7d := resolveOpenAIQuotaAutoPauseThresholds(ctx, account)
-	now := time.Now()
 	if !disabled5h && threshold5h > 0 {
 		if utilization, ok := resolveOpenAIQuotaUtilization(account.Extra, "5h", now); ok && utilization >= threshold5h {
 			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: threshold5h, utilization: utilization}
@@ -1854,11 +1864,17 @@ func readOpenAIQuotaUsedPercent(extra map[string]any, window string) float64 {
 
 type openAIQuotaAutoPauseCtxKey struct{}
 
-func withOpenAIQuotaAutoPauseSettings(ctx context.Context, settings OpsOpenAIAccountQuotaAutoPauseSettings) context.Context {
+// WithOpenAIQuotaAutoPauseSettings 把 OpenAI 配额自动暂停全局设置放进 context，
+// 让调度、展示和容量统计复用完全一致的阈值解析逻辑。
+func WithOpenAIQuotaAutoPauseSettings(ctx context.Context, settings OpsOpenAIAccountQuotaAutoPauseSettings) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, openAIQuotaAutoPauseCtxKey{}, settings)
+}
+
+func withOpenAIQuotaAutoPauseSettings(ctx context.Context, settings OpsOpenAIAccountQuotaAutoPauseSettings) context.Context {
+	return WithOpenAIQuotaAutoPauseSettings(ctx, settings)
 }
 
 func openAIQuotaAutoPauseSettingsFromContext(ctx context.Context) OpsOpenAIAccountQuotaAutoPauseSettings {

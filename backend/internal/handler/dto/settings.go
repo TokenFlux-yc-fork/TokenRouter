@@ -150,21 +150,23 @@ type SystemSettings struct {
 	CustomMenuItems             []CustomMenuItem `json:"custom_menu_items"`
 	CustomEndpoints             []CustomEndpoint `json:"custom_endpoints"`
 
-	DefaultConcurrency           int                          `json:"default_concurrency"`
-	DefaultBalance               float64                      `json:"default_balance"`
-	RiskControlEnabled           bool                         `json:"risk_control_enabled"` // 风控中心功能开关
-	AffiliateEnabled             bool                         `json:"affiliate_enabled"`
-	AffiliateRebateRate          float64                      `json:"affiliate_rebate_rate"`
-	AffiliateRebateFreezeHours   int                          `json:"affiliate_rebate_freeze_hours"`
-	AffiliateRebateDurationDays  int                          `json:"affiliate_rebate_duration_days"`
-	AffiliateRebatePerInviteeCap float64                      `json:"affiliate_rebate_per_invitee_cap"`
-	DefaultUserRPMLimit          int                          `json:"default_user_rpm_limit"`
-	DefaultSubscriptions         []DefaultSubscriptionSetting `json:"default_subscriptions"`
-	BalanceUnitName              string                       `json:"balance_unit_name"`
-	BalanceUnitSymbol            string                       `json:"balance_unit_symbol"`
-	BalanceIconSVG               string                       `json:"balance_icon_svg"`
-	ReasoningPointRMBUnitPrice   float64                      `json:"reasoning_point_rmb_unit_price"`
-	USDExchangeRate              float64                      `json:"usd_exchange_rate"`
+	DefaultConcurrency                   int                          `json:"default_concurrency"`
+	DefaultBalance                       float64                      `json:"default_balance"`
+	RiskControlEnabled                   bool                         `json:"risk_control_enabled"` // 风控中心功能开关
+	AffiliateEnabled                     bool                         `json:"affiliate_enabled"`
+	AffiliateRebateRate                  float64                      `json:"affiliate_rebate_rate"`
+	AffiliateRebateFreezeHours           int                          `json:"affiliate_rebate_freeze_hours"`
+	AffiliateRebateDurationDays          int                          `json:"affiliate_rebate_duration_days"`
+	AffiliateRebatePerInviteeCap         float64                      `json:"affiliate_rebate_per_invitee_cap"`
+	DefaultUserRPMLimit                  int                          `json:"default_user_rpm_limit"`
+	DefaultSubscriptions                 []DefaultSubscriptionSetting `json:"default_subscriptions"`
+	BalanceUnitName                      string                       `json:"balance_unit_name"`
+	BalanceUnitSymbol                    string                       `json:"balance_unit_symbol"`
+	BalanceIconSVG                       string                       `json:"balance_icon_svg"`
+	ReasoningPointRMBUnitPrice           float64                      `json:"reasoning_point_rmb_unit_price"`
+	USDExchangeRate                      float64                      `json:"usd_exchange_rate"`
+	MarketplaceAvailabilityWindowDays    int                          `json:"marketplace_availability_window_days"`
+	MarketplaceAvailabilityBucketMinutes int                          `json:"marketplace_availability_bucket_minutes"`
 
 	// Model fallback configuration
 	EnableModelFallback      bool   `json:"enable_model_fallback"`
@@ -213,6 +215,8 @@ type SystemSettings struct {
 
 	// OpenAI account scheduling
 	OpenAIAdvancedSchedulerEnabled bool `json:"openai_advanced_scheduler_enabled"`
+	// OpenAI 账号配额自动暂停全局默认阈值。后端按 0~1 存储，0 表示不启用全局默认阈值。
+	OpenAIQuotaAutoPauseSettings service.OpsOpenAIAccountQuotaAutoPauseSettings `json:"openai_account_quota_auto_pause"`
 
 	// Payment configuration
 	PaymentEnabled                   bool                      `json:"payment_enabled"`

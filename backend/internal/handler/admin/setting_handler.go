@@ -249,6 +249,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		BalanceIconSVG:                         settings.BalanceIconSVG,
 		ReasoningPointRMBUnitPrice:             settings.ReasoningPointRMBUnitPrice,
 		USDExchangeRate:                        settings.USDExchangeRate,
+		MarketplaceAvailabilityWindowDays:      settings.MarketplaceAvailabilityWindowDays,
+		MarketplaceAvailabilityBucketMinutes:   settings.MarketplaceAvailabilityBucketMinutes,
 		EnableModelFallback:                    settings.EnableModelFallback,
 		FallbackModelAnthropic:                 settings.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    settings.FallbackModelOpenAI,
@@ -278,6 +280,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		PaymentVisibleMethodAlipayEnabled:      settings.PaymentVisibleMethodAlipayEnabled,
 		PaymentVisibleMethodWxpayEnabled:       settings.PaymentVisibleMethodWxpayEnabled,
 		OpenAIAdvancedSchedulerEnabled:         settings.OpenAIAdvancedSchedulerEnabled,
+		OpenAIQuotaAutoPauseSettings:           settings.OpenAIQuotaAutoPauseSettings,
 		BalanceLowNotifyEnabled:                settings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:              settings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:            settings.BalanceLowNotifyRechargeURL,
@@ -575,6 +578,8 @@ type UpdateSettingsRequest struct {
 	BalanceIconSVG                            string                            `json:"balance_icon_svg"`
 	ReasoningPointRMBUnitPrice                *float64                          `json:"reasoning_point_rmb_unit_price"`
 	USDExchangeRate                           *float64                          `json:"usd_exchange_rate"`
+	MarketplaceAvailabilityWindowDays         *int                              `json:"marketplace_availability_window_days"`
+	MarketplaceAvailabilityBucketMinutes      *int                              `json:"marketplace_availability_bucket_minutes"`
 	AuthSourceDefaultEmailBalance             *float64                          `json:"auth_source_default_email_balance"`
 	AuthSourceDefaultEmailConcurrency         *int                              `json:"auth_source_default_email_concurrency"`
 	AuthSourceDefaultEmailSubscriptions       *[]dto.DefaultSubscriptionSetting `json:"auth_source_default_email_subscriptions"`
@@ -656,6 +661,8 @@ type UpdateSettingsRequest struct {
 
 	// OpenAI account scheduling
 	OpenAIAdvancedSchedulerEnabled *bool `json:"openai_advanced_scheduler_enabled"`
+	// OpenAI 账号配额自动暂停全局默认阈值。使用指针区分旧客户端未提交与显式提交零值。
+	OpenAIQuotaAutoPauseSettings *service.OpsOpenAIAccountQuotaAutoPauseSettings `json:"openai_account_quota_auto_pause"`
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled         *bool                   `json:"balance_low_notify_enabled"`
@@ -1728,24 +1735,26 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.RiskControlEnabled
 		}(),
-		DefaultUserRPMLimit:         req.DefaultUserRPMLimit,
-		DefaultSubscriptions:        defaultSubscriptions,
-		BalanceUnitName:             req.BalanceUnitName,
-		BalanceUnitSymbol:           req.BalanceUnitSymbol,
-		BalanceIconSVG:              req.BalanceIconSVG,
-		ReasoningPointRMBUnitPrice:  float64ValueOrDefault(req.ReasoningPointRMBUnitPrice, previousSettings.ReasoningPointRMBUnitPrice),
-		USDExchangeRate:             float64ValueOrDefault(req.USDExchangeRate, previousSettings.USDExchangeRate),
-		EnableModelFallback:         req.EnableModelFallback,
-		FallbackModelAnthropic:      req.FallbackModelAnthropic,
-		FallbackModelOpenAI:         req.FallbackModelOpenAI,
-		FallbackModelGemini:         req.FallbackModelGemini,
-		FallbackModelAntigravity:    req.FallbackModelAntigravity,
-		EnableIdentityPatch:         req.EnableIdentityPatch,
-		IdentityPatchPrompt:         req.IdentityPatchPrompt,
-		MinClaudeCodeVersion:        req.MinClaudeCodeVersion,
-		MaxClaudeCodeVersion:        req.MaxClaudeCodeVersion,
-		AllowUngroupedKeyScheduling: req.AllowUngroupedKeyScheduling,
-		BackendModeEnabled:          req.BackendModeEnabled,
+		DefaultUserRPMLimit:                  req.DefaultUserRPMLimit,
+		DefaultSubscriptions:                 defaultSubscriptions,
+		BalanceUnitName:                      req.BalanceUnitName,
+		BalanceUnitSymbol:                    req.BalanceUnitSymbol,
+		BalanceIconSVG:                       req.BalanceIconSVG,
+		ReasoningPointRMBUnitPrice:           float64ValueOrDefault(req.ReasoningPointRMBUnitPrice, previousSettings.ReasoningPointRMBUnitPrice),
+		USDExchangeRate:                      float64ValueOrDefault(req.USDExchangeRate, previousSettings.USDExchangeRate),
+		MarketplaceAvailabilityWindowDays:    intValueOrDefault(req.MarketplaceAvailabilityWindowDays, previousSettings.MarketplaceAvailabilityWindowDays),
+		MarketplaceAvailabilityBucketMinutes: intValueOrDefault(req.MarketplaceAvailabilityBucketMinutes, previousSettings.MarketplaceAvailabilityBucketMinutes),
+		EnableModelFallback:                  req.EnableModelFallback,
+		FallbackModelAnthropic:               req.FallbackModelAnthropic,
+		FallbackModelOpenAI:                  req.FallbackModelOpenAI,
+		FallbackModelGemini:                  req.FallbackModelGemini,
+		FallbackModelAntigravity:             req.FallbackModelAntigravity,
+		EnableIdentityPatch:                  req.EnableIdentityPatch,
+		IdentityPatchPrompt:                  req.IdentityPatchPrompt,
+		MinClaudeCodeVersion:                 req.MinClaudeCodeVersion,
+		MaxClaudeCodeVersion:                 req.MaxClaudeCodeVersion,
+		AllowUngroupedKeyScheduling:          req.AllowUngroupedKeyScheduling,
+		BackendModeEnabled:                   req.BackendModeEnabled,
 		AllowUserViewErrorRequests: func() bool {
 			if req.AllowUserViewErrorRequests != nil {
 				return *req.AllowUserViewErrorRequests
@@ -1854,6 +1863,13 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAIAdvancedSchedulerEnabled
 		}(),
+		OpenAIQuotaAutoPauseSettings: func() service.OpsOpenAIAccountQuotaAutoPauseSettings {
+			if req.OpenAIQuotaAutoPauseSettings != nil {
+				return *req.OpenAIQuotaAutoPauseSettings
+			}
+			return previousSettings.OpenAIQuotaAutoPauseSettings
+		}(),
+		OpenAIQuotaAutoPauseSettingsSet: req.OpenAIQuotaAutoPauseSettings != nil,
 		BalanceLowNotifyEnabled: func() bool {
 			if req.BalanceLowNotifyEnabled != nil {
 				return *req.BalanceLowNotifyEnabled
@@ -2163,6 +2179,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		BalanceIconSVG:                         updatedSettings.BalanceIconSVG,
 		ReasoningPointRMBUnitPrice:             updatedSettings.ReasoningPointRMBUnitPrice,
 		USDExchangeRate:                        updatedSettings.USDExchangeRate,
+		MarketplaceAvailabilityWindowDays:      updatedSettings.MarketplaceAvailabilityWindowDays,
+		MarketplaceAvailabilityBucketMinutes:   updatedSettings.MarketplaceAvailabilityBucketMinutes,
 		EnableModelFallback:                    updatedSettings.EnableModelFallback,
 		FallbackModelAnthropic:                 updatedSettings.FallbackModelAnthropic,
 		FallbackModelOpenAI:                    updatedSettings.FallbackModelOpenAI,
@@ -2192,6 +2210,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentVisibleMethodAlipayEnabled:      updatedSettings.PaymentVisibleMethodAlipayEnabled,
 		PaymentVisibleMethodWxpayEnabled:       updatedSettings.PaymentVisibleMethodWxpayEnabled,
 		OpenAIAdvancedSchedulerEnabled:         updatedSettings.OpenAIAdvancedSchedulerEnabled,
+		OpenAIQuotaAutoPauseSettings:           updatedSettings.OpenAIQuotaAutoPauseSettings,
 		BalanceLowNotifyEnabled:                updatedSettings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:              updatedSettings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:            updatedSettings.BalanceLowNotifyRechargeURL,
@@ -2327,6 +2346,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.USDExchangeRate != after.USDExchangeRate {
 		changed = append(changed, "usd_exchange_rate")
+	}
+	if before.MarketplaceAvailabilityWindowDays != after.MarketplaceAvailabilityWindowDays {
+		changed = append(changed, "marketplace_availability_window_days")
+	}
+	if before.MarketplaceAvailabilityBucketMinutes != after.MarketplaceAvailabilityBucketMinutes {
+		changed = append(changed, "marketplace_availability_bucket_minutes")
 	}
 	if before.TotpEnabled != after.TotpEnabled {
 		changed = append(changed, "totp_enabled")
@@ -2741,6 +2766,11 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAIAdvancedSchedulerEnabled != after.OpenAIAdvancedSchedulerEnabled {
 		changed = append(changed, "openai_advanced_scheduler_enabled")
+	}
+	// OpenAI 配额自动暂停阈值迁移到系统设置后，变更也需要进入审计日志。
+	if before.OpenAIQuotaAutoPauseSettings.DefaultThreshold5h != after.OpenAIQuotaAutoPauseSettings.DefaultThreshold5h ||
+		before.OpenAIQuotaAutoPauseSettings.DefaultThreshold7d != after.OpenAIQuotaAutoPauseSettings.DefaultThreshold7d {
+		changed = append(changed, "openai_account_quota_auto_pause")
 	}
 	// 余额、订阅到期与账号限额通知
 	if before.BalanceLowNotifyEnabled != after.BalanceLowNotifyEnabled {

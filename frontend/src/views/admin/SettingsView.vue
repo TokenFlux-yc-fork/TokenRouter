@@ -3749,6 +3749,48 @@
                 </div>
                 <Toggle v-model="form.openai_advanced_scheduler_enabled" />
               </div>
+
+              <div class="border-t border-gray-100 pt-5 dark:border-dark-700">
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                  {{ t("admin.settings.openaiQuotaAutoPause.title") }}
+                </h3>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.openaiQuotaAutoPause.description") }}
+                </p>
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="input-label">
+                      {{ t("admin.settings.openaiQuotaAutoPause.default5h") }}
+                    </label>
+                    <input
+                      v-model.number="openAIQuotaAutoPause5hPercent"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      class="input"
+                      data-testid="settings-openai-quota-auto-pause-5h"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label">
+                      {{ t("admin.settings.openaiQuotaAutoPause.default7d") }}
+                    </label>
+                    <input
+                      v-model.number="openAIQuotaAutoPause7dPercent"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      class="input"
+                      data-testid="settings-openai-quota-auto-pause-7d"
+                    />
+                  </div>
+                </div>
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.openaiQuotaAutoPause.thresholdHint") }}
+                </p>
+              </div>
             </div>
           </div>
 
@@ -4528,6 +4570,67 @@
                   </p>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.marketplaceAvailability.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.marketplaceAvailability.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+                <div>
+                  <label class="input-label">
+                    {{ t("admin.settings.marketplaceAvailability.windowDays") }}
+                  </label>
+                  <input
+                    v-model.number="form.marketplace_availability_window_days"
+                    type="number"
+                    :min="marketplaceAvailabilityWindowDaysMin"
+                    :max="marketplaceAvailabilityWindowDaysMax"
+                    step="1"
+                    class="input"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t("admin.settings.marketplaceAvailability.windowDaysHint", {
+                        min: marketplaceAvailabilityWindowDaysMin,
+                        max: marketplaceAvailabilityWindowDaysMax,
+                      })
+                    }}
+                  </p>
+                </div>
+
+                <div>
+                  <label class="input-label">
+                    {{ t("admin.settings.marketplaceAvailability.bucketMinutes") }}
+                  </label>
+                  <input
+                    v-model.number="form.marketplace_availability_bucket_minutes"
+                    type="number"
+                    :min="marketplaceAvailabilityBucketMinutesMin"
+                    :max="marketplaceAvailabilityBucketMinutesMax"
+                    step="1"
+                    class="input"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t("admin.settings.marketplaceAvailability.bucketMinutesHint", {
+                        min: marketplaceAvailabilityBucketMinutesMin,
+                        max: marketplaceAvailabilityBucketMinutesMax,
+                      })
+                    }}
+                  </p>
+                </div>
+              </div>
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.marketplaceAvailability.bucketLimitHint") }}
+              </p>
             </div>
           </div>
 
@@ -6601,6 +6704,7 @@ import type {
   WebSearchProviderConfig,
   WebSearchTestResult,
   PaymentMethodFeeConfig,
+  OpenAIQuotaAutoPauseSettings,
 } from "@/api/admin/settings";
 import type { LoginAgreementDocument, NotifyEmailEntry, Proxy } from "@/types";
 import type { ProviderInstance, SubscriptionPlan } from "@/types/payment";
@@ -6865,6 +6969,12 @@ const tablePageSizeDefault = 20;
 const usageRankingLimitMin = 1;
 const usageRankingLimitMax = 100;
 const usageRankingLimitDefault = 20;
+const marketplaceAvailabilityWindowDaysMin = 1;
+const marketplaceAvailabilityWindowDaysMax = 90;
+const marketplaceAvailabilityWindowDaysDefault = 7;
+const marketplaceAvailabilityBucketMinutesMin = 5;
+const marketplaceAvailabilityBucketMinutesMax = 1440;
+const marketplaceAvailabilityBucketMinutesDefault = 120;
 
 function defaultLoginAgreementDocuments(): LoginAgreementDocument[] {
   return [
@@ -6938,6 +7048,7 @@ type SettingsForm = Omit<
   google_oauth_client_secret: string;
   force_email_on_third_party_signup: boolean;
   openai_advanced_scheduler_enabled: boolean;
+  openai_account_quota_auto_pause: OpenAIQuotaAutoPauseSettings;
   // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
 };
@@ -6970,6 +7081,10 @@ const form = reactive<SettingsForm>({
   balance_icon_svg: "",
   reasoning_point_rmb_unit_price: 0,
   usd_exchange_rate: 0,
+  marketplace_availability_window_days:
+    marketplaceAvailabilityWindowDaysDefault,
+  marketplace_availability_bucket_minutes:
+    marketplaceAvailabilityBucketMinutesDefault,
   force_email_on_third_party_signup: false,
   default_user_rpm_limit: 0,
   site_name: "Sub2API",
@@ -7141,6 +7256,10 @@ const form = reactive<SettingsForm>({
   // 分组隔离
   allow_ungrouped_key_scheduling: false,
   openai_advanced_scheduler_enabled: false,
+  openai_account_quota_auto_pause: {
+    default_threshold_5h: 0,
+    default_threshold_7d: 0,
+  },
   // Gateway forwarding behavior
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
@@ -7171,6 +7290,34 @@ const {
   iconSvg: computed(() => form.balance_icon_svg),
 });
 const previewBalanceAmount = computed(() => formatPreviewBalanceAmount(123.45));
+
+function quotaThresholdToPercent(value: number | undefined): number | null {
+  if (!value || value <= 0) return null;
+  return Math.round(value * 1000) / 10;
+}
+
+function percentToQuotaThreshold(value: number | null): number {
+  return value != null && value > 0 ? value / 100 : 0;
+}
+
+// OpenAI 配额自动暂停在后端以 0~1 存储，系统设置页按百分比展示。
+const openAIQuotaAutoPause5hPercent = computed<number | null>({
+  get() {
+    return quotaThresholdToPercent(form.openai_account_quota_auto_pause?.default_threshold_5h);
+  },
+  set(value) {
+    form.openai_account_quota_auto_pause.default_threshold_5h = percentToQuotaThreshold(value);
+  },
+});
+
+const openAIQuotaAutoPause7dPercent = computed<number | null>({
+  get() {
+    return quotaThresholdToPercent(form.openai_account_quota_auto_pause?.default_threshold_7d);
+  },
+  set(value) {
+    form.openai_account_quota_auto_pause.default_threshold_7d = percentToQuotaThreshold(value);
+  },
+});
 
 const oidcTokenAuthMethodOptions = [
   { value: "client_secret_post", label: "client_secret_post" },
@@ -7836,6 +7983,12 @@ async function loadSettings() {
         : defaultLoginAgreementDocuments();
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(settings));
     form.default_platform_quotas = normalizePlatformQuotasMap(settings.default_platform_quotas);
+    form.openai_account_quota_auto_pause = {
+      default_threshold_5h:
+        settings.openai_account_quota_auto_pause?.default_threshold_5h ?? 0,
+      default_threshold_7d:
+        settings.openai_account_quota_auto_pause?.default_threshold_7d ?? 0,
+    };
     form.backend_mode_enabled = settings.backend_mode_enabled;
     form.default_subscriptions = normalizeDefaultSubscriptionSettings(
       settings.default_subscriptions,
@@ -8067,6 +8220,35 @@ async function saveSettings() {
       Number(form.reasoning_point_rmb_unit_price) || 0,
     );
     form.usd_exchange_rate = Math.max(0, Number(form.usd_exchange_rate) || 0);
+    form.marketplace_availability_window_days = Math.min(
+      marketplaceAvailabilityWindowDaysMax,
+      Math.max(
+        marketplaceAvailabilityWindowDaysMin,
+        Math.floor(
+          Number(form.marketplace_availability_window_days) ||
+            marketplaceAvailabilityWindowDaysDefault,
+        ),
+      ),
+    );
+    form.marketplace_availability_bucket_minutes = Math.min(
+      marketplaceAvailabilityBucketMinutesMax,
+      Math.max(
+        marketplaceAvailabilityBucketMinutesMin,
+        Math.floor(
+          Number(form.marketplace_availability_bucket_minutes) ||
+            marketplaceAvailabilityBucketMinutesDefault,
+        ),
+      ),
+    );
+    if (
+      form.openai_account_quota_auto_pause.default_threshold_5h < 0 ||
+      form.openai_account_quota_auto_pause.default_threshold_5h > 1 ||
+      form.openai_account_quota_auto_pause.default_threshold_7d < 0 ||
+      form.openai_account_quota_auto_pause.default_threshold_7d > 1
+    ) {
+      appStore.showError(t("admin.settings.openaiQuotaAutoPause.rangeError"));
+      return;
+    }
 
     const normalizedLoginAgreementDocuments =
       normalizeLoginAgreementDocumentsForSave();
@@ -8214,6 +8396,10 @@ async function saveSettings() {
       balance_icon_svg: form.balance_icon_svg,
       reasoning_point_rmb_unit_price: form.reasoning_point_rmb_unit_price,
       usd_exchange_rate: form.usd_exchange_rate,
+      marketplace_availability_window_days:
+        form.marketplace_availability_window_days,
+      marketplace_availability_bucket_minutes:
+        form.marketplace_availability_bucket_minutes,
       force_email_on_third_party_signup: form.force_email_on_third_party_signup,
       default_user_rpm_limit: form.default_user_rpm_limit,
       site_name: form.site_name_zh || form.site_name_en || form.site_name,
@@ -8387,6 +8573,12 @@ async function saveSettings() {
         form.payment_cancel_rate_limit_window_mode,
       payment_alipay_force_qrcode: form.payment_alipay_force_qrcode,
       openai_advanced_scheduler_enabled: form.openai_advanced_scheduler_enabled,
+      openai_account_quota_auto_pause: {
+        default_threshold_5h:
+          form.openai_account_quota_auto_pause.default_threshold_5h,
+        default_threshold_7d:
+          form.openai_account_quota_auto_pause.default_threshold_7d,
+      },
       // 余额、订阅到期与账号限额通知
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold:
@@ -8442,6 +8634,12 @@ async function saveSettings() {
     }
     Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(updated));
     form.default_platform_quotas = normalizePlatformQuotasMap(updated.default_platform_quotas);
+    form.openai_account_quota_auto_pause = {
+      default_threshold_5h:
+        updated.openai_account_quota_auto_pause?.default_threshold_5h ?? 0,
+      default_threshold_7d:
+        updated.openai_account_quota_auto_pause?.default_threshold_7d ?? 0,
+    };
     registrationEmailSuffixWhitelistTags.value =
       normalizeRegistrationEmailSuffixDomains(
         updated.registration_email_suffix_whitelist,

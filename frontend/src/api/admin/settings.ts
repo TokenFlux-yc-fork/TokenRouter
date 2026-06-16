@@ -401,6 +401,8 @@ export interface SystemSettings {
   balance_icon_svg: string;
   reasoning_point_rmb_unit_price: number;
   usd_exchange_rate: number;
+  marketplace_availability_window_days: number;
+  marketplace_availability_bucket_minutes: number;
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
@@ -621,6 +623,7 @@ export interface SystemSettings {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
+  openai_account_quota_auto_pause?: OpenAIQuotaAutoPauseSettings;
 
   // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled: boolean;
@@ -664,6 +667,8 @@ export interface UpdateSettingsRequest {
   balance_icon_svg?: string;
   reasoning_point_rmb_unit_price?: number;
   usd_exchange_rate?: number;
+  marketplace_availability_window_days?: number;
+  marketplace_availability_bucket_minutes?: number;
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
@@ -859,6 +864,7 @@ export interface UpdateSettingsRequest {
   payment_visible_method_alipay_enabled?: boolean;
   payment_visible_method_wxpay_enabled?: boolean;
   openai_advanced_scheduler_enabled?: boolean;
+  openai_account_quota_auto_pause?: OpenAIQuotaAutoPauseSettings;
   // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;
@@ -1307,6 +1313,11 @@ export interface OpenAIFastPolicyRule {
  */
 export interface OpenAIFastPolicySettings {
   rules: OpenAIFastPolicyRule[];
+}
+
+export interface OpenAIQuotaAutoPauseSettings {
+  default_threshold_5h: number;
+  default_threshold_7d: number;
 }
 
 // ==================== Beta Policy Settings ====================
