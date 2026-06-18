@@ -29,7 +29,7 @@ vi.mock('vue-i18n', () => {
 })
 
 import ThemeSwitcher from '@/components/common/ThemeSwitcher.vue'
-import { setTheme, resolvedTheme } from '@/composables/useTheme'
+import { setTheme, resolvedTheme, systemPrefersDark } from '@/composables/useTheme'
 
 describe('ThemeSwitcher', () => {
   beforeEach(() => {
@@ -70,5 +70,30 @@ describe('ThemeSwitcher', () => {
     await w.findAll('[data-test="theme-option"]')[3].trigger('click') // carbon
     expect(resolvedTheme.value).toBe('carbon')
     expect(document.documentElement.getAttribute('data-theme')).toBe('carbon')
+  })
+
+  it('marks only the System option active in system mode when OS prefers dark', async () => {
+    // Regression: previously resolvedTheme was used for isActive, which made the
+    // 'System' option AND the resolved dark variant (e.g. 'Midnight') both
+    // report aria-checked="true" at the same time. System mode must be exclusive.
+    setTheme('system')
+    await flushPromises()
+    // OS prefers dark: any matchMedia query containing 'dark' matches.
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('dark'),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    }))
+    // Touch systemPrefersDark() so the useTheme singleton picks up the new OS
+    // signal (resolvedTheme is reactive on the systemDark mirror it refreshes).
+    systemPrefersDark()
+
+    const w = mountIt()
+    await w.find('button').trigger('click')
+    const checked = w
+      .findAll('[data-test="theme-option"]')
+      .filter((o) => o.attributes('aria-checked') === 'true')
+    expect(checked.length).toBe(1)
+    expect(checked[0].text()).toContain('System')
   })
 })

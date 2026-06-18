@@ -42,7 +42,7 @@ import { useTheme } from '@/composables/useTheme'
 import type { ThemeMode } from '@/composables/useTheme'
 
 const { t } = useI18n()
-const { theme, resolvedTheme, setTheme } = useTheme()
+const { theme, setTheme } = useTheme()
 
 const open = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
@@ -58,8 +58,8 @@ const options: ReadonlyArray<{ value: ThemeMode; label: string; swatch: string }
 const swatch = computed(() => options.find((o) => o.value === theme.value)?.swatch ?? '#000')
 
 function isActive(value: ThemeMode): boolean {
-  if (value === 'system') return theme.value === 'system'
-  return resolvedTheme.value === value
+  if (theme.value === 'system') return value === 'system'
+  return value === theme.value
 }
 
 function choose(value: ThemeMode) {
