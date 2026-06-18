@@ -5,6 +5,8 @@ import { Chart as ChartJS, BarElement, CategoryScale, Legend, LinearScale, Toolt
 import { Bar } from 'vue-chartjs'
 import type { OpsLatencyHistogramResponse } from '@/api/admin/ops'
 import type { ChartState } from '../types'
+import { resolvedTheme } from '@/composables/useTheme'
+import { getChartColors } from '@/utils/chartTheme'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
@@ -18,12 +20,10 @@ interface Props {
 const props = defineProps<Props>()
 const { t } = useI18n()
 
-const isDarkMode = computed(() => document.documentElement.classList.contains('dark'))
-const colors = computed(() => ({
-  blue: '#3b82f6',
-  grid: isDarkMode.value ? '#374151' : '#f3f4f6',
-  text: isDarkMode.value ? '#9ca3af' : '#6b7280'
-}))
+const colors = computed(() => {
+  const c = getChartColors(resolvedTheme.value)
+  return { blue: '#3b82f6', grid: c.grid, text: c.text }
+})
 
 const hasData = computed(() => (props.latencyData?.total_requests ?? 0) > 0)
 
