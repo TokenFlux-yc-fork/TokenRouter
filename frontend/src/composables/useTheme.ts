@@ -34,14 +34,28 @@ function loadStoredDarkVariant(): DarkTheme {
 const theme = ref<ThemeMode>(loadStoredTheme())
 const darkVariant = ref<DarkTheme>(loadStoredDarkVariant())
 
-export function systemPrefersDark(): boolean {
-  return typeof window !== 'undefined'
+// Reactive mirror of the OS color-scheme preference. Vue's computed caching
+// means resolvedTheme would not otherwise notice when the OS preference flips
+// (window.matchMedia().matches is not a tracked dependency), so we route the
+// OS signal through this ref. It is refreshed on every systemPrefersDark() call
+// and on the matchMedia 'change' event registered at the bottom of this module.
+const systemDark = ref(false)
+
+/** Read the live OS preference, update the reactive mirror, return the value. */
+function refreshSystemDark(): boolean {
+  const matches = typeof window !== 'undefined'
     && window.matchMedia('(prefers-color-scheme: dark)').matches
+  systemDark.value = matches
+  return matches
+}
+
+export function systemPrefersDark(): boolean {
+  return refreshSystemDark()
 }
 
 export const resolvedTheme = computed<ResolvedTheme>(() => {
   if (theme.value === 'system') {
-    return systemPrefersDark() ? darkVariant.value : 'light'
+    return systemDark.value ? darkVariant.value : 'light'
   }
   if (theme.value === 'light') return 'light'
   return theme.value // a DarkTheme
@@ -75,6 +89,7 @@ function persist(next: ThemeMode, variant: DarkTheme) {
   } else {
     localStorage.setItem(darkVariantStorageKey, variant)
   }
+  refreshSystemDark()
   applyResolved(resolvedTheme.value)
 }
 
@@ -112,6 +127,7 @@ function animateRipple(transition: ViewTransition, x: number, y: number) {
 
 export function initTheme() {
   // Applied before mount (called from main.ts) to avoid a flash of the wrong theme.
+  refreshSystemDark()
   applyResolved(resolvedTheme.value)
 }
 
@@ -136,6 +152,15 @@ export function toggleTheme(event?: MouseEvent) {
 }
 
 export function useTheme() {
+  // Lazy sync: if localStorage now holds a value the module singleton didn't
+  // see at import time (legacy 'dark' migration written after load, a cross-tab
+  // edit, or HMR), pick it up idempotently so callers observe the migrated state.
+  const stored = loadStoredTheme()
+  if (stored !== theme.value) {
+    theme.value = stored
+    refreshSystemDark()
+    applyResolved(resolvedTheme.value)
+  }
   return {
     theme,
     darkVariant,
@@ -150,6 +175,7 @@ export function useTheme() {
 // Keep the resolved theme in sync when the OS preference changes (system mode).
 if (typeof window !== 'undefined') {
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    refreshSystemDark()
     if (theme.value === 'system') applyResolved(resolvedTheme.value)
   })
 }
