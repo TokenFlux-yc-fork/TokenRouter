@@ -7480,4 +7480,14 @@ export default {
     },
   },
 
+  // Theme switcher
+  theme: {
+    system: '跟随系统',
+    light: '浅色',
+    midnight: '精致深蓝',
+    carbon: '中性深灰',
+    oled: '纯黑',
+    label: '主题',
+  },
+
 }

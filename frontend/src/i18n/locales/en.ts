@@ -7308,4 +7308,14 @@ export default {
     },
   },
 
+  // Theme switcher
+  theme: {
+    system: 'System',
+    light: 'Light',
+    midnight: 'Midnight',
+    carbon: 'Carbon',
+    oled: 'OLED Black',
+    label: 'Theme',
+  },
+
 }
