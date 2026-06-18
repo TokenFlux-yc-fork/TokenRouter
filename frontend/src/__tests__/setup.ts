@@ -75,6 +75,26 @@ class MockResizeObserver {
 
 globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver
 
+// Mock window.matchMedia — jsdom/happy-dom do not implement it, but useTheme
+// (and other composables) read prefers-color-scheme / prefers-reduced-motion.
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  const matchMediaMock = (query: string): MediaQueryList => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false
+  })
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: matchMediaMock
+  })
+}
+
 // Vue Test Utils 全局配置
 config.global.stubs = {
   // 可以在这里添加全局 stub

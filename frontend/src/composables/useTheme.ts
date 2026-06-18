@@ -1,101 +1,155 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
-type ViewTransition = {
-  ready: Promise<void>
-}
+export type DarkTheme = 'midnight' | 'carbon' | 'oled'
+export type ThemeMode = 'system' | 'light' | DarkTheme
+export type ResolvedTheme = 'light' | DarkTheme
 
-type ViewTransitionDocument = {
-  startViewTransition?: (callback: () => void) => ViewTransition
-}
+type ViewTransition = { ready: Promise<void> }
+type ViewTransitionDocument = { startViewTransition?: (cb: () => void) => ViewTransition }
 
-const themeStorageKey = 'theme'
+const DARK_THEMES: readonly DarkTheme[] = ['midnight', 'carbon', 'oled']
+const themeStorageKey = 'theme' // 'system'|'light'|'midnight'|'carbon'|'oled'
+const darkVariantStorageKey = 'darkTheme' // which dark variant the user prefers
 const themeRippleDuration = 640
-const isDark = ref(document.documentElement.classList.contains('dark'))
 
-function prefersDarkMode(): boolean {
-  const savedTheme = localStorage.getItem(themeStorageKey)
-  return savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
+function isDarkTheme(v: string): v is DarkTheme {
+  return (DARK_THEMES as readonly string[]).includes(v)
 }
 
-function applyTheme(nextIsDark: boolean) {
-  isDark.value = nextIsDark
-  document.documentElement.classList.toggle('dark', nextIsDark)
+function loadStoredTheme(): ThemeMode {
+  const saved = localStorage.getItem(themeStorageKey)
+  // Backward compatibility: legacy boolean-era values.
+  if (saved === 'dark') return 'midnight'
+  if (saved === 'light') return 'light'
+  if (saved && isDarkTheme(saved)) return saved
+  return 'system'
 }
 
-export function initTheme() {
-  applyTheme(prefersDarkMode())
+function loadStoredDarkVariant(): DarkTheme {
+  const saved = localStorage.getItem(darkVariantStorageKey)
+  if (saved && isDarkTheme(saved)) return saved
+  return 'midnight' // default dark variant (continues brand)
 }
 
-function persistTheme(nextIsDark: boolean) {
-  applyTheme(nextIsDark)
-  localStorage.setItem(themeStorageKey, nextIsDark ? 'dark' : 'light')
+const theme = ref<ThemeMode>(loadStoredTheme())
+const darkVariant = ref<DarkTheme>(loadStoredDarkVariant())
+
+export function systemPrefersDark(): boolean {
+  return typeof window !== 'undefined'
+    && window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+export const resolvedTheme = computed<ResolvedTheme>(() => {
+  if (theme.value === 'system') {
+    return systemPrefersDark() ? darkVariant.value : 'light'
+  }
+  if (theme.value === 'light') return 'light'
+  return theme.value // a DarkTheme
+})
+
+export const isDark = computed(() => resolvedTheme.value !== 'light')
+
+const THEME_CLASSES: readonly string[] = DARK_THEMES.map((t) => `theme-${t}`)
+
+function applyResolved(resolved: ResolvedTheme) {
+  const html = document.documentElement
+  // CSS token blocks (Task 1) are CLASS-based (.theme-midnight/.theme-carbon/.theme-oled),
+  // so the class drives the palette. data-theme is kept for semantics only.
+  html.classList.remove(...THEME_CLASSES)
+  if (resolved === 'light') {
+    html.classList.remove('dark')
+    html.setAttribute('data-theme', 'light')
+  } else {
+    html.classList.add('dark', `theme-${resolved}`)
+    html.setAttribute('data-theme', resolved)
+  }
+}
+
+function persist(next: ThemeMode, variant: DarkTheme) {
+  theme.value = next
+  darkVariant.value = variant
+  localStorage.setItem(themeStorageKey, next)
+  if (next !== 'light' && next !== 'system') {
+    // remember the chosen dark variant for the "system → dark" case
+    localStorage.setItem(darkVariantStorageKey, next)
+  } else {
+    localStorage.setItem(darkVariantStorageKey, variant)
+  }
+  applyResolved(resolvedTheme.value)
 }
 
 function supportsAnimatedTheme(event?: MouseEvent): event is MouseEvent {
-  const viewTransitionDocument = document as unknown as ViewTransitionDocument
+  const doc = document as unknown as ViewTransitionDocument
   return Boolean(
-    event &&
-      viewTransitionDocument.startViewTransition &&
-      !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    event && doc.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
   )
 }
 
-function getRippleRadius(x: number, y: number): number {
-  return Math.hypot(
-    Math.max(x, window.innerWidth - x),
-    Math.max(y, window.innerHeight - y)
-  )
+function rippleRadius(x: number, y: number): number {
+  return Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y))
 }
 
-function animateThemeRipple(transition: ViewTransition, x: number, y: number) {
+function animateRipple(transition: ViewTransition, x: number, y: number) {
   void transition.ready
     .then(() => {
-      const endRadius = getRippleRadius(x, y)
-      const options: KeyframeAnimationOptions & { pseudoElement: string } = {
-        duration: themeRippleDuration,
-        easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
-        pseudoElement: '::view-transition-new(root)',
-      }
-
-      // 用新主题截图做圆形裁剪，让颜色从点击位置像水波一样扩散。
+      const end = rippleRadius(x, y)
       document.documentElement.animate(
         {
           clipPath: [
             `circle(0px at ${x}px ${y}px)`,
-            `circle(${endRadius}px at ${x}px ${y}px)`,
-          ],
+            `circle(${end}px at ${x}px ${y}px)`
+          ]
         },
-        options
+        {
+          duration: themeRippleDuration,
+          easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
+          pseudoElement: '::view-transition-new(root)'
+        } as KeyframeAnimationOptions & { pseudoElement: string }
       )
     })
     .catch(() => undefined)
 }
 
-export function setTheme(nextIsDark: boolean, event?: MouseEvent) {
-  if (nextIsDark === isDark.value) return
+export function initTheme() {
+  // Applied before mount (called from main.ts) to avoid a flash of the wrong theme.
+  applyResolved(resolvedTheme.value)
+}
+
+export function setTheme(next: ThemeMode, event?: MouseEvent) {
+  if (next === theme.value && next !== 'system') return
+  const variant: DarkTheme = isDarkTheme(next) ? next : darkVariant.value
 
   if (!supportsAnimatedTheme(event)) {
-    persistTheme(nextIsDark)
+    persist(next, variant)
     return
   }
-
   const { clientX, clientY } = event
-  const viewTransitionDocument = document as unknown as ViewTransitionDocument
-  const transition = viewTransitionDocument.startViewTransition?.(() => {
-    persistTheme(nextIsDark)
-  })
+  const doc = document as unknown as ViewTransitionDocument
+  const transition = doc.startViewTransition?.(() => persist(next, variant))
+  if (transition) animateRipple(transition, clientX, clientY)
+  else persist(next, variant)
+}
 
-  if (transition) {
-    animateThemeRipple(transition, clientX, clientY)
-  } else {
-    persistTheme(nextIsDark)
-  }
+export function toggleTheme(event?: MouseEvent) {
+  // Quick two-state toggle used by legacy sun/moon buttons (public pages).
+  setTheme(isDark.value ? 'light' : darkVariant.value, event)
 }
 
 export function useTheme() {
   return {
+    theme,
+    darkVariant,
+    resolvedTheme,
     isDark,
     setTheme,
-    toggleTheme: (event?: MouseEvent) => setTheme(!isDark.value, event),
+    toggleTheme,
+    DARK_THEMES
   }
+}
+
+// Keep the resolved theme in sync when the OS preference changes (system mode).
+if (typeof window !== 'undefined') {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (theme.value === 'system') applyResolved(resolvedTheme.value)
+  })
 }

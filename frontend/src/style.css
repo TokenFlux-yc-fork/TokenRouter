@@ -24,7 +24,9 @@
     --dark-950: 26 38 67;     /* #1A2643 */
   }
 
-  /* Midnight — refined dark palette (lands in Task 2 via `data-theme="midnight"`). */
+  /* Midnight — refined dark palette. Applied by useTheme via the `.theme-midnight`
+     class on <html> (alongside `.dark`); `data-theme="midnight"` is set for
+     semantics only — the class drives the palette. */
   .theme-midnight {
     --dark-50: 255 255 255;    /* #FFFFFF */
     --dark-100: 234 240 250;   /* #EAF0FA */
