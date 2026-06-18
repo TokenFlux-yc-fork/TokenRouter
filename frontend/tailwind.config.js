@@ -2,6 +2,11 @@
 export default {
   content: ['./index.html', './src/**/*.{vue,js,ts,jsx,tsx}'],
   darkMode: 'class',
+  // Theme hook classes are referenced dynamically at runtime (Task 2 applies
+  // them via `useTheme`), not as literal tokens in any scanned file. Without
+  // safelisting, Tailwind's content scanner would purge the `.theme-*` token
+  // blocks defined in src/style.css.
+  safelist: ['.theme-midnight', '.theme-carbon', '.theme-oled'],
   theme: {
     extend: {
       colors: {
@@ -34,18 +39,24 @@ export default {
           950: '#071A2A'
         },
         // 深色模式背景 - 参考 Blue Archive GDDark Firefox 主题
+        // Palette now reads CSS variables so all `dark-xxx` utilities follow the
+        // active theme. `:root` (style.css) holds the default dark values used
+        // today; `.theme-midnight` / `.theme-carbon` / `.theme-oled` override them.
+        // Colors are stored as RGB triplets (e.g. `53 64 108`) and wrapped with
+        // `rgb(var(--x) / <alpha-value>)` so Tailwind v3 opacity modifiers
+        // (e.g. `dark:border-dark-600/70`) keep working unchanged.
         dark: {
-          50: '#FFFFFF',
-          100: '#D5E5FB',
-          200: '#B7CEF5',
-          300: '#8EA2CC',
-          400: '#66749E',
-          500: '#475580',
-          600: '#35406C',
-          700: '#293059',
-          800: '#202B52',
-          900: '#10182C',
-          950: '#1A2643'
+          50: 'rgb(var(--dark-50) / <alpha-value>)',
+          100: 'rgb(var(--dark-100) / <alpha-value>)',
+          200: 'rgb(var(--dark-200) / <alpha-value>)',
+          300: 'rgb(var(--dark-300) / <alpha-value>)',
+          400: 'rgb(var(--dark-400) / <alpha-value>)',
+          500: 'rgb(var(--dark-500) / <alpha-value>)',
+          600: 'rgb(var(--dark-600) / <alpha-value>)',
+          700: 'rgb(var(--dark-700) / <alpha-value>)',
+          800: 'rgb(var(--dark-800) / <alpha-value>)',
+          900: 'rgb(var(--dark-900) / <alpha-value>)',
+          950: 'rgb(var(--dark-950) / <alpha-value>)'
         }
       },
       fontFamily: {

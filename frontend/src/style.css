@@ -3,6 +3,62 @@
 @tailwind utilities;
 
 @layer base {
+  /* ============ Theme token variables ============ */
+  /* Light theme — unchanged Blue Archive light values. These are the
+     defaults that also serve the (unchanged) light theme. The `dark` Tailwind
+     palette reads these via `rgb(var(--dark-*) / <alpha-value>)` in
+     tailwind.config.js, so opacity modifiers keep working. Colors are stored as
+     space-separated RGB triplets (Tailwind v3 documented pattern); each comment
+     records the original hex from the brief for traceability. */
+  :root {
+    --dark-50: 255 255 255;    /* #FFFFFF */
+    --dark-100: 213 229 251;   /* #D5E5FB */
+    --dark-200: 183 206 245;   /* #B7CEF5 */
+    --dark-300: 142 162 204;   /* #8EA2CC */
+    --dark-400: 102 116 158;   /* #66749E */
+    --dark-500: 71 85 128;     /* #475580 */
+    --dark-600: 53 64 108;     /* #35406C */
+    --dark-700: 41 48 89;      /* #293059 */
+    --dark-800: 32 43 82;      /* #202B52 */
+    --dark-900: 16 24 44;     /* #10182C */
+    --dark-950: 26 38 67;     /* #1A2643 */
+  }
+
+  /* Midnight — refined dark palette (lands in Task 2 via `data-theme="midnight"`). */
+  .theme-midnight {
+    --dark-50: 255 255 255;    /* #FFFFFF */
+    --dark-100: 234 240 250;   /* #EAF0FA */
+    --dark-200: 194 210 238;   /* #C2D2EE */
+    --dark-300: 147 166 204;   /* #93A6CC */
+    --dark-400: 107 125 160;   /* #6B7DA0 */
+    --dark-500: 77 92 130;    /* #4D5C82 */
+    --dark-600: 44 54 90;     /* #2C365A */
+    --dark-700: 35 46 74;     /* #232E4A */
+    --dark-800: 30 39 70;     /* #1E2746 */
+    --dark-900: 14 22 38;     /* #0E1626 */
+    --dark-950: 21 32 58;     /* #15203A */
+  }
+
+  /* Stub blocks — real values added in Task 4. */
+  .theme-carbon { /* values added in Task 4 */ }
+  .theme-oled { /* values added in Task 4 */ }
+
+  /* Elevation tokens — each theme can fine-tune the highlight + shadow. These
+     replace the previously force-disabled dark shadows (Step 3) and restore
+     depth on dark cards / dialogs / dropdowns. */
+  :root {
+    --shadow-sm: 0 1px 0 rgba(255,255,255,.05), 0 1px 2px rgba(0,0,0,.3);
+    --shadow-md: 0 1px 0 rgba(255,255,255,.06), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-glow: 0 0 0 1px rgba(0,210,255,.4), 0 0 20px rgba(0,210,255,.15);
+  }
+  .theme-midnight,
+  .theme-carbon,
+  .theme-oled {
+    --shadow-sm: 0 1px 0 rgba(255,255,255,.05), 0 1px 2px rgba(0,0,0,.3);
+    --shadow-md: 0 1px 0 rgba(255,255,255,.06), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-glow: 0 0 0 1px rgba(0,210,255,.4), 0 0 20px rgba(0,210,255,.15);
+  }
+
   * {
     @apply border-primary-200/80 dark:border-dark-600/70;
   }
@@ -981,12 +1037,8 @@
 }
 
 @layer utilities {
-  .dark [class*="shadow-"] {
-    --tw-shadow: 0 0 #0000 !important;
-    --tw-shadow-colored: 0 0 #0000 !important;
-    box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow) !important;
-  }
-
+  /* Dark elevation — restored after removing the global shadow-disable rule.
+     Reads `--shadow-md` so each theme can fine-tune the elevation. */
   .dark .card,
   .dark .glass-card,
   .dark .card-glass,
@@ -994,7 +1046,7 @@
   .dark .modal-content,
   .dark .dialog-container,
   .dark .toast {
-    box-shadow: none;
+    box-shadow: var(--shadow-md);
   }
 
   /* 全局工程蓝图背景，网格线参考 Blue Archive 主视觉 */
