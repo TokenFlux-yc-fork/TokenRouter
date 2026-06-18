@@ -298,6 +298,8 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
+import { resolvedTheme } from '@/composables/useTheme'
+import { getChartColors } from '@/utils/chartTheme'
 
 const { t } = useI18n()
 import { adminAPI } from '@/api/admin'
@@ -388,16 +390,11 @@ const granularityOptions = computed(() => [
   { value: 'hour', label: t('admin.dashboard.hour') }
 ])
 
-// Dark mode detection
-const isDarkMode = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
-
 // Chart colors
-const chartColors = computed(() => ({
-  text: isDarkMode.value ? '#D5E5FB' : '#2D4F68',
-  grid: isDarkMode.value ? '#35406C' : '#DDF4FC'
-}))
+const chartColors = computed(() => {
+  const c = getChartColors(resolvedTheme.value)
+  return { text: c.text, grid: c.grid }
+})
 
 // Line chart options (for user trend chart)
 const lineOptions = computed(() => ({

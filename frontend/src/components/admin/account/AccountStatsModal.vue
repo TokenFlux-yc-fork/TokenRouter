@@ -475,6 +475,8 @@ import EndpointDistributionChart from '@/components/charts/EndpointDistributionC
 import BalanceIcon from '@/components/common/BalanceIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
+import { resolvedTheme } from '@/composables/useTheme'
+import { getChartColors } from '@/utils/chartTheme'
 import { adminAPI } from '@/api/admin'
 import type { Account, AccountUsageStatsResponse } from '@/types'
 
@@ -509,16 +511,11 @@ const emit = defineEmits<{
 const loading = ref(false)
 const stats = ref<AccountUsageStatsResponse | null>(null)
 
-// Dark mode detection
-const isDarkMode = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
-
 // Chart colors
-const chartColors = computed(() => ({
-  text: isDarkMode.value ? '#e5e7eb' : '#374151',
-  grid: isDarkMode.value ? '#374151' : '#e5e7eb'
-}))
+const chartColors = computed(() => {
+  const c = getChartColors(resolvedTheme.value)
+  return { text: c.text, grid: c.grid }
+})
 
 // Line chart data
 const trendChartData = computed(() => {

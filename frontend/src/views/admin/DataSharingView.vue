@@ -959,6 +959,8 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
+import { resolvedTheme } from '@/composables/useTheme'
+import { getChartColors } from '@/utils/chartTheme'
 import {
   adminDataSharingAPI,
   type AdminDataShareSessionFilters,
@@ -1198,14 +1200,16 @@ const columns: Column[] = [
   { key: 'actions', label: '操作' }
 ]
 
-const isDarkMode = computed(() => document.documentElement.classList.contains('dark'))
-const chartColors = computed(() => ({
-  text: isDarkMode.value ? '#e5e7eb' : '#374151',
-  grid: isDarkMode.value ? '#374151' : '#e5e7eb',
-  storage: '#2563eb',
-  sessions: '#10b981',
-  group: '#7c3aed'
-}))
+const chartColors = computed(() => {
+  const c = getChartColors(resolvedTheme.value)
+  return {
+    text: c.text,
+    grid: c.grid,
+    storage: '#2563eb',
+    sessions: '#10b981',
+    group: '#7c3aed'
+  }
+})
 
 const doughnutPalette = ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#7c3aed', '#0891b2', '#db2777', '#65a30d']
 
