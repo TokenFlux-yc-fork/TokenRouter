@@ -104,6 +104,7 @@ func provideCleanup(
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	tlsFingerprintCollector *service.TLSFingerprintCollectorService,
+	healthChecker *service.HealthChecker,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -263,6 +264,12 @@ func provideCleanup(
 			{"TLSFingerprintCollectorService", func() error {
 				if tlsFingerprintCollector != nil {
 					return tlsFingerprintCollector.Stop(context.Background())
+				}
+				return nil
+			}},
+			{"HealthChecker", func() error {
+				if healthChecker != nil {
+					healthChecker.Stop()
 				}
 				return nil
 			}},

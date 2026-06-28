@@ -3,14 +3,16 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 )
 
 var (
-	ErrGroupNotFound = infraerrors.NotFound("GROUP_NOT_FOUND", "group not found")
-	ErrGroupExists   = infraerrors.Conflict("GROUP_EXISTS", "group name already exists")
+	ErrGroupNotFound               = infraerrors.NotFound("GROUP_NOT_FOUND", "group not found")
+	ErrGroupExists                 = infraerrors.Conflict("GROUP_EXISTS", "group name already exists")
+	ErrGroupHealthCheckNotEnabled  = infraerrors.BadRequest("GROUP_HEALTH_CHECK_NOT_ENABLED", "health check is not enabled for this group")
 )
 
 type GroupRepository interface {
@@ -37,12 +39,36 @@ type GroupRepository interface {
 	BindAccountsToGroup(ctx context.Context, groupID int64, accountIDs []int64) error
 	// UpdateSortOrders 批量更新分组排序
 	UpdateSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error
+
+	// 健康检查相关方法
+	FindByHealthCheckEnabled(ctx context.Context, enabled bool) ([]*Group, error)
+	UpdateHealthStatus(ctx context.Context, groupID int64, update *HealthStatusUpdate) error
+	UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error
+	UpdateGroupStatus(ctx context.Context, groupID int64, status string) error
+	ForceHealthCheck(ctx context.Context, groupID int64) error
 }
 
 // GroupSortOrderUpdate 分组排序更新
 type GroupSortOrderUpdate struct {
 	ID        int64 `json:"id"`
 	SortOrder int   `json:"sort_order"`
+}
+
+// HealthStatusUpdate 健康状态更新
+type HealthStatusUpdate struct {
+	HealthStatus               string
+	HealthLastCheckAt          *time.Time
+	HealthConsecutiveFailures  int
+	HealthConsecutiveSuccesses int
+}
+
+// HealthCheckConfigUpdate 健康检查配置更新
+type HealthCheckConfigUpdate struct {
+	Enabled           bool
+	IntervalSec       int
+	TimeoutSec        int
+	FailureThreshold  int
+	SuccessThreshold  int
 }
 
 // CreateGroupRequest 创建分组请求

@@ -67,6 +67,11 @@ type AdminService interface {
 	BatchSetGroupRPMOverrides(ctx context.Context, groupID int64, entries []GroupRPMOverrideInput) error
 	UpdateGroupSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error
 
+	// 健康检查相关方法
+	GetGroupByID(ctx context.Context, id int64) (*Group, error)
+	UpdateGroupHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error
+	ForceGroupHealthCheck(ctx context.Context, groupID int64) error
+
 	// API Key management (admin)
 	AdminResetAPIKeyRateLimitUsage(ctx context.Context, keyID int64) (*APIKey, error)
 	AdminUpdateAPIKeyGroupID(ctx context.Context, keyID int64, groupID *int64) (*AdminUpdateAPIKeyGroupIDResult, error)
@@ -4238,4 +4243,35 @@ func (s *adminServiceImpl) ForceAntigravityPrivacy(ctx context.Context, account 
 	}
 	applyAntigravityPrivacyMode(account, mode)
 	return mode
+}
+
+// GetGroupByID 获取分组详情（包含健康检查信息）
+func (s *adminServiceImpl) GetGroupByID(ctx context.Context, id int64) (*Group, error) {
+	return s.groupRepo.GetByID(ctx, id)
+}
+
+// UpdateGroupHealthCheckConfig 更新分组健康检查配置
+func (s *adminServiceImpl) UpdateGroupHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error {
+	// 验证分组是否存在
+	_, err := s.groupRepo.GetByID(ctx, groupID)
+	if err != nil {
+		return err
+	}
+
+	return s.groupRepo.UpdateHealthCheckConfig(ctx, groupID, config)
+}
+
+// ForceGroupHealthCheck 强制立即执行健康检查
+func (s *adminServiceImpl) ForceGroupHealthCheck(ctx context.Context, groupID int64) error {
+	// 验证分组是否存在且启用了健康检查
+	group, err := s.groupRepo.GetByID(ctx, groupID)
+	if err != nil {
+		return err
+	}
+
+	if !group.HealthCheckEnabled {
+		return ErrGroupHealthCheckNotEnabled
+	}
+
+	return s.groupRepo.ForceHealthCheck(ctx, groupID)
 }

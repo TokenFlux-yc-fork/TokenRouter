@@ -712,6 +712,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGroupAvailabilityProbeRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
+	ProvideHealthChecker,
 	NewModelPricingResolver,
 	NewContentModerationService,
 	ProvidePaymentConfigService,
@@ -754,4 +755,14 @@ func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache Lead
 	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
+}
+
+// ProvideHealthChecker creates and starts HealthChecker service
+func ProvideHealthChecker(
+	groupRepo GroupRepository,
+	accountRepo AccountRepository,
+) *HealthChecker {
+	// 暂时使用 DummyUpstreamPinger
+	upstream := NewDummyUpstreamPinger()
+	return NewHealthChecker(groupRepo, accountRepo, upstream)
 }

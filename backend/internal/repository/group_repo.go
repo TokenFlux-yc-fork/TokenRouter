@@ -893,3 +893,183 @@ func (r *groupRepository) UpdateSortOrders(ctx context.Context, updates []servic
 	}
 	return nil
 }
+
+// FindByHealthCheckEnabled 查询启用了健康检查的所有分组
+func (r *groupRepository) FindByHealthCheckEnabled(ctx context.Context, enabled bool) ([]*service.Group, error) {
+	sqlq := r.sqlExecutorFromContext(ctx)
+
+	query := `
+		SELECT id, name, platform, status,
+		       health_check_enabled, health_check_interval_sec, health_check_timeout_sec,
+		       health_check_failure_threshold, health_check_success_threshold,
+		       health_last_check_at, health_consecutive_failures, health_consecutive_successes,
+		       health_status
+		FROM groups
+		WHERE deleted_at IS NULL
+		  AND health_check_enabled = $1
+		  AND status = 'active'
+		ORDER BY id
+	`
+
+	rows, err := sqlq.QueryContext(ctx, query, enabled)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []*service.Group
+	for rows.Next() {
+		g := &service.Group{}
+		err := rows.Scan(
+			&g.ID, &g.Name, &g.Platform, &g.Status,
+			&g.HealthCheckEnabled, &g.HealthCheckIntervalSec, &g.HealthCheckTimeoutSec,
+			&g.HealthCheckFailureThreshold, &g.HealthCheckSuccessThreshold,
+			&g.HealthLastCheckAt, &g.HealthConsecutiveFailures, &g.HealthConsecutiveSuccesses,
+			&g.HealthStatus,
+		)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, g)
+	}
+
+	return groups, rows.Err()
+}
+
+// UpdateHealthStatus 更新分组的健康状态
+func (r *groupRepository) UpdateHealthStatus(ctx context.Context, groupID int64, update *service.HealthStatusUpdate) error {
+	sqlq := r.sqlExecutorFromContext(ctx)
+
+	query := `
+		UPDATE groups
+		SET health_status = $1,
+		    health_last_check_at = $2,
+		    health_consecutive_failures = $3,
+		    health_consecutive_successes = $4,
+		    updated_at = NOW()
+		WHERE id = $5 AND deleted_at IS NULL
+	`
+
+	result, err := sqlq.ExecContext(ctx, query,
+		update.HealthStatus,
+		update.HealthLastCheckAt,
+		update.HealthConsecutiveFailures,
+		update.HealthConsecutiveSuccesses,
+		groupID,
+	)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrGroupNotFound
+	}
+
+	// 通知调度器分组状态变化
+	if err := enqueueSchedulerOutbox(ctx, sqlq, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group health status update failed: group=%d err=%v", groupID, err)
+	}
+
+	return nil
+}
+
+// UpdateHealthCheckConfig 更新分组的健康检查配置
+func (r *groupRepository) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *service.HealthCheckConfigUpdate) error {
+	sqlq := r.sqlExecutorFromContext(ctx)
+
+	query := `
+		UPDATE groups
+		SET health_check_enabled = $1,
+		    health_check_interval_sec = $2,
+		    health_check_timeout_sec = $3,
+		    health_check_failure_threshold = $4,
+		    health_check_success_threshold = $5,
+		    updated_at = NOW()
+		WHERE id = $6 AND deleted_at IS NULL
+	`
+
+	result, err := sqlq.ExecContext(ctx, query,
+		config.Enabled,
+		config.IntervalSec,
+		config.TimeoutSec,
+		config.FailureThreshold,
+		config.SuccessThreshold,
+		groupID,
+	)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrGroupNotFound
+	}
+
+	return nil
+}
+
+// UpdateGroupStatus 更新分组的 status 字段（用于熔断时自动停用/恢复）
+func (r *groupRepository) UpdateGroupStatus(ctx context.Context, groupID int64, status string) error {
+	sqlq := r.sqlExecutorFromContext(ctx)
+
+	query := `
+		UPDATE groups
+		SET status = $1,
+		    updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL
+	`
+
+	result, err := sqlq.ExecContext(ctx, query, status, groupID)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrGroupNotFound
+	}
+
+	// 通知调度器分组状态变化
+	if err := enqueueSchedulerOutbox(ctx, sqlq, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group status update failed: group=%d err=%v", groupID, err)
+	}
+
+	return nil
+}
+
+// ForceHealthCheck 强制立即执行健康检查（将 last_check_at 设为过去时间）
+func (r *groupRepository) ForceHealthCheck(ctx context.Context, groupID int64) error {
+	sqlq := r.sqlExecutorFromContext(ctx)
+
+	query := `
+		UPDATE groups
+		SET health_last_check_at = NOW() - INTERVAL '1 day',
+		    updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL AND health_check_enabled = true
+	`
+
+	result, err := sqlq.ExecContext(ctx, query, groupID)
+	if err != nil {
+		return err
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrGroupNotFound
+	}
+
+	return nil
+}
