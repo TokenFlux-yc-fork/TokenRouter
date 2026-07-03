@@ -66,6 +66,10 @@ const (
 	FieldFallbackGroupIDOnInvalidRequest = "fallback_group_id_on_invalid_request"
 	// FieldUnavailableFallbackGroupID holds the string denoting the unavailable_fallback_group_id field in the database.
 	FieldUnavailableFallbackGroupID = "unavailable_fallback_group_id"
+	// FieldBackupPoolGroupID holds the string denoting the backup_pool_group_id field in the database.
+	FieldBackupPoolGroupID = "backup_pool_group_id"
+	// FieldBackupPoolRefillThresholdPoints holds the string denoting the backup_pool_refill_threshold_points field in the database.
+	FieldBackupPoolRefillThresholdPoints = "backup_pool_refill_threshold_points"
 	// FieldModelRouting holds the string denoting the model_routing field in the database.
 	FieldModelRouting = "model_routing"
 	// FieldModelRoutingEnabled holds the string denoting the model_routing_enabled field in the database.
@@ -212,6 +216,8 @@ var Columns = []string{
 	FieldFallbackGroupID,
 	FieldFallbackGroupIDOnInvalidRequest,
 	FieldUnavailableFallbackGroupID,
+	FieldBackupPoolGroupID,
+	FieldBackupPoolRefillThresholdPoints,
 	FieldModelRouting,
 	FieldModelRoutingEnabled,
 	FieldMcpXMLInject,
@@ -314,6 +320,8 @@ var (
 	DefaultImageRateMultiplier float64
 	// DefaultClaudeCodeOnly holds the default value on creation for the "claude_code_only" field.
 	DefaultClaudeCodeOnly bool
+	// DefaultBackupPoolRefillThresholdPoints holds the default value on creation for the "backup_pool_refill_threshold_points" field.
+	DefaultBackupPoolRefillThresholdPoints float64
 	// DefaultModelRoutingEnabled holds the default value on creation for the "model_routing_enabled" field.
 	DefaultModelRoutingEnabled bool
 	// DefaultMcpXMLInject holds the default value on creation for the "mcp_xml_inject" field.
@@ -495,6 +503,16 @@ func ByFallbackGroupIDOnInvalidRequest(opts ...sql.OrderTermOption) OrderOption 
 // ByUnavailableFallbackGroupID orders the results by the unavailable_fallback_group_id field.
 func ByUnavailableFallbackGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUnavailableFallbackGroupID, opts...).ToFunc()
+}
+
+// ByBackupPoolGroupID orders the results by the backup_pool_group_id field.
+func ByBackupPoolGroupID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBackupPoolGroupID, opts...).ToFunc()
+}
+
+// ByBackupPoolRefillThresholdPoints orders the results by the backup_pool_refill_threshold_points field.
+func ByBackupPoolRefillThresholdPoints(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBackupPoolRefillThresholdPoints, opts...).ToFunc()
 }
 
 // ByModelRoutingEnabled orders the results by the model_routing_enabled field.

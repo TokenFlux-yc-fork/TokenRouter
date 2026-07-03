@@ -2623,6 +2623,14 @@ export default {
         noFallback: '不指定（使用默认分组）',
         hint: '当该分组被停用时，绑定到该分组的 API Key 会优先回退到这里选择的分组；留空则继续回退到同平台默认分组。'
       },
+      backupPool: {
+        title: '备用号池',
+        noPool: '不启用备用号池',
+        poolHint: '仅 OpenAI 分组可用；当本分组 Codex 剩余容量点低于阈值时，会从该分组复制可用账号绑定进来。',
+        threshold: '补充阈值（容量点）',
+        thresholdHint: '容量点按每个账号 min(5h 剩余%, 7d 剩余%) 求和；无新鲜用量快照的可调度账号按 100 计算。',
+        thresholdRequired: '启用备用号池时，补充阈值必须大于 0。'
+      },
       dataSharing: {
         title: '数据共享分组',
         enabled: '已启用',

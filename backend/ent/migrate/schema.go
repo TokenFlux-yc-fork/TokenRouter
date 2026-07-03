@@ -619,6 +619,8 @@ var (
 		{Name: "fallback_group_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "fallback_group_id_on_invalid_request", Type: field.TypeInt64, Nullable: true},
 		{Name: "unavailable_fallback_group_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "backup_pool_group_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "backup_pool_refill_threshold_points", Type: field.TypeFloat64, Default: 0},
 		{Name: "model_routing", Type: field.TypeJSON, Nullable: true, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "model_routing_enabled", Type: field.TypeBool, Default: false},
 		{Name: "mcp_xml_inject", Type: field.TypeBool, Default: true},
@@ -678,27 +680,27 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[30]},
+				Columns: []*schema.Column{GroupsColumns[32]},
 			},
 			{
 				Name:    "group_data_sharing_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[48]},
+				Columns: []*schema.Column{GroupsColumns[50]},
 			},
 			{
 				Name:    "group_session_isolation_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[49]},
+				Columns: []*schema.Column{GroupsColumns[51]},
 			},
 			{
 				Name:    "group_health_check_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[38]},
+				Columns: []*schema.Column{GroupsColumns[40]},
 			},
 			{
 				Name:    "group_health_status",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[46]},
+				Columns: []*schema.Column{GroupsColumns[48]},
 			},
 		},
 	}

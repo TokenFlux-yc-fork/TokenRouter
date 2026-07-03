@@ -97,6 +97,8 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetNillableFallbackGroupID(groupIn.FallbackGroupID).
 		SetNillableFallbackGroupIDOnInvalidRequest(groupIn.FallbackGroupIDOnInvalidRequest).
 		SetNillableUnavailableFallbackGroupID(groupIn.UnavailableFallbackGroupID).
+		SetNillableBackupPoolGroupID(groupIn.BackupPoolGroupID).
+		SetBackupPoolRefillThresholdPoints(groupIn.BackupPoolRefillThresholdPoints).
 		SetModelRoutingEnabled(groupIn.ModelRoutingEnabled).
 		SetMcpXMLInject(groupIn.MCPXMLInject).
 		SetAllowMessagesDispatch(groupIn.AllowMessagesDispatch).
@@ -193,6 +195,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetNillableImagePrice2k(groupIn.ImagePrice2K).
 		SetNillableImagePrice4k(groupIn.ImagePrice4K).
 		SetClaudeCodeOnly(groupIn.ClaudeCodeOnly).
+		SetBackupPoolRefillThresholdPoints(groupIn.BackupPoolRefillThresholdPoints).
 		SetModelRoutingEnabled(groupIn.ModelRoutingEnabled).
 		SetMcpXMLInject(groupIn.MCPXMLInject).
 		SetAllowMessagesDispatch(groupIn.AllowMessagesDispatch).
@@ -254,6 +257,12 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		builder = builder.SetUnavailableFallbackGroupID(*groupIn.UnavailableFallbackGroupID)
 	} else {
 		builder = builder.ClearUnavailableFallbackGroupID()
+	}
+	// 处理 BackupPoolGroupID：nil 时清除，否则设置。
+	if groupIn.BackupPoolGroupID != nil {
+		builder = builder.SetBackupPoolGroupID(*groupIn.BackupPoolGroupID)
+	} else {
+		builder = builder.ClearBackupPoolGroupID()
 	}
 
 	// 处理 ModelRouting：nil 时清除，否则设置
@@ -727,7 +736,19 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 		return nil, err
 	}
 
-	// 5. 软删除分组自身。
+	// 5. 软删除不会触发 backup_pool_group_id 的 ON DELETE SET NULL；
+	// 主动清理仍指向该分组的备用号池配置，避免活跃目标分组长期保留失效 pool。
+	if _, err := exec.ExecContext(ctx, `
+		UPDATE groups
+		SET backup_pool_group_id = NULL,
+			backup_pool_refill_threshold_points = 0
+		WHERE backup_pool_group_id = $1
+		  AND deleted_at IS NULL
+	`, id); err != nil {
+		return nil, err
+	}
+
+	// 6. 软删除分组自身。
 	if _, err := txClient.Group.Delete().Where(group.IDEQ(id)).Exec(ctx); err != nil {
 		return nil, err
 	}

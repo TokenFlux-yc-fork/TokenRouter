@@ -57,6 +57,10 @@ type Group struct {
 	FallbackGroupIDOnInvalidRequest *int64
 	// UnavailableFallbackGroupID 表示当前分组停用时 API Key 优先回退到的分组。
 	UnavailableFallbackGroupID *int64
+	// BackupPoolGroupID 表示 OpenAI Codex 容量不足时用于复制账号的备用号池分组。
+	BackupPoolGroupID *int64
+	// BackupPoolRefillThresholdPoints 表示触发自动补池的 Codex 容量点阈值。
+	BackupPoolRefillThresholdPoints float64
 
 	// 模型路由配置
 	// key: 模型匹配模式（支持 * 通配符，如 "claude-opus-*"）
