@@ -190,6 +190,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldClaudeCodeOnly,
 				group.FieldFallbackGroupID,
 				group.FieldFallbackGroupIDOnInvalidRequest,
+				group.FieldUnavailableFallbackGroupID,
 				group.FieldModelRoutingEnabled,
 				group.FieldModelRouting,
 				group.FieldMcpXMLInject,
@@ -205,6 +206,8 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldPeakStart,
 				group.FieldPeakEnd,
 				group.FieldPeakRateMultiplier,
+				group.FieldHealthCheckEnabled,
+				group.FieldHealthStatus,
 			)
 		}).
 		Only(ctx)
@@ -943,6 +946,15 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		MessagesDispatchModelConfig:     g.MessagesDispatchModelConfig,
 		ModelsListConfig:                g.ModelsListConfig,
 		AvailabilityProbeConfig:         g.AvailabilityProbeConfig,
+		HealthCheckEnabled:              g.HealthCheckEnabled,
+		HealthCheckIntervalSec:          g.HealthCheckIntervalSec,
+		HealthCheckTimeoutSec:           g.HealthCheckTimeoutSec,
+		HealthCheckFailureThreshold:     g.HealthCheckFailureThreshold,
+		HealthCheckSuccessThreshold:     g.HealthCheckSuccessThreshold,
+		HealthLastCheckAt:               g.HealthLastCheckAt,
+		HealthConsecutiveFailures:       g.HealthConsecutiveFailures,
+		HealthConsecutiveSuccesses:      g.HealthConsecutiveSuccesses,
+		HealthStatus:                    g.HealthStatus,
 		RPMLimit:                        g.RpmLimit,
 		PeakRateEnabled:                 g.PeakRateEnabled,
 		PeakStart:                       g.PeakStart,

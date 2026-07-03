@@ -812,16 +812,50 @@ func init() {
 	groupDescAvailabilityProbeConfig := groupFields[33].Descriptor()
 	// group.DefaultAvailabilityProbeConfig holds the default value on creation for the availability_probe_config field.
 	group.DefaultAvailabilityProbeConfig = groupDescAvailabilityProbeConfig.Default.(domain.GroupAvailabilityProbeConfig)
+	// groupDescHealthCheckEnabled is the schema descriptor for health_check_enabled field.
+	groupDescHealthCheckEnabled := groupFields[34].Descriptor()
+	// group.DefaultHealthCheckEnabled holds the default value on creation for the health_check_enabled field.
+	group.DefaultHealthCheckEnabled = groupDescHealthCheckEnabled.Default.(bool)
+	// groupDescHealthCheckIntervalSec is the schema descriptor for health_check_interval_sec field.
+	groupDescHealthCheckIntervalSec := groupFields[35].Descriptor()
+	// group.DefaultHealthCheckIntervalSec holds the default value on creation for the health_check_interval_sec field.
+	group.DefaultHealthCheckIntervalSec = groupDescHealthCheckIntervalSec.Default.(int)
+	// groupDescHealthCheckTimeoutSec is the schema descriptor for health_check_timeout_sec field.
+	groupDescHealthCheckTimeoutSec := groupFields[36].Descriptor()
+	// group.DefaultHealthCheckTimeoutSec holds the default value on creation for the health_check_timeout_sec field.
+	group.DefaultHealthCheckTimeoutSec = groupDescHealthCheckTimeoutSec.Default.(int)
+	// groupDescHealthCheckFailureThreshold is the schema descriptor for health_check_failure_threshold field.
+	groupDescHealthCheckFailureThreshold := groupFields[37].Descriptor()
+	// group.DefaultHealthCheckFailureThreshold holds the default value on creation for the health_check_failure_threshold field.
+	group.DefaultHealthCheckFailureThreshold = groupDescHealthCheckFailureThreshold.Default.(int)
+	// groupDescHealthCheckSuccessThreshold is the schema descriptor for health_check_success_threshold field.
+	groupDescHealthCheckSuccessThreshold := groupFields[38].Descriptor()
+	// group.DefaultHealthCheckSuccessThreshold holds the default value on creation for the health_check_success_threshold field.
+	group.DefaultHealthCheckSuccessThreshold = groupDescHealthCheckSuccessThreshold.Default.(int)
+	// groupDescHealthConsecutiveFailures is the schema descriptor for health_consecutive_failures field.
+	groupDescHealthConsecutiveFailures := groupFields[40].Descriptor()
+	// group.DefaultHealthConsecutiveFailures holds the default value on creation for the health_consecutive_failures field.
+	group.DefaultHealthConsecutiveFailures = groupDescHealthConsecutiveFailures.Default.(int)
+	// groupDescHealthConsecutiveSuccesses is the schema descriptor for health_consecutive_successes field.
+	groupDescHealthConsecutiveSuccesses := groupFields[41].Descriptor()
+	// group.DefaultHealthConsecutiveSuccesses holds the default value on creation for the health_consecutive_successes field.
+	group.DefaultHealthConsecutiveSuccesses = groupDescHealthConsecutiveSuccesses.Default.(int)
+	// groupDescHealthStatus is the schema descriptor for health_status field.
+	groupDescHealthStatus := groupFields[42].Descriptor()
+	// group.DefaultHealthStatus holds the default value on creation for the health_status field.
+	group.DefaultHealthStatus = groupDescHealthStatus.Default.(string)
+	// group.HealthStatusValidator is a validator for the "health_status" field. It is called by the builders before save.
+	group.HealthStatusValidator = groupDescHealthStatus.Validators[0].(func(string) error)
 	// groupDescRpmLimit is the schema descriptor for rpm_limit field.
-	groupDescRpmLimit := groupFields[34].Descriptor()
+	groupDescRpmLimit := groupFields[43].Descriptor()
 	// group.DefaultRpmLimit holds the default value on creation for the rpm_limit field.
 	group.DefaultRpmLimit = groupDescRpmLimit.Default.(int)
 	// groupDescDataSharingEnabled is the schema descriptor for data_sharing_enabled field.
-	groupDescDataSharingEnabled := groupFields[35].Descriptor()
+	groupDescDataSharingEnabled := groupFields[44].Descriptor()
 	// group.DefaultDataSharingEnabled holds the default value on creation for the data_sharing_enabled field.
 	group.DefaultDataSharingEnabled = groupDescDataSharingEnabled.Default.(bool)
 	// groupDescSessionIsolationEnabled is the schema descriptor for session_isolation_enabled field.
-	groupDescSessionIsolationEnabled := groupFields[36].Descriptor()
+	groupDescSessionIsolationEnabled := groupFields[45].Descriptor()
 	// group.DefaultSessionIsolationEnabled holds the default value on creation for the session_isolation_enabled field.
 	group.DefaultSessionIsolationEnabled = groupDescSessionIsolationEnabled.Default.(bool)
 	idempotencyrecordMixin := schema.IdempotencyRecord{}.Mixin()

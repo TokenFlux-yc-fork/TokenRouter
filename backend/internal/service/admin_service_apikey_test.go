@@ -286,6 +286,21 @@ func (s *groupRepoStubForGroupUpdate) BindAccountsToGroup(context.Context, int64
 func (s *groupRepoStubForGroupUpdate) UpdateSortOrders(context.Context, []GroupSortOrderUpdate) error {
 	panic("unexpected")
 }
+func (s *groupRepoStubForGroupUpdate) FindByHealthCheckEnabled(context.Context, bool) ([]*Group, error) {
+	panic("unexpected")
+}
+func (s *groupRepoStubForGroupUpdate) UpdateHealthStatus(context.Context, int64, *HealthStatusUpdate) error {
+	panic("unexpected")
+}
+func (s *groupRepoStubForGroupUpdate) UpdateHealthCheckConfig(context.Context, int64, *HealthCheckConfigUpdate) error {
+	panic("unexpected")
+}
+func (s *groupRepoStubForGroupUpdate) UpdateGroupStatus(context.Context, int64, string) error {
+	panic("unexpected")
+}
+func (s *groupRepoStubForGroupUpdate) ForceHealthCheck(context.Context, int64) error {
+	panic("unexpected")
+}
 
 // ---------------------------------------------------------------------------
 // Tests

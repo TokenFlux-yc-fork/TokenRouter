@@ -63,9 +63,13 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			abortWithGoogleError(c, 401, "User account is not active")
 			return
 		}
-		if _, message, ok := validateAPIKeyGroupAvailable(apiKey); !ok {
+		if code, message, ok := validateAPIKeyGroupAvailable(apiKey); !ok {
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonAPIKeyGroupUnavailable)
-			abortWithGoogleError(c, 403, message)
+			status := 403
+			if code == "GROUP_UNHEALTHY" {
+				status = 503
+			}
+			abortWithGoogleError(c, status, message)
 			return
 		}
 		if !validateAPIKeyGroupAllowed(apiKey) {

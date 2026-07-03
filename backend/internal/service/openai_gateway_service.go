@@ -4991,6 +4991,23 @@ func (s *OpenAIGatewayService) overrideBrowserUserAgent(ctx context.Context, acc
 	req.Header.Set("user-agent", codexUA)
 }
 
+func (s *OpenAIGatewayService) recordOpenAIPassiveGroupHealthFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.rateLimitService == nil || account == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, statusCode, responseBody)
+}
+
+func openAIRequestContextOrBackground(c *gin.Context) context.Context {
+	if c != nil && c.Request != nil {
+		return c.Request.Context()
+	}
+	return context.Background()
+}
+
 func (s *OpenAIGatewayService) handleErrorResponse(
 	ctx context.Context,
 	resp *http.Response,
@@ -5076,6 +5093,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
+		s.recordOpenAIPassiveGroupHealthFailure(ctx, account, resp.StatusCode, body)
 		MarkResponseCommitted(c)
 		c.JSON(status, gin.H{
 			"error": gin.H{
@@ -5094,6 +5112,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 
 	// Check custom error codes
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {
+		s.recordOpenAIPassiveGroupHealthFailure(ctx, account, resp.StatusCode, body)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -5252,6 +5271,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		c, account.Platform, resp.StatusCode, body,
 		http.StatusBadGateway, "api_error", "Upstream request failed",
 	); matched {
+		s.recordOpenAIPassiveGroupHealthFailure(openAIRequestContextOrBackground(c), account, resp.StatusCode, body)
 		MarkResponseCommitted(c)
 		writeError(c, status, errType, errMsg)
 		if upstreamMsg == "" {
@@ -5266,6 +5286,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	// Check custom error codes — if the account does not handle this status,
 	// return a generic error without exposing upstream details.
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {
+		s.recordOpenAIPassiveGroupHealthFailure(openAIRequestContextOrBackground(c), account, resp.StatusCode, body)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,

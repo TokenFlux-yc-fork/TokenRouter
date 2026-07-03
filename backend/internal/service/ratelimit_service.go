@@ -30,6 +30,7 @@ type RateLimitService struct {
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
 	runtimeBlocker        AccountRuntimeBlocker
+	groupHealthMonitor    *GroupHealthMonitor
 	usageCacheMu          sync.RWMutex
 	usageCache            map[int64]*geminiUsageCacheEntry
 }
@@ -109,6 +110,10 @@ func (s *RateLimitService) SetTokenCacheInvalidator(invalidator TokenCacheInvali
 	s.tokenCacheInvalidator = invalidator
 }
 
+func (s *RateLimitService) SetGroupHealthMonitor(monitor *GroupHealthMonitor) {
+	s.groupHealthMonitor = monitor
+}
+
 func (s *RateLimitService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
 	s.runtimeBlocker = blocker
 }
@@ -159,6 +164,8 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	s.recordPassiveGroupHealthFailure(ctx, account, statusCode, responseBody)
+
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
 
 	// 池模式默认不标记本地账号状态；仅当用户显式配置自定义错误码时按本地策略处理。
@@ -353,6 +360,22 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	}
 
 	return shouldDisable
+}
+
+func (s *RateLimitService) RecordUpstreamRequestFailure(ctx context.Context, account *Account, err error) {
+	if err == nil {
+		return
+	}
+	s.recordPassiveGroupHealthFailure(ctx, account, 0, []byte(err.Error()))
+}
+
+func (s *RateLimitService) recordPassiveGroupHealthFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.groupHealthMonitor == nil || account == nil {
+		return
+	}
+	if err := s.groupHealthMonitor.RecordPassiveAccountFailure(ctx, account, statusCode, passiveHealthErrorMessage(statusCode, responseBody)); err != nil {
+		slog.Warn("group_passive_health_record_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+	}
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.

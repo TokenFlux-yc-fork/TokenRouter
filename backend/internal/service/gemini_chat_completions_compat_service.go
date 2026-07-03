@@ -138,6 +138,9 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 				sleepGeminiBackoff(attempt)
 				continue
 			}
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+			}
 			setOpsUpstreamError(c, 0, safeErr, "")
 			return nil, s.writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries: "+safeErr)
 		}
@@ -209,6 +212,10 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
+		if s.rateLimitService != nil && account != nil && account.IsCustomErrorCodesEnabled() && !account.ShouldHandleErrorCode(resp.StatusCode) {
+			s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, resp.StatusCode, respBody)
+			return nil, s.writeChatCompletionsError(c, http.StatusInternalServerError, "upstream_error", "Upstream gateway error")
+		}
 		s.handleGeminiUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 		evBody := unwrapIfNeeded(account.Type == AccountTypeOAuth, respBody)
 

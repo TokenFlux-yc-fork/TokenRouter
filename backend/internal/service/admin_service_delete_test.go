@@ -284,6 +284,26 @@ func (s *groupRepoStub) UpdateSortOrders(ctx context.Context, updates []GroupSor
 	return nil
 }
 
+func (s *groupRepoStub) FindByHealthCheckEnabled(ctx context.Context, enabled bool) ([]*Group, error) {
+	panic("unexpected FindByHealthCheckEnabled call")
+}
+
+func (s *groupRepoStub) UpdateHealthStatus(ctx context.Context, groupID int64, update *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *groupRepoStub) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error {
+	panic("unexpected UpdateHealthCheckConfig call")
+}
+
+func (s *groupRepoStub) UpdateGroupStatus(ctx context.Context, groupID int64, status string) error {
+	panic("unexpected UpdateGroupStatus call")
+}
+
+func (s *groupRepoStub) ForceHealthCheck(ctx context.Context, groupID int64) error {
+	panic("unexpected ForceHealthCheck call")
+}
+
 type deleteGroupAPIKeyRepoStub struct {
 	apiKeyRepoStubForGroupUpdate
 	keys         []string

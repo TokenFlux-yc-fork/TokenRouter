@@ -322,12 +322,14 @@ func ProvideRateLimitService(
 	openAI403CounterCache OpenAI403CounterCache,
 	settingService *SettingService,
 	tokenCacheInvalidator TokenCacheInvalidator,
+	groupHealthMonitor *GroupHealthMonitor,
 ) *RateLimitService {
 	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
 	svc.SetTimeoutCounterCache(timeoutCounterCache)
 	svc.SetOpenAI403CounterCache(openAI403CounterCache)
 	svc.SetSettingService(settingService)
 	svc.SetTokenCacheInvalidator(tokenCacheInvalidator)
+	svc.SetGroupHealthMonitor(groupHealthMonitor)
 	return svc
 }
 
@@ -464,9 +466,10 @@ func ProvideGroupAvailabilityProbeRunnerService(
 	gatewaySvc *GatewayService,
 	openAIGateway *OpenAIGatewayService,
 	geminiCompatSvc *GeminiMessagesCompatService,
+	healthMonitor *GroupHealthMonitor,
 	cfg *config.Config,
 ) *GroupAvailabilityProbeRunnerService {
-	svc := NewGroupAvailabilityProbeRunnerService(repo, accountTestSvc, gatewaySvc, openAIGateway, geminiCompatSvc, cfg)
+	svc := NewGroupAvailabilityProbeRunnerService(repo, accountTestSvc, gatewaySvc, openAIGateway, geminiCompatSvc, healthMonitor, cfg)
 	svc.Start()
 	return svc
 }
@@ -645,6 +648,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	NewGroupService,
+	NewGroupHealthMonitor,
 	NewAccountService,
 	NewProxyService,
 	NewRedeemService,

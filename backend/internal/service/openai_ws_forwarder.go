@@ -2013,6 +2013,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(err.Error())))
 			}
 		}
+		s.recordOpenAIWSDialPassiveGroupHealthFailure(ctx, account, err)
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
 	// cleanExit 标记正常终端事件退出，此时上游不会再发送帧，连接可安全归还复用。
@@ -3223,6 +3224,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(acquireErr.Error())))
 				}
 			}
+			s.recordOpenAIWSDialPassiveGroupHealthFailure(ctx, account, acquireErr)
 			if errors.Is(acquireErr, errOpenAIWSPreferredConnUnavailable) {
 				return nil, NewOpenAIWSClientCloseError(
 					coderws.StatusPolicyViolation,
@@ -4721,15 +4723,43 @@ func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Contex
 	s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody)
 }
 
+func (s *OpenAIGatewayService) recordOpenAIWSPassiveGroupHealthFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.rateLimitService == nil || account == nil {
+		return
+	}
+	s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSDialPassiveGroupHealthFailure(ctx context.Context, account *Account, err error) {
+	if err == nil {
+		return
+	}
+	var dialErr *openAIWSDialError
+	if !errors.As(err, &dialErr) || dialErr == nil {
+		return
+	}
+	switch dialErr.StatusCode {
+	case http.StatusTooManyRequests:
+		return
+	case http.StatusForbidden:
+		if account != nil && account.IsOpenAIOAuth() {
+			return
+		}
+	}
+	s.recordOpenAIWSPassiveGroupHealthFailure(ctx, account, dialErr.StatusCode, []byte(strings.TrimSpace(err.Error())))
+}
+
 // persistOpenAIWSErrorSignal 根据 WS error 事件语义同步账号运行态信号。
 func (s *OpenAIGatewayService) persistOpenAIWSErrorSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string) {
 	if isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
 		s.persistOpenAIWSRateLimitSignal(ctx, account, headers, responseBody, codeRaw, errTypeRaw, msgRaw)
 		return
 	}
-	if openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw) == http.StatusForbidden {
+	statusCode := openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	if statusCode == http.StatusForbidden {
 		s.persistOpenAIWSForbiddenSignal(ctx, account, headers, responseBody)
 	}
+	s.recordOpenAIWSPassiveGroupHealthFailure(ctx, account, statusCode, responseBody)
 }
 
 func (s *OpenAIGatewayService) persistOpenAIWSForbiddenSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {

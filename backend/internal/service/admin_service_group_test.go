@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
@@ -17,10 +18,12 @@ func ptrString[T ~string](v T) *string {
 
 // groupRepoStubForAdmin 用于测试 AdminService 的 GroupRepository Stub
 type groupRepoStubForAdmin struct {
-	created *Group // 记录 Create 调用的参数
-	updated *Group // 记录 Update 调用的参数
-	getByID *Group // GetByID 返回值
-	getErr  error  // GetByID 返回的错误
+	created           *Group // 记录 Create 调用的参数
+	updated           *Group // 记录 Update 调用的参数
+	healthCheckConfig *HealthCheckConfigUpdate
+	getByID           *Group // GetByID 返回值
+	getErr            error  // GetByID 返回的错误
+	updateErr         error
 
 	listWithFiltersCalls       int
 	listWithFiltersParams      pagination.PaginationParams
@@ -31,6 +34,9 @@ type groupRepoStubForAdmin struct {
 	listWithFiltersGroups      []Group
 	listWithFiltersResult      *pagination.PaginationResult
 	listWithFiltersErr         error
+	allowForceHealthCheck      bool
+	forceHealthCheckCalls      int
+	forceHealthCheckErr        error
 }
 
 func (s *groupRepoStubForAdmin) Create(_ context.Context, g *Group) error {
@@ -40,7 +46,7 @@ func (s *groupRepoStubForAdmin) Create(_ context.Context, g *Group) error {
 
 func (s *groupRepoStubForAdmin) Update(_ context.Context, g *Group) error {
 	s.updated = g
-	return nil
+	return s.updateErr
 }
 
 func (s *groupRepoStubForAdmin) GetByID(_ context.Context, _ int64) (*Group, error) {
@@ -126,6 +132,32 @@ func (s *groupRepoStubForAdmin) GetAccountIDsByGroupIDs(_ context.Context, _ []i
 
 func (s *groupRepoStubForAdmin) UpdateSortOrders(_ context.Context, _ []GroupSortOrderUpdate) error {
 	return nil
+}
+
+func (s *groupRepoStubForAdmin) FindByHealthCheckEnabled(_ context.Context, _ bool) ([]*Group, error) {
+	panic("unexpected FindByHealthCheckEnabled call")
+}
+
+func (s *groupRepoStubForAdmin) UpdateHealthStatus(_ context.Context, _ int64, _ *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *groupRepoStubForAdmin) UpdateHealthCheckConfig(_ context.Context, _ int64, update *HealthCheckConfigUpdate) error {
+	config := *update
+	s.healthCheckConfig = &config
+	return nil
+}
+
+func (s *groupRepoStubForAdmin) UpdateGroupStatus(_ context.Context, _ int64, _ string) error {
+	panic("unexpected UpdateGroupStatus call")
+}
+
+func (s *groupRepoStubForAdmin) ForceHealthCheck(_ context.Context, _ int64) error {
+	if !s.allowForceHealthCheck {
+		panic("unexpected ForceHealthCheck call")
+	}
+	s.forceHealthCheckCalls++
+	return s.forceHealthCheckErr
 }
 
 func TestAdminService_ListGroups_PassesSortParams(t *testing.T) {
@@ -431,6 +463,26 @@ func TestAdminService_CreateGroup_WithSessionIsolation(t *testing.T) {
 	require.True(t, group.SessionIsolationEnabled)
 }
 
+func TestAdminService_CreateGroup_NormalizesHealthCheckDefaults(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:               "health-defaults",
+		Platform:           PlatformAnthropic,
+		RateMultiplier:     1.0,
+		HealthCheckEnabled: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, defaultGroupHealthIntervalSec, group.HealthCheckIntervalSec)
+	require.Equal(t, defaultGroupHealthTimeoutSec, group.HealthCheckTimeoutSec)
+	require.Equal(t, defaultGroupHealthFailureThreshold, group.HealthCheckFailureThreshold)
+	require.Equal(t, defaultGroupHealthSuccessThreshold, group.HealthCheckSuccessThreshold)
+	require.Equal(t, HealthStatusUnknown, group.HealthStatus)
+	require.Equal(t, defaultGroupHealthIntervalSec, repo.created.HealthCheckIntervalSec)
+}
+
 // TestAdminService_UpdateGroup_WithImagePricing 测试更新分组时 ImagePrice 字段正确更新
 func TestAdminService_UpdateGroup_WithImagePricing(t *testing.T) {
 	existingGroup := &Group{
@@ -679,6 +731,95 @@ func TestAdminService_UpdateGroup_ScrubsInvalidDisabledPeakRate(t *testing.T) {
 	require.Equal(t, "", repo.updated.PeakStart)
 	require.Equal(t, "18:00", repo.updated.PeakEnd)
 	require.Equal(t, 1.0, repo.updated.PeakRateMultiplier)
+}
+
+func TestAdminService_UpdateGroup_DoesNotInvalidateAuthCacheWhenUpdateFails(t *testing.T) {
+	existingGroup := &Group{
+		ID:       1,
+		Name:     "existing-group",
+		Platform: PlatformAnthropic,
+		Status:   StatusActive,
+		RPMLimit: 10,
+	}
+	repo := &groupRepoStubForAdmin{
+		getByID:   existingGroup,
+		updateErr: errors.New("update failed"),
+	}
+	invalidator := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{
+		groupRepo:            repo,
+		authCacheInvalidator: invalidator,
+	}
+
+	rpmLimit := 60
+	_, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
+		RPMLimit: &rpmLimit,
+	})
+
+	require.Error(t, err)
+	require.Empty(t, invalidator.groupIDs)
+}
+
+func TestAdminService_UpdateGroup_RejectsInvalidHealthCheckConfig(t *testing.T) {
+	existingGroup := &Group{
+		ID:       1,
+		Name:     "existing-group",
+		Platform: PlatformAnthropic,
+		Status:   StatusActive,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existingGroup}
+	svc := &adminServiceImpl{groupRepo: repo}
+	tooSmallInterval := minGroupHealthIntervalSec - 1
+
+	_, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
+		HealthCheckIntervalSec: &tooSmallInterval,
+	})
+
+	require.Error(t, err)
+	require.Nil(t, repo.updated)
+}
+
+func TestAdminService_UpdateGroupHealthCheckConfig_NormalizesDefaults(t *testing.T) {
+	repo := &groupRepoStubForAdmin{
+		getByID: &Group{ID: 1, Name: "existing-group"},
+	}
+	invalidator := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{
+		groupRepo:            repo,
+		authCacheInvalidator: invalidator,
+	}
+
+	err := svc.UpdateGroupHealthCheckConfig(context.Background(), 1, &HealthCheckConfigUpdate{
+		Enabled: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.healthCheckConfig)
+	require.True(t, repo.healthCheckConfig.Enabled)
+	require.Equal(t, defaultGroupHealthIntervalSec, repo.healthCheckConfig.IntervalSec)
+	require.Equal(t, defaultGroupHealthTimeoutSec, repo.healthCheckConfig.TimeoutSec)
+	require.Equal(t, defaultGroupHealthFailureThreshold, repo.healthCheckConfig.FailureThreshold)
+	require.Equal(t, defaultGroupHealthSuccessThreshold, repo.healthCheckConfig.SuccessThreshold)
+	require.Equal(t, []int64{1}, invalidator.groupIDs)
+}
+
+func TestAdminService_ForceGroupHealthCheck_RejectsInactiveGroup(t *testing.T) {
+	repo := &groupRepoStubForAdmin{
+		getByID: &Group{
+			ID:                 1,
+			Name:               "inactive-health-group",
+			Status:             "inactive",
+			HealthCheckEnabled: true,
+		},
+		allowForceHealthCheck: true,
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	err := svc.ForceGroupHealthCheck(context.Background(), 1)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "active")
+	require.Equal(t, 0, repo.forceHealthCheckCalls)
 }
 
 func TestAdminService_CreateGroup_NormalizesMessagesDispatchModelConfig(t *testing.T) {
@@ -952,6 +1093,26 @@ func (s *groupRepoStubForFallbackCycle) UpdateSortOrders(_ context.Context, _ []
 	return nil
 }
 
+func (s *groupRepoStubForFallbackCycle) FindByHealthCheckEnabled(_ context.Context, _ bool) ([]*Group, error) {
+	panic("unexpected FindByHealthCheckEnabled call")
+}
+
+func (s *groupRepoStubForFallbackCycle) UpdateHealthStatus(_ context.Context, _ int64, _ *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *groupRepoStubForFallbackCycle) UpdateHealthCheckConfig(_ context.Context, _ int64, _ *HealthCheckConfigUpdate) error {
+	panic("unexpected UpdateHealthCheckConfig call")
+}
+
+func (s *groupRepoStubForFallbackCycle) UpdateGroupStatus(_ context.Context, _ int64, _ string) error {
+	panic("unexpected UpdateGroupStatus call")
+}
+
+func (s *groupRepoStubForFallbackCycle) ForceHealthCheck(_ context.Context, _ int64) error {
+	panic("unexpected ForceHealthCheck call")
+}
+
 type groupRepoStubForInvalidRequestFallback struct {
 	groups  map[int64]*Group
 	created *Group
@@ -1028,6 +1189,26 @@ func (s *groupRepoStubForInvalidRequestFallback) BindAccountsToGroup(_ context.C
 
 func (s *groupRepoStubForInvalidRequestFallback) UpdateSortOrders(_ context.Context, _ []GroupSortOrderUpdate) error {
 	return nil
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) FindByHealthCheckEnabled(_ context.Context, _ bool) ([]*Group, error) {
+	panic("unexpected FindByHealthCheckEnabled call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) UpdateHealthStatus(_ context.Context, _ int64, _ *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) UpdateHealthCheckConfig(_ context.Context, _ int64, _ *HealthCheckConfigUpdate) error {
+	panic("unexpected UpdateHealthCheckConfig call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) UpdateGroupStatus(_ context.Context, _ int64, _ string) error {
+	panic("unexpected UpdateGroupStatus call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) ForceHealthCheck(_ context.Context, _ int64) error {
+	panic("unexpected ForceHealthCheck call")
 }
 
 func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsUnsupportedPlatform(t *testing.T) {
@@ -1211,6 +1392,17 @@ func TestAdminService_CreateGroup_UnavailableFallbackRejectsInvalidGroup(t *test
 			name:        "inactive_target",
 			fallback:    &Group{ID: 10, Platform: PlatformOpenAI, Status: StatusDisabled},
 			wantMessage: "unavailable fallback group must be active",
+		},
+		{
+			name: "unhealthy_target",
+			fallback: &Group{
+				ID:                 10,
+				Platform:           PlatformOpenAI,
+				Status:             StatusActive,
+				HealthCheckEnabled: true,
+				HealthStatus:       HealthStatusUnhealthy,
+			},
+			wantMessage: "unavailable fallback group must be healthy",
 		},
 	}
 

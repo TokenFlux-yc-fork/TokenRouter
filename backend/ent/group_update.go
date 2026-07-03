@@ -644,6 +644,180 @@ func (_u *GroupUpdate) SetNillableAvailabilityProbeConfig(v *domain.GroupAvailab
 	return _u
 }
 
+// SetHealthCheckEnabled sets the "health_check_enabled" field.
+func (_u *GroupUpdate) SetHealthCheckEnabled(v bool) *GroupUpdate {
+	_u.mutation.SetHealthCheckEnabled(v)
+	return _u
+}
+
+// SetNillableHealthCheckEnabled sets the "health_check_enabled" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthCheckEnabled(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthCheckEnabled(*v)
+	}
+	return _u
+}
+
+// SetHealthCheckIntervalSec sets the "health_check_interval_sec" field.
+func (_u *GroupUpdate) SetHealthCheckIntervalSec(v int) *GroupUpdate {
+	_u.mutation.ResetHealthCheckIntervalSec()
+	_u.mutation.SetHealthCheckIntervalSec(v)
+	return _u
+}
+
+// SetNillableHealthCheckIntervalSec sets the "health_check_interval_sec" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthCheckIntervalSec(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthCheckIntervalSec(*v)
+	}
+	return _u
+}
+
+// AddHealthCheckIntervalSec adds value to the "health_check_interval_sec" field.
+func (_u *GroupUpdate) AddHealthCheckIntervalSec(v int) *GroupUpdate {
+	_u.mutation.AddHealthCheckIntervalSec(v)
+	return _u
+}
+
+// SetHealthCheckTimeoutSec sets the "health_check_timeout_sec" field.
+func (_u *GroupUpdate) SetHealthCheckTimeoutSec(v int) *GroupUpdate {
+	_u.mutation.ResetHealthCheckTimeoutSec()
+	_u.mutation.SetHealthCheckTimeoutSec(v)
+	return _u
+}
+
+// SetNillableHealthCheckTimeoutSec sets the "health_check_timeout_sec" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthCheckTimeoutSec(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthCheckTimeoutSec(*v)
+	}
+	return _u
+}
+
+// AddHealthCheckTimeoutSec adds value to the "health_check_timeout_sec" field.
+func (_u *GroupUpdate) AddHealthCheckTimeoutSec(v int) *GroupUpdate {
+	_u.mutation.AddHealthCheckTimeoutSec(v)
+	return _u
+}
+
+// SetHealthCheckFailureThreshold sets the "health_check_failure_threshold" field.
+func (_u *GroupUpdate) SetHealthCheckFailureThreshold(v int) *GroupUpdate {
+	_u.mutation.ResetHealthCheckFailureThreshold()
+	_u.mutation.SetHealthCheckFailureThreshold(v)
+	return _u
+}
+
+// SetNillableHealthCheckFailureThreshold sets the "health_check_failure_threshold" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthCheckFailureThreshold(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthCheckFailureThreshold(*v)
+	}
+	return _u
+}
+
+// AddHealthCheckFailureThreshold adds value to the "health_check_failure_threshold" field.
+func (_u *GroupUpdate) AddHealthCheckFailureThreshold(v int) *GroupUpdate {
+	_u.mutation.AddHealthCheckFailureThreshold(v)
+	return _u
+}
+
+// SetHealthCheckSuccessThreshold sets the "health_check_success_threshold" field.
+func (_u *GroupUpdate) SetHealthCheckSuccessThreshold(v int) *GroupUpdate {
+	_u.mutation.ResetHealthCheckSuccessThreshold()
+	_u.mutation.SetHealthCheckSuccessThreshold(v)
+	return _u
+}
+
+// SetNillableHealthCheckSuccessThreshold sets the "health_check_success_threshold" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthCheckSuccessThreshold(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthCheckSuccessThreshold(*v)
+	}
+	return _u
+}
+
+// AddHealthCheckSuccessThreshold adds value to the "health_check_success_threshold" field.
+func (_u *GroupUpdate) AddHealthCheckSuccessThreshold(v int) *GroupUpdate {
+	_u.mutation.AddHealthCheckSuccessThreshold(v)
+	return _u
+}
+
+// SetHealthLastCheckAt sets the "health_last_check_at" field.
+func (_u *GroupUpdate) SetHealthLastCheckAt(v time.Time) *GroupUpdate {
+	_u.mutation.SetHealthLastCheckAt(v)
+	return _u
+}
+
+// SetNillableHealthLastCheckAt sets the "health_last_check_at" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthLastCheckAt(v *time.Time) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthLastCheckAt(*v)
+	}
+	return _u
+}
+
+// ClearHealthLastCheckAt clears the value of the "health_last_check_at" field.
+func (_u *GroupUpdate) ClearHealthLastCheckAt() *GroupUpdate {
+	_u.mutation.ClearHealthLastCheckAt()
+	return _u
+}
+
+// SetHealthConsecutiveFailures sets the "health_consecutive_failures" field.
+func (_u *GroupUpdate) SetHealthConsecutiveFailures(v int) *GroupUpdate {
+	_u.mutation.ResetHealthConsecutiveFailures()
+	_u.mutation.SetHealthConsecutiveFailures(v)
+	return _u
+}
+
+// SetNillableHealthConsecutiveFailures sets the "health_consecutive_failures" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthConsecutiveFailures(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthConsecutiveFailures(*v)
+	}
+	return _u
+}
+
+// AddHealthConsecutiveFailures adds value to the "health_consecutive_failures" field.
+func (_u *GroupUpdate) AddHealthConsecutiveFailures(v int) *GroupUpdate {
+	_u.mutation.AddHealthConsecutiveFailures(v)
+	return _u
+}
+
+// SetHealthConsecutiveSuccesses sets the "health_consecutive_successes" field.
+func (_u *GroupUpdate) SetHealthConsecutiveSuccesses(v int) *GroupUpdate {
+	_u.mutation.ResetHealthConsecutiveSuccesses()
+	_u.mutation.SetHealthConsecutiveSuccesses(v)
+	return _u
+}
+
+// SetNillableHealthConsecutiveSuccesses sets the "health_consecutive_successes" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthConsecutiveSuccesses(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthConsecutiveSuccesses(*v)
+	}
+	return _u
+}
+
+// AddHealthConsecutiveSuccesses adds value to the "health_consecutive_successes" field.
+func (_u *GroupUpdate) AddHealthConsecutiveSuccesses(v int) *GroupUpdate {
+	_u.mutation.AddHealthConsecutiveSuccesses(v)
+	return _u
+}
+
+// SetHealthStatus sets the "health_status" field.
+func (_u *GroupUpdate) SetHealthStatus(v string) *GroupUpdate {
+	_u.mutation.SetHealthStatus(v)
+	return _u
+}
+
+// SetNillableHealthStatus sets the "health_status" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableHealthStatus(v *string) *GroupUpdate {
+	if v != nil {
+		_u.SetHealthStatus(*v)
+	}
+	return _u
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_u *GroupUpdate) SetRpmLimit(v int) *GroupUpdate {
 	_u.mutation.ResetRpmLimit()
@@ -957,6 +1131,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "default_mapped_model", err: fmt.Errorf(`ent: validator failed for field "Group.default_mapped_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.HealthStatus(); ok {
+		if err := group.HealthStatusValidator(v); err != nil {
+			return &ValidationError{Name: "health_status", err: fmt.Errorf(`ent: validator failed for field "Group.health_status": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -1141,6 +1320,54 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AvailabilityProbeConfig(); ok {
 		_spec.SetField(group.FieldAvailabilityProbeConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.HealthCheckEnabled(); ok {
+		_spec.SetField(group.FieldHealthCheckEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.HealthCheckIntervalSec(); ok {
+		_spec.SetField(group.FieldHealthCheckIntervalSec, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthCheckIntervalSec(); ok {
+		_spec.AddField(group.FieldHealthCheckIntervalSec, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthCheckTimeoutSec(); ok {
+		_spec.SetField(group.FieldHealthCheckTimeoutSec, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthCheckTimeoutSec(); ok {
+		_spec.AddField(group.FieldHealthCheckTimeoutSec, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthCheckFailureThreshold(); ok {
+		_spec.SetField(group.FieldHealthCheckFailureThreshold, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthCheckFailureThreshold(); ok {
+		_spec.AddField(group.FieldHealthCheckFailureThreshold, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthCheckSuccessThreshold(); ok {
+		_spec.SetField(group.FieldHealthCheckSuccessThreshold, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthCheckSuccessThreshold(); ok {
+		_spec.AddField(group.FieldHealthCheckSuccessThreshold, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthLastCheckAt(); ok {
+		_spec.SetField(group.FieldHealthLastCheckAt, field.TypeTime, value)
+	}
+	if _u.mutation.HealthLastCheckAtCleared() {
+		_spec.ClearField(group.FieldHealthLastCheckAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.HealthConsecutiveFailures(); ok {
+		_spec.SetField(group.FieldHealthConsecutiveFailures, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthConsecutiveFailures(); ok {
+		_spec.AddField(group.FieldHealthConsecutiveFailures, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthConsecutiveSuccesses(); ok {
+		_spec.SetField(group.FieldHealthConsecutiveSuccesses, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthConsecutiveSuccesses(); ok {
+		_spec.AddField(group.FieldHealthConsecutiveSuccesses, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthStatus(); ok {
+		_spec.SetField(group.FieldHealthStatus, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
@@ -2045,6 +2272,180 @@ func (_u *GroupUpdateOne) SetNillableAvailabilityProbeConfig(v *domain.GroupAvai
 	return _u
 }
 
+// SetHealthCheckEnabled sets the "health_check_enabled" field.
+func (_u *GroupUpdateOne) SetHealthCheckEnabled(v bool) *GroupUpdateOne {
+	_u.mutation.SetHealthCheckEnabled(v)
+	return _u
+}
+
+// SetNillableHealthCheckEnabled sets the "health_check_enabled" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthCheckEnabled(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthCheckEnabled(*v)
+	}
+	return _u
+}
+
+// SetHealthCheckIntervalSec sets the "health_check_interval_sec" field.
+func (_u *GroupUpdateOne) SetHealthCheckIntervalSec(v int) *GroupUpdateOne {
+	_u.mutation.ResetHealthCheckIntervalSec()
+	_u.mutation.SetHealthCheckIntervalSec(v)
+	return _u
+}
+
+// SetNillableHealthCheckIntervalSec sets the "health_check_interval_sec" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthCheckIntervalSec(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthCheckIntervalSec(*v)
+	}
+	return _u
+}
+
+// AddHealthCheckIntervalSec adds value to the "health_check_interval_sec" field.
+func (_u *GroupUpdateOne) AddHealthCheckIntervalSec(v int) *GroupUpdateOne {
+	_u.mutation.AddHealthCheckIntervalSec(v)
+	return _u
+}
+
+// SetHealthCheckTimeoutSec sets the "health_check_timeout_sec" field.
+func (_u *GroupUpdateOne) SetHealthCheckTimeoutSec(v int) *GroupUpdateOne {
+	_u.mutation.ResetHealthCheckTimeoutSec()
+	_u.mutation.SetHealthCheckTimeoutSec(v)
+	return _u
+}
+
+// SetNillableHealthCheckTimeoutSec sets the "health_check_timeout_sec" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthCheckTimeoutSec(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthCheckTimeoutSec(*v)
+	}
+	return _u
+}
+
+// AddHealthCheckTimeoutSec adds value to the "health_check_timeout_sec" field.
+func (_u *GroupUpdateOne) AddHealthCheckTimeoutSec(v int) *GroupUpdateOne {
+	_u.mutation.AddHealthCheckTimeoutSec(v)
+	return _u
+}
+
+// SetHealthCheckFailureThreshold sets the "health_check_failure_threshold" field.
+func (_u *GroupUpdateOne) SetHealthCheckFailureThreshold(v int) *GroupUpdateOne {
+	_u.mutation.ResetHealthCheckFailureThreshold()
+	_u.mutation.SetHealthCheckFailureThreshold(v)
+	return _u
+}
+
+// SetNillableHealthCheckFailureThreshold sets the "health_check_failure_threshold" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthCheckFailureThreshold(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthCheckFailureThreshold(*v)
+	}
+	return _u
+}
+
+// AddHealthCheckFailureThreshold adds value to the "health_check_failure_threshold" field.
+func (_u *GroupUpdateOne) AddHealthCheckFailureThreshold(v int) *GroupUpdateOne {
+	_u.mutation.AddHealthCheckFailureThreshold(v)
+	return _u
+}
+
+// SetHealthCheckSuccessThreshold sets the "health_check_success_threshold" field.
+func (_u *GroupUpdateOne) SetHealthCheckSuccessThreshold(v int) *GroupUpdateOne {
+	_u.mutation.ResetHealthCheckSuccessThreshold()
+	_u.mutation.SetHealthCheckSuccessThreshold(v)
+	return _u
+}
+
+// SetNillableHealthCheckSuccessThreshold sets the "health_check_success_threshold" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthCheckSuccessThreshold(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthCheckSuccessThreshold(*v)
+	}
+	return _u
+}
+
+// AddHealthCheckSuccessThreshold adds value to the "health_check_success_threshold" field.
+func (_u *GroupUpdateOne) AddHealthCheckSuccessThreshold(v int) *GroupUpdateOne {
+	_u.mutation.AddHealthCheckSuccessThreshold(v)
+	return _u
+}
+
+// SetHealthLastCheckAt sets the "health_last_check_at" field.
+func (_u *GroupUpdateOne) SetHealthLastCheckAt(v time.Time) *GroupUpdateOne {
+	_u.mutation.SetHealthLastCheckAt(v)
+	return _u
+}
+
+// SetNillableHealthLastCheckAt sets the "health_last_check_at" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthLastCheckAt(v *time.Time) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthLastCheckAt(*v)
+	}
+	return _u
+}
+
+// ClearHealthLastCheckAt clears the value of the "health_last_check_at" field.
+func (_u *GroupUpdateOne) ClearHealthLastCheckAt() *GroupUpdateOne {
+	_u.mutation.ClearHealthLastCheckAt()
+	return _u
+}
+
+// SetHealthConsecutiveFailures sets the "health_consecutive_failures" field.
+func (_u *GroupUpdateOne) SetHealthConsecutiveFailures(v int) *GroupUpdateOne {
+	_u.mutation.ResetHealthConsecutiveFailures()
+	_u.mutation.SetHealthConsecutiveFailures(v)
+	return _u
+}
+
+// SetNillableHealthConsecutiveFailures sets the "health_consecutive_failures" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthConsecutiveFailures(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthConsecutiveFailures(*v)
+	}
+	return _u
+}
+
+// AddHealthConsecutiveFailures adds value to the "health_consecutive_failures" field.
+func (_u *GroupUpdateOne) AddHealthConsecutiveFailures(v int) *GroupUpdateOne {
+	_u.mutation.AddHealthConsecutiveFailures(v)
+	return _u
+}
+
+// SetHealthConsecutiveSuccesses sets the "health_consecutive_successes" field.
+func (_u *GroupUpdateOne) SetHealthConsecutiveSuccesses(v int) *GroupUpdateOne {
+	_u.mutation.ResetHealthConsecutiveSuccesses()
+	_u.mutation.SetHealthConsecutiveSuccesses(v)
+	return _u
+}
+
+// SetNillableHealthConsecutiveSuccesses sets the "health_consecutive_successes" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthConsecutiveSuccesses(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthConsecutiveSuccesses(*v)
+	}
+	return _u
+}
+
+// AddHealthConsecutiveSuccesses adds value to the "health_consecutive_successes" field.
+func (_u *GroupUpdateOne) AddHealthConsecutiveSuccesses(v int) *GroupUpdateOne {
+	_u.mutation.AddHealthConsecutiveSuccesses(v)
+	return _u
+}
+
+// SetHealthStatus sets the "health_status" field.
+func (_u *GroupUpdateOne) SetHealthStatus(v string) *GroupUpdateOne {
+	_u.mutation.SetHealthStatus(v)
+	return _u
+}
+
+// SetNillableHealthStatus sets the "health_status" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableHealthStatus(v *string) *GroupUpdateOne {
+	if v != nil {
+		_u.SetHealthStatus(*v)
+	}
+	return _u
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_u *GroupUpdateOne) SetRpmLimit(v int) *GroupUpdateOne {
 	_u.mutation.ResetRpmLimit()
@@ -2371,6 +2772,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "default_mapped_model", err: fmt.Errorf(`ent: validator failed for field "Group.default_mapped_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.HealthStatus(); ok {
+		if err := group.HealthStatusValidator(v); err != nil {
+			return &ValidationError{Name: "health_status", err: fmt.Errorf(`ent: validator failed for field "Group.health_status": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -2572,6 +2978,54 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.AvailabilityProbeConfig(); ok {
 		_spec.SetField(group.FieldAvailabilityProbeConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.HealthCheckEnabled(); ok {
+		_spec.SetField(group.FieldHealthCheckEnabled, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.HealthCheckIntervalSec(); ok {
+		_spec.SetField(group.FieldHealthCheckIntervalSec, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthCheckIntervalSec(); ok {
+		_spec.AddField(group.FieldHealthCheckIntervalSec, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthCheckTimeoutSec(); ok {
+		_spec.SetField(group.FieldHealthCheckTimeoutSec, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthCheckTimeoutSec(); ok {
+		_spec.AddField(group.FieldHealthCheckTimeoutSec, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthCheckFailureThreshold(); ok {
+		_spec.SetField(group.FieldHealthCheckFailureThreshold, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthCheckFailureThreshold(); ok {
+		_spec.AddField(group.FieldHealthCheckFailureThreshold, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthCheckSuccessThreshold(); ok {
+		_spec.SetField(group.FieldHealthCheckSuccessThreshold, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthCheckSuccessThreshold(); ok {
+		_spec.AddField(group.FieldHealthCheckSuccessThreshold, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthLastCheckAt(); ok {
+		_spec.SetField(group.FieldHealthLastCheckAt, field.TypeTime, value)
+	}
+	if _u.mutation.HealthLastCheckAtCleared() {
+		_spec.ClearField(group.FieldHealthLastCheckAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.HealthConsecutiveFailures(); ok {
+		_spec.SetField(group.FieldHealthConsecutiveFailures, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthConsecutiveFailures(); ok {
+		_spec.AddField(group.FieldHealthConsecutiveFailures, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthConsecutiveSuccesses(); ok {
+		_spec.SetField(group.FieldHealthConsecutiveSuccesses, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedHealthConsecutiveSuccesses(); ok {
+		_spec.AddField(group.FieldHealthConsecutiveSuccesses, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.HealthStatus(); ok {
+		_spec.SetField(group.FieldHealthStatus, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)

@@ -2762,6 +2762,26 @@ export default {
         modelRequired: '启用分组可用性探测时必须选择探测模型',
         promptRequired: '启用分组可用性探测时必须填写探测提示词'
       },
+      health: {
+        title: '健康检查与熔断',
+        hint: '结合主动探测结果与上游错误自动熔断该分组，并在连续成功后恢复。',
+        status: '健康',
+        disabled: '未监控',
+        interval: '检查间隔（秒）',
+        timeout: '超时时间（秒）',
+        failureThreshold: '失败阈值',
+        successThreshold: '恢复阈值',
+        manualCheck: '立即检查',
+        manualCheckTriggered: '已安排手动健康检查',
+        manualCheckFailed: '触发手动健康检查失败',
+        lastCheck: '上次检查',
+        counters: '失败 {failures} / 成功 {successes}',
+        statuses: {
+          unknown: '未知',
+          healthy: '健康',
+          unhealthy: '异常'
+        }
+      },
       claudeCode: {
         title: 'Claude Code 客户端限制',
         tooltip:

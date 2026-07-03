@@ -262,6 +262,21 @@ func (m *mockGroupRepoForGemini) GetAccountIDsByGroupIDs(ctx context.Context, gr
 func (m *mockGroupRepoForGemini) UpdateSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error {
 	return nil
 }
+func (m *mockGroupRepoForGemini) FindByHealthCheckEnabled(ctx context.Context, enabled bool) ([]*Group, error) {
+	return nil, nil
+}
+func (m *mockGroupRepoForGemini) UpdateHealthStatus(ctx context.Context, groupID int64, update *HealthStatusUpdate) error {
+	return nil
+}
+func (m *mockGroupRepoForGemini) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error {
+	return nil
+}
+func (m *mockGroupRepoForGemini) UpdateGroupStatus(ctx context.Context, groupID int64, status string) error {
+	return nil
+}
+func (m *mockGroupRepoForGemini) ForceHealthCheck(ctx context.Context, groupID int64) error {
+	return nil
+}
 
 var _ GroupRepository = (*mockGroupRepoForGemini)(nil)
 

@@ -213,6 +213,26 @@ func (s *authGroupRepoStub) UpdateSortOrders(ctx context.Context, updates []Grou
 	panic("unexpected UpdateSortOrders call")
 }
 
+func (s *authGroupRepoStub) FindByHealthCheckEnabled(ctx context.Context, enabled bool) ([]*Group, error) {
+	panic("unexpected FindByHealthCheckEnabled call")
+}
+
+func (s *authGroupRepoStub) UpdateHealthStatus(ctx context.Context, groupID int64, update *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *authGroupRepoStub) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error {
+	panic("unexpected UpdateHealthCheckConfig call")
+}
+
+func (s *authGroupRepoStub) UpdateGroupStatus(ctx context.Context, groupID int64, status string) error {
+	panic("unexpected UpdateGroupStatus call")
+}
+
+func (s *authGroupRepoStub) ForceHealthCheck(ctx context.Context, groupID int64) error {
+	panic("unexpected ForceHealthCheck call")
+}
+
 type authUserGroupRateRepoStub struct {
 	overrides map[int64]*int
 	calls     []int64
@@ -489,6 +509,60 @@ func TestAPIKeyService_GetByKey_FallsBackDisabledBoundGroupToConfiguredGroup(t *
 	require.NotNil(t, apiKey.Group)
 	require.Equal(t, configuredFallbackID, apiKey.Group.ID)
 	require.Equal(t, "openai-configured-fallback", apiKey.Group.Name)
+}
+
+func TestAPIKeyService_GetByKey_FallsBackUnhealthyBoundGroupToConfiguredGroup(t *testing.T) {
+	unhealthyGroupID := int64(9)
+	configuredFallbackID := int64(11)
+	repo := &authRepoStub{
+		getByKeyForAuth: func(ctx context.Context, key string) (*APIKey, error) {
+			return &APIKey{
+				ID:                                    1,
+				UserID:                                2,
+				GroupID:                               &unhealthyGroupID,
+				Key:                                   key,
+				Status:                                StatusActive,
+				FallbackToDefaultGroupWhenUnavailable: true,
+				User: &User{
+					ID:          2,
+					Status:      StatusActive,
+					Role:        RoleUser,
+					Balance:     10,
+					Concurrency: 3,
+				},
+				Group: &Group{
+					ID:                         unhealthyGroupID,
+					Name:                       "openai-unhealthy",
+					Platform:                   PlatformOpenAI,
+					Status:                     StatusActive,
+					Hydrated:                   true,
+					HealthCheckEnabled:         true,
+					HealthStatus:               HealthStatusUnhealthy,
+					UnavailableFallbackGroupID: &configuredFallbackID,
+				},
+			}, nil
+		},
+	}
+	groupRepo := &authGroupRepoStub{
+		groupsByID: map[int64]Group{
+			configuredFallbackID: {
+				ID:             configuredFallbackID,
+				Name:           "openai-configured-fallback",
+				Platform:       PlatformOpenAI,
+				Status:         StatusActive,
+				Hydrated:       true,
+				RateMultiplier: 1.2,
+			},
+		},
+	}
+	svc := NewAPIKeyService(repo, nil, groupRepo, nil, nil, nil, &config.Config{})
+
+	apiKey, err := svc.GetByKey(context.Background(), "k-unhealthy")
+	require.NoError(t, err)
+	require.NotNil(t, apiKey.GroupID)
+	require.Equal(t, configuredFallbackID, *apiKey.GroupID)
+	require.NotNil(t, apiKey.Group)
+	require.Equal(t, configuredFallbackID, apiKey.Group.ID)
 }
 
 func TestAPIKeyService_GetByKey_InvalidConfiguredUnavailableFallbackUsesPlatformDefault(t *testing.T) {
