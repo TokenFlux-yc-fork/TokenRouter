@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -72,4 +73,14 @@ func TestIsOpenAIWSTokenEvent_DisjointWithTerminal(t *testing.T) {
 			require.False(t, isOpenAIWSTokenEvent(ev), "terminal event %q must NOT be classified as token event (issue #2651)", ev)
 		})
 	}
+}
+
+func TestOpenAIWSIngressTurnRetryable_ResponseFailedRetryable(t *testing.T) {
+	err := wrapOpenAIWSIngressTurnError(openAIWSIngressStageResponseFailedRetryable, errors.New("capacity"), false)
+
+	require.True(t, isOpenAIWSIngressTurnRetryable(err))
+	require.Equal(t, openAIWSIngressStageResponseFailedRetryable, openAIWSIngressTurnRetryReason(err))
+	require.False(t, isOpenAIWSIngressTurnRetryable(
+		wrapOpenAIWSIngressTurnError(openAIWSIngressStageResponseFailedRetryable, errors.New("capacity"), true),
+	))
 }

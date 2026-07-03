@@ -236,8 +236,32 @@ func TestIsOpenAITransientProcessingError(t *testing.T) {
 
 	require.True(t, isOpenAITransientProcessingError(
 		http.StatusBadRequest,
+		"Selected model is at capacity. Please try a different model.",
+		nil,
+	))
+
+	require.True(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
 		"",
 		[]byte(`{"error":{"code":"server_is_overloaded","message":"Please retry later.","type":"invalid_request_error"}}`),
+	))
+
+	require.True(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"",
+		[]byte(`{"response":{"error":{"code":"server_is_overloaded","message":"Please retry later."}}}`),
+	))
+
+	require.True(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"",
+		[]byte(`{"code":"server_is_overloaded","message":"Please retry later."}`),
+	))
+
+	require.True(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"Please retry later.",
+		[]byte(`{"type":"response.failed","response":{"instructions":"This prompt mentions cybersecurity risk but the actual error is capacity.","error":{"code":"server_is_overloaded","message":"Please retry later."}}}`),
 	))
 
 	require.True(t, isOpenAITransientProcessingError(
@@ -246,11 +270,117 @@ func TestIsOpenAITransientProcessingError(t *testing.T) {
 		[]byte(`{"error":{"code":"slow_down","message":"Please retry later."}}`),
 	))
 
+	require.True(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"",
+		[]byte(`{"response":{"error":{"message":"The service is currently experiencing high demand. Please try again later."}}}`),
+	))
+
+	require.True(t, isOpenAITransientProcessingError(
+		http.StatusServiceUnavailable,
+		"",
+		[]byte(`{"error":{"message":"The model is temporarily unavailable."}}`),
+	))
+
 	require.False(t, isOpenAITransientProcessingError(
 		http.StatusBadRequest,
 		"Missing required parameter: 'instructions'",
 		[]byte(`{"error":{"message":"Missing required parameter: 'instructions'"}}`),
 	))
+
+	require.False(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"Your input exceeds the context window of this model. Please adjust your input and try again.",
+		[]byte(`{"response":{"error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again.","code":"context_length_exceeded"}}}`),
+	))
+
+	require.False(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"This request has been flagged for potentially high-risk cyber activity.",
+		[]byte(`{"response":{"error":{"message":"This request has been flagged for potentially high-risk cyber activity.","code":"cyber_policy"}}}`),
+	))
+
+	require.False(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"This request has been flagged for potentially high-risk cyber activity.",
+		[]byte(`{"type":"response.failed","response":{"instructions":"The selected model is at capacity. Please try again later.","error":{"code":"cyber_policy","message":"This request has been flagged for potentially high-risk cyber activity."}}}`),
+	))
+}
+
+func TestExtractUpstreamErrorMessageAndCodeResponsesFormat(t *testing.T) {
+	require.Equal(t,
+		"Selected model is at capacity. Please try a different model.",
+		extractUpstreamErrorMessage([]byte(`{"response":{"error":{"message":"Selected model is at capacity. Please try a different model.","code":"server_is_overloaded"}}}`)),
+	)
+	require.Equal(t,
+		"server_is_overloaded",
+		extractUpstreamErrorCode([]byte(`{"response":{"error":{"message":"Selected model is at capacity. Please try a different model.","code":"server_is_overloaded"}}}`)),
+	)
+	require.Equal(t,
+		"server_is_overloaded",
+		extractUpstreamErrorCode([]byte(`{"code":"server_is_overloaded","message":"Please retry later."}`)),
+	)
+	require.Equal(t,
+		"top-level nested capacity",
+		extractUpstreamErrorMessage([]byte(`{"message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"top-level nested capacity\"}} trailing"}`)),
+	)
+	require.Equal(t,
+		"server_is_overloaded",
+		extractUpstreamErrorCode([]byte(`{"code":"upstream_error","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"top-level nested capacity\"}} trailing"}`)),
+	)
+	require.Equal(t,
+		"prefixed nested capacity",
+		extractUpstreamErrorMessage([]byte(`{"message":"upstream returned: {\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"prefixed nested capacity\"}} trailing"}`)),
+	)
+	require.Equal(t,
+		"server_is_overloaded",
+		extractUpstreamErrorCode([]byte(`{"code":"upstream_error","message":"upstream returned: {\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"prefixed nested capacity\"}} trailing"}`)),
+	)
+	require.Equal(t,
+		"cyber_policy",
+		extractUpstreamErrorCode([]byte(`{"code":"cyber_policy","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"wrapped but top-level code is authoritative\"}}"}`)),
+	)
+	require.True(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"",
+		[]byte(`{"code":"upstream_error","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"Please retry later.\"}} trailing"}`),
+	))
+	require.Equal(t,
+		"status-details capacity",
+		extractUpstreamErrorMessage([]byte(`{"response":{"status_details":{"error":{"message":"status-details capacity","code":"slow_down"}}}}`)),
+	)
+	require.Equal(t,
+		"slow_down",
+		extractUpstreamErrorCode([]byte(`{"response":{"status_details":{"error":{"message":"status-details capacity","code":"slow_down"}}}}`)),
+	)
+	require.Equal(t,
+		"nested status details",
+		extractUpstreamErrorMessage([]byte(`{"error":{"message":"{\"response\":{\"status_details\":{\"error\":{\"code\":\"slow_down\",\"message\":\"nested status details\"}}}}"}}`)),
+	)
+	require.Equal(t,
+		"slow_down",
+		extractUpstreamErrorCode([]byte(`{"error":{"message":"{\"response\":{\"status_details\":{\"error\":{\"code\":\"slow_down\",\"message\":\"nested status details\"}}}} trailing text"}}`)),
+	)
+	require.Equal(t,
+		"server_is_overloaded",
+		extractUpstreamErrorCode([]byte(`{"error":{"code":"invalid_request_error","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"wrapped generic error code\"}}"}}`)),
+	)
+	require.Equal(t,
+		"server_is_overloaded",
+		extractUpstreamErrorCode([]byte(`{"error":{"code":"upstream_error","message":"wrapper"},"response":{"error":{"code":"server_is_overloaded","message":"nested direct retry"}}}`)),
+	)
+	require.Equal(t,
+		"nested capacity",
+		extractUpstreamErrorMessage([]byte(`{"error":{"message":"{\"response\":{\"error\":{\"code\":\"slow_down\",\"message\":\"nested capacity\"}}}"}}`)),
+	)
+	require.Equal(t,
+		"slow_down",
+		extractUpstreamErrorCode([]byte(`{"response":{"error":{"message":"{\"error\":{\"code\":\"slow_down\",\"message\":\"nested retry\"}} trailing text"}}}`)),
+	)
+	require.Equal(t,
+		"slow_down",
+		extractUpstreamErrorCode([]byte(`{"message":"{\"error\":{\"code\":\"upstream_error\",\"message\":\"wrapper\"},\"response\":{\"error\":{\"code\":\"slow_down\",\"message\":\"embedded direct retry\"}}}"}`)),
+	)
 }
 
 func TestIsOpenAIContextWindowError(t *testing.T) {
@@ -262,9 +392,17 @@ func TestIsOpenAIContextWindowError(t *testing.T) {
 		"maximum context length exceeded",
 		nil,
 	))
+	require.True(t, isOpenAIContextWindowError(
+		"",
+		[]byte(`{"response":{"status_details":{"error":{"message":"Your input exceeds the context window of this model.","code":"context_length_exceeded"}}}}`),
+	))
 	require.False(t, isOpenAIContextWindowError(
 		"context canceled",
 		nil,
+	))
+	require.False(t, isOpenAIContextWindowError(
+		"Please retry later.",
+		[]byte(`{"type":"response.failed","response":{"instructions":"The user asked about context window limits.","error":{"code":"server_is_overloaded","message":"Please retry later."}}}`),
 	))
 }
 
@@ -274,6 +412,11 @@ func TestShouldFailoverOpenAIUpstreamResponseContextWindow502(t *testing.T) {
 
 	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadGateway, "", body))
 	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadGateway, "temporary upstream outage", []byte(`{"error":{"message":"temporary upstream outage"}}`)))
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(
+		http.StatusBadRequest,
+		"Please retry later.",
+		[]byte(`{"type":"response.failed","response":{"instructions":"This prompt mentions context window and cybersecurity risk.","error":{"code":"server_is_overloaded","message":"Please retry later."}}}`),
+	))
 }
 
 func TestOpenAIGatewayService_Forward_LogsInstructionsRequiredDetails(t *testing.T) {
@@ -375,5 +518,53 @@ func TestOpenAIGatewayService_Forward_TransientProcessingErrorTriggersFailover(t
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "An error occurred while processing your request")
+	require.False(t, c.Writer.Written(), "service 层应返回 failover 错误给上层换号，而不是直接向客户端写响应")
+}
+
+func TestOpenAIGatewayService_Forward_ResponseErrorCapacityTriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"x-request-id": []string{"rid-capacity-400"},
+			},
+			Body: io.NopCloser(strings.NewReader(`{"response":{"error":{"message":"Selected model is at capacity. Please try a different model.","code":"server_is_overloaded"}}}`)),
+		},
+	}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{ForceCodexCLI: false},
+		},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:             1001,
+		Name:           "codex max套餐",
+		Platform:       PlatformOpenAI,
+		Type:           AccountTypeAPIKey,
+		Concurrency:    1,
+		Credentials:    map[string]any{"api_key": "sk-test"},
+		Status:         StatusActive,
+		Schedulable:    true,
+		RateMultiplier: f64p(1),
+	}
+	body := []byte(`{"model":"gpt-5.1-codex","stream":false,"input":[{"type":"text","text":"hello"}]}`)
+
+	_, err := svc.Forward(context.Background(), c, account, body)
+	require.Error(t, err)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.False(t, c.Writer.Written(), "service 层应返回 failover 错误给上层换号，而不是直接向客户端写响应")
 }

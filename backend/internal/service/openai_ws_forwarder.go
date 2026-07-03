@@ -57,6 +57,7 @@ const (
 	openAIWSStoreDisabledConnModeOff      = "off"
 
 	openAIWSIngressStagePreviousResponseNotFound = "previous_response_not_found"
+	openAIWSIngressStageResponseFailedRetryable  = "response_failed_retryable"
 	openAIWSMaxPrevResponseIDDeletePasses        = 8
 )
 
@@ -176,7 +177,7 @@ func isOpenAIWSIngressTurnRetryable(err error) bool {
 		return false
 	}
 	switch turnErr.stage {
-	case "write_upstream", "read_upstream":
+	case "write_upstream", "read_upstream", openAIWSIngressStageResponseFailedRetryable:
 		return true
 	default:
 		return false
@@ -2325,6 +2326,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			upstreamWarning = warning
 		}
 
+		if eventType == "response.failed" && !wroteDownstream {
+			failedMessage := extractOpenAISSEErrorMessage(message)
+			if openAIStreamFailedEventShouldFailover(message, failedMessage) {
+				if strings.TrimSpace(failedMessage) == "" {
+					failedMessage = "upstream response failed"
+				}
+				lease.MarkBroken()
+				return nil, wrapOpenAIWSFallback("upstream_error_event", errors.New(failedMessage))
+			}
+		}
+
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
 			s.persistOpenAIWSErrorSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
@@ -3423,6 +3435,20 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						UpstreamInTok:  usage.InputTokens,
 						UpstreamOutTok: usage.OutputTokens,
 					})
+				}
+				if !wroteDownstream {
+					failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+					if openAIStreamFailedEventShouldFailover(upstreamMessage, failedMessage) {
+						if strings.TrimSpace(failedMessage) == "" {
+							failedMessage = "upstream response failed"
+						}
+						lease.MarkBroken()
+						return nil, wrapOpenAIWSIngressTurnError(
+							openAIWSIngressStageResponseFailedRetryable,
+							errors.New(failedMessage),
+							false,
+						)
+					}
 				}
 			}
 			imageCounter.AddSSEData(upstreamMessage)
