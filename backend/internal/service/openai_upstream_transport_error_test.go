@@ -3,6 +3,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -100,4 +102,179 @@ func TestHandleOpenAIUpstreamTransportError_WrappedContextCanceledNoFailover(t *
 	require.False(t, errors.As(err, &failoverErr), "wrapped context.Canceled must not return *UpstreamFailoverError")
 	require.Empty(t, repo.tempUnschedCalls)
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
+func newOpenAITransportForwardTestService(upstream *httpUpstreamRecorder) *OpenAIGatewayService {
+	return &OpenAIGatewayService{
+		httpUpstream: upstream,
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+}
+
+func newOpenAITransportForwardTestAccount(extra map[string]any) *Account {
+	return &Account{
+		ID:          91,
+		Name:        "transport-test",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "sk-transport-test",
+		},
+		Extra: extra,
+	}
+}
+
+func requireOpenAITransportForwardFailover(t *testing.T, err error, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr), "transport error must trigger account failover")
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, 0, rec.Body.Len(), "service must not write a hard 502 before handler can fail over")
+}
+
+func TestOpenAIGatewayService_ForwardTransportErrorFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.5","input":[{"type":"input_text","text":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{err: errors.New(`Post "https://api.openai.com/v1/responses": EOF`)}
+	svc := newOpenAITransportForwardTestService(upstream)
+	account := newOpenAITransportForwardTestAccount(nil)
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.Nil(t, result)
+	requireOpenAITransportForwardFailover(t, err, rec)
+}
+
+func TestOpenAIGatewayService_PassthroughTransportErrorFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.5","input":[{"type":"input_text","text":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{err: errors.New(`Post "https://api.openai.com/v1/responses": EOF`)}
+	svc := newOpenAITransportForwardTestService(upstream)
+	account := newOpenAITransportForwardTestAccount(map[string]any{"openai_passthrough": true})
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.Nil(t, result)
+	requireOpenAITransportForwardFailover(t, err, rec)
+}
+
+func TestOpenAIGatewayService_ForwardAsAnthropicTransportErrorFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.5","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{err: errors.New(`Post "https://api.openai.com/v1/responses": EOF`)}
+	svc := newOpenAITransportForwardTestService(upstream)
+	account := newOpenAITransportForwardTestAccount(nil)
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.5")
+
+	require.Nil(t, result)
+	requireOpenAITransportForwardFailover(t, err, rec)
+}
+
+func TestOpenAIGatewayService_ForwardResponsesViaRawChatTransportErrorFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{err: errors.New(`Post "https://api.openai.com/v1/chat/completions": EOF`)}
+	svc := newOpenAITransportForwardTestService(upstream)
+	account := newOpenAITransportForwardTestAccount(nil)
+
+	result, err := svc.forwardResponsesViaRawChatCompletions(context.Background(), c, account, body)
+
+	require.Nil(t, result)
+	requireOpenAITransportForwardFailover(t, err, rec)
+}
+
+func TestOpenAIGatewayService_ForwardEmbeddingsTransportErrorFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"text-embedding-3-small","input":"hello"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{err: errors.New(`Post "https://api.openai.com/v1/embeddings": EOF`)}
+	svc := newOpenAITransportForwardTestService(upstream)
+	account := newOpenAITransportForwardTestAccount(nil)
+
+	result, err := svc.ForwardEmbeddings(context.Background(), c, account, body, "text-embedding-3-small")
+
+	require.Nil(t, result)
+	requireOpenAITransportForwardFailover(t, err, rec)
+}
+
+func TestOpenAIGatewayService_ForwardImagesAPIKeyTransportErrorFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-image-1","prompt":"draw a cat"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{err: errors.New(`Post "https://api.openai.com/v1/images/generations": EOF`)}
+	svc := newOpenAITransportForwardTestService(upstream)
+	account := newOpenAITransportForwardTestAccount(nil)
+	parsed := &OpenAIImagesRequest{
+		Endpoint: openAIImagesGenerationsEndpoint,
+		Model:    "gpt-image-1",
+		Prompt:   "draw a cat",
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+
+	require.Nil(t, result)
+	requireOpenAITransportForwardFailover(t, err, rec)
+}
+
+func TestOpenAIGatewayService_ForwardImagesOAuthTransportErrorFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{err: errors.New(`Post "https://chatgpt.com/backend-api/images": EOF`)}
+	svc := newOpenAITransportForwardTestService(upstream)
+	account := &Account{
+		ID:          92,
+		Name:        "transport-test-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+	parsed := &OpenAIImagesRequest{
+		Endpoint: openAIImagesGenerationsEndpoint,
+		Model:    "gpt-image-2",
+		Prompt:   "draw a cat",
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+
+	require.Nil(t, result)
+	requireOpenAITransportForwardFailover(t, err, rec)
 }

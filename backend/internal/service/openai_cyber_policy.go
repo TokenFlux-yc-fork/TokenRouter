@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 // opsCyberPolicyKey 在 gin context 中携带 cyber_policy 命中标记。
@@ -66,18 +65,11 @@ func DetectOpenAICyberPolicy(payload []byte) (bool, string, string) {
 	return detectOpenAICyberPolicy(payload)
 }
 
-// detectOpenAICyberPolicy 精确识别 error.code 或 response.error.code 为 cyber_policy 的响应。
+// detectOpenAICyberPolicy 精确识别 OpenAI/Responses 错误 code 为 cyber_policy 的响应。
 func detectOpenAICyberPolicy(payload []byte) (bool, string, string) {
-	code := gjson.GetBytes(payload, "error.code").String()
-	if code == "" {
-		code = gjson.GetBytes(payload, "response.error.code").String()
-	}
+	code := extractUpstreamErrorCode(payload)
 	if !strings.EqualFold(strings.TrimSpace(code), "cyber_policy") {
 		return false, "", ""
 	}
-	msg := gjson.GetBytes(payload, "error.message").String()
-	if msg == "" {
-		msg = gjson.GetBytes(payload, "response.error.message").String()
-	}
-	return true, "cyber_policy", strings.TrimSpace(msg)
+	return true, "cyber_policy", strings.TrimSpace(extractUpstreamErrorMessage(payload))
 }
