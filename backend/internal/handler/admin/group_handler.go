@@ -68,6 +68,11 @@ type CreateGroupRequest struct {
 	MessagesDispatchModelConfig service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	ModelsListConfig            service.GroupModelsListConfig             `json:"models_list_config"`
 	AvailabilityProbeConfig     service.GroupAvailabilityProbeConfig      `json:"availability_probe_config"`
+	HealthCheckEnabled          bool                                      `json:"health_check_enabled"`
+	HealthCheckIntervalSec      int                                       `json:"health_check_interval_sec"`
+	HealthCheckTimeoutSec       int                                       `json:"health_check_timeout_sec"`
+	HealthCheckFailureThreshold int                                       `json:"health_check_failure_threshold"`
+	HealthCheckSuccessThreshold int                                       `json:"health_check_success_threshold"`
 	// 分组 RPM 上限（0 = 不限制）
 	RPMLimit int `json:"rpm_limit"`
 	// 从指定分组复制账号（创建后自动绑定）
@@ -115,6 +120,11 @@ type UpdateGroupRequest struct {
 	MessagesDispatchModelConfig *service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	ModelsListConfig            *service.GroupModelsListConfig             `json:"models_list_config"`
 	AvailabilityProbeConfig     *service.GroupAvailabilityProbeConfig      `json:"availability_probe_config"`
+	HealthCheckEnabled          *bool                                      `json:"health_check_enabled"`
+	HealthCheckIntervalSec      *int                                       `json:"health_check_interval_sec"`
+	HealthCheckTimeoutSec       *int                                       `json:"health_check_timeout_sec"`
+	HealthCheckFailureThreshold *int                                       `json:"health_check_failure_threshold"`
+	HealthCheckSuccessThreshold *int                                       `json:"health_check_success_threshold"`
 	// 分组 RPM 上限（0 = 不限制）；nil 表示未提供不改动
 	RPMLimit *int `json:"rpm_limit"`
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
@@ -268,6 +278,11 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		MessagesDispatchModelConfig:     req.MessagesDispatchModelConfig,
 		ModelsListConfig:                req.ModelsListConfig,
 		AvailabilityProbeConfig:         req.AvailabilityProbeConfig,
+		HealthCheckEnabled:              req.HealthCheckEnabled,
+		HealthCheckIntervalSec:          req.HealthCheckIntervalSec,
+		HealthCheckTimeoutSec:           req.HealthCheckTimeoutSec,
+		HealthCheckFailureThreshold:     req.HealthCheckFailureThreshold,
+		HealthCheckSuccessThreshold:     req.HealthCheckSuccessThreshold,
 		RPMLimit:                        req.RPMLimit,
 		CopyAccountsFromGroupIDs:        req.CopyAccountsFromGroupIDs,
 	})
@@ -327,6 +342,11 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		MessagesDispatchModelConfig:     req.MessagesDispatchModelConfig,
 		ModelsListConfig:                req.ModelsListConfig,
 		AvailabilityProbeConfig:         req.AvailabilityProbeConfig,
+		HealthCheckEnabled:              req.HealthCheckEnabled,
+		HealthCheckIntervalSec:          req.HealthCheckIntervalSec,
+		HealthCheckTimeoutSec:           req.HealthCheckTimeoutSec,
+		HealthCheckFailureThreshold:     req.HealthCheckFailureThreshold,
+		HealthCheckSuccessThreshold:     req.HealthCheckSuccessThreshold,
 		RPMLimit:                        req.RPMLimit,
 		CopyAccountsFromGroupIDs:        req.CopyAccountsFromGroupIDs,
 	})
@@ -586,13 +606,13 @@ func (h *GroupHandler) GetGroupHealth(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"health_check_enabled":        group.HealthCheckEnabled,
-		"health_status":                group.HealthStatus,
-		"health_last_check_at":         group.HealthLastCheckAt,
-		"health_consecutive_failures":  group.HealthConsecutiveFailures,
-		"health_consecutive_successes": group.HealthConsecutiveSuccesses,
-		"health_check_interval_sec":    group.HealthCheckIntervalSec,
-		"health_check_timeout_sec":     group.HealthCheckTimeoutSec,
+		"health_check_enabled":           group.HealthCheckEnabled,
+		"health_status":                  group.HealthStatus,
+		"health_last_check_at":           group.HealthLastCheckAt,
+		"health_consecutive_failures":    group.HealthConsecutiveFailures,
+		"health_consecutive_successes":   group.HealthConsecutiveSuccesses,
+		"health_check_interval_sec":      group.HealthCheckIntervalSec,
+		"health_check_timeout_sec":       group.HealthCheckTimeoutSec,
 		"health_check_failure_threshold": group.HealthCheckFailureThreshold,
 		"health_check_success_threshold": group.HealthCheckSuccessThreshold,
 	})

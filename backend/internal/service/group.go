@@ -11,6 +11,12 @@ type OpenAIMessagesDispatchModelConfig = domain.OpenAIMessagesDispatchModelConfi
 type GroupModelsListConfig = domain.GroupModelsListConfig
 type GroupAvailabilityProbeConfig = domain.GroupAvailabilityProbeConfig
 
+const (
+	HealthStatusUnknown   = "unknown"
+	HealthStatusHealthy   = "healthy"
+	HealthStatusUnhealthy = "unhealthy"
+)
+
 type Group struct {
 	ID             int64
 	Name           string
@@ -74,15 +80,15 @@ type Group struct {
 	RPMLimit int
 
 	// 健康检查和熔断机制相关字段
-	HealthCheckEnabled           bool      // 是否启用健康检查
-	HealthCheckIntervalSec       int       // 健康检查间隔（秒）
-	HealthCheckTimeoutSec        int       // 单次检查超时时间（秒）
-	HealthCheckFailureThreshold  int       // 连续失败多少次后触发熔断
-	HealthCheckSuccessThreshold  int       // 熔断后连续成功多少次后自动恢复
-	HealthLastCheckAt            *time.Time // 上次健康检查时间
-	HealthConsecutiveFailures    int       // 当前连续失败次数
-	HealthConsecutiveSuccesses   int       // 当前连续成功次数
-	HealthStatus                 string    // 实时健康状态：unknown/healthy/unhealthy
+	HealthCheckEnabled          bool       // 是否启用健康检查
+	HealthCheckIntervalSec      int        // 健康检查间隔（秒）
+	HealthCheckTimeoutSec       int        // 单次检查超时时间（秒）
+	HealthCheckFailureThreshold int        // 连续失败多少次后触发熔断
+	HealthCheckSuccessThreshold int        // 熔断后连续成功多少次后自动恢复
+	HealthLastCheckAt           *time.Time // 上次健康检查时间
+	HealthConsecutiveFailures   int        // 当前连续失败次数
+	HealthConsecutiveSuccesses  int        // 当前连续成功次数
+	HealthStatus                string     // 实时健康状态：unknown/healthy/unhealthy
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -99,10 +105,30 @@ func (g *Group) IsActive() bool {
 
 // IsHealthy 返回分组是否健康（未启用健康检查时始终视为健康）
 func (g *Group) IsHealthy() bool {
+	if g == nil {
+		return false
+	}
 	if !g.HealthCheckEnabled {
 		return true
 	}
-	return g.HealthStatus == "healthy"
+	return normalizeGroupHealthStatus(g.HealthStatus) != HealthStatusUnhealthy
+}
+
+// IsRoutable 返回分组当前是否可用于请求路由。
+// 熔断只影响运行时路由，不修改管理员设置的 status。
+func (g *Group) IsRoutable() bool {
+	return g != nil && g.IsActive() && g.IsHealthy()
+}
+
+func normalizeGroupHealthStatus(status string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case HealthStatusHealthy:
+		return HealthStatusHealthy
+	case HealthStatusUnhealthy:
+		return HealthStatusUnhealthy
+	default:
+		return HealthStatusUnknown
+	}
 }
 
 // GetImagePrice 根据 image_size 返回对应的图片生成价格

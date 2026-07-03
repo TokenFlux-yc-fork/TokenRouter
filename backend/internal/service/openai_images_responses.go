@@ -830,6 +830,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesErrorResponse(
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
+		s.recordOpenAIPassiveGroupHealthFailure(ctx, account, resp.StatusCode, body)
 		upErr := &OpenAIImagesUpstreamError{
 			StatusCode:        status,
 			ErrorType:         errType,
@@ -841,6 +842,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesErrorResponse(
 	}
 
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {
+		s.recordOpenAIPassiveGroupHealthFailure(ctx, account, resp.StatusCode, body)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -1493,6 +1495,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
+		if s.rateLimitService != nil {
+			s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+		}
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

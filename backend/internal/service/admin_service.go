@@ -242,7 +242,12 @@ type CreateGroupInput struct {
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
 	ModelsListConfig            GroupModelsListConfig
 	// AvailabilityProbeConfig 控制分组主动可用性探测。
-	AvailabilityProbeConfig GroupAvailabilityProbeConfig
+	AvailabilityProbeConfig     GroupAvailabilityProbeConfig
+	HealthCheckEnabled          bool
+	HealthCheckIntervalSec      int
+	HealthCheckTimeoutSec       int
+	HealthCheckFailureThreshold int
+	HealthCheckSuccessThreshold int
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
 	RPMLimit int
 	// 从指定分组复制账号（创建分组后在同一事务内绑定）
@@ -290,7 +295,12 @@ type UpdateGroupInput struct {
 	MessagesDispatchModelConfig *OpenAIMessagesDispatchModelConfig
 	ModelsListConfig            *GroupModelsListConfig
 	// AvailabilityProbeConfig 为 nil 时不修改探测配置。
-	AvailabilityProbeConfig *GroupAvailabilityProbeConfig
+	AvailabilityProbeConfig     *GroupAvailabilityProbeConfig
+	HealthCheckEnabled          *bool
+	HealthCheckIntervalSec      *int
+	HealthCheckTimeoutSec       *int
+	HealthCheckFailureThreshold *int
+	HealthCheckSuccessThreshold *int
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
 	RPMLimit *int
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
@@ -1871,6 +1881,15 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if err != nil {
 		return nil, err
 	}
+	healthIntervalSec, healthTimeoutSec, healthFailureThreshold, healthSuccessThreshold, err := normalizeGroupHealthCheckSettings(
+		input.HealthCheckIntervalSec,
+		input.HealthCheckTimeoutSec,
+		input.HealthCheckFailureThreshold,
+		input.HealthCheckSuccessThreshold,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	group := &Group{
 		Name:                            input.Name,
@@ -1904,6 +1923,12 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
 		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
 		AvailabilityProbeConfig:         availabilityProbeConfig,
+		HealthCheckEnabled:              input.HealthCheckEnabled,
+		HealthCheckIntervalSec:          healthIntervalSec,
+		HealthCheckTimeoutSec:           healthTimeoutSec,
+		HealthCheckFailureThreshold:     healthFailureThreshold,
+		HealthCheckSuccessThreshold:     healthSuccessThreshold,
+		HealthStatus:                    HealthStatusUnknown,
 		RPMLimit:                        input.RPMLimit,
 	}
 	sanitizeGroupMessagesDispatchFields(group)
@@ -2107,6 +2132,9 @@ func (s *adminServiceImpl) validateUnavailableFallbackGroup(ctx context.Context,
 	if !fallbackGroup.IsActive() {
 		return fmt.Errorf("unavailable fallback group must be active")
 	}
+	if !fallbackGroup.IsHealthy() {
+		return fmt.Errorf("unavailable fallback group must be healthy")
+	}
 	return nil
 }
 
@@ -2263,15 +2291,46 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 		group.AvailabilityProbeConfig = config
 	}
+	healthConfigTouched := input.HealthCheckEnabled != nil ||
+		input.HealthCheckIntervalSec != nil ||
+		input.HealthCheckTimeoutSec != nil ||
+		input.HealthCheckFailureThreshold != nil ||
+		input.HealthCheckSuccessThreshold != nil
+	if input.HealthCheckEnabled != nil {
+		group.HealthCheckEnabled = *input.HealthCheckEnabled
+	}
+	if input.HealthCheckIntervalSec != nil {
+		group.HealthCheckIntervalSec = *input.HealthCheckIntervalSec
+	}
+	if input.HealthCheckTimeoutSec != nil {
+		group.HealthCheckTimeoutSec = *input.HealthCheckTimeoutSec
+	}
+	if input.HealthCheckFailureThreshold != nil {
+		group.HealthCheckFailureThreshold = *input.HealthCheckFailureThreshold
+	}
+	if input.HealthCheckSuccessThreshold != nil {
+		group.HealthCheckSuccessThreshold = *input.HealthCheckSuccessThreshold
+	}
+	if healthConfigTouched {
+		intervalSec, timeoutSec, failureThreshold, successThreshold, err := normalizeGroupHealthCheckSettings(
+			group.HealthCheckIntervalSec,
+			group.HealthCheckTimeoutSec,
+			group.HealthCheckFailureThreshold,
+			group.HealthCheckSuccessThreshold,
+		)
+		if err != nil {
+			return nil, err
+		}
+		group.HealthCheckIntervalSec = intervalSec
+		group.HealthCheckTimeoutSec = timeoutSec
+		group.HealthCheckFailureThreshold = failureThreshold
+		group.HealthCheckSuccessThreshold = successThreshold
+	}
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit
 	}
 	sanitizeGroupMessagesDispatchFields(group)
 	normalizeGroupDefaultState(group)
-
-	if s.authCacheInvalidator != nil {
-		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, id)
-	}
 
 	// 如果指定了复制账号的源分组，同步绑定（替换当前分组的账号）
 	var accountIDsToCopy []int64
@@ -2351,6 +2410,10 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, id)
 	}
 
 	return group, nil
@@ -4252,13 +4315,35 @@ func (s *adminServiceImpl) GetGroupByID(ctx context.Context, id int64) (*Group, 
 
 // UpdateGroupHealthCheckConfig 更新分组健康检查配置
 func (s *adminServiceImpl) UpdateGroupHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error {
+	if config == nil {
+		return infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health check config is required")
+	}
 	// 验证分组是否存在
 	_, err := s.groupRepo.GetByID(ctx, groupID)
 	if err != nil {
 		return err
 	}
+	intervalSec, timeoutSec, failureThreshold, successThreshold, err := normalizeGroupHealthCheckSettings(
+		config.IntervalSec,
+		config.TimeoutSec,
+		config.FailureThreshold,
+		config.SuccessThreshold,
+	)
+	if err != nil {
+		return err
+	}
+	config.IntervalSec = intervalSec
+	config.TimeoutSec = timeoutSec
+	config.FailureThreshold = failureThreshold
+	config.SuccessThreshold = successThreshold
 
-	return s.groupRepo.UpdateHealthCheckConfig(ctx, groupID, config)
+	if err := s.groupRepo.UpdateHealthCheckConfig(ctx, groupID, config); err != nil {
+		return err
+	}
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
+	}
+	return nil
 }
 
 // ForceGroupHealthCheck 强制立即执行健康检查
@@ -4272,6 +4357,37 @@ func (s *adminServiceImpl) ForceGroupHealthCheck(ctx context.Context, groupID in
 	if !group.HealthCheckEnabled {
 		return ErrGroupHealthCheckNotEnabled
 	}
+	if !group.IsActive() {
+		return infraerrors.BadRequest("GROUP_NOT_ACTIVE", "health check can only be triggered for active groups")
+	}
 
 	return s.groupRepo.ForceHealthCheck(ctx, groupID)
+}
+
+func normalizeGroupHealthCheckSettings(intervalSec, timeoutSec, failureThreshold, successThreshold int) (int, int, int, int, error) {
+	if intervalSec == 0 {
+		intervalSec = defaultGroupHealthIntervalSec
+	}
+	if timeoutSec == 0 {
+		timeoutSec = defaultGroupHealthTimeoutSec
+	}
+	if failureThreshold == 0 {
+		failureThreshold = defaultGroupHealthFailureThreshold
+	}
+	if successThreshold == 0 {
+		successThreshold = defaultGroupHealthSuccessThreshold
+	}
+	if intervalSec < minGroupHealthIntervalSec || intervalSec > maxGroupHealthIntervalSec {
+		return 0, 0, 0, 0, infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health_check_interval_sec must be between 10 and 3600")
+	}
+	if timeoutSec < minGroupHealthTimeoutSec || timeoutSec > maxGroupHealthTimeoutSec {
+		return 0, 0, 0, 0, infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health_check_timeout_sec must be between 5 and 60")
+	}
+	if failureThreshold < minGroupHealthThreshold || failureThreshold > maxGroupHealthThreshold {
+		return 0, 0, 0, 0, infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health_check_failure_threshold must be between 1 and 10")
+	}
+	if successThreshold < minGroupHealthThreshold || successThreshold > maxGroupHealthThreshold {
+		return 0, 0, 0, 0, infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health_check_success_threshold must be between 1 and 10")
+	}
+	return intervalSec, timeoutSec, failureThreshold, successThreshold, nil
 }

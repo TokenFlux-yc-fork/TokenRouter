@@ -17,6 +17,16 @@ type GroupAvailabilityProbeDueGroup struct {
 	// Platform 用于选择对应平台的账号调度器。
 	Platform string
 	Config   GroupAvailabilityProbeConfig
+
+	HealthCheckEnabled          bool
+	HealthCheckIntervalSec      int
+	HealthCheckTimeoutSec       int
+	HealthCheckFailureThreshold int
+	HealthCheckSuccessThreshold int
+	HealthConsecutiveFailures   int
+	HealthConsecutiveSuccesses  int
+	HealthStatus                string
+	HealthLastCheckAt           *time.Time
 }
 
 // GroupAvailabilityProbeResult 是单次主动探测结果。

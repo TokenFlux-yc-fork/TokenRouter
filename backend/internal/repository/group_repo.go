@@ -43,9 +43,37 @@ func (r *groupRepository) sqlExecutorFromContext(ctx context.Context) sqlExecuto
 	return r.sql
 }
 
+func normalizedGroupHealthPersistenceFields(groupIn *service.Group) (intervalSec, timeoutSec, failureThreshold, successThreshold int, status string) {
+	intervalSec = 60
+	timeoutSec = 10
+	failureThreshold = 3
+	successThreshold = 2
+	status = service.HealthStatusUnknown
+	if groupIn == nil {
+		return
+	}
+	if groupIn.HealthCheckIntervalSec > 0 {
+		intervalSec = groupIn.HealthCheckIntervalSec
+	}
+	if groupIn.HealthCheckTimeoutSec > 0 {
+		timeoutSec = groupIn.HealthCheckTimeoutSec
+	}
+	if groupIn.HealthCheckFailureThreshold > 0 {
+		failureThreshold = groupIn.HealthCheckFailureThreshold
+	}
+	if groupIn.HealthCheckSuccessThreshold > 0 {
+		successThreshold = groupIn.HealthCheckSuccessThreshold
+	}
+	if groupIn.HealthStatus != "" {
+		status = groupIn.HealthStatus
+	}
+	return
+}
+
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
 	client := clientFromContext(ctx, r.client)
 	sqlq := r.sqlExecutorFromContext(ctx)
+	healthIntervalSec, healthTimeoutSec, healthFailureThreshold, healthSuccessThreshold, healthStatus := normalizedGroupHealthPersistenceFields(groupIn)
 
 	builder := client.Group.Create().
 		SetName(groupIn.Name).
@@ -78,6 +106,15 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
 		SetAvailabilityProbeConfig(groupIn.AvailabilityProbeConfig).
+		SetHealthCheckEnabled(groupIn.HealthCheckEnabled).
+		SetHealthCheckIntervalSec(healthIntervalSec).
+		SetHealthCheckTimeoutSec(healthTimeoutSec).
+		SetHealthCheckFailureThreshold(healthFailureThreshold).
+		SetHealthCheckSuccessThreshold(healthSuccessThreshold).
+		SetNillableHealthLastCheckAt(groupIn.HealthLastCheckAt).
+		SetHealthConsecutiveFailures(groupIn.HealthConsecutiveFailures).
+		SetHealthConsecutiveSuccesses(groupIn.HealthConsecutiveSuccesses).
+		SetHealthStatus(healthStatus).
 		SetRpmLimit(groupIn.RPMLimit)
 
 	// 设置模型路由配置
@@ -131,6 +168,7 @@ func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.G
 func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) error {
 	client := clientFromContext(ctx, r.client)
 	sqlq := r.sqlExecutorFromContext(ctx)
+	healthIntervalSec, healthTimeoutSec, healthFailureThreshold, healthSuccessThreshold, healthStatus := normalizedGroupHealthPersistenceFields(groupIn)
 
 	builder := client.Group.UpdateOneID(groupIn.ID).
 		SetName(groupIn.Name).
@@ -160,7 +198,20 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
 		SetAvailabilityProbeConfig(groupIn.AvailabilityProbeConfig).
+		SetHealthCheckEnabled(groupIn.HealthCheckEnabled).
+		SetHealthCheckIntervalSec(healthIntervalSec).
+		SetHealthCheckTimeoutSec(healthTimeoutSec).
+		SetHealthCheckFailureThreshold(healthFailureThreshold).
+		SetHealthCheckSuccessThreshold(healthSuccessThreshold).
+		SetHealthConsecutiveFailures(groupIn.HealthConsecutiveFailures).
+		SetHealthConsecutiveSuccesses(groupIn.HealthConsecutiveSuccesses).
+		SetHealthStatus(healthStatus).
 		SetRpmLimit(groupIn.RPMLimit)
+	if groupIn.HealthLastCheckAt != nil {
+		builder = builder.SetHealthLastCheckAt(*groupIn.HealthLastCheckAt)
+	} else {
+		builder = builder.ClearHealthLastCheckAt()
+	}
 
 	if groupIn.ImagePrice1K != nil {
 		builder = builder.SetImagePrice1k(*groupIn.ImagePrice1K)
@@ -948,6 +999,7 @@ func (r *groupRepository) UpdateHealthStatus(ctx context.Context, groupID int64,
 		    health_consecutive_successes = $4,
 		    updated_at = NOW()
 		WHERE id = $5 AND deleted_at IS NULL
+		  AND (health_last_check_at IS NULL OR health_last_check_at < $2)
 	`
 
 	result, err := sqlq.ExecContext(ctx, query,
@@ -966,7 +1018,28 @@ func (r *groupRepository) UpdateHealthStatus(ctx context.Context, groupID int64,
 		return err
 	}
 	if affected == 0 {
-		return service.ErrGroupNotFound
+		var exists bool
+		rows, err := sqlq.QueryContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM groups WHERE id = $1 AND deleted_at IS NULL
+			)
+		`, groupID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		if rows.Next() {
+			if err := rows.Scan(&exists); err != nil {
+				return err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if !exists {
+			return service.ErrGroupNotFound
+		}
+		return nil
 	}
 
 	// 通知调度器分组状态变化
@@ -1012,10 +1085,14 @@ func (r *groupRepository) UpdateHealthCheckConfig(ctx context.Context, groupID i
 		return service.ErrGroupNotFound
 	}
 
+	if err := enqueueSchedulerOutbox(ctx, sqlq, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group health config update failed: group=%d err=%v", groupID, err)
+	}
+
 	return nil
 }
 
-// UpdateGroupStatus 更新分组的 status 字段（用于熔断时自动停用/恢复）
+// UpdateGroupStatus 更新分组的 status 字段。
 func (r *groupRepository) UpdateGroupStatus(ctx context.Context, groupID int64, status string) error {
 	sqlq := r.sqlExecutorFromContext(ctx)
 
@@ -1047,14 +1124,13 @@ func (r *groupRepository) UpdateGroupStatus(ctx context.Context, groupID int64, 
 	return nil
 }
 
-// ForceHealthCheck 强制立即执行健康检查（将 last_check_at 设为过去时间）
+// ForceHealthCheck 强制立即执行健康检查。
 func (r *groupRepository) ForceHealthCheck(ctx context.Context, groupID int64) error {
 	sqlq := r.sqlExecutorFromContext(ctx)
 
 	query := `
 		UPDATE groups
-		SET health_last_check_at = NOW() - INTERVAL '1 day',
-		    updated_at = NOW()
+		SET updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL AND health_check_enabled = true
 	`
 
@@ -1069,6 +1145,18 @@ func (r *groupRepository) ForceHealthCheck(ctx context.Context, groupID int64) e
 	}
 	if affected == 0 {
 		return service.ErrGroupNotFound
+	}
+
+	if _, err := sqlq.ExecContext(ctx, `
+		INSERT INTO group_availability_probe_states (group_id, next_run_at, locked_until, locked_by, created_at, updated_at)
+		VALUES ($1, NOW(), NULL, NULL, NOW(), NOW())
+		ON CONFLICT (group_id) DO UPDATE SET
+			next_run_at = NOW(),
+			locked_until = NULL,
+			locked_by = NULL,
+			updated_at = NOW()
+	`, groupID); err != nil {
+		return err
 	}
 
 	return nil

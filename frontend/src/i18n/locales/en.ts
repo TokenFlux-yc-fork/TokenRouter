@@ -2650,6 +2650,26 @@ export default {
         modelRequired: 'Select a probe model before enabling group availability probes',
         promptRequired: 'Enter a probe prompt before enabling group availability probes'
       },
+      health: {
+        title: 'Health Check & Circuit Breaker',
+        hint: 'Use active probe results and upstream errors to circuit-break this group, then recover after consecutive successes.',
+        status: 'Health',
+        disabled: 'Not monitored',
+        interval: 'Check interval (seconds)',
+        timeout: 'Timeout (seconds)',
+        failureThreshold: 'Failure threshold',
+        successThreshold: 'Recovery threshold',
+        manualCheck: 'Check now',
+        manualCheckTriggered: 'Manual health check scheduled',
+        manualCheckFailed: 'Failed to trigger manual health check',
+        lastCheck: 'Last check',
+        counters: 'Failures {failures} / successes {successes}',
+        statuses: {
+          unknown: 'Unknown',
+          healthy: 'Healthy',
+          unhealthy: 'Unhealthy'
+        }
+      },
       claudeCode: {
         title: 'Claude Code Client Restriction',
         tooltip: 'When enabled, this group only allows official Claude Code clients. Non-Claude Code requests will be rejected or fallback to the specified group.',

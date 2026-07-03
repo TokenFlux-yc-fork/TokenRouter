@@ -95,6 +95,10 @@ type APIKeyAuthGroupSnapshot struct {
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config,omitempty"`
 	ModelsListConfig            GroupModelsListConfig             `json:"models_list_config,omitempty"`
 
+	// Health fields are required for request-time fallback from circuit-broken groups.
+	HealthCheckEnabled bool   `json:"health_check_enabled"`
+	HealthStatus       string `json:"health_status,omitempty"`
+
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制）；用于 billing_cache_service.checkRPM 级联判断。
 	RPMLimit int `json:"rpm_limit"`
 }

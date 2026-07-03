@@ -407,6 +407,21 @@ func TestAPIKeyAuthRejectsUnavailableGroup(t *testing.T) {
 			wantMarked: true,
 		},
 		{
+			name: "unhealthy group returns service unavailable",
+			group: &service.Group{
+				ID:                 groupID,
+				Name:               "unhealthy",
+				Status:             service.StatusActive,
+				Platform:           service.PlatformAnthropic,
+				Hydrated:           true,
+				HealthCheckEnabled: true,
+				HealthStatus:       service.HealthStatusUnhealthy,
+			},
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   "GROUP_UNHEALTHY",
+			wantMarked: true,
+		},
+		{
 			name:       "missing group edge is forbidden",
 			group:      nil,
 			wantStatus: http.StatusForbidden,
@@ -1360,6 +1375,26 @@ func (r *stubGroupRepoForAuth) BindAccountsToGroup(ctx context.Context, groupID 
 }
 
 func (r *stubGroupRepoForAuth) UpdateSortOrders(ctx context.Context, updates []service.GroupSortOrderUpdate) error {
+	return errors.New("not implemented")
+}
+
+func (r *stubGroupRepoForAuth) FindByHealthCheckEnabled(ctx context.Context, enabled bool) ([]*service.Group, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (r *stubGroupRepoForAuth) UpdateHealthStatus(ctx context.Context, groupID int64, update *service.HealthStatusUpdate) error {
+	return errors.New("not implemented")
+}
+
+func (r *stubGroupRepoForAuth) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *service.HealthCheckConfigUpdate) error {
+	return errors.New("not implemented")
+}
+
+func (r *stubGroupRepoForAuth) UpdateGroupStatus(ctx context.Context, groupID int64, status string) error {
+	return errors.New("not implemented")
+}
+
+func (r *stubGroupRepoForAuth) ForceHealthCheck(ctx context.Context, groupID int64) error {
 	return errors.New("not implemented")
 }
 

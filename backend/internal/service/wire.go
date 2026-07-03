@@ -296,12 +296,14 @@ func ProvideRateLimitService(
 	openAI403CounterCache OpenAI403CounterCache,
 	settingService *SettingService,
 	tokenCacheInvalidator TokenCacheInvalidator,
+	groupHealthMonitor *GroupHealthMonitor,
 ) *RateLimitService {
 	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
 	svc.SetTimeoutCounterCache(timeoutCounterCache)
 	svc.SetOpenAI403CounterCache(openAI403CounterCache)
 	svc.SetSettingService(settingService)
 	svc.SetTokenCacheInvalidator(tokenCacheInvalidator)
+	svc.SetGroupHealthMonitor(groupHealthMonitor)
 	return svc
 }
 
@@ -438,9 +440,10 @@ func ProvideGroupAvailabilityProbeRunnerService(
 	gatewaySvc *GatewayService,
 	openAIGateway *OpenAIGatewayService,
 	geminiCompatSvc *GeminiMessagesCompatService,
+	healthMonitor *GroupHealthMonitor,
 	cfg *config.Config,
 ) *GroupAvailabilityProbeRunnerService {
-	svc := NewGroupAvailabilityProbeRunnerService(repo, accountTestSvc, gatewaySvc, openAIGateway, geminiCompatSvc, cfg)
+	svc := NewGroupAvailabilityProbeRunnerService(repo, accountTestSvc, gatewaySvc, openAIGateway, geminiCompatSvc, healthMonitor, cfg)
 	svc.Start()
 	return svc
 }
@@ -619,6 +622,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	NewGroupService,
+	NewGroupHealthMonitor,
 	NewAccountService,
 	NewProxyService,
 	NewRedeemService,
@@ -712,7 +716,6 @@ var ProviderSet = wire.NewSet(
 	ProvideGroupAvailabilityProbeRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
-	ProvideHealthChecker,
 	NewModelPricingResolver,
 	NewContentModerationService,
 	ProvidePaymentConfigService,
@@ -755,14 +758,4 @@ func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache Lead
 	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
-}
-
-// ProvideHealthChecker creates and starts HealthChecker service
-func ProvideHealthChecker(
-	groupRepo GroupRepository,
-	accountRepo AccountRepository,
-) *HealthChecker {
-	// 暂时使用 DummyUpstreamPinger
-	upstream := NewDummyUpstreamPinger()
-	return NewHealthChecker(groupRepo, accountRepo, upstream)
 }

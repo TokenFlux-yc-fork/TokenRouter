@@ -418,6 +418,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				ResponseHeaders: cloneHeader(handshakeHeaders),
 			}
 		}
+		s.recordOpenAIWSDialPassiveGroupHealthFailure(ctx, account, &openAIWSDialError{
+			StatusCode:      statusCode,
+			ResponseHeaders: cloneHeader(handshakeHeaders),
+			Err:             err,
+		})
 		return s.mapOpenAIWSPassthroughDialError(err, statusCode, handshakeHeaders)
 	}
 	defer func() {
@@ -632,10 +637,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return nil
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
+				s.persistOpenAIWSErrorSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
 				if !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
 					return nil
 				}
-				s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
 				logOpenAIWSV2Passthrough(
 					"relay_rate_limit_failover account_id=%d err_code=%s err_type=%s err_message=%s",
 					account.ID,
@@ -724,6 +729,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		relayResult.DroppedDownstreamFrames,
 		turnCount,
 	)
+	if shouldRecordOpenAIWSRelayPassiveGroupHealthFailure(relayExit.Stage) {
+		s.recordOpenAIWSPassiveGroupHealthFailure(ctx, account, 0, []byte(relayErrorText(relayExit.Err)))
+	}
 
 	relayErr := relayExit.Err
 	if relayExit.Stage == "idle_timeout" {
@@ -750,6 +758,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		})
 	}
 	return turnErr
+}
+
+func shouldRecordOpenAIWSRelayPassiveGroupHealthFailure(stage string) bool {
+	switch stage {
+	case "read_upstream", "write_upstream", "drain_terminal":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *OpenAIGatewayService) mapOpenAIWSPassthroughDialError(
