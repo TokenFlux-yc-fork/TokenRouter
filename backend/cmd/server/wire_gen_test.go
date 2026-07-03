@@ -80,6 +80,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // openAIGateway
 		nil, // scheduledTestRunner
 		nil, // groupAvailabilityProbeRunner
+		nil, // groupBackupPoolRefill
 		nil, // backupSvc
 		nil, // paymentOrderExpiry
 		nil, // quotaFlusher

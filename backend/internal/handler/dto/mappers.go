@@ -234,6 +234,8 @@ func groupFromServiceBase(g *service.Group) Group {
 		FallbackGroupID:                 g.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: g.FallbackGroupIDOnInvalidRequest,
 		UnavailableFallbackGroupID:      g.UnavailableFallbackGroupID,
+		BackupPoolGroupID:               g.BackupPoolGroupID,
+		BackupPoolRefillThresholdPoints: service.NormalizeBackupPoolRefillThresholdPoints(g.BackupPoolRefillThresholdPoints),
 		AllowMessagesDispatch:           g.AllowMessagesDispatch,
 		RequireOAuthOnly:                g.RequireOAuthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,

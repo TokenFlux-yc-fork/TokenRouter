@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand"
 	"net/http"
 	"sort"
@@ -1953,7 +1954,7 @@ func resolveAccountExtraNumber(extra map[string]any, keys ...string) (float64, b
 // 如果不做该检查，旧 used_percent 会在真实窗口重置后仍让账号永久暂停。
 func resolveOpenAIQuotaUtilization(extra map[string]any, window string, now time.Time) (float64, bool) {
 	usedPercent := readOpenAIQuotaUsedPercent(extra, window)
-	if usedPercent <= 0 {
+	if usedPercent <= 0 || math.IsNaN(usedPercent) || math.IsInf(usedPercent, 0) {
 		return 0, false
 	}
 	if openAIQuotaWindowReset(extra, window, now) {

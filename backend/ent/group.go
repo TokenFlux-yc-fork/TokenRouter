@@ -61,6 +61,10 @@ type Group struct {
 	FallbackGroupIDOnInvalidRequest *int64 `json:"fallback_group_id_on_invalid_request,omitempty"`
 	// 当前分组不可用时优先回退使用的分组 ID
 	UnavailableFallbackGroupID *int64 `json:"unavailable_fallback_group_id,omitempty"`
+	// OpenAI Codex 备用号池分组 ID；目标分组容量不足时从该分组复制账号绑定
+	BackupPoolGroupID *int64 `json:"backup_pool_group_id,omitempty"`
+	// OpenAI Codex 备用号池自动补充阈值（容量点）；0 表示禁用
+	BackupPoolRefillThresholdPoints float64 `json:"backup_pool_refill_threshold_points,omitempty"`
 	// 模型路由配置：模型模式 -> 优先账号ID列表
 	ModelRouting map[string][]int64 `json:"model_routing,omitempty"`
 	// 是否启用模型路由配置
@@ -201,9 +205,9 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case group.FieldIsExclusive, group.FieldIsDefault, group.FieldAllowImageGeneration, group.FieldImageRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldDataSharingEnabled, group.FieldSessionIsolationEnabled:
 			values[i] = new(sql.NullBool)
-		case group.FieldRateMultiplier, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k:
+		case group.FieldRateMultiplier, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBackupPoolRefillThresholdPoints:
 			values[i] = new(sql.NullFloat64)
-		case group.FieldID, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldUnavailableFallbackGroupID, group.FieldSortOrder, group.FieldRpmLimit:
+		case group.FieldID, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldUnavailableFallbackGroupID, group.FieldBackupPoolGroupID, group.FieldSortOrder, group.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
 		case group.FieldName, group.FieldDescription, group.FieldStatus, group.FieldPlatform, group.FieldDisplayBrand, group.FieldDefaultMappedModel:
 			values[i] = new(sql.NullString)
@@ -363,6 +367,19 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.UnavailableFallbackGroupID = new(int64)
 				*_m.UnavailableFallbackGroupID = value.Int64
+			}
+		case group.FieldBackupPoolGroupID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field backup_pool_group_id", values[i])
+			} else if value.Valid {
+				_m.BackupPoolGroupID = new(int64)
+				*_m.BackupPoolGroupID = value.Int64
+			}
+		case group.FieldBackupPoolRefillThresholdPoints:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field backup_pool_refill_threshold_points", values[i])
+			} else if value.Valid {
+				_m.BackupPoolRefillThresholdPoints = value.Float64
 			}
 		case group.FieldModelRouting:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -618,6 +635,14 @@ func (_m *Group) String() string {
 		builder.WriteString("unavailable_fallback_group_id=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
+	builder.WriteString(", ")
+	if v := _m.BackupPoolGroupID; v != nil {
+		builder.WriteString("backup_pool_group_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("backup_pool_refill_threshold_points=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BackupPoolRefillThresholdPoints))
 	builder.WriteString(", ")
 	builder.WriteString("model_routing=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ModelRouting))

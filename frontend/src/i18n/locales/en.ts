@@ -2531,6 +2531,14 @@ export default {
         noFallback: 'Not specified (use default group)',
         hint: 'When this group is disabled, API keys bound to it prefer this group as fallback. Leave empty to keep falling back to the platform default group.'
       },
+      backupPool: {
+        title: 'Backup Pool',
+        noPool: 'Do not enable backup pool',
+        poolHint: 'OpenAI groups only. When this group falls below the Codex capacity threshold, eligible accounts are copied from the selected group.',
+        threshold: 'Refill threshold (capacity points)',
+        thresholdHint: 'Capacity points sum min(5h remaining%, 7d remaining%) per account. Schedulable accounts without a fresh usage snapshot count as 100.',
+        thresholdRequired: 'When backup pool is enabled, the refill threshold must be greater than 0.'
+      },
       dataSharing: {
         title: 'Data Sharing Group',
         enabled: 'Enabled',

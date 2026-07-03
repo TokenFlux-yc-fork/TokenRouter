@@ -13429,6 +13429,10 @@ type GroupMutation struct {
 	addfallback_group_id_on_invalid_request *int64
 	unavailable_fallback_group_id           *int64
 	addunavailable_fallback_group_id        *int64
+	backup_pool_group_id                    *int64
+	addbackup_pool_group_id                 *int64
+	backup_pool_refill_threshold_points     *float64
+	addbackup_pool_refill_threshold_points  *float64
 	model_routing                           *map[string][]int64
 	model_routing_enabled                   *bool
 	mcp_xml_inject                          *bool
@@ -14592,6 +14596,132 @@ func (m *GroupMutation) ResetUnavailableFallbackGroupID() {
 	delete(m.clearedFields, group.FieldUnavailableFallbackGroupID)
 }
 
+// SetBackupPoolGroupID sets the "backup_pool_group_id" field.
+func (m *GroupMutation) SetBackupPoolGroupID(i int64) {
+	m.backup_pool_group_id = &i
+	m.addbackup_pool_group_id = nil
+}
+
+// BackupPoolGroupID returns the value of the "backup_pool_group_id" field in the mutation.
+func (m *GroupMutation) BackupPoolGroupID() (r int64, exists bool) {
+	v := m.backup_pool_group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBackupPoolGroupID returns the old "backup_pool_group_id" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldBackupPoolGroupID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBackupPoolGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBackupPoolGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBackupPoolGroupID: %w", err)
+	}
+	return oldValue.BackupPoolGroupID, nil
+}
+
+// AddBackupPoolGroupID adds i to the "backup_pool_group_id" field.
+func (m *GroupMutation) AddBackupPoolGroupID(i int64) {
+	if m.addbackup_pool_group_id != nil {
+		*m.addbackup_pool_group_id += i
+	} else {
+		m.addbackup_pool_group_id = &i
+	}
+}
+
+// AddedBackupPoolGroupID returns the value that was added to the "backup_pool_group_id" field in this mutation.
+func (m *GroupMutation) AddedBackupPoolGroupID() (r int64, exists bool) {
+	v := m.addbackup_pool_group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearBackupPoolGroupID clears the value of the "backup_pool_group_id" field.
+func (m *GroupMutation) ClearBackupPoolGroupID() {
+	m.backup_pool_group_id = nil
+	m.addbackup_pool_group_id = nil
+	m.clearedFields[group.FieldBackupPoolGroupID] = struct{}{}
+}
+
+// BackupPoolGroupIDCleared returns if the "backup_pool_group_id" field was cleared in this mutation.
+func (m *GroupMutation) BackupPoolGroupIDCleared() bool {
+	_, ok := m.clearedFields[group.FieldBackupPoolGroupID]
+	return ok
+}
+
+// ResetBackupPoolGroupID resets all changes to the "backup_pool_group_id" field.
+func (m *GroupMutation) ResetBackupPoolGroupID() {
+	m.backup_pool_group_id = nil
+	m.addbackup_pool_group_id = nil
+	delete(m.clearedFields, group.FieldBackupPoolGroupID)
+}
+
+// SetBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field.
+func (m *GroupMutation) SetBackupPoolRefillThresholdPoints(f float64) {
+	m.backup_pool_refill_threshold_points = &f
+	m.addbackup_pool_refill_threshold_points = nil
+}
+
+// BackupPoolRefillThresholdPoints returns the value of the "backup_pool_refill_threshold_points" field in the mutation.
+func (m *GroupMutation) BackupPoolRefillThresholdPoints() (r float64, exists bool) {
+	v := m.backup_pool_refill_threshold_points
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBackupPoolRefillThresholdPoints returns the old "backup_pool_refill_threshold_points" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldBackupPoolRefillThresholdPoints(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBackupPoolRefillThresholdPoints is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBackupPoolRefillThresholdPoints requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBackupPoolRefillThresholdPoints: %w", err)
+	}
+	return oldValue.BackupPoolRefillThresholdPoints, nil
+}
+
+// AddBackupPoolRefillThresholdPoints adds f to the "backup_pool_refill_threshold_points" field.
+func (m *GroupMutation) AddBackupPoolRefillThresholdPoints(f float64) {
+	if m.addbackup_pool_refill_threshold_points != nil {
+		*m.addbackup_pool_refill_threshold_points += f
+	} else {
+		m.addbackup_pool_refill_threshold_points = &f
+	}
+}
+
+// AddedBackupPoolRefillThresholdPoints returns the value that was added to the "backup_pool_refill_threshold_points" field in this mutation.
+func (m *GroupMutation) AddedBackupPoolRefillThresholdPoints() (r float64, exists bool) {
+	v := m.addbackup_pool_refill_threshold_points
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBackupPoolRefillThresholdPoints resets all changes to the "backup_pool_refill_threshold_points" field.
+func (m *GroupMutation) ResetBackupPoolRefillThresholdPoints() {
+	m.backup_pool_refill_threshold_points = nil
+	m.addbackup_pool_refill_threshold_points = nil
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (m *GroupMutation) SetModelRouting(value map[string][]int64) {
 	m.model_routing = &value
@@ -15504,7 +15634,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 36)
+	fields := make([]string, 0, 38)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -15567,6 +15697,12 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.unavailable_fallback_group_id != nil {
 		fields = append(fields, group.FieldUnavailableFallbackGroupID)
+	}
+	if m.backup_pool_group_id != nil {
+		fields = append(fields, group.FieldBackupPoolGroupID)
+	}
+	if m.backup_pool_refill_threshold_points != nil {
+		fields = append(fields, group.FieldBackupPoolRefillThresholdPoints)
 	}
 	if m.model_routing != nil {
 		fields = append(fields, group.FieldModelRouting)
@@ -15663,6 +15799,10 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.FallbackGroupIDOnInvalidRequest()
 	case group.FieldUnavailableFallbackGroupID:
 		return m.UnavailableFallbackGroupID()
+	case group.FieldBackupPoolGroupID:
+		return m.BackupPoolGroupID()
+	case group.FieldBackupPoolRefillThresholdPoints:
+		return m.BackupPoolRefillThresholdPoints()
 	case group.FieldModelRouting:
 		return m.ModelRouting()
 	case group.FieldModelRoutingEnabled:
@@ -15744,6 +15884,10 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldFallbackGroupIDOnInvalidRequest(ctx)
 	case group.FieldUnavailableFallbackGroupID:
 		return m.OldUnavailableFallbackGroupID(ctx)
+	case group.FieldBackupPoolGroupID:
+		return m.OldBackupPoolGroupID(ctx)
+	case group.FieldBackupPoolRefillThresholdPoints:
+		return m.OldBackupPoolRefillThresholdPoints(ctx)
 	case group.FieldModelRouting:
 		return m.OldModelRouting(ctx)
 	case group.FieldModelRoutingEnabled:
@@ -15930,6 +16074,20 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetUnavailableFallbackGroupID(v)
 		return nil
+	case group.FieldBackupPoolGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBackupPoolGroupID(v)
+		return nil
+	case group.FieldBackupPoolRefillThresholdPoints:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBackupPoolRefillThresholdPoints(v)
+		return nil
 	case group.FieldModelRouting:
 		v, ok := value.(map[string][]int64)
 		if !ok {
@@ -16067,6 +16225,12 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addunavailable_fallback_group_id != nil {
 		fields = append(fields, group.FieldUnavailableFallbackGroupID)
 	}
+	if m.addbackup_pool_group_id != nil {
+		fields = append(fields, group.FieldBackupPoolGroupID)
+	}
+	if m.addbackup_pool_refill_threshold_points != nil {
+		fields = append(fields, group.FieldBackupPoolRefillThresholdPoints)
+	}
 	if m.addsort_order != nil {
 		fields = append(fields, group.FieldSortOrder)
 	}
@@ -16097,6 +16261,10 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedFallbackGroupIDOnInvalidRequest()
 	case group.FieldUnavailableFallbackGroupID:
 		return m.AddedUnavailableFallbackGroupID()
+	case group.FieldBackupPoolGroupID:
+		return m.AddedBackupPoolGroupID()
+	case group.FieldBackupPoolRefillThresholdPoints:
+		return m.AddedBackupPoolRefillThresholdPoints()
 	case group.FieldSortOrder:
 		return m.AddedSortOrder()
 	case group.FieldRpmLimit:
@@ -16166,6 +16334,20 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddUnavailableFallbackGroupID(v)
 		return nil
+	case group.FieldBackupPoolGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBackupPoolGroupID(v)
+		return nil
+	case group.FieldBackupPoolRefillThresholdPoints:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBackupPoolRefillThresholdPoints(v)
+		return nil
 	case group.FieldSortOrder:
 		v, ok := value.(int)
 		if !ok {
@@ -16212,6 +16394,9 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldUnavailableFallbackGroupID) {
 		fields = append(fields, group.FieldUnavailableFallbackGroupID)
 	}
+	if m.FieldCleared(group.FieldBackupPoolGroupID) {
+		fields = append(fields, group.FieldBackupPoolGroupID)
+	}
 	if m.FieldCleared(group.FieldModelRouting) {
 		fields = append(fields, group.FieldModelRouting)
 	}
@@ -16252,6 +16437,9 @@ func (m *GroupMutation) ClearField(name string) error {
 		return nil
 	case group.FieldUnavailableFallbackGroupID:
 		m.ClearUnavailableFallbackGroupID()
+		return nil
+	case group.FieldBackupPoolGroupID:
+		m.ClearBackupPoolGroupID()
 		return nil
 	case group.FieldModelRouting:
 		m.ClearModelRouting()
@@ -16326,6 +16514,12 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldUnavailableFallbackGroupID:
 		m.ResetUnavailableFallbackGroupID()
+		return nil
+	case group.FieldBackupPoolGroupID:
+		m.ResetBackupPoolGroupID()
+		return nil
+	case group.FieldBackupPoolRefillThresholdPoints:
+		m.ResetBackupPoolRefillThresholdPoints()
 		return nil
 	case group.FieldModelRouting:
 		m.ResetModelRouting()

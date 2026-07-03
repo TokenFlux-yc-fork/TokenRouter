@@ -121,6 +121,9 @@ type Group struct {
 	FallbackGroupIDOnInvalidRequest *int64 `json:"fallback_group_id_on_invalid_request"`
 	// 当前分组不可用时 API Key 优先回退到的分组。
 	UnavailableFallbackGroupID *int64 `json:"unavailable_fallback_group_id"`
+	// OpenAI Codex 备用号池自动补充配置。
+	BackupPoolGroupID               *int64  `json:"backup_pool_group_id"`
+	BackupPoolRefillThresholdPoints float64 `json:"backup_pool_refill_threshold_points"`
 
 	// OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
 	AllowMessagesDispatch bool `json:"allow_messages_dispatch"`
