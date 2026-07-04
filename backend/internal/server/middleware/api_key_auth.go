@@ -277,11 +277,7 @@ func abortIfAPIKeyGroupUnavailable(c *gin.Context, apiKey *service.APIKey) bool 
 		return false
 	}
 	service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonAPIKeyGroupUnavailable)
-	status := 403
-	if code == "GROUP_UNHEALTHY" {
-		status = 503
-	}
-	AbortWithError(c, status, code, message)
+	AbortWithError(c, 403, code, message)
 	return true
 }
 
@@ -312,9 +308,6 @@ func validateAPIKeyGroupAvailable(apiKey *service.APIKey) (string, string, bool)
 	}
 	if !group.IsActive() {
 		return "GROUP_DISABLED", "API Key 所属分组已停用", false
-	}
-	if !group.IsHealthy() {
-		return "GROUP_UNHEALTHY", "API Key 所属分组健康检查异常，已熔断", false
 	}
 	return "", "", true
 }

@@ -2132,9 +2132,6 @@ func (s *adminServiceImpl) validateUnavailableFallbackGroup(ctx context.Context,
 	if !fallbackGroup.IsActive() {
 		return fmt.Errorf("unavailable fallback group must be active")
 	}
-	if !fallbackGroup.IsHealthy() {
-		return fmt.Errorf("unavailable fallback group must be healthy")
-	}
 	return nil
 }
 

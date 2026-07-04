@@ -107,6 +107,51 @@
               </p>
             </div>
           </div>
+          <div class="sm:col-span-2 rounded-lg border border-orange-200 bg-orange-50/70 p-3 dark:border-orange-900/60 dark:bg-orange-950/20">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <Toggle v-model="newPlan.account_circuit_breaker_enabled" />
+                  {{ t('admin.scheduledTests.accountCircuitBreaker') }}
+                </label>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.accountCircuitBreakerHelp') }}
+                </p>
+              </div>
+            </div>
+            <div
+              v-if="newPlan.account_circuit_breaker_enabled"
+              class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4"
+            >
+              <div>
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.failureThreshold') }}
+                </label>
+                <Input v-model="newPlan.failure_threshold" type="number" placeholder="3" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.successThreshold') }}
+                </label>
+                <Input v-model="newPlan.success_threshold" type="number" placeholder="2" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.failureCooldownMinutes') }}
+                </label>
+                <Input v-model="newPlan.failure_cooldown_minutes" type="number" placeholder="5" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.timeoutSeconds') }}
+                </label>
+                <Input v-model="newPlan.timeout_seconds" type="number" placeholder="30" />
+              </div>
+              <p class="sm:col-span-4 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.scheduledTests.probePolicyHint') }}
+              </p>
+            </div>
+          </div>
         </div>
         <div class="mt-3 flex justify-end gap-2">
           <button
@@ -183,6 +228,14 @@
                 class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"
               >
                 {{ t('admin.scheduledTests.autoRecover') }}
+              </span>
+
+              <!-- Account Circuit Breaker Badge -->
+              <span
+                v-if="plan.account_circuit_breaker_enabled"
+                class="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-500/20 dark:text-orange-400"
+              >
+                {{ t('admin.scheduledTests.accountCircuitBreakerBadge') }}
               </span>
             </div>
 
@@ -314,6 +367,47 @@
                   </label>
                   <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
                     {{ t('admin.scheduledTests.autoRecoverHelp') }}
+                  </p>
+                </div>
+              </div>
+              <div class="sm:col-span-2 rounded-lg border border-orange-200 bg-orange-50/70 p-3 dark:border-orange-900/60 dark:bg-orange-950/20">
+                <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <Toggle v-model="editForm.account_circuit_breaker_enabled" />
+                  {{ t('admin.scheduledTests.accountCircuitBreaker') }}
+                </label>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.accountCircuitBreakerHelp') }}
+                </p>
+                <div
+                  v-if="editForm.account_circuit_breaker_enabled"
+                  class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4"
+                >
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t('admin.scheduledTests.failureThreshold') }}
+                    </label>
+                    <Input v-model="editForm.failure_threshold" type="number" placeholder="3" />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t('admin.scheduledTests.successThreshold') }}
+                    </label>
+                    <Input v-model="editForm.success_threshold" type="number" placeholder="2" />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t('admin.scheduledTests.failureCooldownMinutes') }}
+                    </label>
+                    <Input v-model="editForm.failure_cooldown_minutes" type="number" placeholder="5" />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t('admin.scheduledTests.timeoutSeconds') }}
+                    </label>
+                    <Input v-model="editForm.timeout_seconds" type="number" placeholder="30" />
+                  </div>
+                  <p class="sm:col-span-4 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.scheduledTests.probePolicyHint') }}
                   </p>
                 </div>
               </div>
@@ -508,7 +602,12 @@ const editForm = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  account_circuit_breaker_enabled: false,
+  failure_threshold: '3' as string,
+  success_threshold: '2' as string,
+  failure_cooldown_minutes: '5' as string,
+  timeout_seconds: '30' as string
 })
 
 const newPlan = reactive({
@@ -516,8 +615,18 @@ const newPlan = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  account_circuit_breaker_enabled: false,
+  failure_threshold: '3' as string,
+  success_threshold: '2' as string,
+  failure_cooldown_minutes: '5' as string,
+  timeout_seconds: '30' as string
 })
+
+const toPositiveNumber = (value: string, fallback: number) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback
+}
 
 const resetNewPlan = () => {
   newPlan.model_id = ''
@@ -525,6 +634,11 @@ const resetNewPlan = () => {
   newPlan.max_results = '100'
   newPlan.enabled = true
   newPlan.auto_recover = false
+  newPlan.account_circuit_breaker_enabled = false
+  newPlan.failure_threshold = '3'
+  newPlan.success_threshold = '2'
+  newPlan.failure_cooldown_minutes = '5'
+  newPlan.timeout_seconds = '30'
 }
 
 // Load plans when dialog opens
@@ -560,14 +674,18 @@ const handleCreate = async () => {
   if (!props.accountId || !newPlan.model_id || !newPlan.cron_expression) return
   creating.value = true
   try {
-    const maxResults = Number(newPlan.max_results) || 100
     await adminAPI.scheduledTests.create({
       account_id: props.accountId,
       model_id: newPlan.model_id,
       cron_expression: newPlan.cron_expression,
       enabled: newPlan.enabled,
-      max_results: maxResults,
-      auto_recover: newPlan.auto_recover
+      max_results: toPositiveNumber(newPlan.max_results, 100),
+      auto_recover: newPlan.auto_recover,
+      account_circuit_breaker_enabled: newPlan.account_circuit_breaker_enabled,
+      failure_threshold: toPositiveNumber(newPlan.failure_threshold, 3),
+      success_threshold: toPositiveNumber(newPlan.success_threshold, 2),
+      failure_cooldown_minutes: toPositiveNumber(newPlan.failure_cooldown_minutes, 5),
+      timeout_seconds: toPositiveNumber(newPlan.timeout_seconds, 30)
     })
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
@@ -600,6 +718,11 @@ const startEdit = (plan: ScheduledTestPlan) => {
   editForm.max_results = String(plan.max_results)
   editForm.enabled = plan.enabled
   editForm.auto_recover = plan.auto_recover
+  editForm.account_circuit_breaker_enabled = plan.account_circuit_breaker_enabled
+  editForm.failure_threshold = String(plan.failure_threshold || 3)
+  editForm.success_threshold = String(plan.success_threshold || 2)
+  editForm.failure_cooldown_minutes = String(plan.failure_cooldown_minutes || 5)
+  editForm.timeout_seconds = String(plan.timeout_seconds || 30)
 }
 
 const cancelEdit = () => {
@@ -613,9 +736,14 @@ const handleEdit = async () => {
     const updated = await adminAPI.scheduledTests.update(editingPlanId.value, {
       model_id: editForm.model_id,
       cron_expression: editForm.cron_expression,
-      max_results: Number(editForm.max_results) || 100,
+      max_results: toPositiveNumber(editForm.max_results, 100),
       enabled: editForm.enabled,
-      auto_recover: editForm.auto_recover
+      auto_recover: editForm.auto_recover,
+      account_circuit_breaker_enabled: editForm.account_circuit_breaker_enabled,
+      failure_threshold: toPositiveNumber(editForm.failure_threshold, 3),
+      success_threshold: toPositiveNumber(editForm.success_threshold, 2),
+      failure_cooldown_minutes: toPositiveNumber(editForm.failure_cooldown_minutes, 5),
+      timeout_seconds: toPositiveNumber(editForm.timeout_seconds, 30)
     })
     const index = plans.value.findIndex((p) => p.id === editingPlanId.value)
     if (index !== -1) {

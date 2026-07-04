@@ -14,37 +14,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newPassiveHealthRateLimitService(groupID int64) (*RateLimitService, *groupHealthRepoStub) {
-	group := &Group{
-		ID:                          groupID,
-		HealthCheckEnabled:          true,
-		HealthStatus:                HealthStatusHealthy,
-		HealthCheckFailureThreshold: 1,
-	}
-	groupRepo := &groupHealthRepoStub{groups: map[int64]*Group{group.ID: group}}
-	rateLimitService := NewRateLimitService(nil, nil, nil, nil, nil)
-	rateLimitService.SetGroupHealthMonitor(NewGroupHealthMonitor(groupRepo, nil))
-	return rateLimitService, groupRepo
-}
-
-func requireSinglePassiveHealthUpdate(t *testing.T, groupRepo *groupHealthRepoStub, groupID int64) {
-	t.Helper()
-	require.Len(t, groupRepo.updates, 1)
-	require.Equal(t, groupID, groupRepo.updates[0].groupID)
-	require.Equal(t, HealthStatusUnhealthy, groupRepo.updates[0].update.HealthStatus)
-}
-
-type passiveHealthTempUnschedAccountRepo struct {
+type passiveAccountCircuitBreakerTempUnschedAccountRepo struct {
 	AccountRepository
+	calls []passiveAccountCircuitBreakerCall
 }
 
-func (r *passiveHealthTempUnschedAccountRepo) SetTempUnschedulable(context.Context, int64, time.Time, string) error {
+type passiveAccountCircuitBreakerCall struct {
+	accountID int64
+	until     time.Time
+	reason    string
+}
+
+func (r *passiveAccountCircuitBreakerTempUnschedAccountRepo) SetTempUnschedulable(_ context.Context, accountID int64, until time.Time, reason string) error {
+	if len(r.calls) > 0 && !r.calls[len(r.calls)-1].until.Before(until) {
+		return nil
+	}
+	r.calls = append(r.calls, passiveAccountCircuitBreakerCall{accountID: accountID, until: until, reason: reason})
 	return nil
 }
 
-func TestGeminiHandleUpstreamErrorHTTP5xxRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 401
-	rateLimitService, groupRepo := newPassiveHealthRateLimitService(groupID)
+func (r *passiveAccountCircuitBreakerTempUnschedAccountRepo) SetModelRateLimit(context.Context, int64, string, time.Time, ...string) error {
+	return nil
+}
+
+func newPassiveAccountCircuitBreakerRateLimitService() (*RateLimitService, *passiveAccountCircuitBreakerTempUnschedAccountRepo) {
+	accountRepo := &passiveAccountCircuitBreakerTempUnschedAccountRepo{}
+	return NewRateLimitService(accountRepo, nil, nil, nil, nil), accountRepo
+}
+
+func requireSinglePassiveAccountCircuitBreaker(t *testing.T, accountRepo *passiveAccountCircuitBreakerTempUnschedAccountRepo, accountID int64) {
+	t.Helper()
+	require.Len(t, accountRepo.calls, 1)
+	require.Equal(t, accountID, accountRepo.calls[0].accountID)
+	require.True(t, accountRepo.calls[0].until.After(time.Now()))
+	require.Contains(t, accountRepo.calls[0].reason, "passive_account_circuit_breaker")
+}
+
+func TestGeminiHandleUpstreamErrorHTTP5xxRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	svc := &GeminiMessagesCompatService{rateLimitService: rateLimitService}
 	account := &Account{
 		ID:       501,
@@ -54,7 +61,6 @@ func TestGeminiHandleUpstreamErrorHTTP5xxRecordsPassiveGroupHealthFailure(t *tes
 		Credentials: map[string]any{
 			"pool_mode": true,
 		},
-		GroupIDs: []int64{groupID},
 	}
 
 	svc.handleGeminiUpstreamError(
@@ -65,19 +71,17 @@ func TestGeminiHandleUpstreamErrorHTTP5xxRecordsPassiveGroupHealthFailure(t *tes
 		[]byte(`{"error":{"message":"upstream overloaded"}}`),
 	)
 
-	requireSinglePassiveHealthUpdate(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestAntigravityHandleUpstreamErrorHTTP503RecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 402
-	rateLimitService, groupRepo := newPassiveHealthRateLimitService(groupID)
+func TestAntigravityHandleUpstreamErrorHTTP503RecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	svc := &AntigravityGatewayService{rateLimitService: rateLimitService}
 	account := &Account{
 		ID:       502,
 		Name:     "antigravity-upstream",
 		Platform: PlatformAntigravity,
 		Type:     AccountTypeUpstream,
-		GroupIDs: []int64{groupID},
 	}
 
 	svc.handleUpstreamError(
@@ -93,20 +97,12 @@ func TestAntigravityHandleUpstreamErrorHTTP503RecordsPassiveGroupHealthFailure(t
 		false,
 	)
 
-	requireSinglePassiveHealthUpdate(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestAntigravityTempUnscheduledPolicyRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 406
-	group := &Group{
-		ID:                          groupID,
-		HealthCheckEnabled:          true,
-		HealthStatus:                HealthStatusHealthy,
-		HealthCheckFailureThreshold: 1,
-	}
-	groupRepo := &groupHealthRepoStub{groups: map[int64]*Group{group.ID: group}}
-	rateLimitService := NewRateLimitService(&passiveHealthTempUnschedAccountRepo{}, nil, nil, nil, nil)
-	rateLimitService.SetGroupHealthMonitor(NewGroupHealthMonitor(groupRepo, nil))
+func TestAntigravityTempUnscheduledPolicyKeepsConfiguredAccountCooldown(t *testing.T) {
+	accountRepo := &passiveAccountCircuitBreakerTempUnschedAccountRepo{}
+	rateLimitService := NewRateLimitService(accountRepo, nil, nil, nil, nil)
 	svc := &AntigravityGatewayService{rateLimitService: rateLimitService}
 	account := &Account{
 		ID:       506,
@@ -123,7 +119,6 @@ func TestAntigravityTempUnscheduledPolicyRecordsPassiveGroupHealthFailure(t *tes
 				},
 			},
 		},
-		GroupIDs: []int64{groupID},
 	}
 
 	handled, status, err := svc.applyErrorPolicy(
@@ -141,14 +136,16 @@ func TestAntigravityTempUnscheduledPolicyRecordsPassiveGroupHealthFailure(t *tes
 	require.Equal(t, http.StatusServiceUnavailable, status)
 	var switchErr *AntigravityAccountSwitchError
 	require.ErrorAs(t, err, &switchErr)
-	requireSinglePassiveHealthUpdate(t, groupRepo, groupID)
+	require.Len(t, accountRepo.calls, 1)
+	require.Equal(t, account.ID, accountRepo.calls[0].accountID)
+	require.Contains(t, accountRepo.calls[0].reason, `"matched_keyword":"overloaded"`)
+	require.NotContains(t, accountRepo.calls[0].reason, "passive_account_circuit_breaker")
 }
 
-func TestAntigravityForwardUpstreamHTTP5xxRecordsPassiveGroupHealthFailure(t *testing.T) {
+func TestAntigravityForwardUpstreamHTTP5xxRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	const groupID int64 = 405
-	rateLimitService, groupRepo := newPassiveHealthRateLimitService(groupID)
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusServiceUnavailable,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -167,7 +164,6 @@ func TestAntigravityForwardUpstreamHTTP5xxRecordsPassiveGroupHealthFailure(t *te
 			"base_url": "https://upstream.example",
 			"api_key":  "sk-upstream",
 		},
-		GroupIDs:    []int64{groupID},
 		Concurrency: 1,
 	}
 	rec := httptest.NewRecorder()
@@ -184,14 +180,13 @@ func TestAntigravityForwardUpstreamHTTP5xxRecordsPassiveGroupHealthFailure(t *te
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	requireSinglePassiveHealthUpdate(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestGeminiChatCompletionsCustomSkippedRecordsPassiveGroupHealthFailure(t *testing.T) {
+func TestGeminiChatCompletionsCustomSkippedRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	const groupID int64 = 403
-	rateLimitService, groupRepo := newPassiveHealthRateLimitService(groupID)
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusServiceUnavailable,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -213,7 +208,6 @@ func TestGeminiChatCompletionsCustomSkippedRecordsPassiveGroupHealthFailure(t *t
 			"custom_error_codes_enabled": true,
 			"custom_error_codes":         []any{float64(http.StatusUnauthorized)},
 		},
-		GroupIDs: []int64{groupID},
 	}
 	rec := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(rec)
@@ -229,5 +223,5 @@ func TestGeminiChatCompletionsCustomSkippedRecordsPassiveGroupHealthFailure(t *t
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	requireSinglePassiveHealthUpdate(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }

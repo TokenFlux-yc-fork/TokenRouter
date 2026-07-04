@@ -594,7 +594,7 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 	return apiKey, nil
 }
 
-// applyDefaultGroupFallback 为未绑定有效分组、绑定停用分组或绑定熔断分组的 API Key 计算请求级默认分组。
+// applyDefaultGroupFallback 为未绑定有效分组或绑定停用分组的 API Key 计算请求级默认分组。
 // 这里只修正当前请求中的对象，不回写数据库，也不写入认证缓存，避免不同端点之间互相污染。
 func (s *APIKeyService) applyDefaultGroupFallback(ctx context.Context, apiKey *APIKey) *APIKey {
 	if apiKey == nil || s.groupRepo == nil {
@@ -636,7 +636,7 @@ func (s *APIKeyService) applyDefaultGroupFallback(ctx context.Context, apiKey *A
 }
 
 // applyUnavailableFallbackGroup 将不可用分组的请求优先切到管理员指定的回退分组。
-// 若目标分组不存在、停用、熔断或平台不匹配，返回 nil 交给默认分组兜底逻辑继续处理。
+// 若目标分组不存在、停用或平台不匹配，返回 nil 交给默认分组兜底逻辑继续处理。
 func (s *APIKeyService) applyUnavailableFallbackGroup(ctx context.Context, apiKey *APIKey, platform string, fallbackGroupID int64) *APIKey {
 	if apiKey == nil || s.groupRepo == nil || fallbackGroupID <= 0 {
 		return nil

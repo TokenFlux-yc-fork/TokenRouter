@@ -118,38 +118,3 @@ func TestGroupHealthMonitor_RecordProbeResultSkipsStaleCheck(t *testing.T) {
 	require.Equal(t, 0, group.HealthConsecutiveFailures)
 	require.Equal(t, 4, group.HealthConsecutiveSuccesses)
 }
-
-func TestGroupHealthMonitor_RecordPassiveAccountFailureTargetsUpstreamPoolsOnly(t *testing.T) {
-	enabledGroup := &Group{
-		ID:                          21,
-		HealthCheckEnabled:          true,
-		HealthStatus:                HealthStatusHealthy,
-		HealthCheckFailureThreshold: 1,
-	}
-	disabledHealthGroup := &Group{
-		ID:                 22,
-		HealthCheckEnabled: false,
-		HealthStatus:       HealthStatusHealthy,
-	}
-	repo := &groupHealthRepoStub{
-		groups: map[int64]*Group{
-			enabledGroup.ID:        enabledGroup,
-			disabledHealthGroup.ID: disabledHealthGroup,
-		},
-	}
-	monitor := NewGroupHealthMonitor(repo, nil)
-
-	ordinaryAccount := &Account{ID: 1, Type: AccountTypeAPIKey, GroupIDs: []int64{enabledGroup.ID}}
-	require.NoError(t, monitor.RecordPassiveAccountFailure(context.Background(), ordinaryAccount, 503, "upstream failed"))
-	require.Empty(t, repo.updates)
-
-	upstreamAccount := &Account{ID: 2, Type: AccountTypeUpstream, GroupIDs: []int64{disabledHealthGroup.ID}}
-	require.NoError(t, monitor.RecordPassiveAccountFailure(context.Background(), upstreamAccount, 503, "upstream failed"))
-	require.Empty(t, repo.updates)
-
-	upstreamAccount.GroupIDs = []int64{enabledGroup.ID}
-	require.NoError(t, monitor.RecordPassiveAccountFailure(context.Background(), upstreamAccount, 429, "upstream rate limited"))
-	require.Len(t, repo.updates, 1)
-	require.Equal(t, enabledGroup.ID, repo.updates[0].groupID)
-	require.Equal(t, HealthStatusUnhealthy, repo.updates[0].update.HealthStatus)
-}

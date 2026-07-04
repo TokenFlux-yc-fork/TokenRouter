@@ -6,20 +6,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
 
-func TestGatewayService_RetryExhaustedRecordsPassiveGroupHealthFailure(t *testing.T) {
-	group := &Group{
-		ID:                          201,
-		HealthCheckEnabled:          true,
-		HealthStatus:                HealthStatusHealthy,
-		HealthCheckFailureThreshold: 1,
-	}
-	groupRepo := &groupHealthRepoStub{groups: map[int64]*Group{group.ID: group}}
-	rateLimitService := NewRateLimitService(nil, nil, nil, nil, nil)
-	rateLimitService.SetGroupHealthMonitor(NewGroupHealthMonitor(groupRepo, nil))
+func TestGatewayService_RetryExhaustedRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 
 	svc := &GatewayService{rateLimitService: rateLimitService}
 	account := &Account{
@@ -32,7 +22,6 @@ func TestGatewayService_RetryExhaustedRecordsPassiveGroupHealthFailure(t *testin
 			"custom_error_codes_enabled": true,
 			"custom_error_codes":         []any{float64(http.StatusUnauthorized)},
 		},
-		GroupIDs: []int64{group.ID},
 	}
 	resp := &http.Response{
 		StatusCode: http.StatusServiceUnavailable,
@@ -42,7 +31,5 @@ func TestGatewayService_RetryExhaustedRecordsPassiveGroupHealthFailure(t *testin
 
 	svc.handleRetryExhaustedSideEffects(context.Background(), resp, account)
 
-	require.Len(t, groupRepo.updates, 1)
-	require.Equal(t, group.ID, groupRepo.updates[0].groupID)
-	require.Equal(t, HealthStatusUnhealthy, groupRepo.updates[0].update.HealthStatus)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }

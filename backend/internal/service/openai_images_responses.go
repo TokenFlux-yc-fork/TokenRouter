@@ -830,7 +830,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesErrorResponse(
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
-		s.recordOpenAIPassiveGroupHealthFailure(ctx, account, resp.StatusCode, body)
+		s.recordOpenAIPassiveAccountFailure(ctx, account, resp.StatusCode, body)
 		upErr := &OpenAIImagesUpstreamError{
 			StatusCode:        status,
 			ErrorType:         errType,
@@ -842,7 +842,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesErrorResponse(
 	}
 
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {
-		s.recordOpenAIPassiveGroupHealthFailure(ctx, account, resp.StatusCode, body)
+		s.recordOpenAIPassiveAccountFailure(ctx, account, resp.StatusCode, body)
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,

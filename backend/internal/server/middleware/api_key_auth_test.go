@@ -407,7 +407,7 @@ func TestAPIKeyAuthRejectsUnavailableGroup(t *testing.T) {
 			wantMarked: true,
 		},
 		{
-			name: "unhealthy group returns service unavailable",
+			name: "unhealthy health status does not block group",
 			group: &service.Group{
 				ID:                 groupID,
 				Name:               "unhealthy",
@@ -417,9 +417,7 @@ func TestAPIKeyAuthRejectsUnavailableGroup(t *testing.T) {
 				HealthCheckEnabled: true,
 				HealthStatus:       service.HealthStatusUnhealthy,
 			},
-			wantStatus: http.StatusServiceUnavailable,
-			wantCode:   "GROUP_UNHEALTHY",
-			wantMarked: true,
+			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "missing group edge is forbidden",

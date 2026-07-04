@@ -8056,8 +8056,8 @@ func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, re
 		s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
 		logger.LegacyPrintf("service.gateway", "Account %d: applied upstream error policy after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
 	} else {
-		// API Key 未配置错误码：不标记账号状态，但仍让上游池健康熔断看到最终失败。
-		s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, statusCode, body)
+		// API Key 未配置错误码：不标记账号 error，但仍让账号级被动熔断看到最终失败。
+		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
 		logger.LegacyPrintf("service.gateway", "Account %d: upstream error %d after %d retries (not marking account)", account.ID, statusCode, maxRetryAttempts)
 	}
 }

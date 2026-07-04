@@ -10,6 +10,17 @@ import (
 
 var scheduledTestCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
+const (
+	defaultScheduledTestMaxResults             = 50
+	defaultScheduledTestFailureThreshold       = 3
+	defaultScheduledTestSuccessThreshold       = 2
+	defaultScheduledTestFailureCooldownMinutes = 5
+	defaultScheduledTestTimeoutSeconds         = 30
+	maxScheduledTestThreshold                  = 10
+	maxScheduledTestFailureCooldownMinutes     = 10080
+	maxScheduledTestTimeoutSeconds             = 300
+)
+
 // ScheduledTestService provides CRUD operations for scheduled test plans and results.
 type ScheduledTestService struct {
 	planRepo   ScheduledTestPlanRepository
@@ -35,9 +46,7 @@ func (s *ScheduledTestService) CreatePlan(ctx context.Context, plan *ScheduledTe
 	}
 	plan.NextRunAt = &nextRun
 
-	if plan.MaxResults <= 0 {
-		plan.MaxResults = 50
-	}
+	normalizeScheduledTestPlanDefaults(plan)
 
 	return s.planRepo.Create(ctx, plan)
 }
@@ -59,6 +68,7 @@ func (s *ScheduledTestService) UpdatePlan(ctx context.Context, plan *ScheduledTe
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
 	}
 	plan.NextRunAt = &nextRun
+	normalizeScheduledTestPlanDefaults(plan)
 
 	return s.planRepo.Update(ctx, plan)
 }
@@ -91,4 +101,42 @@ func computeNextRun(cronExpr string, from time.Time) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return sched.Next(from), nil
+}
+
+func normalizeScheduledTestPlanDefaults(plan *ScheduledTestPlan) {
+	if plan == nil {
+		return
+	}
+	if plan.MaxResults <= 0 {
+		plan.MaxResults = defaultScheduledTestMaxResults
+	}
+	if plan.FailureThreshold <= 0 {
+		plan.FailureThreshold = defaultScheduledTestFailureThreshold
+	} else if plan.FailureThreshold > maxScheduledTestThreshold {
+		plan.FailureThreshold = maxScheduledTestThreshold
+	}
+	if plan.SuccessThreshold <= 0 {
+		plan.SuccessThreshold = defaultScheduledTestSuccessThreshold
+	} else if plan.SuccessThreshold > maxScheduledTestThreshold {
+		plan.SuccessThreshold = maxScheduledTestThreshold
+	}
+	if plan.FailureCooldownMinutes <= 0 {
+		plan.FailureCooldownMinutes = defaultScheduledTestFailureCooldownMinutes
+	} else if plan.FailureCooldownMinutes > maxScheduledTestFailureCooldownMinutes {
+		plan.FailureCooldownMinutes = maxScheduledTestFailureCooldownMinutes
+	}
+	if plan.TimeoutSeconds <= 0 {
+		plan.TimeoutSeconds = defaultScheduledTestTimeoutSeconds
+	} else if plan.TimeoutSeconds > maxScheduledTestTimeoutSeconds {
+		plan.TimeoutSeconds = maxScheduledTestTimeoutSeconds
+	}
+	if plan.AccountCircuitBreakerEnabled {
+		minResultsForCircuitBreaker := plan.FailureThreshold
+		if plan.SuccessThreshold > minResultsForCircuitBreaker {
+			minResultsForCircuitBreaker = plan.SuccessThreshold
+		}
+		if plan.MaxResults < minResultsForCircuitBreaker {
+			plan.MaxResults = minResultsForCircuitBreaker
+		}
+	}
 }

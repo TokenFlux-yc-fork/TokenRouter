@@ -4386,7 +4386,15 @@ export default {
       maxResultsTooltipExample: '例如填写 100，表示最多保存最近 100 次测试结果；第 101 次结果写入后，最早的一条会被清理。',
       maxResultsTooltipRange: '推荐填写范围：一般可填 20 到 200。只关注近期可用性时可填 20-50；需要回看较长时间的波动趋势时可填 100-200。',
       autoRecover: '自动恢复',
-      autoRecoverHelp: '测试成功后自动恢复异常状态的账号'
+      autoRecoverHelp: '测试成功后自动恢复异常状态的账号',
+      accountCircuitBreaker: '账号级主动熔断',
+      accountCircuitBreakerBadge: '账号熔断',
+      accountCircuitBreakerHelp: '连续探测失败后暂停调度当前账号；后续探针仍会运行，连续成功后自动恢复该账号。',
+      failureThreshold: '失败阈值',
+      successThreshold: '恢复阈值',
+      failureCooldownMinutes: '冷却分钟',
+      timeoutSeconds: '探针超时（秒）',
+      probePolicyHint: '探针超过超时上限会按失败记录。连续失败达到阈值后只暂停这个账号，不影响同组其他账号。阈值上限 10，探针超时上限 300 秒。'
     },
 
     // Proxies Management

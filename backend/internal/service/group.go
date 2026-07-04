@@ -115,9 +115,8 @@ func (g *Group) IsHealthy() bool {
 }
 
 // IsRoutable 返回分组当前是否可用于请求路由。
-// 熔断只影响运行时路由，不修改管理员设置的 status。
 func (g *Group) IsRoutable() bool {
-	return g != nil && g.IsActive() && g.IsHealthy()
+	return g != nil && g.IsActive()
 }
 
 func normalizeGroupHealthStatus(status string) string {

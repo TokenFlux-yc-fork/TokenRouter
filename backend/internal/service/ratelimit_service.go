@@ -30,7 +30,6 @@ type RateLimitService struct {
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
 	runtimeBlocker        AccountRuntimeBlocker
-	groupHealthMonitor    *GroupHealthMonitor
 	usageCacheMu          sync.RWMutex
 	usageCache            map[int64]*geminiUsageCacheEntry
 }
@@ -76,6 +75,12 @@ const (
 	openAIImageRateLimitReason          = "openai_image_rate_limited"
 )
 
+const (
+	defaultPassiveAccountCircuitBreakerCooldown = time.Minute
+	passiveAccountCircuitBreakerRuleIndex       = -2
+	scheduledTestCircuitBreakerRuleIndex        = -3
+)
+
 var openAIImageTryAgainPattern = regexp.MustCompile(`(?i)try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes)`)
 
 // NewRateLimitService 创建RateLimitService实例
@@ -108,10 +113,6 @@ func (s *RateLimitService) SetSettingService(settingService *SettingService) {
 // SetTokenCacheInvalidator 设置 token 缓存清理器（可选依赖）
 func (s *RateLimitService) SetTokenCacheInvalidator(invalidator TokenCacheInvalidator) {
 	s.tokenCacheInvalidator = invalidator
-}
-
-func (s *RateLimitService) SetGroupHealthMonitor(monitor *GroupHealthMonitor) {
-	s.groupHealthMonitor = monitor
 }
 
 func (s *RateLimitService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
@@ -164,7 +165,7 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
-	s.recordPassiveGroupHealthFailure(ctx, account, statusCode, responseBody)
+	s.recordPassiveAccountFailure(ctx, account, statusCode, responseBody)
 
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
 
@@ -356,16 +357,87 @@ func (s *RateLimitService) RecordUpstreamRequestFailure(ctx context.Context, acc
 	if err == nil {
 		return
 	}
-	s.recordPassiveGroupHealthFailure(ctx, account, 0, []byte(err.Error()))
+	s.recordPassiveAccountFailure(ctx, account, 0, []byte(err.Error()))
 }
 
-func (s *RateLimitService) recordPassiveGroupHealthFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
-	if s == nil || s.groupHealthMonitor == nil || account == nil {
+func (s *RateLimitService) recordPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.accountRepo == nil || account == nil {
 		return
 	}
-	if err := s.groupHealthMonitor.RecordPassiveAccountFailure(ctx, account, statusCode, passiveHealthErrorMessage(statusCode, responseBody)); err != nil {
-		slog.Warn("group_passive_health_record_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+	if !shouldRecordPassiveAccountCircuitBreaker(account, statusCode) {
+		return
 	}
+
+	now := time.Now()
+	until := now.Add(defaultPassiveAccountCircuitBreakerCooldown)
+	if account.TempUnschedulableUntil != nil && !account.TempUnschedulableUntil.Before(until) {
+		return
+	}
+	message := passiveAccountCircuitBreakerMessage(statusCode, responseBody)
+	state := &TempUnschedState{
+		UntilUnix:       until.Unix(),
+		TriggeredAtUnix: now.Unix(),
+		StatusCode:      statusCode,
+		MatchedKeyword:  "passive_account_circuit_breaker",
+		RuleIndex:       passiveAccountCircuitBreakerRuleIndex,
+		ErrorMessage:    message,
+	}
+
+	reason := ""
+	if raw, err := json.Marshal(state); err == nil {
+		reason = string(raw)
+	}
+	if reason == "" {
+		reason = message
+	}
+
+	s.notifyAccountSchedulingBlocked(account, until, "passive_account_circuit_breaker")
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("passive_account_circuit_breaker_set_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		return
+	}
+	account.TempUnschedulableUntil = &until
+	account.TempUnschedulableReason = reason
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
+			slog.Warn("passive_account_circuit_breaker_cache_set_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		}
+	}
+	slog.Info("passive_account_circuit_breaker_set", "account_id", account.ID, "status_code", statusCode, "until", until)
+}
+
+func shouldRecordPassiveAccountCircuitBreaker(account *Account, statusCode int) bool {
+	if account == nil || !account.IsUpstreamPoolHealthTarget() {
+		return false
+	}
+	if statusCode == 0 || statusCode >= http.StatusInternalServerError {
+		return true
+	}
+	if account.Type == AccountTypeUpstream && isPoolModeRetryableStatus(statusCode) {
+		return true
+	}
+	if account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
+		return true
+	}
+	return false
+}
+
+func passiveAccountCircuitBreakerMessage(statusCode int, body []byte) string {
+	message := strings.TrimSpace(extractUpstreamErrorMessage(body))
+	if message == "" && len(body) > 0 {
+		message = string(body)
+	}
+	message = sanitizeUpstreamErrorMessage(message)
+	if statusCode > 0 {
+		if message == "" {
+			return fmt.Sprintf("upstream status %d", statusCode)
+		}
+		return fmt.Sprintf("upstream status %d: %s", statusCode, truncateString(message, tempUnschedMessageMaxBytes))
+	}
+	if message == "" {
+		return "upstream request failed"
+	}
+	return truncateString(message, tempUnschedMessageMaxBytes)
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.
@@ -1752,6 +1824,53 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 	return nil
 }
 
+func (s *RateLimitService) SetScheduledTestTempUnschedulable(ctx context.Context, accountID int64, until time.Time, message string) error {
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return nil
+	}
+	now := time.Now()
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "scheduled test failed consecutively"
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if account != nil && account.TempUnschedulableUntil != nil && !account.TempUnschedulableUntil.Before(until) {
+		return nil
+	}
+
+	state := &TempUnschedState{
+		UntilUnix:       until.Unix(),
+		TriggeredAtUnix: now.Unix(),
+		StatusCode:      0,
+		MatchedKeyword:  "scheduled_test_circuit_breaker",
+		RuleIndex:       scheduledTestCircuitBreakerRuleIndex,
+		ErrorMessage:    truncateString(message, tempUnschedMessageMaxBytes),
+	}
+
+	reason := state.ErrorMessage
+	if raw, err := json.Marshal(state); err == nil {
+		reason = string(raw)
+	}
+
+	s.notifyAccountSchedulingBlocked(account, until, "scheduled_test_circuit_breaker")
+	if err := s.accountRepo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
+		return err
+	}
+	if account != nil {
+		account.TempUnschedulableUntil = &until
+		account.TempUnschedulableReason = reason
+	}
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, accountID, state); err != nil {
+			slog.Warn("scheduled_test_circuit_breaker_cache_set_failed", "account_id", accountID, "error", err)
+		}
+	}
+	return nil
+}
+
 func hasRecoverableRuntimeState(account *Account) bool {
 	if account == nil {
 		return false
@@ -2110,6 +2229,8 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 		slog.Warn("temp_unsched_set_failed", "account_id", account.ID, "error", err)
 		return false
 	}
+	account.TempUnschedulableUntil = &until
+	account.TempUnschedulableReason = reason
 
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
