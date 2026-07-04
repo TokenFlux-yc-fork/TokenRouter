@@ -434,7 +434,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				ResponseHeaders: cloneHeader(handshakeHeaders),
 			}
 		}
-		s.recordOpenAIWSDialPassiveGroupHealthFailure(ctx, account, &openAIWSDialError{
+		s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, &openAIWSDialError{
 			StatusCode:      statusCode,
 			ResponseHeaders: cloneHeader(handshakeHeaders),
 			Err:             err,
@@ -752,8 +752,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		relayResult.DroppedDownstreamFrames,
 		turnCount,
 	)
-	if shouldRecordOpenAIWSRelayPassiveGroupHealthFailure(relayExit.Stage) {
-		s.recordOpenAIWSPassiveGroupHealthFailure(ctx, account, 0, []byte(relayErrorText(relayExit.Err)))
+	if shouldRecordOpenAIWSRelayPassiveAccountFailure(relayExit.Stage) {
+		s.recordOpenAIWSPassiveAccountFailure(ctx, account, 0, []byte(relayErrorText(relayExit.Err)))
 	}
 
 	relayErr := relayExit.Err
@@ -783,7 +783,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	return turnErr
 }
 
-func shouldRecordOpenAIWSRelayPassiveGroupHealthFailure(stage string) bool {
+func shouldRecordOpenAIWSRelayPassiveAccountFailure(stage string) bool {
 	switch stage {
 	case "read_upstream", "write_upstream", "drain_terminal":
 		return true

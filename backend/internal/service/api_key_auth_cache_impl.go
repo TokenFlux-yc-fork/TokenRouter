@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 19 // v19：认证快照包含分组高峰倍率与健康熔断状态字段
+const apiKeyAuthSnapshotVersion = 19 // v19：认证快照包含分组高峰倍率与健康状态字段
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -240,7 +240,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		},
 	}
 
-	// 填充 (user, group) RPM override —— 仅对可路由分组预取，避免停用/熔断分组的 override 进入认证快照。
+	// 填充 (user, group) RPM override —— 仅对可路由分组预取，避免停用分组的 override 进入认证快照。
 	if apiKey.GroupID != nil && *apiKey.GroupID > 0 && apiKey.Group != nil && apiKey.Group.IsRoutable() && s.userGroupRateRepo != nil {
 		override, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, apiKey.UserID, *apiKey.GroupID)
 		if err == nil && override != nil {

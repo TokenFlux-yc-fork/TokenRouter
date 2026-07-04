@@ -45,7 +45,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 
 	if isOpenAIImageRateLimitError(statusCode, responseBody) {
 		if s != nil && s.rateLimitService != nil {
-			s.rateLimitService.recordPassiveGroupHealthFailure(stateCtx, account, statusCode, responseBody)
+			s.rateLimitService.recordPassiveAccountFailure(stateCtx, account, statusCode, responseBody)
 			_ = s.rateLimitService.HandleOpenAIImageRateLimit(stateCtx, account, statusCode, headers, responseBody)
 		}
 		return false

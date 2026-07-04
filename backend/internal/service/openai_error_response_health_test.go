@@ -14,26 +14,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newOpenAICustomErrorSkippedHealthFixture(t *testing.T, groupID int64) (*OpenAIGatewayService, *groupHealthRepoStub, *Account, *gin.Context, *httptest.ResponseRecorder) {
+func newOpenAICustomErrorSkippedAccountCircuitBreakerFixture(t *testing.T, accountID int64) (*OpenAIGatewayService, *passiveAccountCircuitBreakerTempUnschedAccountRepo, *Account, *gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	group := &Group{
-		ID:                          groupID,
-		HealthCheckEnabled:          true,
-		HealthStatus:                HealthStatusHealthy,
-		HealthCheckFailureThreshold: 1,
-	}
-	groupRepo := &groupHealthRepoStub{groups: map[int64]*Group{group.ID: group}}
-	rateLimitService := NewRateLimitService(nil, nil, nil, nil, nil)
-	rateLimitService.SetGroupHealthMonitor(NewGroupHealthMonitor(groupRepo, nil))
-
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	svc := &OpenAIGatewayService{
 		cfg:              &config.Config{},
 		rateLimitService: rateLimitService,
 	}
 	account := &Account{
-		ID:       groupID + 1000,
+		ID:       accountID,
 		Name:     "pool-api-key",
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
@@ -42,14 +33,13 @@ func newOpenAICustomErrorSkippedHealthFixture(t *testing.T, groupID int64) (*Ope
 			"custom_error_codes_enabled": true,
 			"custom_error_codes":         []any{float64(http.StatusUnauthorized)},
 		},
-		GroupIDs:    []int64{group.ID},
 		Concurrency: 1,
 		Status:      StatusActive,
 	}
 	rec := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(rec)
 	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{}`))
-	return svc, groupRepo, account, ginCtx, rec
+	return svc, accountRepo, account, ginCtx, rec
 }
 
 func newOpenAITestErrorResponse(statusCode int) *http.Response {
@@ -61,13 +51,6 @@ func newOpenAITestErrorResponse(statusCode int) *http.Response {
 		},
 		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"upstream overloaded","type":"server_error"}}`)),
 	}
-}
-
-func requirePassiveGroupHealthFailure(t *testing.T, groupRepo *groupHealthRepoStub, groupID int64) {
-	t.Helper()
-	require.Len(t, groupRepo.updates, 1)
-	require.Equal(t, groupID, groupRepo.updates[0].groupID)
-	require.Equal(t, HealthStatusUnhealthy, groupRepo.updates[0].update.HealthStatus)
 }
 
 func bindOpenAITestPassthroughRule(c *gin.Context) {
@@ -89,9 +72,9 @@ func bindOpenAITestPassthroughRule(c *gin.Context) {
 	BindErrorPassthroughService(c, passthrough)
 }
 
-func TestOpenAIHandleErrorResponseCustomSkippedRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 101
-	svc, groupRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedHealthFixture(t, groupID)
+func TestOpenAIHandleErrorResponseCustomSkippedRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	const accountID int64 = 1101
+	svc, accountRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedAccountCircuitBreakerFixture(t, accountID)
 
 	result, err := svc.handleErrorResponse(
 		context.Background(),
@@ -105,12 +88,12 @@ func TestOpenAIHandleErrorResponseCustomSkippedRecordsPassiveGroupHealthFailure(
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	requirePassiveGroupHealthFailure(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestOpenAIHandleErrorResponsePassthroughRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 104
-	svc, groupRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedHealthFixture(t, groupID)
+func TestOpenAIHandleErrorResponsePassthroughRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	const accountID int64 = 1104
+	svc, accountRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedAccountCircuitBreakerFixture(t, accountID)
 	bindOpenAITestPassthroughRule(ginCtx)
 
 	result, err := svc.handleErrorResponse(
@@ -125,12 +108,12 @@ func TestOpenAIHandleErrorResponsePassthroughRecordsPassiveGroupHealthFailure(t 
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	requirePassiveGroupHealthFailure(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestOpenAIHandleCompatErrorResponseCustomSkippedRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 102
-	svc, groupRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedHealthFixture(t, groupID)
+func TestOpenAIHandleCompatErrorResponseCustomSkippedRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	const accountID int64 = 1102
+	svc, accountRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedAccountCircuitBreakerFixture(t, accountID)
 	writeError := func(c *gin.Context, statusCode int, errType, message string) {
 		c.JSON(statusCode, gin.H{"error": gin.H{"type": errType, "message": message}})
 	}
@@ -146,12 +129,12 @@ func TestOpenAIHandleCompatErrorResponseCustomSkippedRecordsPassiveGroupHealthFa
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	requirePassiveGroupHealthFailure(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestOpenAIHandleCompatErrorResponsePassthroughRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 105
-	svc, groupRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedHealthFixture(t, groupID)
+func TestOpenAIHandleCompatErrorResponsePassthroughRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	const accountID int64 = 1105
+	svc, accountRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedAccountCircuitBreakerFixture(t, accountID)
 	bindOpenAITestPassthroughRule(ginCtx)
 	writeError := func(c *gin.Context, statusCode int, errType, message string) {
 		c.JSON(statusCode, gin.H{"error": gin.H{"type": errType, "message": message}})
@@ -168,12 +151,12 @@ func TestOpenAIHandleCompatErrorResponsePassthroughRecordsPassiveGroupHealthFail
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	requirePassiveGroupHealthFailure(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestOpenAIImagesErrorResponseCustomSkippedRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 103
-	svc, groupRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedHealthFixture(t, groupID)
+func TestOpenAIImagesErrorResponseCustomSkippedRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	const accountID int64 = 1103
+	svc, accountRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedAccountCircuitBreakerFixture(t, accountID)
 
 	result, err := svc.handleOpenAIImagesErrorResponse(
 		context.Background(),
@@ -187,12 +170,12 @@ func TestOpenAIImagesErrorResponseCustomSkippedRecordsPassiveGroupHealthFailure(
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	requirePassiveGroupHealthFailure(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestOpenAIImagesErrorResponsePassthroughRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 106
-	svc, groupRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedHealthFixture(t, groupID)
+func TestOpenAIImagesErrorResponsePassthroughRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	const accountID int64 = 1106
+	svc, accountRepo, account, ginCtx, rec := newOpenAICustomErrorSkippedAccountCircuitBreakerFixture(t, accountID)
 	bindOpenAITestPassthroughRule(ginCtx)
 
 	result, err := svc.handleOpenAIImagesErrorResponse(
@@ -207,12 +190,11 @@ func TestOpenAIImagesErrorResponsePassthroughRecordsPassiveGroupHealthFailure(t 
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	requirePassiveGroupHealthFailure(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestOpenAIImageRateLimitRecordsPassiveGroupHealthFailure(t *testing.T) {
-	const groupID int64 = 107
-	rateLimitService, groupRepo := newPassiveHealthRateLimitService(groupID)
+func TestOpenAIImageRateLimitRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
 	account := &Account{
 		ID:       1107,
@@ -222,7 +204,6 @@ func TestOpenAIImageRateLimitRecordsPassiveGroupHealthFailure(t *testing.T) {
 		Credentials: map[string]any{
 			"pool_mode": true,
 		},
-		GroupIDs: []int64{groupID},
 	}
 
 	shouldDisable := svc.handleOpenAIAccountUpstreamError(
@@ -235,5 +216,5 @@ func TestOpenAIImageRateLimitRecordsPassiveGroupHealthFailure(t *testing.T) {
 	)
 
 	require.False(t, shouldDisable)
-	requirePassiveGroupHealthFailure(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }

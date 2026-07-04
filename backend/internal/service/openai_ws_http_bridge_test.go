@@ -176,19 +176,10 @@ func TestOpenAIWSHTTPBridgeRelaysSSEFramesAsWebSocketMessages(t *testing.T) {
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 }
 
-func TestOpenAIWSHTTPBridgeHTTPErrorRecordsPassiveGroupHealthFailure(t *testing.T) {
+func TestOpenAIWSHTTPBridgeHTTPErrorRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	group := &Group{
-		ID:                          77,
-		HealthCheckEnabled:          true,
-		HealthStatus:                HealthStatusHealthy,
-		HealthCheckFailureThreshold: 1,
-	}
-	groupRepo := &groupHealthRepoStub{groups: map[int64]*Group{group.ID: group}}
-	rateLimitService := NewRateLimitService(nil, nil, nil, nil, nil)
-	rateLimitService.SetGroupHealthMonitor(NewGroupHealthMonitor(groupRepo, nil))
-
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusServiceUnavailable,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -204,7 +195,6 @@ func TestOpenAIWSHTTPBridgeHTTPErrorRecordsPassiveGroupHealthFailure(t *testing.
 		Name:        "upstream",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeUpstream,
-		GroupIDs:    []int64{group.ID},
 		Concurrency: 1,
 		Status:      StatusActive,
 	}
@@ -236,24 +226,13 @@ func TestOpenAIWSHTTPBridgeHTTPErrorRecordsPassiveGroupHealthFailure(t *testing.
 	require.Nil(t, result)
 	require.Len(t, downstream, 1)
 	require.Equal(t, "error", gjson.GetBytes(downstream[0], "type").String())
-	require.Len(t, groupRepo.updates, 1)
-	require.Equal(t, group.ID, groupRepo.updates[0].groupID)
-	require.Equal(t, HealthStatusUnhealthy, groupRepo.updates[0].update.HealthStatus)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestOpenAIWSHTTPBridgeErrorEventRecordsPassiveGroupHealthFailure(t *testing.T) {
+func TestOpenAIWSHTTPBridgeErrorEventRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	group := &Group{
-		ID:                          78,
-		HealthCheckEnabled:          true,
-		HealthStatus:                HealthStatusHealthy,
-		HealthCheckFailureThreshold: 1,
-	}
-	groupRepo := &groupHealthRepoStub{groups: map[int64]*Group{group.ID: group}}
-	rateLimitService := NewRateLimitService(nil, nil, nil, nil, nil)
-	rateLimitService.SetGroupHealthMonitor(NewGroupHealthMonitor(groupRepo, nil))
-
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	sseBody := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_bridge_error","model":"gpt-5"}}`,
 		"",
@@ -275,7 +254,6 @@ func TestOpenAIWSHTTPBridgeErrorEventRecordsPassiveGroupHealthFailure(t *testing
 		Name:        "upstream",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeUpstream,
-		GroupIDs:    []int64{group.ID},
 		Concurrency: 1,
 		Status:      StatusActive,
 	}
@@ -308,9 +286,7 @@ func TestOpenAIWSHTTPBridgeErrorEventRecordsPassiveGroupHealthFailure(t *testing
 	require.Equal(t, "resp_bridge_error", result.RequestID)
 	require.Len(t, downstream, 2)
 	require.Equal(t, "error", gjson.GetBytes(downstream[1], "type").String())
-	require.Len(t, groupRepo.updates, 1)
-	require.Equal(t, group.ID, groupRepo.updates[0].groupID)
-	require.Equal(t, HealthStatusUnhealthy, groupRepo.updates[0].update.HealthStatus)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
 func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridge(t *testing.T) {

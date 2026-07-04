@@ -1488,17 +1488,6 @@ func TestAdminService_CreateGroup_UnavailableFallbackRejectsInvalidGroup(t *test
 			fallback:    &Group{ID: 10, Platform: PlatformOpenAI, Status: StatusDisabled},
 			wantMessage: "unavailable fallback group must be active",
 		},
-		{
-			name: "unhealthy_target",
-			fallback: &Group{
-				ID:                 10,
-				Platform:           PlatformOpenAI,
-				Status:             StatusActive,
-				HealthCheckEnabled: true,
-				HealthStatus:       HealthStatusUnhealthy,
-			},
-			wantMessage: "unavailable fallback group must be healthy",
-		},
 	}
 
 	for _, tc := range tests {

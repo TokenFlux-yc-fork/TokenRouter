@@ -1103,7 +1103,7 @@ func (a *Account) IsPoolMode() bool {
 }
 
 // IsUpstreamPoolHealthTarget reports whether failures on this account should
-// contribute to group-level upstream pool health. It intentionally excludes
+// trigger upstream-pool account scheduling cooldowns. It intentionally excludes
 // ordinary OAuth/API-key accounts unless pool_mode is enabled.
 func (a *Account) IsUpstreamPoolHealthTarget() bool {
 	if a == nil {

@@ -511,15 +511,15 @@ func TestAPIKeyService_GetByKey_FallsBackDisabledBoundGroupToConfiguredGroup(t *
 	require.Equal(t, "openai-configured-fallback", apiKey.Group.Name)
 }
 
-func TestAPIKeyService_GetByKey_FallsBackUnhealthyBoundGroupToConfiguredGroup(t *testing.T) {
-	unhealthyGroupID := int64(9)
-	configuredFallbackID := int64(11)
+func TestAPIKeyService_GetByKey_KeepsUnhealthyBoundGroup(t *testing.T) {
+	groupID := int64(9)
+	fallbackID := int64(11)
 	repo := &authRepoStub{
 		getByKeyForAuth: func(ctx context.Context, key string) (*APIKey, error) {
 			return &APIKey{
 				ID:                                    1,
 				UserID:                                2,
-				GroupID:                               &unhealthyGroupID,
+				GroupID:                               &groupID,
 				Key:                                   key,
 				Status:                                StatusActive,
 				FallbackToDefaultGroupWhenUnavailable: true,
@@ -531,38 +531,26 @@ func TestAPIKeyService_GetByKey_FallsBackUnhealthyBoundGroupToConfiguredGroup(t 
 					Concurrency: 3,
 				},
 				Group: &Group{
-					ID:                         unhealthyGroupID,
+					ID:                         groupID,
 					Name:                       "openai-unhealthy",
 					Platform:                   PlatformOpenAI,
 					Status:                     StatusActive,
 					Hydrated:                   true,
 					HealthCheckEnabled:         true,
 					HealthStatus:               HealthStatusUnhealthy,
-					UnavailableFallbackGroupID: &configuredFallbackID,
+					UnavailableFallbackGroupID: &fallbackID,
 				},
 			}, nil
 		},
 	}
-	groupRepo := &authGroupRepoStub{
-		groupsByID: map[int64]Group{
-			configuredFallbackID: {
-				ID:             configuredFallbackID,
-				Name:           "openai-configured-fallback",
-				Platform:       PlatformOpenAI,
-				Status:         StatusActive,
-				Hydrated:       true,
-				RateMultiplier: 1.2,
-			},
-		},
-	}
-	svc := NewAPIKeyService(repo, nil, groupRepo, nil, nil, nil, &config.Config{})
+	svc := NewAPIKeyService(repo, nil, &authGroupRepoStub{}, nil, nil, nil, &config.Config{})
 
 	apiKey, err := svc.GetByKey(context.Background(), "k-unhealthy")
 	require.NoError(t, err)
 	require.NotNil(t, apiKey.GroupID)
-	require.Equal(t, configuredFallbackID, *apiKey.GroupID)
+	require.Equal(t, groupID, *apiKey.GroupID)
 	require.NotNil(t, apiKey.Group)
-	require.Equal(t, configuredFallbackID, apiKey.Group.ID)
+	require.Equal(t, groupID, apiKey.Group.ID)
 }
 
 func TestAPIKeyService_GetByKey_InvalidConfiguredUnavailableFallbackUsesPlatformDefault(t *testing.T) {

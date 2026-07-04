@@ -954,7 +954,7 @@ func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParam
 	switch s.checkErrorPolicy(p.ctx, p.account, statusCode, respBody) {
 	case ErrorPolicySkipped:
 		if s.rateLimitService != nil {
-			s.rateLimitService.recordPassiveGroupHealthFailure(p.ctx, p.account, statusCode, respBody)
+			s.rateLimitService.recordPassiveAccountFailure(p.ctx, p.account, statusCode, respBody)
 		}
 		if s.handleAntigravityModelRateLimitBeforePolicy(p, statusCode, headers, respBody) {
 			return true, statusCode, nil
@@ -969,7 +969,7 @@ func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParam
 		return true, statusCode, nil
 	case ErrorPolicyTempUnscheduled:
 		if s.rateLimitService != nil {
-			s.rateLimitService.recordPassiveGroupHealthFailure(p.ctx, p.account, statusCode, respBody)
+			s.rateLimitService.recordPassiveAccountFailure(p.ctx, p.account, statusCode, respBody)
 		}
 		slog.Info("temp_unschedulable_matched",
 			"prefix", p.prefix, "status_code", statusCode, "account_id", p.account.ID)
@@ -2977,8 +2977,8 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 	requestedModel string,
 	groupID int64, sessionHash string, isStickySession bool,
 ) *handleModelRateLimitResult {
-	if s.rateLimitService != nil && shouldRecordAntigravityPassiveGroupHealthBeforeLocalHandling(statusCode) {
-		s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, statusCode, body)
+	if s.rateLimitService != nil && shouldRecordAntigravityPassiveAccountBeforeLocalHandling(statusCode) {
+		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
 	}
 	// 遵守自定义错误码策略：未命中则跳过所有限流处理
 	if !account.ShouldHandleErrorCode(statusCode) {
@@ -3057,7 +3057,7 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 	return nil
 }
 
-func shouldRecordAntigravityPassiveGroupHealthBeforeLocalHandling(statusCode int) bool {
+func shouldRecordAntigravityPassiveAccountBeforeLocalHandling(statusCode int) bool {
 	return statusCode == http.StatusTooManyRequests || statusCode == http.StatusServiceUnavailable
 }
 
@@ -4393,11 +4393,11 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
 
-		// 429 错误时标记账号限流；其他上游池错误至少进入分组被动健康计数。
+		// 429 错误时标记账号限流；其他上游池错误至少进入账号级被动熔断。
 		if resp.StatusCode == http.StatusTooManyRequests {
 			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, originalModel, 0, "", false)
 		} else if s.rateLimitService != nil {
-			s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, resp.StatusCode, respBody)
+			s.rateLimitService.recordPassiveAccountFailure(ctx, account, resp.StatusCode, respBody)
 		}
 
 		// 透传上游错误

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -11,18 +13,29 @@ import (
 )
 
 const scheduledTestDefaultMaxWorkers = 10
+const scheduledTestResultStatusSuccess = "success"
 
 // ScheduledTestRunnerService periodically scans due test plans and executes them.
 type ScheduledTestRunnerService struct {
 	planRepo       ScheduledTestPlanRepository
 	scheduledSvc   *ScheduledTestService
-	accountTestSvc *AccountTestService
-	rateLimitSvc   *RateLimitService
+	accountTestSvc scheduledAccountTester
+	rateLimitSvc   scheduledTestAccountRateLimiter
 	cfg            *config.Config
 
 	cron      *cron.Cron
 	startOnce sync.Once
 	stopOnce  sync.Once
+}
+
+type scheduledAccountTester interface {
+	RunTestBackground(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error)
+}
+
+type scheduledTestAccountRateLimiter interface {
+	SetScheduledTestTempUnschedulable(ctx context.Context, accountID int64, until time.Time, message string) error
+	ClearTempUnschedulable(ctx context.Context, accountID int64) error
+	RecoverAccountAfterSuccessfulTest(ctx context.Context, accountID int64) (*SuccessfulTestRecoveryResult, error)
 }
 
 // NewScheduledTestRunnerService creates a new runner.
@@ -120,7 +133,9 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 }
 
 func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *ScheduledTestPlan) {
-	result, err := s.accountTestSvc.RunTestBackground(ctx, plan.AccountID, plan.ModelID)
+	normalizeScheduledTestPlanDefaults(plan)
+
+	result, err := s.runAccountTestWithTimeout(ctx, plan)
 	if err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d RunTestBackground error: %v", plan.ID, err)
 		return
@@ -128,10 +143,10 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 
 	if err := s.scheduledSvc.SaveResult(ctx, plan.ID, plan.MaxResults, result); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d SaveResult error: %v", plan.ID, err)
-	}
-
-	// Auto-recover account if test succeeded and auto_recover is enabled.
-	if result.Status == "success" && plan.AutoRecover {
+	} else if plan.AccountCircuitBreakerEnabled {
+		s.applyAccountCircuitBreakerPolicy(ctx, plan)
+	} else if result.Status == scheduledTestResultStatusSuccess && plan.AutoRecover {
+		// Auto-recover account if test succeeded and auto_recover is enabled.
 		s.tryRecoverAccount(ctx, plan.AccountID, plan.ID)
 	}
 
@@ -144,6 +159,185 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, time.Now(), nextRun); err != nil {
 		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
 	}
+}
+
+func (s *ScheduledTestRunnerService) runAccountTestWithTimeout(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestResult, error) {
+	timeout := time.Duration(plan.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = time.Duration(defaultScheduledTestTimeoutSeconds) * time.Second
+	}
+
+	testCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	startedAt := time.Now()
+	type testOutput struct {
+		result *ScheduledTestResult
+		err    error
+	}
+	done := make(chan testOutput, 1)
+	go func() {
+		result, err := s.accountTestSvc.RunTestBackground(testCtx, plan.AccountID, plan.ModelID)
+		done <- testOutput{result: result, err: err}
+	}()
+
+	select {
+	case out := <-done:
+		if out.err != nil {
+			return failedScheduledTestResult(startedAt, out.err.Error(), out.result), nil
+		}
+		if out.result == nil {
+			return failedScheduledTestResult(startedAt, "scheduled test returned no result", nil), nil
+		}
+		return out.result, nil
+	case <-testCtx.Done():
+		if !errors.Is(testCtx.Err(), context.DeadlineExceeded) {
+			return nil, testCtx.Err()
+		}
+		return failedScheduledTestResult(startedAt, fmt.Sprintf("scheduled test timed out after %d seconds", int(timeout/time.Second)), nil), nil
+	}
+}
+
+func (s *ScheduledTestRunnerService) applyAccountCircuitBreakerPolicy(ctx context.Context, plan *ScheduledTestPlan) {
+	if s == nil || s.scheduledSvc == nil || s.rateLimitSvc == nil || plan == nil {
+		return
+	}
+
+	limit := maxInt(plan.FailureThreshold, plan.SuccessThreshold)
+	if limit <= 0 {
+		return
+	}
+	results, err := s.scheduledSvc.ListResults(ctx, plan.ID, limit)
+	if err != nil {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d ListResults error: %v", plan.ID, err)
+		return
+	}
+
+	if hasConsecutiveScheduledTestFailures(results, plan.FailureThreshold) {
+		now := time.Now()
+		until := scheduledTestCircuitBreakerUntil(plan, now)
+		message := fmt.Sprintf("scheduled test failed %d consecutive times", plan.FailureThreshold)
+		if len(results) > 0 && results[0].ErrorMessage != "" {
+			message = fmt.Sprintf("%s: %s", message, results[0].ErrorMessage)
+		}
+		if err := s.rateLimitSvc.SetScheduledTestTempUnschedulable(ctx, plan.AccountID, until, message); err != nil {
+			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d account circuit breaker set failed: %v", plan.ID, err)
+		}
+		return
+	}
+
+	if hasConsecutiveScheduledTestSuccesses(results, plan.SuccessThreshold) {
+		if plan.AutoRecover {
+			s.tryRecoverAccount(ctx, plan.AccountID, plan.ID)
+			return
+		}
+		if err := s.rateLimitSvc.ClearTempUnschedulable(ctx, plan.AccountID); err != nil {
+			logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] plan=%d account circuit breaker clear failed: %v", plan.ID, err)
+		}
+	}
+}
+
+func failedScheduledTestResult(startedAt time.Time, message string, result *ScheduledTestResult) *ScheduledTestResult {
+	finishedAt := time.Now()
+	if result == nil {
+		result = &ScheduledTestResult{}
+	}
+	result.Status = "failed"
+	if result.ErrorMessage == "" {
+		result.ErrorMessage = message
+	}
+	if result.StartedAt.IsZero() {
+		result.StartedAt = startedAt
+	}
+	if result.FinishedAt.IsZero() {
+		result.FinishedAt = finishedAt
+	}
+	if result.LatencyMs <= 0 {
+		result.LatencyMs = result.FinishedAt.Sub(result.StartedAt).Milliseconds()
+	}
+	return result
+}
+
+func scheduledTestCircuitBreakerUntil(plan *ScheduledTestPlan, now time.Time) time.Time {
+	if plan == nil {
+		return now
+	}
+	cooldownMinutes := plan.FailureCooldownMinutes
+	if cooldownMinutes <= 0 {
+		cooldownMinutes = defaultScheduledTestFailureCooldownMinutes
+	}
+	until := now.Add(time.Duration(cooldownMinutes) * time.Minute)
+
+	recoveryUntil, ok := scheduledTestRecoveryProbeWindowUntil(plan, now)
+	if ok && recoveryUntil.After(until) {
+		return recoveryUntil
+	}
+	return until
+}
+
+func scheduledTestRecoveryProbeWindowUntil(plan *ScheduledTestPlan, from time.Time) (time.Time, bool) {
+	if plan == nil || plan.CronExpression == "" {
+		return time.Time{}, false
+	}
+	successThreshold := plan.SuccessThreshold
+	if successThreshold <= 0 {
+		successThreshold = defaultScheduledTestSuccessThreshold
+	}
+	timeoutSeconds := plan.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = defaultScheduledTestTimeoutSeconds
+	}
+
+	sched, err := scheduledTestCronParser.Parse(plan.CronExpression)
+	if err != nil {
+		return time.Time{}, false
+	}
+	probeAt := from
+	for i := 0; i < successThreshold; i++ {
+		probeAt = sched.Next(probeAt)
+	}
+	return probeAt.Add(time.Duration(timeoutSeconds)*time.Second + time.Minute), true
+}
+
+func hasConsecutiveScheduledTestFailures(results []*ScheduledTestResult, threshold int) bool {
+	if threshold <= 0 || len(results) < threshold {
+		return false
+	}
+	failures := 0
+	for _, result := range results {
+		if result == nil || result.Status == scheduledTestResultStatusSuccess {
+			break
+		}
+		failures++
+		if failures >= threshold {
+			return true
+		}
+	}
+	return false
+}
+
+func hasConsecutiveScheduledTestSuccesses(results []*ScheduledTestResult, threshold int) bool {
+	if threshold <= 0 || len(results) < threshold {
+		return false
+	}
+	successes := 0
+	for _, result := range results {
+		if result == nil || result.Status != scheduledTestResultStatusSuccess {
+			break
+		}
+		successes++
+		if successes >= threshold {
+			return true
+		}
+	}
+	return false
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // tryRecoverAccount attempts to recover an account from recoverable runtime state.

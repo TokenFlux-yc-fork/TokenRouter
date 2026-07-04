@@ -971,7 +971,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		if s.rateLimitService != nil {
 			switch s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody) {
 			case ErrorPolicySkipped:
-				s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, resp.StatusCode, respBody)
+				s.rateLimitService.recordPassiveAccountFailure(ctx, account, resp.StatusCode, respBody)
 				upstreamReqID := resp.Header.Get(requestIDHeader)
 				if upstreamReqID == "" {
 					upstreamReqID = resp.Header.Get("x-goog-request-id")
@@ -1493,7 +1493,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		if s.rateLimitService != nil {
 			switch s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody) {
 			case ErrorPolicySkipped:
-				s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, resp.StatusCode, respBody)
+				s.rateLimitService.recordPassiveAccountFailure(ctx, account, resp.StatusCode, respBody)
 				respBody = unwrapIfNeeded(isOAuth, respBody)
 				contentType := resp.Header.Get("Content-Type")
 				if contentType == "" {
@@ -2914,8 +2914,8 @@ func asInt(v any) (int, bool) {
 }
 
 func (s *GeminiMessagesCompatService) handleGeminiUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, body []byte) {
-	if s.rateLimitService != nil && shouldRecordGeminiPassiveGroupHealthBeforeLocalHandling(statusCode) {
-		s.rateLimitService.recordPassiveGroupHealthFailure(ctx, account, statusCode, body)
+	if s.rateLimitService != nil && shouldRecordGeminiPassiveAccountBeforeLocalHandling(statusCode) {
+		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
 	}
 	// 遵守自定义错误码策略：未命中则跳过所有限流处理
 	if !account.ShouldHandleErrorCode(statusCode) {
@@ -2972,7 +2972,7 @@ func (s *GeminiMessagesCompatService) handleGeminiUpstreamError(ctx context.Cont
 		account.ID, resetTime, oauthType, tierID)
 }
 
-func shouldRecordGeminiPassiveGroupHealthBeforeLocalHandling(statusCode int) bool {
+func shouldRecordGeminiPassiveAccountBeforeLocalHandling(statusCode int) bool {
 	if statusCode == http.StatusTooManyRequests {
 		return true
 	}

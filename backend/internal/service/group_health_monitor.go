@@ -3,8 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"strings"
 	"time"
 )
 
@@ -51,39 +49,6 @@ func (m *GroupHealthMonitor) RecordProbeResult(ctx context.Context, group *Group
 		return nil
 	}
 	return m.recordResult(ctx, group, success, checkedAt)
-}
-
-func (m *GroupHealthMonitor) RecordPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, message string) error {
-	if m == nil || m.groupRepo == nil || account == nil || !account.IsUpstreamPoolHealthTarget() {
-		return nil
-	}
-	if !shouldRecordPassiveGroupHealthFailure(account, statusCode) {
-		return nil
-	}
-
-	groupIDs := accountHealthGroupIDs(account)
-	if len(groupIDs) == 0 {
-		return nil
-	}
-
-	var firstErr error
-	now := time.Now()
-	for _, groupID := range groupIDs {
-		group, err := m.groupRepo.GetByIDLite(ctx, groupID)
-		if err != nil || group == nil {
-			if firstErr == nil && err != nil {
-				firstErr = err
-			}
-			continue
-		}
-		if !group.HealthCheckEnabled {
-			continue
-		}
-		if err := m.recordResult(ctx, group, false, now); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
 }
 
 func (m *GroupHealthMonitor) recordResult(ctx context.Context, group *Group, success bool, checkedAt time.Time) error {
@@ -140,70 +105,4 @@ func normalizeHealthThreshold(value int, fallback int) int {
 		return fallback
 	}
 	return value
-}
-
-func shouldRecordPassiveGroupHealthFailure(account *Account, statusCode int) bool {
-	if account == nil || !account.IsUpstreamPoolHealthTarget() {
-		return false
-	}
-	if statusCode == 0 || statusCode >= http.StatusInternalServerError {
-		return true
-	}
-	if account.Type == AccountTypeUpstream && isPoolModeRetryableStatus(statusCode) {
-		return true
-	}
-	if account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
-		return true
-	}
-	return false
-}
-
-func accountHealthGroupIDs(account *Account) []int64 {
-	if account == nil {
-		return nil
-	}
-	seen := make(map[int64]struct{})
-	add := func(id int64) {
-		if id <= 0 {
-			return
-		}
-		seen[id] = struct{}{}
-	}
-	for _, id := range account.GroupIDs {
-		add(id)
-	}
-	for i := range account.Groups {
-		if account.Groups[i] != nil {
-			add(account.Groups[i].ID)
-		}
-	}
-	for i := range account.AccountGroups {
-		add(account.AccountGroups[i].GroupID)
-		if account.AccountGroups[i].Group != nil {
-			add(account.AccountGroups[i].Group.ID)
-		}
-	}
-	out := make([]int64, 0, len(seen))
-	for id := range seen {
-		out = append(out, id)
-	}
-	return out
-}
-
-func passiveHealthErrorMessage(statusCode int, body []byte) string {
-	message := strings.TrimSpace(extractUpstreamErrorMessage(body))
-	if message == "" && len(body) > 0 {
-		message = string(body)
-	}
-	message = sanitizeUpstreamErrorMessage(message)
-	if statusCode > 0 {
-		if message == "" {
-			return fmt.Sprintf("upstream status %d", statusCode)
-		}
-		return fmt.Sprintf("upstream status %d: %s", statusCode, truncateString(message, 512))
-	}
-	if message == "" {
-		return "upstream request failed"
-	}
-	return truncateString(message, 512)
 }

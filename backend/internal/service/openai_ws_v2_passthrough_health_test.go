@@ -94,11 +94,10 @@ func (c *openAIWSReadErrorConn) Close() error {
 	return nil
 }
 
-func TestOpenAIWSV2PassthroughDialErrorRecordsPassiveGroupHealthFailure(t *testing.T) {
+func TestOpenAIWSV2PassthroughDialErrorRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	const groupID int64 = 404
-	rateLimitService, groupRepo := newPassiveHealthRateLimitService(groupID)
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 1
 	svc := &OpenAIGatewayService{
@@ -119,7 +118,6 @@ func TestOpenAIWSV2PassthroughDialErrorRecordsPassiveGroupHealthFailure(t *testi
 			"api_key":   "sk-upstream",
 			"pool_mode": true,
 		},
-		GroupIDs:    []int64{groupID},
 		Concurrency: 1,
 		Status:      StatusActive,
 	}
@@ -163,14 +161,13 @@ func TestOpenAIWSV2PassthroughDialErrorRecordsPassiveGroupHealthFailure(t *testi
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for passthrough proxy")
 	}
-	requireSinglePassiveHealthUpdate(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
 
-func TestOpenAIWSV2PassthroughUpstreamReadErrorRecordsPassiveGroupHealthFailure(t *testing.T) {
+func TestOpenAIWSV2PassthroughUpstreamReadErrorRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	const groupID int64 = 406
-	rateLimitService, groupRepo := newPassiveHealthRateLimitService(groupID)
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 1
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 1
@@ -192,7 +189,6 @@ func TestOpenAIWSV2PassthroughUpstreamReadErrorRecordsPassiveGroupHealthFailure(
 			"api_key":   "sk-upstream",
 			"pool_mode": true,
 		},
-		GroupIDs:    []int64{groupID},
 		Concurrency: 1,
 		Status:      StatusActive,
 	}
@@ -236,5 +232,5 @@ func TestOpenAIWSV2PassthroughUpstreamReadErrorRecordsPassiveGroupHealthFailure(
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for passthrough proxy")
 	}
-	requireSinglePassiveHealthUpdate(t, groupRepo, groupID)
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
 }
