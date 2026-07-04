@@ -452,6 +452,9 @@ func ProvideScheduledTestRunnerService(
 	rateLimitSvc *RateLimitService,
 	cfg *config.Config,
 ) *ScheduledTestRunnerService {
+	if rateLimitSvc != nil {
+		rateLimitSvc.SetScheduledTestPlanReader(planRepo)
+	}
 	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
 	svc.Start()
 	return svc

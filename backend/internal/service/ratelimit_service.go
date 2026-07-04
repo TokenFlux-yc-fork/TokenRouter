@@ -25,6 +25,7 @@ type RateLimitService struct {
 	cfg                   *config.Config
 	geminiQuotaService    *GeminiQuotaService
 	tempUnschedCache      TempUnschedCache
+	scheduledTestPlanRepo ScheduledAccountCircuitBreakerPlanReader
 	timeoutCounterCache   TimeoutCounterCache
 	openAI403CounterCache OpenAI403CounterCache
 	settingService        *SettingService
@@ -37,6 +38,10 @@ type RateLimitService struct {
 type AccountRuntimeBlocker interface {
 	BlockAccountScheduling(account *Account, until time.Time, reason string)
 	ClearAccountSchedulingBlock(accountID int64)
+}
+
+type ScheduledAccountCircuitBreakerPlanReader interface {
+	ListByAccountID(ctx context.Context, accountID int64) ([]*ScheduledTestPlan, error)
 }
 
 // SuccessfulTestRecoveryResult 表示测试成功后恢复了哪些运行时状态。
@@ -113,6 +118,10 @@ func (s *RateLimitService) SetSettingService(settingService *SettingService) {
 // SetTokenCacheInvalidator 设置 token 缓存清理器（可选依赖）
 func (s *RateLimitService) SetTokenCacheInvalidator(invalidator TokenCacheInvalidator) {
 	s.tokenCacheInvalidator = invalidator
+}
+
+func (s *RateLimitService) SetScheduledTestPlanReader(reader ScheduledAccountCircuitBreakerPlanReader) {
+	s.scheduledTestPlanRepo = reader
 }
 
 func (s *RateLimitService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
@@ -377,6 +386,10 @@ func (s *RateLimitService) recordPassiveAccountFailure(ctx context.Context, acco
 	if !shouldRecordPassiveAccountCircuitBreaker(account, statusCode) {
 		return
 	}
+	if s.hasScheduledAccountCircuitBreaker(ctx, account.ID) {
+		slog.Info("passive_account_circuit_breaker_skipped_by_scheduled_probe", "account_id", account.ID, "status_code", statusCode)
+		return
+	}
 
 	now := time.Now()
 	until := now.Add(defaultPassiveAccountCircuitBreakerCooldown)
@@ -414,6 +427,23 @@ func (s *RateLimitService) recordPassiveAccountFailure(ctx context.Context, acco
 		}
 	}
 	slog.Info("passive_account_circuit_breaker_set", "account_id", account.ID, "status_code", statusCode, "until", until)
+}
+
+func (s *RateLimitService) hasScheduledAccountCircuitBreaker(ctx context.Context, accountID int64) bool {
+	if s == nil || s.scheduledTestPlanRepo == nil || accountID <= 0 {
+		return false
+	}
+	plans, err := s.scheduledTestPlanRepo.ListByAccountID(ctx, accountID)
+	if err != nil {
+		slog.Warn("scheduled_account_circuit_breaker_lookup_failed", "account_id", accountID, "error", err)
+		return false
+	}
+	for _, plan := range plans {
+		if plan != nil && plan.Enabled && plan.AccountCircuitBreakerEnabled {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldRecordPassiveAccountCircuitBreaker(account *Account, statusCode int) bool {

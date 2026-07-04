@@ -25,6 +25,14 @@ type passiveAccountCircuitBreakerCall struct {
 	reason    string
 }
 
+type passiveAccountCircuitBreakerPlanReader struct {
+	plans []*ScheduledTestPlan
+}
+
+func (r *passiveAccountCircuitBreakerPlanReader) ListByAccountID(context.Context, int64) ([]*ScheduledTestPlan, error) {
+	return r.plans, nil
+}
+
 func (r *passiveAccountCircuitBreakerTempUnschedAccountRepo) SetTempUnschedulable(_ context.Context, accountID int64, until time.Time, reason string) error {
 	if len(r.calls) > 0 && !r.calls[len(r.calls)-1].until.Before(until) {
 		return nil
@@ -48,6 +56,37 @@ func requireSinglePassiveAccountCircuitBreaker(t *testing.T, accountRepo *passiv
 	require.Equal(t, accountID, accountRepo.calls[0].accountID)
 	require.True(t, accountRepo.calls[0].until.After(time.Now()))
 	require.Contains(t, accountRepo.calls[0].reason, "passive_account_circuit_breaker")
+}
+
+func TestPassiveAccountCircuitBreakerSkipsAccountWithScheduledCircuitBreaker(t *testing.T) {
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
+	rateLimitService.SetScheduledTestPlanReader(&passiveAccountCircuitBreakerPlanReader{
+		plans: []*ScheduledTestPlan{
+			{
+				AccountID:                    501,
+				Enabled:                      true,
+				AccountCircuitBreakerEnabled: true,
+			},
+		},
+	})
+	account := &Account{
+		ID:       501,
+		Name:     "openai-pool",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"pool_mode": true,
+		},
+	}
+
+	rateLimitService.recordPassiveAccountFailure(
+		context.Background(),
+		account,
+		http.StatusServiceUnavailable,
+		[]byte(`{"error":{"message":"upstream overloaded"}}`),
+	)
+
+	require.Empty(t, accountRepo.calls)
 }
 
 func TestGeminiHandleUpstreamErrorHTTP5xxRecordsPassiveAccountCircuitBreaker(t *testing.T) {
