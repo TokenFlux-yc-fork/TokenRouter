@@ -203,7 +203,7 @@ func (s *ScheduledTestRunnerService) applyAccountCircuitBreakerPolicy(ctx contex
 		return
 	}
 
-	limit := maxInt(plan.FailureThreshold, plan.SuccessThreshold)
+	limit := maxScheduledTestInt(plan.FailureThreshold, plan.SuccessThreshold)
 	if limit <= 0 {
 		return
 	}
@@ -333,7 +333,7 @@ func hasConsecutiveScheduledTestSuccesses(results []*ScheduledTestResult, thresh
 	return false
 }
 
-func maxInt(a, b int) int {
+func maxScheduledTestInt(a, b int) int {
 	if a > b {
 		return a
 	}
