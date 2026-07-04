@@ -173,6 +173,36 @@ func (r *scheduledTestResultRepository) ListByPlanID(ctx context.Context, planID
 	return results, rows.Err()
 }
 
+func (r *scheduledTestResultRepository) ListByAccountID(ctx context.Context, accountID int64, limit int) ([]*service.ScheduledTestAccountResult, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT r.id, r.plan_id, p.account_id, p.model_id, p.cron_expression,
+			r.status, r.response_text, r.error_message, r.latency_ms, r.started_at, r.finished_at, r.created_at
+		FROM scheduled_test_results r
+		INNER JOIN scheduled_test_plans p ON p.id = r.plan_id
+		WHERE p.account_id = $1
+		ORDER BY r.created_at DESC
+		LIMIT $2
+	`, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []*service.ScheduledTestAccountResult
+	for rows.Next() {
+		r := &service.ScheduledTestAccountResult{}
+		if err := rows.Scan(
+			&r.ID, &r.PlanID, &r.AccountID, &r.ModelID, &r.CronExpression,
+			&r.Status, &r.ResponseText, &r.ErrorMessage, &r.LatencyMs,
+			&r.StartedAt, &r.FinishedAt, &r.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 func (r *scheduledTestResultRepository) PruneOldResults(ctx context.Context, planID int64, keepCount int) error {
 	_, err := r.db.ExecContext(ctx, `
 		DELETE FROM scheduled_test_results

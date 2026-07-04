@@ -193,3 +193,24 @@ func (h *ScheduledTestHandler) ListResults(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, results)
 }
+
+// ListAccountResults GET /admin/accounts/:id/scheduled-test-results
+func (h *ScheduledTestHandler) ListAccountResults(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "invalid account id")
+		return
+	}
+
+	limit := 50
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
+		limit = l
+	}
+
+	results, err := h.scheduledTestSvc.ListResultsByAccount(c.Request.Context(), accountID, limit)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, results)
+}

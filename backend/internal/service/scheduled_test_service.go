@@ -86,6 +86,14 @@ func (s *ScheduledTestService) ListResults(ctx context.Context, planID int64, li
 	return s.resultRepo.ListByPlanID(ctx, planID, limit)
 }
 
+// ListResultsByAccount returns the most recent results for all plans of an account.
+func (s *ScheduledTestService) ListResultsByAccount(ctx context.Context, accountID int64, limit int) ([]*ScheduledTestAccountResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	return s.resultRepo.ListByAccountID(ctx, accountID, limit)
+}
+
 // SaveResult inserts a result and prunes old entries beyond maxResults.
 func (s *ScheduledTestService) SaveResult(ctx context.Context, planID int64, maxResults int, result *ScheduledTestResult) error {
 	result.PlanID = planID

@@ -2182,6 +2182,12 @@ export interface ScheduledTestResult {
   created_at: string
 }
 
+export interface ScheduledTestAccountResult extends ScheduledTestResult {
+  account_id: number
+  model_id: string
+  cron_expression: string
+}
+
 export interface CreateScheduledTestPlanRequest {
   account_id: number
   model_id: string

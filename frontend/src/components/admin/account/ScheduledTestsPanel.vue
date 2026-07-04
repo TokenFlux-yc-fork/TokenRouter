@@ -171,6 +171,123 @@
         </div>
       </div>
 
+      <!-- Account Recent Results -->
+      <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-600 dark:bg-dark-800">
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <div class="text-sm font-medium text-gray-900 dark:text-gray-100">
+              {{ t('admin.scheduledTests.accountRecentResults') }}
+            </div>
+            <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.scheduledTests.accountRecentResultsHelp') }}
+            </div>
+          </div>
+          <button
+            @click="loadAccountResults"
+            class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-primary-500 dark:hover:bg-dark-700"
+            :title="t('common.refresh')"
+          >
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': loadingAccountResults }" :stroke-width="2" />
+          </button>
+        </div>
+
+        <div v-if="loadingAccountResults" class="flex items-center justify-center py-4">
+          <Icon name="refresh" size="sm" class="animate-spin text-gray-400" :stroke-width="2" />
+          <span class="ml-2 text-xs text-gray-500">{{ t('common.loading') }}...</span>
+        </div>
+        <div
+          v-else-if="accountResults.length === 0"
+          class="py-4 text-center text-xs text-gray-500 dark:text-gray-400"
+        >
+          {{ t('admin.scheduledTests.noResults') }}
+        </div>
+        <div v-else class="max-h-64 space-y-2 overflow-y-auto">
+          <div
+            v-for="result in accountResults"
+            :key="'account-' + result.id"
+            class="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-900"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span
+                    :class="[
+                      'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
+                      result.status === 'success'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
+                        : result.status === 'running'
+                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400'
+                          : 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400'
+                    ]"
+                  >
+                    {{
+                      result.status === 'success'
+                        ? t('admin.scheduledTests.success')
+                        : result.status === 'running'
+                          ? t('admin.scheduledTests.running')
+                          : t('admin.scheduledTests.failed')
+                    }}
+                  </span>
+                  <span class="truncate text-xs font-medium text-gray-700 dark:text-gray-300">
+                    {{ result.model_id }}
+                  </span>
+                  <span v-if="result.latency_ms > 0" class="text-xs text-gray-500 dark:text-gray-400">
+                    {{ result.latency_ms }}ms
+                  </span>
+                </div>
+                <div class="mt-1 font-mono text-[11px] text-gray-400">
+                  plan #{{ result.plan_id }} · {{ result.cron_expression }}
+                </div>
+              </div>
+              <span class="shrink-0 text-xs text-gray-400">
+                {{ formatDateTime(result.started_at) }}
+              </span>
+            </div>
+
+            <div v-if="result.error_message" class="mt-2">
+              <div
+                class="cursor-pointer text-xs font-medium text-red-600 dark:text-red-400"
+                @click="toggleResultDetail(result.id)"
+              >
+                {{ t('admin.scheduledTests.errorMessage') }}
+                <Icon
+                  name="chevronDown"
+                  size="sm"
+                  :class="[
+                    'inline transition-transform duration-200',
+                    expandedResultIds.has(result.id) ? 'rotate-180' : ''
+                  ]"
+                />
+              </div>
+              <pre
+                v-if="expandedResultIds.has(result.id)"
+                class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-red-50 p-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300"
+              >{{ result.error_message }}</pre>
+            </div>
+            <div v-else-if="result.response_text" class="mt-2">
+              <div
+                class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-400"
+                @click="toggleResultDetail(result.id)"
+              >
+                {{ t('admin.scheduledTests.responseText') }}
+                <Icon
+                  name="chevronDown"
+                  size="sm"
+                  :class="[
+                    'inline transition-transform duration-200',
+                    expandedResultIds.has(result.id) ? 'rotate-180' : ''
+                  ]"
+                />
+              </div>
+              <pre
+                v-if="expandedResultIds.has(result.id)"
+                class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-gray-100 p-2 text-xs text-gray-700 dark:bg-dark-800 dark:text-gray-300"
+              >{{ result.response_text }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Loading State -->
       <div v-if="loading" class="flex items-center justify-center py-8">
         <Icon name="refresh" size="md" class="animate-spin text-gray-400" :stroke-width="2" />
@@ -569,7 +686,7 @@ import { Icon } from '@/components/icons'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime } from '@/utils/format'
-import type { ScheduledTestPlan, ScheduledTestResult } from '@/types'
+import type { ScheduledTestPlan, ScheduledTestResult, ScheduledTestAccountResult } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -588,8 +705,10 @@ const emit = defineEmits<{
 const loading = ref(false)
 const creating = ref(false)
 const loadingResults = ref(false)
+const loadingAccountResults = ref(false)
 const plans = ref<ScheduledTestPlan[]>([])
 const results = ref<ScheduledTestResult[]>([])
+const accountResults = ref<ScheduledTestAccountResult[]>([])
 const expandedPlanId = ref<number | null>(null)
 const expandedResultIds = reactive(new Set<number>())
 const showAddForm = ref(false)
@@ -646,10 +765,11 @@ watch(
   () => props.show,
   async (visible) => {
     if (visible && props.accountId) {
-      await loadPlans()
+      await Promise.all([loadPlans(), loadAccountResults()])
     } else {
       plans.value = []
       results.value = []
+      accountResults.value = []
       expandedPlanId.value = null
       expandedResultIds.clear()
       showAddForm.value = false
@@ -667,6 +787,19 @@ const loadPlans = async () => {
     appStore.showError(error?.message || 'Failed to load plans')
   } finally {
     loading.value = false
+  }
+}
+
+const loadAccountResults = async () => {
+  if (!props.accountId) return
+  loadingAccountResults.value = true
+  try {
+    accountResults.value = await adminAPI.scheduledTests.listAccountResults(props.accountId, 20)
+  } catch (error: any) {
+    appStore.showError(error?.message || 'Failed to load account results')
+    accountResults.value = []
+  } finally {
+    loadingAccountResults.value = false
   }
 }
 
@@ -690,7 +823,7 @@ const handleCreate = async () => {
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
     resetNewPlan()
-    await loadPlans()
+    await Promise.all([loadPlans(), loadAccountResults()])
   } catch (error: any) {
     appStore.showError(error?.message || 'Failed to create plan')
   } finally {
@@ -751,6 +884,7 @@ const handleEdit = async () => {
     }
     appStore.showSuccess(t('admin.scheduledTests.updateSuccess'))
     editingPlanId.value = null
+    await loadAccountResults()
   } catch (error: any) {
     appStore.showError(error?.message || 'Failed to update plan')
   } finally {
@@ -769,6 +903,7 @@ const handleDelete = async () => {
     await adminAPI.scheduledTests.delete(deletingPlan.value.id)
     appStore.showSuccess(t('admin.scheduledTests.deleteSuccess'))
     plans.value = plans.value.filter((p) => p.id !== deletingPlan.value!.id)
+    accountResults.value = accountResults.value.filter((r) => r.plan_id !== deletingPlan.value!.id)
     if (expandedPlanId.value === deletingPlan.value.id) {
       expandedPlanId.value = null
       results.value = []

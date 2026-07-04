@@ -4436,6 +4436,8 @@ export default {
       accountCircuitBreaker: 'Account Circuit Breaker',
       accountCircuitBreakerBadge: 'Account CB',
       accountCircuitBreakerHelp: 'Pause scheduling for this account after consecutive probe failures. Probes keep running and restore the account after consecutive successes.',
+      accountRecentResults: 'Recent Account Probe Results',
+      accountRecentResultsHelp: 'Shows the latest 20 results across all scheduled test plans for this account.',
       failureThreshold: 'Failure Threshold',
       successThreshold: 'Recovery Threshold',
       failureCooldownMinutes: 'Cooldown Minutes',

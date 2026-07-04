@@ -4522,6 +4522,8 @@ export default {
       accountCircuitBreaker: '账号级主动熔断',
       accountCircuitBreakerBadge: '账号熔断',
       accountCircuitBreakerHelp: '连续探测失败后暂停调度当前账号；后续探针仍会运行，连续成功后自动恢复该账号。',
+      accountRecentResults: '账号最近探针结果',
+      accountRecentResultsHelp: '汇总当前账号所有定时测试计划的最近 20 次结果。',
       failureThreshold: '失败阈值',
       successThreshold: '恢复阈值',
       failureCooldownMinutes: '冷却分钟',

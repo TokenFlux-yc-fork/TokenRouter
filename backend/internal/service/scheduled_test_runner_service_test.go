@@ -72,6 +72,10 @@ func (r *scheduledResultRepoStub) ListByPlanID(_ context.Context, planID int64, 
 	return out, nil
 }
 
+func (r *scheduledResultRepoStub) ListByAccountID(context.Context, int64, int) ([]*ScheduledTestAccountResult, error) {
+	panic("unexpected ListByAccountID call")
+}
+
 func (r *scheduledResultRepoStub) PruneOldResults(context.Context, int64, int) error {
 	return nil
 }
