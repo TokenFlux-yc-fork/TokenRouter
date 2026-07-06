@@ -183,6 +183,16 @@ export interface CustomEndpoint {
   description: string
 }
 
+export interface FooterLink {
+  label: string
+  url: string
+}
+
+export interface FooterLinkGroup {
+  title: string
+  links: FooterLink[]
+}
+
 export interface LoginAgreementDocument {
   id: string
   title: string
@@ -225,6 +235,8 @@ export interface PublicSettings {
   usage_ranking_limit: number
   custom_menu_items: CustomMenuItem[]
   custom_endpoints: CustomEndpoint[]
+  footer_links?: FooterLinkGroup[]
+  footer_text?: string
   linuxdo_oauth_enabled: boolean
   dingtalk_oauth_enabled?: boolean
   wechat_oauth_enabled: boolean
@@ -237,6 +249,9 @@ export interface PublicSettings {
   google_oauth_enabled: boolean
   backend_mode_enabled: boolean
   version: string
+  // 服务器全局时区与当前 UTC 偏移；旧注入缓存可能缺失。
+  server_timezone?: string
+  server_utc_offset?: string
   balance_unit_name: string
   balance_unit_symbol: string
   balance_icon_svg: string
@@ -578,6 +593,8 @@ export interface MarketplaceGroup {
   display_brand: string
   sort_order: number
   rate_multiplier: number
+  image_rate_independent: boolean
+  image_rate_multiplier: number
   official_price_ratio?: number
   official_price_rmb_equivalent?: number
   // 数据共享分组需要在模型广场展示醒目标记，提醒用户该分组会进入采集流程。
@@ -631,6 +648,11 @@ export interface Group {
   image_price_1k: number | null
   image_price_2k: number | null
   image_price_4k: number | null
+  // 高峰时段倍率配置
+  peak_rate_enabled: boolean
+  peak_start: string
+  peak_end: string
+  peak_rate_multiplier: number
   // Claude Code 客户端限制
   claude_code_only: boolean
   fallback_group_id: number | null
@@ -764,6 +786,10 @@ export interface CreateGroupRequest {
   image_price_1k?: number | null
   image_price_2k?: number | null
   image_price_4k?: number | null
+  peak_rate_enabled?: boolean
+  peak_start?: string
+  peak_end?: string
+  peak_rate_multiplier?: number
   claude_code_only?: boolean
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
@@ -804,6 +830,10 @@ export interface UpdateGroupRequest {
   image_price_1k?: number | null
   image_price_2k?: number | null
   image_price_4k?: number | null
+  peak_rate_enabled?: boolean
+  peak_start?: string
+  peak_end?: string
+  peak_rate_multiplier?: number
   claude_code_only?: boolean
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null

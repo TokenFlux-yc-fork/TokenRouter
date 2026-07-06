@@ -7,6 +7,7 @@ import { apiClient } from "../client";
 import type {
   CustomEndpoint,
   CustomMenuItem,
+  FooterLinkGroup,
   LoginAgreementDocument,
   NotifyEmailEntry,
 } from "@/types";
@@ -491,6 +492,8 @@ export interface SystemSettings {
   backend_mode_enabled: boolean;
   custom_menu_items: CustomMenuItem[];
   custom_endpoints: CustomEndpoint[];
+  footer_links: FooterLinkGroup[];
+  footer_text: string;
   // SMTP settings
   smtp_host: string;
   smtp_port: number;
@@ -763,6 +766,8 @@ export interface UpdateSettingsRequest {
   backend_mode_enabled?: boolean;
   custom_menu_items?: CustomMenuItem[];
   custom_endpoints?: CustomEndpoint[];
+  footer_links?: FooterLinkGroup[];
+  footer_text?: string;
   smtp_host?: string;
   smtp_port?: number;
   smtp_username?: string;
