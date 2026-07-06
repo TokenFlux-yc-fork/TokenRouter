@@ -105,6 +105,26 @@ func TestOpenAIModelNotFound_DoesNotRuntimeBlockWholeAccount(t *testing.T) {
 	require.Len(t, repo.modelRateLimitCalls, 1)
 }
 
+func TestOpenAIRuntimeBlock_SkipsNoRefreshOAuth401(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := &Account{
+		ID:       48,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "access-token-only",
+		},
+	}
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusUnauthorized, http.Header{}, []byte("unauthorized"))
+
+	require.True(t, shouldDisable, "当前请求仍应 failover")
+	require.Equal(t, 0, repo.tempCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "no-rt 账号不能被运行时临时剔除调度池")
+}
+
 func TestOpenAIRuntimeBlock_DoesNotShortenExistingBlock(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 46, Platform: PlatformOpenAI, Type: AccountTypeOAuth}

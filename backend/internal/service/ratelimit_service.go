@@ -257,6 +257,20 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			shouldDisable = true
 			break
 		}
+		// OpenAI access-token-only OAuth（没有 refresh_token）由外部会话/导入链路维护 token。
+		// 401 只能说明本次请求使用的 bearer 被上游拒绝，不能通过本服务自愈；因此只让当前请求
+		// failover，并清掉 access token 缓存，不能写入 temp_unschedulable 或 SetError，避免把账号
+		// 在调度池里临时/永久剔除。
+		if isOpenAIOAuthAccessTokenOnly(authAccount) {
+			if s.tokenCacheInvalidator != nil {
+				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, authAccount); err != nil {
+					slog.Warn("oauth_401_invalidate_cache_failed", "account_id", authAccount.ID, "error", err)
+				}
+			}
+			slog.Info("openai_oauth_401_no_refresh_token_state_skipped", "account_id", authAccount.ID)
+			shouldDisable = true
+			break
+		}
 		// OpenAI: {"detail":"Unauthorized"} 表示 token 完全无效（非标准 OpenAI 错误格式），直接标记 error
 		if authAccount.Platform == PlatformOpenAI && gjson.GetBytes(responseBody, "detail").String() == "Unauthorized" {
 			msg := "Unauthorized (401): account authentication failed permanently"
@@ -276,8 +290,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 					slog.Warn("oauth_401_invalidate_cache_failed", "account_id", authAccount.ID, "error", err)
 				}
 			}
-			// 2. 临时不可调度，替代 SetError（保持 status=active；缺失 refresh_token
-			// 不等同于凭据永久失效，应避免把仍可用账号直接打成 401/error）
+			// 2. 临时不可调度，替代 SetError（保持 status=active；可刷新账号由后台/下次请求刷新）
 			// 注意：此处不再写回 account.Credentials/expires_at。
 			// 原实现使用请求开始时的 account 快照整列覆盖 credentials JSONB（见
 			// persistAccountCredentials → accountRepository.UpdateCredentials → SetCredentials），
@@ -360,6 +373,17 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	}
 
 	return shouldDisable
+}
+
+func isOpenAIOAuthAccessTokenOnly(account *Account) bool {
+	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+		return false
+	}
+	if account.IsOpenAIPersonalAccessToken() {
+		return false
+	}
+	return strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" &&
+		strings.TrimSpace(account.GetOpenAIAccessToken()) != ""
 }
 
 func (s *RateLimitService) RecordUpstreamRequestFailure(ctx context.Context, account *Account, err error) {
