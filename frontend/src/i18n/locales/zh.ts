@@ -147,7 +147,8 @@ export default {
       button: '免费注册'
     },
     footer: {
-      allRightsReserved: '保留所有权利。'
+      allRightsReserved: '保留所有权利。',
+      quickLinks: '快速链接'
     }
   },
 
@@ -294,6 +295,7 @@ export default {
   common: {
     loading: '加载中...',
     justNow: '刚刚',
+    peakRateTooltip: '高峰倍率：{window}',
     save: '保存',
     saved: '保存成功',
     deleted: '删除成功',
@@ -425,9 +427,9 @@ export default {
 
   marketplace: {
     title: '模型广场',
-    subtitle: '按公开分组浏览当前可用模型，并直接查看已包含分组倍率的实际扣费价格。',
+    subtitle: '按公开分组浏览当前可用模型，并直接查看已包含分组倍率和生图独立倍率的实际扣费价格。',
     backHome: '返回首页',
-    actualPricingNote: '价格已按价格文件记录的基础价乘以分组倍率计算，单位为 {unitName}',
+    actualPricingNote: '价格已按价格文件记录的基础价乘以分组倍率计算；生图独立倍率开启时，图片价格会改用生图倍率，单位为 {unitName}',
     tokenPricing: 'Token 计费',
     contextIntervalPricing: '按上下文区间定价',
     pricingDetail: '完整定价信息',
@@ -460,6 +462,7 @@ export default {
     availabilityHintNoData: '近 {days} 天暂无主动探测数据',
     rateMultiplier: '分组倍率',
     rateMultiplierValue: '分组倍率{multiplier}',
+    imageRateMultiplierValue: '生图倍率{multiplier}',
     officialPriceDiscount: '最低至官方价格的{discount}折',
     usdRmbEquivalent: '最低 {amount} 元相当于 1 美元',
     contextTokens: '上下文 Token',
@@ -1053,6 +1056,21 @@ export default {
     exportExcelFailed: '使用数据导出失败',
     imageUnit: '张',
     userAgent: 'User-Agent',
+    ipGeo: {
+      fetch: '获取地区',
+      fetching: '获取中...',
+      failed: '获取失败',
+      private: '内网地址',
+      refreshTitle: '刷新地区信息',
+      batchFetch: '批量获取地区',
+      batchFetching: '获取中...',
+      pending: '{count} 个 IP 待获取地区',
+      batchFailed: '批量获取地区信息失败',
+      detailOrg: '运营商',
+      detailTimezone: '时区',
+      detailAccuracy: '定位精度',
+      detailCoordinates: '坐标',
+    },
     tabs: { usage: '用量明细', errors: '错误请求' },
     errors: {
       time: '时间', model: '模型', endpoint: '端点', status: '状态码',
@@ -2509,6 +2527,7 @@ export default {
       editGroup: '编辑分组',
       deleteGroup: '删除分组',
       sortOrder: '排序',
+      columnSettings: '列设置',
       sortOrderHint: '拖拽分组调整显示顺序，排在前面的分组会优先显示',
       sortOrderUpdated: '排序已更新',
       failedToUpdateSortOrder: '更新排序失败',
@@ -2714,6 +2733,13 @@ export default {
         modeHint: '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
         finalPricePreview: '最终单张价格预览',
         notConfigured: '未配置'
+      },
+      peakRate: {
+        enable: '启用高峰倍率',
+        peakStart: '高峰开始',
+        peakEnd: '高峰结束',
+        peakMultiplier: '高峰倍率',
+        multiplierHint: '作用于 token 计费倍率；token 计费的图片 token 同样适用，0 表示高峰 token 请求按 0 倍计费'
       },
       modelsList: {
         title: '自定义 /v1/models 模型列表',
@@ -3021,6 +3047,8 @@ export default {
       adjust: '调整',
       adjusting: '调整中...',
       revoke: '撤销',
+      restore: '恢复',
+      restoreSubscription: '恢复订阅',
       cancelPending: '取消',
       cancelPendingSubscription: '取消待生效订阅',
       resetQuota: '重置配额',
@@ -3033,17 +3061,20 @@ export default {
       subscriptionAssigned: '订阅分配成功',
       subscriptionAdjusted: '订阅调整成功',
       subscriptionRevoked: '订阅撤销成功',
+      subscriptionRestored: '订阅恢复成功',
       pendingSubscriptionCancelled: '待生效订阅已取消',
       failedToLoad: '加载订阅列表失败',
       failedToAssign: '分配订阅失败',
       failedToAdjust: '调整订阅失败',
       failedToRevoke: '撤销订阅失败',
+      failedToRestore: '恢复订阅失败',
       adjustWouldExpire: '有效时长必须大于0',
       adjustOutOfRange: '有效时长必须在 1 到 36500 天之间',
       pleaseSelectUser: '请选择用户',
       pleaseSelectGroup: '请选择分组',
       validityDaysRequired: '请输入有效的天数（至少1天）',
       revokeConfirm: "确定要撤销 '{user}' 的订阅吗？此操作无法撤销。",
+      restoreConfirm: "确定要恢复 '{user}' 的已撤销订阅吗？如果该订阅与同套餐的生效或待生效订阅重叠，请求会失败。",
       cancelPendingConfirm: "确定要取消 '{user}' 的待生效订阅吗？后续待生效订阅会自动向前衔接，此操作无法撤销。",
       guide: {
         title: '订阅管理教程',
@@ -3600,6 +3631,7 @@ export default {
         wsModeOff: '关闭（off）',
         wsModeCtxPool: '上下文池（ctx_pool）',
         wsModePassthrough: '透传（passthrough）',
+        wsModeHttpBridge: 'HTTP 桥接（http_bridge）',
         wsModeShared: '共享（shared）',
         wsModeDedicated: '独享（dedicated）',
         wsModeConcurrencyHint: '启用 WS mode 后，该账号并发数将作为该账号 WS 连接池上限。',
@@ -3681,6 +3713,11 @@ export default {
         apiKeyPassthrough: '自动透传（仅替换认证）',
         apiKeyPassthroughDesc:
           '仅对 Anthropic API Key 生效。开启后，messages/count_tokens 请求将透传上游并仅替换认证，保留计费/并发/审计及必要安全过滤；关闭即可回滚到现有兼容链路。',
+        apiKeyAuthScheme: '上游认证方式',
+        apiKeyAuthSchemeDesc:
+          '选择转发到 Anthropic-compatible 上游时使用的 API Key 认证头。Ollama Cloud 使用 Authorization: Bearer。',
+        apiKeyAuthSchemeXApiKey: 'x-api-key',
+        apiKeyAuthSchemeBearer: 'Authorization: Bearer',
         webSearchEmulation: 'Web Search 模拟',
         webSearchEmulationDesc:
           '为该 API Key 账号启用 web search 模拟。客户端发送纯 web_search 请求时，由网关调用第三方搜索 API 并构造响应返回。默认跟随渠道配置。',
@@ -4280,6 +4317,8 @@ export default {
       inviteResetSelectCredit: '选择重置机会',
       inviteResetCreditFallbackTitle: 'Codex 重置机会',
       inviteResetCreditFallbackDescription: '可用于重置当前 Codex 用量窗口',
+      inviteResetCreditExpirations: '重置机会到期时间',
+      inviteResetCreditExpiresAtFull: '到期时间：{time}',
       inviteResetNoCredits: '当前没有已发放的重置机会。邀请成功后奖励会出现在这里。',
       inviteResetUseReset: '使用重置次数',
       inviteResetUsing: '重置中...',
@@ -7567,6 +7606,7 @@ export default {
     planFeatures: '功能特性',
     planCard: {
       rate: '倍率',
+      peakRate: '高峰倍率',
       dailyLimit: '日限额',
       weeklyLimit: '周限额',
       monthlyLimit: '月限额',

@@ -147,7 +147,8 @@ export default {
       button: 'Sign Up Free'
     },
     footer: {
-      allRightsReserved: 'All rights reserved.'
+      allRightsReserved: 'All rights reserved.',
+      quickLinks: 'Quick links'
     }
   },
 
@@ -294,6 +295,7 @@ export default {
   common: {
     loading: 'Loading...',
     justNow: 'just now',
+    peakRateTooltip: 'Peak rate: {window}',
     save: 'Save',
     saved: 'Saved successfully',
     deleted: 'Deleted successfully',
@@ -425,9 +427,9 @@ export default {
 
   marketplace: {
     title: 'Model Marketplace',
-    subtitle: 'Browse currently available models by public group, with actual charged pricing after the group multiplier is applied.',
+    subtitle: 'Browse currently available models by public group, with actual charged pricing after group and independent image multipliers are applied.',
     backHome: 'Back Home',
-    actualPricingNote: 'Prices are calculated from the pricing file base rates multiplied by the group multiplier, using {unitName}',
+    actualPricingNote: 'Prices are calculated from pricing file base rates multiplied by the group multiplier. When independent image pricing is enabled, image prices use the image multiplier instead. Unit: {unitName}',
     tokenPricing: 'Token Pricing',
     contextIntervalPricing: 'Context Interval Pricing',
     pricingDetail: 'Full Pricing Details',
@@ -460,6 +462,7 @@ export default {
     availabilityHintNoData: 'No active probe data in the last {days} days',
     rateMultiplier: 'Group Multiplier',
     rateMultiplierValue: 'Group Multiplier {multiplier}',
+    imageRateMultiplierValue: 'Image Multiplier {multiplier}',
     officialPriceDiscount: 'As low as {discount}/10 of official price',
     usdRmbEquivalent: 'As low as {amount} CNY equals 1 USD',
     contextTokens: 'Context Tokens',
@@ -1049,6 +1052,21 @@ export default {
     exportExcelFailed: 'Failed to export usage data',
     imageUnit: ' images',
     userAgent: 'User-Agent',
+    ipGeo: {
+      fetch: 'Fetch region',
+      fetching: 'Fetching...',
+      failed: 'Failed',
+      private: 'Private address',
+      refreshTitle: 'Refresh region info',
+      batchFetch: 'Batch fetch regions',
+      batchFetching: 'Fetching...',
+      pending: '{count} IPs pending',
+      batchFailed: 'Failed to batch fetch IP regions',
+      detailOrg: 'ISP',
+      detailTimezone: 'Timezone',
+      detailAccuracy: 'Accuracy',
+      detailCoordinates: 'Coordinates',
+    },
     tabs: { usage: 'Usage', errors: 'Error Requests' },
     errors: {
       time: 'Time', model: 'Model', endpoint: 'Endpoint', status: 'Status',
@@ -2456,6 +2474,7 @@ export default {
       editGroup: 'Edit Group',
       deleteGroup: 'Delete Group',
       sortOrder: 'Sort',
+      columnSettings: 'Column Settings',
       sortOrderHint: 'Drag groups to adjust display order, groups at the top will be displayed first',
       sortOrderUpdated: 'Sort order updated',
       failedToUpdateSortOrder: 'Failed to update sort order',
@@ -2631,6 +2650,13 @@ export default {
         modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
         finalPricePreview: 'Final per-image price preview',
         notConfigured: 'Not configured'
+      },
+      peakRate: {
+        enable: 'Enable peak rate multiplier',
+        peakStart: 'Peak start',
+        peakEnd: 'Peak end',
+        peakMultiplier: 'Peak multiplier',
+        multiplierHint: 'Applies to token billing multiplier; image tokens in token billing are also affected. 0 means peak token requests are billed at 0x.'
       },
       modelsList: {
         title: 'Custom /v1/models Model List',
@@ -2944,6 +2970,8 @@ export default {
       adjust: 'Adjust',
       adjusting: 'Adjusting...',
       revoke: 'Revoke',
+      restore: 'Restore',
+      restoreSubscription: 'Restore Subscription',
       cancelPending: 'Cancel',
       cancelPendingSubscription: 'Cancel Pending Subscription',
       resetQuota: 'Reset Quota',
@@ -2956,11 +2984,13 @@ export default {
       subscriptionAssigned: 'Subscription assigned successfully',
       subscriptionAdjusted: 'Subscription adjusted successfully',
       subscriptionRevoked: 'Subscription revoked successfully',
+      subscriptionRestored: 'Subscription restored successfully',
       pendingSubscriptionCancelled: 'Pending subscription cancelled successfully',
       failedToLoad: 'Failed to load subscriptions',
       failedToAssign: 'Failed to assign subscription',
       failedToAdjust: 'Failed to adjust subscription',
       failedToRevoke: 'Failed to revoke subscription',
+      failedToRestore: 'Failed to restore subscription',
       adjustWouldExpire: 'Validity length must be greater than 0',
       adjustOutOfRange: 'Validity length must be between 1 and 36500 days',
       pleaseSelectUser: 'Please select a user',
@@ -2968,6 +2998,8 @@ export default {
       validityDaysRequired: 'Please enter a valid number of days (at least 1)',
       revokeConfirm:
         "Are you sure you want to revoke the subscription for '{user}'? This action cannot be undone.",
+      restoreConfirm:
+        "Restore the revoked subscription for '{user}'? The request may fail if the subscription overlaps with an active or pending subscription for the same plan.",
       cancelPendingConfirm:
         "Cancel the pending subscription for '{user}'? Later pending subscriptions will move forward automatically. This action cannot be undone.",
       guide: {
@@ -3427,6 +3459,7 @@ export default {
         wsModeOff: 'Off (off)',
         wsModeCtxPool: 'Context Pool (ctx_pool)',
         wsModePassthrough: 'Passthrough (passthrough)',
+        wsModeHttpBridge: 'HTTP Bridge (http_bridge)',
         wsModeShared: 'Shared (shared)',
         wsModeDedicated: 'Dedicated (dedicated)',
         wsModeConcurrencyHint:
@@ -3515,6 +3548,11 @@ export default {
         apiKeyPassthrough: 'Auto passthrough (auth only)',
         apiKeyPassthroughDesc:
           'Only applies to Anthropic API Key accounts. When enabled, messages/count_tokens are forwarded in passthrough mode with auth replacement only, while billing/concurrency/audit and safety filtering are preserved. Disable to roll back immediately.',
+        apiKeyAuthScheme: 'Upstream auth scheme',
+        apiKeyAuthSchemeDesc:
+          'Choose the API key auth header used when forwarding to an Anthropic-compatible upstream. Ollama Cloud uses Authorization: Bearer.',
+        apiKeyAuthSchemeXApiKey: 'x-api-key',
+        apiKeyAuthSchemeBearer: 'Authorization: Bearer',
         webSearchEmulation: 'Web Search Emulation',
         webSearchEmulationDesc:
           'Enable web search emulation for this API Key account. When a pure web_search request is detected, the gateway calls a third-party search API and constructs the response locally. Default follows channel config.',
@@ -4132,6 +4170,8 @@ export default {
       inviteResetSelectCredit: 'Select reset credit',
       inviteResetCreditFallbackTitle: 'Codex reset credit',
       inviteResetCreditFallbackDescription: 'Can be used to reset the current Codex usage window',
+      inviteResetCreditExpirations: 'Reset credit expirations',
+      inviteResetCreditExpiresAtFull: 'Expires at {time}',
       inviteResetNoCredits: 'No reset credits have been granted yet. Invite rewards will appear here after they are issued.',
       inviteResetUseReset: 'Use reset credit',
       inviteResetUsing: 'Resetting...',
@@ -7396,6 +7436,7 @@ export default {
     planFeatures: 'Features',
     planCard: {
       rate: 'Rate',
+      peakRate: 'Peak Rate',
       dailyLimit: 'Daily',
       weeklyLimit: 'Weekly',
       monthlyLimit: 'Monthly',

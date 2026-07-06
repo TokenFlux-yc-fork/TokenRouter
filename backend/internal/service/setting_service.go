@@ -20,6 +20,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/antigravity"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/imroc/req/v3"
 	"golang.org/x/sync/singleflight"
 )
@@ -925,6 +926,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyUsageRankingLimit,
 		SettingKeyCustomMenuItems,
 		SettingKeyCustomEndpoints,
+		SettingKeyFooterLinks,
+		SettingKeyFooterText,
 		SettingKeyLinuxDoConnectEnabled,
 		SettingKeyDingTalkConnectEnabled,
 		SettingKeyWeChatConnectEnabled,
@@ -1070,6 +1073,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		UsageRankingLimit:                usageRankingLimit,
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		FooterLinks:                      settings[SettingKeyFooterLinks],
+		FooterText:                       settings[SettingKeyFooterText],
 		LinuxDoOAuthEnabled:              linuxDoEnabled,
 		DingTalkOAuthEnabled:             dingTalkEnabled,
 		WeChatOAuthEnabled:               weChatEnabled,
@@ -1308,6 +1313,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		UsageRankingLimit                int                      `json:"usage_ranking_limit"`
 		CustomMenuItems                  json.RawMessage          `json:"custom_menu_items"`
 		CustomEndpoints                  json.RawMessage          `json:"custom_endpoints"`
+		FooterLinks                      json.RawMessage          `json:"footer_links"`
+		FooterText                       string                   `json:"footer_text,omitempty"`
 		LinuxDoOAuthEnabled              bool                     `json:"linuxdo_oauth_enabled"`
 		DingTalkOAuthEnabled             bool                     `json:"dingtalk_oauth_enabled"`
 		WeChatOAuthEnabled               bool                     `json:"wechat_oauth_enabled"`
@@ -1321,16 +1328,19 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		GitHubOAuthEnabled               bool                     `json:"github_oauth_enabled"`
 		GoogleOAuthEnabled               bool                     `json:"google_oauth_enabled"`
 		Version                          string                   `json:"version,omitempty"`
-		BalanceUnitName                  string                   `json:"balance_unit_name"`
-		BalanceUnitSymbol                string                   `json:"balance_unit_symbol"`
-		BalanceIconSVG                   string                   `json:"balance_icon_svg"`
-		BalanceLowNotifyEnabled          bool                     `json:"balance_low_notify_enabled"`
-		AccountQuotaNotifyEnabled        bool                     `json:"account_quota_notify_enabled"`
-		RiskControlEnabled               bool                     `json:"risk_control_enabled"`
-		AffiliateEnabled                 bool                     `json:"affiliate_enabled"`
-		BalanceLowNotifyThreshold        float64                  `json:"balance_low_notify_threshold"`
-		BalanceLowNotifyRechargeURL      string                   `json:"balance_low_notify_recharge_url"`
-		AllowUserViewErrorRequests       bool                     `json:"allow_user_view_error_requests"`
+		// 服务器全局时区与当前 UTC 偏移，供前端标注高峰计费窗口等服务端本地时间。
+		ServerTimezone              string  `json:"server_timezone"`
+		ServerUTCOffset             string  `json:"server_utc_offset"`
+		BalanceUnitName             string  `json:"balance_unit_name"`
+		BalanceUnitSymbol           string  `json:"balance_unit_symbol"`
+		BalanceIconSVG              string  `json:"balance_icon_svg"`
+		BalanceLowNotifyEnabled     bool    `json:"balance_low_notify_enabled"`
+		AccountQuotaNotifyEnabled   bool    `json:"account_quota_notify_enabled"`
+		RiskControlEnabled          bool    `json:"risk_control_enabled"`
+		AffiliateEnabled            bool    `json:"affiliate_enabled"`
+		BalanceLowNotifyThreshold   float64 `json:"balance_low_notify_threshold"`
+		BalanceLowNotifyRechargeURL string  `json:"balance_low_notify_recharge_url"`
+		AllowUserViewErrorRequests  bool    `json:"allow_user_view_error_requests"`
 	}{
 		RegistrationEnabled:              settings.RegistrationEnabled,
 		EmailVerifyEnabled:               settings.EmailVerifyEnabled,
@@ -1368,6 +1378,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		UsageRankingLimit:                settings.UsageRankingLimit,
 		CustomMenuItems:                  filterUserVisibleMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                  safeRawJSONArray(settings.CustomEndpoints),
+		FooterLinks:                      safeRawJSONArray(settings.FooterLinks),
+		FooterText:                       settings.FooterText,
 		LinuxDoOAuthEnabled:              settings.LinuxDoOAuthEnabled,
 		DingTalkOAuthEnabled:             settings.DingTalkOAuthEnabled,
 		WeChatOAuthEnabled:               settings.WeChatOAuthEnabled,
@@ -1381,6 +1393,8 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		GitHubOAuthEnabled:               settings.GitHubOAuthEnabled,
 		GoogleOAuthEnabled:               settings.GoogleOAuthEnabled,
 		Version:                          s.version,
+		ServerTimezone:                   timezone.Name(),
+		ServerUTCOffset:                  timezone.UTCOffset(),
 		BalanceUnitName:                  settings.BalanceUnitName,
 		BalanceUnitSymbol:                settings.BalanceUnitSymbol,
 		BalanceIconSVG:                   settings.BalanceIconSVG,
@@ -1907,6 +1921,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyUsageRankingLimit] = strconv.Itoa(normalizeUsageRankingLimit(settings.UsageRankingLimit))
 	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
 	updates[SettingKeyCustomEndpoints] = settings.CustomEndpoints
+	updates[SettingKeyFooterLinks] = settings.FooterLinks
+	updates[SettingKeyFooterText] = strings.TrimSpace(settings.FooterText)
 
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)
@@ -2860,6 +2876,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyUsageRankingLimit:                         strconv.Itoa(DefaultUsageRankingLimit),
 		SettingKeyCustomMenuItems:                           "[]",
 		SettingKeyCustomEndpoints:                           "[]",
+		SettingKeyFooterLinks:                               "[]",
+		SettingKeyFooterText:                                "",
 		SettingKeyWeChatConnectEnabled:                      "false",
 		SettingKeyWeChatConnectAppID:                        "",
 		SettingKeyWeChatConnectAppSecret:                    "",
@@ -3065,6 +3083,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		FooterLinks:                      settings[SettingKeyFooterLinks],
+		FooterText:                       settings[SettingKeyFooterText],
 		BalanceUnitName:                  balanceUnitName,
 		BalanceUnitSymbol:                balanceUnitSymbol,
 		BalanceIconSVG:                   strings.TrimSpace(settings[SettingKeyBalanceIconSVG]),
