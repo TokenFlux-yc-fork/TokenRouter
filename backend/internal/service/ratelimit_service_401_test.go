@@ -433,6 +433,37 @@ func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403WithoutCounterUsesSe
 	require.Contains(t, repo.lastErrorMsg, "temporary forbidden")
 }
 
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403NoRefreshTokenKeepsSchedulable(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	counter := &openAI403CounterCacheStub{counts: []int64{1}}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetOpenAI403CounterCache(counter)
+	account := &Account{
+		ID:       108,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "access-token",
+			"refresh_token": "",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusForbidden,
+		http.Header{},
+		[]byte(`{"error":{"message":"temporary forbidden"}}`),
+	)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, []int64{account.ID}, counter.resetCalls)
+	require.Nil(t, account.TempUnschedulableUntil)
+	require.Empty(t, account.TempUnschedulableReason)
+}
+
 func TestRateLimitService_HandleUpstreamError_NonOpenAIOAuth403UsesSetError(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)

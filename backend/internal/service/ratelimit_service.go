@@ -927,6 +927,14 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		responseBody,
 		"account may be suspended or lack permissions",
 	)
+	// OpenAI access-token-only OAuth（没有 refresh_token）由外部会话/导入链路维护 token。
+	// 这类账号的上游 403 常见于临时边缘/会话判定，不能写入 temp_unschedulable 或 SetError，
+	// 否则会把仍可由外部刷新/替换 token 的账号从调度池剔除；当前请求 failover 即可。
+	if isOpenAIOAuthAccessTokenOnly(account) {
+		s.ResetOpenAI403Counter(ctx, account.ID)
+		slog.Info("openai_oauth_403_no_refresh_token_state_skipped", "account_id", account.ID)
+		return true
+	}
 	settings := s.getOpenAI403CooldownSettings(ctx, account.ID)
 	if !settings.Enabled {
 		s.handleAuthError(ctx, account, msg)
