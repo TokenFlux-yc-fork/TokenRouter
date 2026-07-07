@@ -5223,6 +5223,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		// 发送请求
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 		if err != nil {
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+			}
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
@@ -5791,6 +5794,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 		if err != nil {
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+			}
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
@@ -6689,6 +6695,9 @@ func (s *GatewayService) executeBedrockUpstream(
 
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
 		if err != nil {
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+			}
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
@@ -7946,12 +7955,27 @@ func ExtractUpstreamErrorMessage(body []byte) string {
 func extractUpstreamErrorMessage(body []byte) string {
 	// Claude 风格：{"type":"error","error":{"type":"...","message":"..."}}
 	if m := gjson.GetBytes(body, "error.message").String(); strings.TrimSpace(m) != "" {
-		inner := strings.TrimSpace(m)
 		// 有些上游会把完整 JSON 作为字符串塞进 message
-		if strings.HasPrefix(inner, "{") {
-			if innerMsg := gjson.Get(inner, "error.message").String(); strings.TrimSpace(innerMsg) != "" {
-				return innerMsg
-			}
+		if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+			return innerMsg
+		}
+		return m
+	}
+
+	// OpenAI Responses 风格：{"response":{"error":{"message":"..."}}}
+	if m := gjson.GetBytes(body, "response.error.message").String(); strings.TrimSpace(m) != "" {
+		// 有些上游会把完整 JSON 作为字符串塞进 message
+		if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+			return innerMsg
+		}
+		return m
+	}
+
+	// OpenAI Responses status_details 风格：{"response":{"status_details":{"error":{"message":"..."}}}}
+	if m := gjson.GetBytes(body, "response.status_details.error.message").String(); strings.TrimSpace(m) != "" {
+		// 有些上游会把完整 JSON 作为字符串塞进 message
+		if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+			return innerMsg
 		}
 		return m
 	}
@@ -7962,30 +7986,109 @@ func extractUpstreamErrorMessage(body []byte) string {
 	}
 
 	// 兜底：尝试顶层 message
-	return gjson.GetBytes(body, "message").String()
+	if m := gjson.GetBytes(body, "message").String(); strings.TrimSpace(m) != "" {
+		if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+			return innerMsg
+		}
+		return m
+	}
+	return ""
 }
 
 func extractUpstreamErrorCode(body []byte) string {
-	if code := strings.TrimSpace(gjson.GetBytes(body, "error.code").String()); code != "" {
-		return code
-	}
-
-	inner := strings.TrimSpace(gjson.GetBytes(body, "error.message").String())
-	if !strings.HasPrefix(inner, "{") {
-		return ""
-	}
-
-	if code := strings.TrimSpace(gjson.Get(inner, "error.code").String()); code != "" {
-		return code
-	}
-
-	if lastBrace := strings.LastIndex(inner, "}"); lastBrace >= 0 {
-		if code := strings.TrimSpace(gjson.Get(inner[:lastBrace+1], "error.code").String()); code != "" {
-			return code
+	directCode := ""
+	for _, path := range []string{"error.code", "response.error.code", "response.status_details.error.code"} {
+		if code := strings.TrimSpace(gjson.GetBytes(body, path).String()); code != "" {
+			if !isGenericUpstreamEnvelopeCode(code) {
+				return code
+			}
+			if directCode == "" {
+				directCode = code
+			}
 		}
 	}
 
+	topLevelCode := strings.TrimSpace(gjson.GetBytes(body, "code").String())
+	for _, path := range []string{"error.message", "response.error.message", "response.status_details.error.message", "message"} {
+		if code := extractUpstreamErrorCodeFromEmbeddedJSON(gjson.GetBytes(body, path).String()); code != "" {
+			if (directCode == "" || isGenericUpstreamEnvelopeCode(directCode)) &&
+				(topLevelCode == "" || isGenericUpstreamEnvelopeCode(topLevelCode)) {
+				return code
+			}
+		}
+	}
+	if topLevelCode != "" && !isGenericUpstreamEnvelopeCode(topLevelCode) {
+		return topLevelCode
+	}
+	if directCode != "" {
+		return directCode
+	}
+	if topLevelCode != "" {
+		return topLevelCode
+	}
+
 	return ""
+}
+
+func extractUpstreamErrorMessageFromEmbeddedJSON(text string) string {
+	for _, candidate := range embeddedJSONCandidates(text) {
+		for _, path := range []string{"error.message", "response.error.message", "response.status_details.error.message", "message"} {
+			msg := strings.TrimSpace(gjson.Get(candidate, path).String())
+			if msg == "" {
+				continue
+			}
+			if nested := extractUpstreamErrorMessageFromEmbeddedJSON(msg); nested != "" {
+				return nested
+			}
+			return msg
+		}
+	}
+	return ""
+}
+
+func extractUpstreamErrorCodeFromEmbeddedJSON(text string) string {
+	for _, candidate := range embeddedJSONCandidates(text) {
+		genericCode := ""
+		for _, path := range []string{"error.code", "response.error.code", "response.status_details.error.code", "code"} {
+			if code := strings.TrimSpace(gjson.Get(candidate, path).String()); code != "" {
+				if !isGenericUpstreamEnvelopeCode(code) {
+					return code
+				}
+				if genericCode == "" {
+					genericCode = code
+				}
+			}
+		}
+		if genericCode != "" {
+			return genericCode
+		}
+	}
+	return ""
+}
+
+func embeddedJSONCandidates(text string) []string {
+	inner := strings.TrimSpace(text)
+	firstBrace := strings.Index(inner, "{")
+	if firstBrace < 0 {
+		return nil
+	}
+	if firstBrace > 0 {
+		inner = inner[firstBrace:]
+	}
+	out := []string{inner}
+	if lastBrace := strings.LastIndex(inner, "}"); lastBrace >= 0 && lastBrace+1 < len(inner) {
+		out = append(out, inner[:lastBrace+1])
+	}
+	return out
+}
+
+func isGenericUpstreamEnvelopeCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "upstream_error", "api_error", "server_error", "bad_request", "invalid_request", "invalid_request_error":
+		return true
+	default:
+		return false
+	}
 }
 
 func isCountTokensUnsupported404(statusCode int, body []byte) bool {
@@ -8171,13 +8274,17 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, resp *http.Response, account *Account) {
 	body, _ := s.readUpstreamErrorBody(resp)
 	statusCode := resp.StatusCode
+	if s.rateLimitService == nil {
+		return
+	}
 
 	// OAuth/Setup Token 账号的 403：按上游错误策略处理账号状态。
 	if account.IsOAuth() && statusCode == 403 {
 		s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
 		logger.LegacyPrintf("service.gateway", "Account %d: applied upstream error policy after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
 	} else {
-		// API Key 未配置错误码：不标记账号状态
+		// API Key 未配置错误码：不标记账号 error，但仍让账号级被动熔断看到最终失败。
+		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
 		logger.LegacyPrintf("service.gateway", "Account %d: upstream error %d after %d retries (not marking account)", account.ID, statusCode, maxRetryAttempts)
 	}
 }
@@ -10659,6 +10766,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// 发送请求
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 	if err != nil {
+		if s.rateLimitService != nil {
+			s.rateLimitService.RecordUpstreamRequestFailure(c.Request.Context(), account, err)
+		}
 		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(err.Error()), "")
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
 		return fmt.Errorf("upstream request failed: %w", err)
@@ -10783,6 +10893,9 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 	if err != nil {
+		if s.rateLimitService != nil {
+			s.rateLimitService.RecordUpstreamRequestFailure(c.Request.Context(), account, err)
+		}
 		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(err.Error()), "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,

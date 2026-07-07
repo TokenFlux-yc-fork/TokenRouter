@@ -25,6 +25,7 @@ type RateLimitService struct {
 	cfg                   *config.Config
 	geminiQuotaService    *GeminiQuotaService
 	tempUnschedCache      TempUnschedCache
+	scheduledTestPlanRepo ScheduledAccountCircuitBreakerPlanReader
 	timeoutCounterCache   TimeoutCounterCache
 	openAI403CounterCache OpenAI403CounterCache
 	settingService        *SettingService
@@ -37,6 +38,10 @@ type RateLimitService struct {
 type AccountRuntimeBlocker interface {
 	BlockAccountScheduling(account *Account, until time.Time, reason string)
 	ClearAccountSchedulingBlock(accountID int64)
+}
+
+type ScheduledAccountCircuitBreakerPlanReader interface {
+	ListByAccountID(ctx context.Context, accountID int64) ([]*ScheduledTestPlan, error)
 }
 
 // SuccessfulTestRecoveryResult 表示测试成功后恢复了哪些运行时状态。
@@ -75,6 +80,12 @@ const (
 	openAIImageRateLimitReason          = "openai_image_rate_limited"
 )
 
+const (
+	defaultPassiveAccountCircuitBreakerCooldown = time.Minute
+	passiveAccountCircuitBreakerRuleIndex       = -2
+	scheduledTestCircuitBreakerRuleIndex        = -3
+)
+
 var openAIImageTryAgainPattern = regexp.MustCompile(`(?i)try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes)`)
 
 // NewRateLimitService 创建RateLimitService实例
@@ -107,6 +118,10 @@ func (s *RateLimitService) SetSettingService(settingService *SettingService) {
 // SetTokenCacheInvalidator 设置 token 缓存清理器（可选依赖）
 func (s *RateLimitService) SetTokenCacheInvalidator(invalidator TokenCacheInvalidator) {
 	s.tokenCacheInvalidator = invalidator
+}
+
+func (s *RateLimitService) SetScheduledTestPlanReader(reader ScheduledAccountCircuitBreakerPlanReader) {
+	s.scheduledTestPlanRepo = reader
 }
 
 func (s *RateLimitService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
@@ -166,6 +181,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		slog.Info("pool_mode_error_skipped", "account_id", account.ID, "status_code", statusCode)
 		return false
 	}
+	if !account.IsPoolMode() {
+		s.recordPassiveAccountFailure(ctx, account, statusCode, responseBody)
+	}
 
 	// apikey 类型账号：检查自定义错误码配置
 	// 如果启用且错误码不在列表中，则不处理（不停止调度、不标记限流/过载）
@@ -220,10 +238,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		}
 		// 其他 400 错误（如参数问题）不处理，不禁用账号
 	case 401:
-		// 外审第9轮:Spark 影子无独立凭据,401 是母账号 token 问题——失效缓存 / refresh_token 判断 /
-		// 永久禁用 / 临时不可调度都必须落到凭据 owner(母账号),否则影子(无 refresh_token)必中
-		// "refresh_token missing"永久禁用分支、母账号 token cache 也不会被清,把母账号可恢复的 token
-		// 问题变成影子永久死亡。母账号被标记 temp-unschedulable 后由 parentHealthyForShadow 级联排除影子。
+		// 外审第9轮:Spark 影子无独立凭据,401 是母账号 token 问题——失效缓存 /
+		// 永久禁用 / 临时不可调度都必须落到凭据 owner(母账号),否则影子无独立凭据会被错误处理。
+		// 母账号被标记 temp-unschedulable 后由 parentHealthyForShadow 级联排除影子。
 		// 非影子时 resolveCredentialAccount 返回自身;母账号缺失/损坏(orphan 影子,罕见)时回退到原 account。
 		authAccount := account
 		if resolved, rerr := resolveCredentialAccount(ctx, s.accountRepo, account); rerr == nil && resolved != nil {
@@ -237,6 +254,20 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 				msg = "Token revoked (401): " + upstreamMsg
 			}
 			s.handleAuthError(ctx, authAccount, msg)
+			shouldDisable = true
+			break
+		}
+		// OpenAI access-token-only OAuth（没有 refresh_token）由外部会话/导入链路维护 token。
+		// 401 只能说明本次请求使用的 bearer 被上游拒绝，不能通过本服务自愈；因此只让当前请求
+		// failover，并清掉 access token 缓存，不能写入 temp_unschedulable 或 SetError，避免把账号
+		// 在调度池里临时/永久剔除。
+		if isOpenAIOAuthAccessTokenOnly(authAccount) {
+			if s.tokenCacheInvalidator != nil {
+				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, authAccount); err != nil {
+					slog.Warn("oauth_401_invalidate_cache_failed", "account_id", authAccount.ID, "error", err)
+				}
+			}
+			slog.Info("openai_oauth_401_no_refresh_token_state_skipped", "account_id", authAccount.ID)
 			shouldDisable = true
 			break
 		}
@@ -259,18 +290,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 					slog.Warn("oauth_401_invalidate_cache_failed", "account_id", authAccount.ID, "error", err)
 				}
 			}
-			// 缺少 refresh_token 的 OAuth 账号无法在冷却期内自愈（后台刷新服务也会跳过），
-			// 直接走 SetError 永久禁用，避免冷却结束后再被选中产生一发无意义的 502。
-			if strings.TrimSpace(authAccount.GetCredential("refresh_token")) == "" {
-				msg := "Authentication failed (401): refresh_token missing, cannot recover"
-				if upstreamMsg != "" {
-					msg = "OAuth 401 (no refresh_token): " + upstreamMsg
-				}
-				s.handleAuthError(ctx, authAccount, msg)
-				shouldDisable = true
-				break
-			}
-			// 2. 临时不可调度，替代 SetError（保持 status=active 让刷新服务能拾取）
+			// 2. 临时不可调度，替代 SetError（保持 status=active；可刷新账号由后台/下次请求刷新）
 			// 注意：此处不再写回 account.Credentials/expires_at。
 			// 原实现使用请求开始时的 account 快照整列覆盖 credentials JSONB（见
 			// persistAccountCredentials → accountRepository.UpdateCredentials → SetCredentials），
@@ -353,6 +373,125 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	}
 
 	return shouldDisable
+}
+
+func isOpenAIOAuthAccessTokenOnly(account *Account) bool {
+	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+		return false
+	}
+	if account.IsOpenAIPersonalAccessToken() {
+		return false
+	}
+	return strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" &&
+		strings.TrimSpace(account.GetOpenAIAccessToken()) != ""
+}
+
+func (s *RateLimitService) RecordUpstreamRequestFailure(ctx context.Context, account *Account, err error) {
+	if err == nil {
+		return
+	}
+	s.recordPassiveAccountFailure(ctx, account, 0, []byte(err.Error()))
+}
+
+func (s *RateLimitService) recordPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.accountRepo == nil || account == nil {
+		return
+	}
+	if !shouldRecordPassiveAccountCircuitBreaker(account, statusCode) {
+		return
+	}
+	if s.hasScheduledAccountCircuitBreaker(ctx, account.ID) {
+		slog.Info("passive_account_circuit_breaker_skipped_by_scheduled_probe", "account_id", account.ID, "status_code", statusCode)
+		return
+	}
+
+	now := time.Now()
+	until := now.Add(defaultPassiveAccountCircuitBreakerCooldown)
+	if account.TempUnschedulableUntil != nil && !account.TempUnschedulableUntil.Before(until) {
+		return
+	}
+	message := passiveAccountCircuitBreakerMessage(statusCode, responseBody)
+	state := &TempUnschedState{
+		UntilUnix:       until.Unix(),
+		TriggeredAtUnix: now.Unix(),
+		StatusCode:      statusCode,
+		MatchedKeyword:  "passive_account_circuit_breaker",
+		RuleIndex:       passiveAccountCircuitBreakerRuleIndex,
+		ErrorMessage:    message,
+	}
+
+	reason := ""
+	if raw, err := json.Marshal(state); err == nil {
+		reason = string(raw)
+	}
+	if reason == "" {
+		reason = message
+	}
+
+	s.notifyAccountSchedulingBlocked(account, until, "passive_account_circuit_breaker")
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
+		slog.Warn("passive_account_circuit_breaker_set_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		return
+	}
+	account.TempUnschedulableUntil = &until
+	account.TempUnschedulableReason = reason
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
+			slog.Warn("passive_account_circuit_breaker_cache_set_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
+		}
+	}
+	slog.Info("passive_account_circuit_breaker_set", "account_id", account.ID, "status_code", statusCode, "until", until)
+}
+
+func (s *RateLimitService) hasScheduledAccountCircuitBreaker(ctx context.Context, accountID int64) bool {
+	if s == nil || s.scheduledTestPlanRepo == nil || accountID <= 0 {
+		return false
+	}
+	plans, err := s.scheduledTestPlanRepo.ListByAccountID(ctx, accountID)
+	if err != nil {
+		slog.Warn("scheduled_account_circuit_breaker_lookup_failed", "account_id", accountID, "error", err)
+		return false
+	}
+	for _, plan := range plans {
+		if plan != nil && plan.Enabled && plan.AccountCircuitBreakerEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldRecordPassiveAccountCircuitBreaker(account *Account, statusCode int) bool {
+	if account == nil || !account.IsUpstreamPoolHealthTarget() {
+		return false
+	}
+	if statusCode == 0 || statusCode >= http.StatusInternalServerError {
+		return true
+	}
+	if account.Type == AccountTypeUpstream && isPoolModeRetryableStatus(statusCode) {
+		return true
+	}
+	if account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
+		return true
+	}
+	return false
+}
+
+func passiveAccountCircuitBreakerMessage(statusCode int, body []byte) string {
+	message := strings.TrimSpace(extractUpstreamErrorMessage(body))
+	if message == "" && len(body) > 0 {
+		message = string(body)
+	}
+	message = sanitizeUpstreamErrorMessage(message)
+	if statusCode > 0 {
+		if message == "" {
+			return fmt.Sprintf("upstream status %d", statusCode)
+		}
+		return fmt.Sprintf("upstream status %d: %s", statusCode, truncateString(message, tempUnschedMessageMaxBytes))
+	}
+	if message == "" {
+		return "upstream request failed"
+	}
+	return truncateString(message, tempUnschedMessageMaxBytes)
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.
@@ -788,6 +927,14 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		responseBody,
 		"account may be suspended or lack permissions",
 	)
+	// OpenAI access-token-only OAuth（没有 refresh_token）由外部会话/导入链路维护 token。
+	// 这类账号的上游 403 常见于临时边缘/会话判定，不能写入 temp_unschedulable 或 SetError，
+	// 否则会把仍可由外部刷新/替换 token 的账号从调度池剔除；当前请求 failover 即可。
+	if isOpenAIOAuthAccessTokenOnly(account) {
+		s.ResetOpenAI403Counter(ctx, account.ID)
+		slog.Info("openai_oauth_403_no_refresh_token_state_skipped", "account_id", account.ID)
+		return true
+	}
 	settings := s.getOpenAI403CooldownSettings(ctx, account.ID)
 	if !settings.Enabled {
 		s.handleAuthError(ctx, account, msg)
@@ -1758,6 +1905,53 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 	return nil
 }
 
+func (s *RateLimitService) SetScheduledTestTempUnschedulable(ctx context.Context, accountID int64, until time.Time, message string) error {
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return nil
+	}
+	now := time.Now()
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "scheduled test failed consecutively"
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if account != nil && account.TempUnschedulableUntil != nil && !account.TempUnschedulableUntil.Before(until) {
+		return nil
+	}
+
+	state := &TempUnschedState{
+		UntilUnix:       until.Unix(),
+		TriggeredAtUnix: now.Unix(),
+		StatusCode:      0,
+		MatchedKeyword:  "scheduled_test_circuit_breaker",
+		RuleIndex:       scheduledTestCircuitBreakerRuleIndex,
+		ErrorMessage:    truncateString(message, tempUnschedMessageMaxBytes),
+	}
+
+	reason := state.ErrorMessage
+	if raw, err := json.Marshal(state); err == nil {
+		reason = string(raw)
+	}
+
+	s.notifyAccountSchedulingBlocked(account, until, "scheduled_test_circuit_breaker")
+	if err := s.accountRepo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
+		return err
+	}
+	if account != nil {
+		account.TempUnschedulableUntil = &until
+		account.TempUnschedulableReason = reason
+	}
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, accountID, state); err != nil {
+			slog.Warn("scheduled_test_circuit_breaker_cache_set_failed", "account_id", accountID, "error", err)
+		}
+	}
+	return nil
+}
+
 func hasRecoverableRuntimeState(account *Account) bool {
 	if account == nil {
 		return false
@@ -2116,6 +2310,8 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 		slog.Warn("temp_unsched_set_failed", "account_id", account.ID, "error", err)
 		return false
 	}
+	account.TempUnschedulableUntil = &until
+	account.TempUnschedulableReason = reason
 
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {

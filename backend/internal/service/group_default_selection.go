@@ -20,27 +20,37 @@ func findPlatformDefaultGroup(ctx context.Context, groupRepo GroupRepository, pl
 		return nil, nil
 	}
 
+	routableGroups := make([]Group, 0, len(groups))
 	for i := range groups {
-		if groups[i].IsDefault {
-			group := groups[i]
+		if groups[i].IsRoutable() {
+			routableGroups = append(routableGroups, groups[i])
+		}
+	}
+	if len(routableGroups) == 0 {
+		return nil, nil
+	}
+
+	for i := range routableGroups {
+		if routableGroups[i].IsDefault {
+			group := routableGroups[i]
 			return &group, nil
 		}
 	}
 
 	preferredNames := defaultGroupNamesByPlatform(platform)
 	for _, preferredName := range preferredNames {
-		for i := range groups {
-			if groups[i].Name == preferredName {
-				group := groups[i]
+		for i := range routableGroups {
+			if routableGroups[i].Name == preferredName {
+				group := routableGroups[i]
 				return &group, nil
 			}
 		}
 	}
 
 	if platform == PlatformAntigravity {
-		for i := range groups {
-			if strings.HasPrefix(groups[i].Name, PlatformAntigravity+"-default") {
-				group := groups[i]
+		for i := range routableGroups {
+			if strings.HasPrefix(routableGroups[i].Name, PlatformAntigravity+"-default") {
+				group := routableGroups[i]
 				return &group, nil
 			}
 		}

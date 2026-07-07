@@ -2552,6 +2552,14 @@ export default {
         noFallback: 'Not specified (use default group)',
         hint: 'When this group is disabled, API keys bound to it prefer this group as fallback. Leave empty to keep falling back to the platform default group.'
       },
+      backupPool: {
+        title: 'Backup Pool',
+        noPool: 'Do not enable backup pool',
+        poolHint: 'OpenAI groups only. When this group falls below the Codex capacity threshold, eligible accounts are copied from the selected group.',
+        threshold: 'Refill threshold (capacity points)',
+        thresholdHint: 'Capacity points sum min(5h remaining%, 7d remaining%) per account. Schedulable accounts without a fresh usage snapshot count as 100.',
+        thresholdRequired: 'When backup pool is enabled, the refill threshold must be greater than 0.'
+      },
       dataSharing: {
         title: 'Data Sharing Group',
         enabled: 'Enabled',
@@ -2680,6 +2688,26 @@ export default {
         promptPlaceholder: 'e.g. hi',
         modelRequired: 'Select a probe model before enabling group availability probes',
         promptRequired: 'Enter a probe prompt before enabling group availability probes'
+      },
+      health: {
+        title: 'Health Check & Circuit Breaker',
+        hint: 'Use active probe results and upstream errors to circuit-break this group, then recover after consecutive successes.',
+        status: 'Health',
+        disabled: 'Not monitored',
+        interval: 'Check interval (seconds)',
+        timeout: 'Timeout (seconds)',
+        failureThreshold: 'Failure threshold',
+        successThreshold: 'Recovery threshold',
+        manualCheck: 'Check now',
+        manualCheckTriggered: 'Manual health check scheduled',
+        manualCheckFailed: 'Failed to trigger manual health check',
+        lastCheck: 'Last check',
+        counters: 'Failures {failures} / successes {successes}',
+        statuses: {
+          unknown: 'Unknown',
+          healthy: 'Healthy',
+          unhealthy: 'Unhealthy'
+        }
       },
       claudeCode: {
         title: 'Claude Code Client Restriction',
@@ -4406,7 +4434,17 @@ export default {
       maxResultsTooltipExample: 'For example, 100 means keeping at most the latest 100 test results. When the 101st result is saved, the oldest one is removed.',
       maxResultsTooltipRange: 'Recommended range: usually 20 to 200. Use 20-50 when you only care about recent health status, or 100-200 if you want a longer trend history.',
       autoRecover: 'Auto Recover',
-      autoRecoverHelp: 'Automatically recover account from error/rate-limited state on successful test'
+      autoRecoverHelp: 'Automatically recover account from error/rate-limited state on successful test',
+      accountCircuitBreaker: 'Account Circuit Breaker',
+      accountCircuitBreakerBadge: 'Account CB',
+      accountCircuitBreakerHelp: 'Pause scheduling for this account after consecutive probe failures. Probes keep running and restore the account after consecutive successes.',
+      accountRecentResults: 'Recent Account Probe Results',
+      accountRecentResultsHelp: 'Shows the latest 20 results across all scheduled test plans for this account.',
+      failureThreshold: 'Failure Threshold',
+      successThreshold: 'Recovery Threshold',
+      failureCooldownMinutes: 'Cooldown Minutes',
+      timeoutSeconds: 'Probe Timeout (s)',
+      probePolicyHint: 'A probe that exceeds the timeout is recorded as failed. Reaching the failure threshold pauses only this account, not other accounts in the same group. Thresholds are capped at 10 and probe timeout is capped at 300 seconds.'
     },
 
     // Proxies

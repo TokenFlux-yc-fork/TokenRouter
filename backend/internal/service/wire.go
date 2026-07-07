@@ -452,6 +452,9 @@ func ProvideScheduledTestRunnerService(
 	rateLimitSvc *RateLimitService,
 	cfg *config.Config,
 ) *ScheduledTestRunnerService {
+	if rateLimitSvc != nil {
+		rateLimitSvc.SetScheduledTestPlanReader(planRepo)
+	}
 	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
 	svc.Start()
 	return svc
@@ -464,9 +467,10 @@ func ProvideGroupAvailabilityProbeRunnerService(
 	gatewaySvc *GatewayService,
 	openAIGateway *OpenAIGatewayService,
 	geminiCompatSvc *GeminiMessagesCompatService,
+	healthMonitor *GroupHealthMonitor,
 	cfg *config.Config,
 ) *GroupAvailabilityProbeRunnerService {
-	svc := NewGroupAvailabilityProbeRunnerService(repo, accountTestSvc, gatewaySvc, openAIGateway, geminiCompatSvc, cfg)
+	svc := NewGroupAvailabilityProbeRunnerService(repo, accountTestSvc, gatewaySvc, openAIGateway, geminiCompatSvc, healthMonitor, cfg)
 	svc.Start()
 	return svc
 }
@@ -645,6 +649,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	NewGroupService,
+	NewGroupHealthMonitor,
 	NewAccountService,
 	NewProxyService,
 	NewRedeemService,
@@ -739,6 +744,7 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestService,
 	ProvideScheduledTestRunnerService,
 	ProvideGroupAvailabilityProbeRunnerService,
+	ProvideGroupBackupPoolRefillService,
 	NewGroupCapacityService,
 	NewChannelService,
 	NewModelPricingResolver,

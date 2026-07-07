@@ -4,8 +4,11 @@ package service
 
 import (
 	"context"
+	"errors"
+	"math"
 	"testing"
 
+	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -17,10 +20,12 @@ func ptrString[T ~string](v T) *string {
 
 // groupRepoStubForAdmin 用于测试 AdminService 的 GroupRepository Stub
 type groupRepoStubForAdmin struct {
-	created *Group // 记录 Create 调用的参数
-	updated *Group // 记录 Update 调用的参数
-	getByID *Group // GetByID 返回值
-	getErr  error  // GetByID 返回的错误
+	created           *Group // 记录 Create 调用的参数
+	updated           *Group // 记录 Update 调用的参数
+	healthCheckConfig *HealthCheckConfigUpdate
+	getByID           *Group // GetByID 返回值
+	getErr            error  // GetByID 返回的错误
+	updateErr         error
 
 	listWithFiltersCalls       int
 	listWithFiltersParams      pagination.PaginationParams
@@ -31,6 +36,9 @@ type groupRepoStubForAdmin struct {
 	listWithFiltersGroups      []Group
 	listWithFiltersResult      *pagination.PaginationResult
 	listWithFiltersErr         error
+	allowForceHealthCheck      bool
+	forceHealthCheckCalls      int
+	forceHealthCheckErr        error
 }
 
 func (s *groupRepoStubForAdmin) Create(_ context.Context, g *Group) error {
@@ -40,7 +48,7 @@ func (s *groupRepoStubForAdmin) Create(_ context.Context, g *Group) error {
 
 func (s *groupRepoStubForAdmin) Update(_ context.Context, g *Group) error {
 	s.updated = g
-	return nil
+	return s.updateErr
 }
 
 func (s *groupRepoStubForAdmin) GetByID(_ context.Context, _ int64) (*Group, error) {
@@ -126,6 +134,32 @@ func (s *groupRepoStubForAdmin) GetAccountIDsByGroupIDs(_ context.Context, _ []i
 
 func (s *groupRepoStubForAdmin) UpdateSortOrders(_ context.Context, _ []GroupSortOrderUpdate) error {
 	return nil
+}
+
+func (s *groupRepoStubForAdmin) FindByHealthCheckEnabled(_ context.Context, _ bool) ([]*Group, error) {
+	panic("unexpected FindByHealthCheckEnabled call")
+}
+
+func (s *groupRepoStubForAdmin) UpdateHealthStatus(_ context.Context, _ int64, _ *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *groupRepoStubForAdmin) UpdateHealthCheckConfig(_ context.Context, _ int64, update *HealthCheckConfigUpdate) error {
+	config := *update
+	s.healthCheckConfig = &config
+	return nil
+}
+
+func (s *groupRepoStubForAdmin) UpdateGroupStatus(_ context.Context, _ int64, _ string) error {
+	panic("unexpected UpdateGroupStatus call")
+}
+
+func (s *groupRepoStubForAdmin) ForceHealthCheck(_ context.Context, _ int64) error {
+	if !s.allowForceHealthCheck {
+		panic("unexpected ForceHealthCheck call")
+	}
+	s.forceHealthCheckCalls++
+	return s.forceHealthCheckErr
 }
 
 func TestAdminService_ListGroups_PassesSortParams(t *testing.T) {
@@ -431,6 +465,26 @@ func TestAdminService_CreateGroup_WithSessionIsolation(t *testing.T) {
 	require.True(t, group.SessionIsolationEnabled)
 }
 
+func TestAdminService_CreateGroup_NormalizesHealthCheckDefaults(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:               "health-defaults",
+		Platform:           PlatformAnthropic,
+		RateMultiplier:     1.0,
+		HealthCheckEnabled: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, defaultGroupHealthIntervalSec, group.HealthCheckIntervalSec)
+	require.Equal(t, defaultGroupHealthTimeoutSec, group.HealthCheckTimeoutSec)
+	require.Equal(t, defaultGroupHealthFailureThreshold, group.HealthCheckFailureThreshold)
+	require.Equal(t, defaultGroupHealthSuccessThreshold, group.HealthCheckSuccessThreshold)
+	require.Equal(t, HealthStatusUnknown, group.HealthStatus)
+	require.Equal(t, defaultGroupHealthIntervalSec, repo.created.HealthCheckIntervalSec)
+}
+
 // TestAdminService_UpdateGroup_WithImagePricing 测试更新分组时 ImagePrice 字段正确更新
 func TestAdminService_UpdateGroup_WithImagePricing(t *testing.T) {
 	existingGroup := &Group{
@@ -679,6 +733,95 @@ func TestAdminService_UpdateGroup_ScrubsInvalidDisabledPeakRate(t *testing.T) {
 	require.Equal(t, "", repo.updated.PeakStart)
 	require.Equal(t, "18:00", repo.updated.PeakEnd)
 	require.Equal(t, 1.0, repo.updated.PeakRateMultiplier)
+}
+
+func TestAdminService_UpdateGroup_DoesNotInvalidateAuthCacheWhenUpdateFails(t *testing.T) {
+	existingGroup := &Group{
+		ID:       1,
+		Name:     "existing-group",
+		Platform: PlatformAnthropic,
+		Status:   StatusActive,
+		RPMLimit: 10,
+	}
+	repo := &groupRepoStubForAdmin{
+		getByID:   existingGroup,
+		updateErr: errors.New("update failed"),
+	}
+	invalidator := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{
+		groupRepo:            repo,
+		authCacheInvalidator: invalidator,
+	}
+
+	rpmLimit := 60
+	_, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
+		RPMLimit: &rpmLimit,
+	})
+
+	require.Error(t, err)
+	require.Empty(t, invalidator.groupIDs)
+}
+
+func TestAdminService_UpdateGroup_RejectsInvalidHealthCheckConfig(t *testing.T) {
+	existingGroup := &Group{
+		ID:       1,
+		Name:     "existing-group",
+		Platform: PlatformAnthropic,
+		Status:   StatusActive,
+	}
+	repo := &groupRepoStubForAdmin{getByID: existingGroup}
+	svc := &adminServiceImpl{groupRepo: repo}
+	tooSmallInterval := minGroupHealthIntervalSec - 1
+
+	_, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
+		HealthCheckIntervalSec: &tooSmallInterval,
+	})
+
+	require.Error(t, err)
+	require.Nil(t, repo.updated)
+}
+
+func TestAdminService_UpdateGroupHealthCheckConfig_NormalizesDefaults(t *testing.T) {
+	repo := &groupRepoStubForAdmin{
+		getByID: &Group{ID: 1, Name: "existing-group"},
+	}
+	invalidator := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{
+		groupRepo:            repo,
+		authCacheInvalidator: invalidator,
+	}
+
+	err := svc.UpdateGroupHealthCheckConfig(context.Background(), 1, &HealthCheckConfigUpdate{
+		Enabled: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, repo.healthCheckConfig)
+	require.True(t, repo.healthCheckConfig.Enabled)
+	require.Equal(t, defaultGroupHealthIntervalSec, repo.healthCheckConfig.IntervalSec)
+	require.Equal(t, defaultGroupHealthTimeoutSec, repo.healthCheckConfig.TimeoutSec)
+	require.Equal(t, defaultGroupHealthFailureThreshold, repo.healthCheckConfig.FailureThreshold)
+	require.Equal(t, defaultGroupHealthSuccessThreshold, repo.healthCheckConfig.SuccessThreshold)
+	require.Equal(t, []int64{1}, invalidator.groupIDs)
+}
+
+func TestAdminService_ForceGroupHealthCheck_RejectsInactiveGroup(t *testing.T) {
+	repo := &groupRepoStubForAdmin{
+		getByID: &Group{
+			ID:                 1,
+			Name:               "inactive-health-group",
+			Status:             "inactive",
+			HealthCheckEnabled: true,
+		},
+		allowForceHealthCheck: true,
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	err := svc.ForceGroupHealthCheck(context.Background(), 1)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "active")
+	require.Equal(t, 0, repo.forceHealthCheckCalls)
 }
 
 func TestAdminService_CreateGroup_NormalizesMessagesDispatchModelConfig(t *testing.T) {
@@ -952,10 +1095,31 @@ func (s *groupRepoStubForFallbackCycle) UpdateSortOrders(_ context.Context, _ []
 	return nil
 }
 
+func (s *groupRepoStubForFallbackCycle) FindByHealthCheckEnabled(_ context.Context, _ bool) ([]*Group, error) {
+	panic("unexpected FindByHealthCheckEnabled call")
+}
+
+func (s *groupRepoStubForFallbackCycle) UpdateHealthStatus(_ context.Context, _ int64, _ *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *groupRepoStubForFallbackCycle) UpdateHealthCheckConfig(_ context.Context, _ int64, _ *HealthCheckConfigUpdate) error {
+	panic("unexpected UpdateHealthCheckConfig call")
+}
+
+func (s *groupRepoStubForFallbackCycle) UpdateGroupStatus(_ context.Context, _ int64, _ string) error {
+	panic("unexpected UpdateGroupStatus call")
+}
+
+func (s *groupRepoStubForFallbackCycle) ForceHealthCheck(_ context.Context, _ int64) error {
+	panic("unexpected ForceHealthCheck call")
+}
+
 type groupRepoStubForInvalidRequestFallback struct {
-	groups  map[int64]*Group
-	created *Group
-	updated *Group
+	groups            map[int64]*Group
+	getByIDLiteErrors map[int64]error
+	created           *Group
+	updated           *Group
 }
 
 func (s *groupRepoStubForInvalidRequestFallback) Create(_ context.Context, g *Group) error {
@@ -973,6 +1137,9 @@ func (s *groupRepoStubForInvalidRequestFallback) GetByID(ctx context.Context, id
 }
 
 func (s *groupRepoStubForInvalidRequestFallback) GetByIDLite(_ context.Context, id int64) (*Group, error) {
+	if err, ok := s.getByIDLiteErrors[id]; ok {
+		return nil, err
+	}
 	if g, ok := s.groups[id]; ok {
 		return g, nil
 	}
@@ -1030,6 +1197,26 @@ func (s *groupRepoStubForInvalidRequestFallback) UpdateSortOrders(_ context.Cont
 	return nil
 }
 
+func (s *groupRepoStubForInvalidRequestFallback) FindByHealthCheckEnabled(_ context.Context, _ bool) ([]*Group, error) {
+	panic("unexpected FindByHealthCheckEnabled call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) UpdateHealthStatus(_ context.Context, _ int64, _ *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) UpdateHealthCheckConfig(_ context.Context, _ int64, _ *HealthCheckConfigUpdate) error {
+	panic("unexpected UpdateHealthCheckConfig call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) UpdateGroupStatus(_ context.Context, _ int64, _ string) error {
+	panic("unexpected UpdateGroupStatus call")
+}
+
+func (s *groupRepoStubForInvalidRequestFallback) ForceHealthCheck(_ context.Context, _ int64) error {
+	panic("unexpected ForceHealthCheck call")
+}
+
 func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsUnsupportedPlatform(t *testing.T) {
 	fallbackID := int64(10)
 	repo := &groupRepoStubForInvalidRequestFallback{
@@ -1048,6 +1235,95 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsUnsupportedPlatfo
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid request fallback only supported for anthropic or antigravity groups")
 	require.Nil(t, repo.created)
+}
+
+func TestAdminService_CreateGroup_BackupPoolRejectsUnsupportedPlatform(t *testing.T) {
+	backupID := int64(10)
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			backupID: {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                            "g1",
+		Platform:                        PlatformAnthropic,
+		RateMultiplier:                  1.0,
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: 100,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "backup pool auto refill only supports openai groups")
+	require.Nil(t, repo.created)
+}
+
+func TestAdminService_CreateGroup_BackupPoolPersistsConfig(t *testing.T) {
+	backupID := int64(10)
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			backupID: {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:                            "g1",
+		Platform:                        PlatformOpenAI,
+		RateMultiplier:                  1.0,
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: 150,
+	})
+	require.NoError(t, err)
+	require.Equal(t, group, repo.created)
+	require.Equal(t, backupID, *repo.created.BackupPoolGroupID)
+	require.Equal(t, 150.0, repo.created.BackupPoolRefillThresholdPoints)
+}
+
+func TestAdminService_CreateGroup_BackupPoolRejectsNonPositiveThreshold(t *testing.T) {
+	backupID := int64(10)
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			backupID: {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:              "g1",
+		Platform:          PlatformOpenAI,
+		RateMultiplier:    1.0,
+		BackupPoolGroupID: &backupID,
+	})
+	require.Error(t, err)
+	require.True(t, infraerrors.IsBadRequest(err))
+	require.Contains(t, err.Error(), "backup pool refill threshold points must be > 0")
+	require.Nil(t, repo.created)
+}
+
+func TestAdminService_CreateGroup_BackupPoolRejectsNonFiniteThreshold(t *testing.T) {
+	backupID := int64(10)
+	for _, threshold := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		t.Run("threshold", func(t *testing.T) {
+			repo := &groupRepoStubForInvalidRequestFallback{
+				groups: map[int64]*Group{
+					backupID: {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+				},
+			}
+			svc := &adminServiceImpl{groupRepo: repo}
+
+			_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+				Name:                            "g1",
+				Platform:                        PlatformOpenAI,
+				RateMultiplier:                  1.0,
+				BackupPoolGroupID:               &backupID,
+				BackupPoolRefillThresholdPoints: threshold,
+			})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "backup pool refill threshold points must be > 0")
+			require.Nil(t, repo.created)
+		})
+	}
 }
 
 func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsFallbackGroup(t *testing.T) {
@@ -1282,6 +1558,227 @@ func TestAdminService_UpdateGroup_UnavailableFallbackClearsOnZero(t *testing.T) 
 	require.NotNil(t, group)
 	require.NotNil(t, repo.updated)
 	require.Nil(t, repo.updated.UnavailableFallbackGroupID)
+}
+
+func TestAdminService_UpdateGroup_BackupPoolRejectsSelf(t *testing.T) {
+	existing := &Group{
+		ID:       1,
+		Name:     "g1",
+		Platform: PlatformOpenAI,
+		Status:   StatusActive,
+	}
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{existing.ID: existing},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	threshold := 100.0
+	_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		BackupPoolGroupID:               &existing.ID,
+		BackupPoolRefillThresholdPoints: &threshold,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot set self as backup pool group")
+	require.Nil(t, repo.updated)
+}
+
+func TestAdminService_UpdateGroup_BackupPoolClearsOnZero(t *testing.T) {
+	backupID := int64(10)
+	existing := &Group{
+		ID:                              1,
+		Name:                            "g1",
+		Platform:                        PlatformOpenAI,
+		Status:                          StatusActive,
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: 100,
+	}
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			existing.ID: existing,
+			backupID:    {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	clear := int64(0)
+	group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		BackupPoolGroupID: &clear,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.updated)
+	require.Nil(t, repo.updated.BackupPoolGroupID)
+	require.Zero(t, repo.updated.BackupPoolRefillThresholdPoints)
+}
+
+func TestAdminService_UpdateGroup_BackupPoolClearsStaleDisabledConfigOnUnrelatedUpdate(t *testing.T) {
+	backupID := int64(10)
+	existing := &Group{
+		ID:                              1,
+		Name:                            "g1",
+		Platform:                        PlatformOpenAI,
+		Status:                          StatusActive,
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: 0,
+	}
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			existing.ID: existing,
+			backupID:    {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		Name: "renamed",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.updated)
+	require.Equal(t, "renamed", repo.updated.Name)
+	require.Nil(t, repo.updated.BackupPoolGroupID)
+	require.Zero(t, repo.updated.BackupPoolRefillThresholdPoints)
+}
+
+func TestAdminService_UpdateGroup_BackupPoolClearsStaleInactivePoolOnUnrelatedUpdate(t *testing.T) {
+	backupID := int64(10)
+	existing := &Group{
+		ID:                              1,
+		Name:                            "g1",
+		Platform:                        PlatformOpenAI,
+		Status:                          StatusActive,
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: 100,
+	}
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			existing.ID: existing,
+			backupID:    {ID: backupID, Platform: PlatformOpenAI, Status: StatusDisabled},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		Name: "renamed",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.updated)
+	require.Equal(t, "renamed", repo.updated.Name)
+	require.Nil(t, repo.updated.BackupPoolGroupID)
+	require.Zero(t, repo.updated.BackupPoolRefillThresholdPoints)
+}
+
+func TestAdminService_UpdateGroup_BackupPoolKeepsUnknownValidationErrorOnUnrelatedUpdate(t *testing.T) {
+	backupID := int64(10)
+	dbErr := errors.New("temporary lookup failure")
+	existing := &Group{
+		ID:                              1,
+		Name:                            "g1",
+		Platform:                        PlatformOpenAI,
+		Status:                          StatusActive,
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: 100,
+	}
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			existing.ID: existing,
+		},
+		getByIDLiteErrors: map[int64]error{
+			backupID: dbErr,
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		Name: "renamed",
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, dbErr)
+	require.Nil(t, repo.updated)
+}
+
+func TestAdminService_UpdateGroup_BackupPoolSetSuccess(t *testing.T) {
+	backupID := int64(10)
+	existing := &Group{
+		ID:       1,
+		Name:     "g1",
+		Platform: PlatformOpenAI,
+		Status:   StatusActive,
+	}
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			existing.ID: existing,
+			backupID:    {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	threshold := 150.0
+	group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: &threshold,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.updated)
+	require.Equal(t, backupID, *repo.updated.BackupPoolGroupID)
+	require.Equal(t, threshold, repo.updated.BackupPoolRefillThresholdPoints)
+}
+
+func TestAdminService_UpdateGroup_BackupPoolClearsWhenPlatformChangesAwayFromOpenAI(t *testing.T) {
+	backupID := int64(10)
+	existing := &Group{
+		ID:                              1,
+		Name:                            "g1",
+		Platform:                        PlatformOpenAI,
+		Status:                          StatusActive,
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: 100,
+	}
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			existing.ID: existing,
+			backupID:    {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		Platform: PlatformAnthropic,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.updated)
+	require.Equal(t, PlatformAnthropic, repo.updated.Platform)
+	require.Nil(t, repo.updated.BackupPoolGroupID)
+	require.Zero(t, repo.updated.BackupPoolRefillThresholdPoints)
+}
+
+func TestAdminService_UpdateGroup_BackupPoolRejectsExplicitNonOpenAIPlatform(t *testing.T) {
+	backupID := int64(10)
+	existing := &Group{
+		ID:       1,
+		Name:     "g1",
+		Platform: PlatformAnthropic,
+		Status:   StatusActive,
+	}
+	repo := &groupRepoStubForInvalidRequestFallback{
+		groups: map[int64]*Group{
+			existing.ID: existing,
+			backupID:    {ID: backupID, Platform: PlatformOpenAI, Status: StatusActive},
+		},
+	}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	threshold := 100.0
+	_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		BackupPoolGroupID:               &backupID,
+		BackupPoolRefillThresholdPoints: &threshold,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "backup pool auto refill only supports openai groups")
+	require.Nil(t, repo.updated)
 }
 
 func TestAdminService_UpdateGroup_InvalidRequestFallbackPlatformMismatch(t *testing.T) {

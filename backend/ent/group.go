@@ -69,6 +69,10 @@ type Group struct {
 	FallbackGroupIDOnInvalidRequest *int64 `json:"fallback_group_id_on_invalid_request,omitempty"`
 	// 当前分组不可用时优先回退使用的分组 ID
 	UnavailableFallbackGroupID *int64 `json:"unavailable_fallback_group_id,omitempty"`
+	// OpenAI Codex 备用号池分组 ID；目标分组容量不足时从该分组复制账号绑定
+	BackupPoolGroupID *int64 `json:"backup_pool_group_id,omitempty"`
+	// OpenAI Codex 备用号池自动补充阈值（容量点）；0 表示禁用
+	BackupPoolRefillThresholdPoints float64 `json:"backup_pool_refill_threshold_points,omitempty"`
 	// 模型路由配置：模型模式 -> 优先账号ID列表
 	ModelRouting map[string][]int64 `json:"model_routing,omitempty"`
 	// 是否启用模型路由配置
@@ -93,6 +97,24 @@ type Group struct {
 	ModelsListConfig domain.GroupModelsListConfig `json:"models_list_config,omitempty"`
 	// 分组主动可用性探测配置
 	AvailabilityProbeConfig domain.GroupAvailabilityProbeConfig `json:"availability_probe_config,omitempty"`
+	// 是否启用健康检查与熔断
+	HealthCheckEnabled bool `json:"health_check_enabled,omitempty"`
+	// 健康检查间隔（秒）
+	HealthCheckIntervalSec int `json:"health_check_interval_sec,omitempty"`
+	// 单次健康检查超时时间（秒）
+	HealthCheckTimeoutSec int `json:"health_check_timeout_sec,omitempty"`
+	// 连续失败多少次后触发熔断
+	HealthCheckFailureThreshold int `json:"health_check_failure_threshold,omitempty"`
+	// 熔断后连续成功多少次后自动恢复
+	HealthCheckSuccessThreshold int `json:"health_check_success_threshold,omitempty"`
+	// 上次健康检查时间
+	HealthLastCheckAt *time.Time `json:"health_last_check_at,omitempty"`
+	// 当前连续失败次数
+	HealthConsecutiveFailures int `json:"health_consecutive_failures,omitempty"`
+	// 当前连续成功次数
+	HealthConsecutiveSuccesses int `json:"health_consecutive_successes,omitempty"`
+	// 实时健康状态：unknown/healthy/unhealthy
+	HealthStatus string `json:"health_status,omitempty"`
 	// 分组 RPM 上限，0 表示不限制；设置后接管该分组用户的限流
 	RpmLimit int `json:"rpm_limit,omitempty"`
 	// 是否为数据共享分组
@@ -207,15 +229,15 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig, group.FieldAvailabilityProbeConfig:
 			values[i] = new([]byte)
-		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldIsDefault, group.FieldAllowImageGeneration, group.FieldImageRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldDataSharingEnabled, group.FieldSessionIsolationEnabled:
+		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldIsDefault, group.FieldAllowImageGeneration, group.FieldImageRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldHealthCheckEnabled, group.FieldDataSharingEnabled, group.FieldSessionIsolationEnabled:
 			values[i] = new(sql.NullBool)
-		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k:
+		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBackupPoolRefillThresholdPoints:
 			values[i] = new(sql.NullFloat64)
-		case group.FieldID, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldUnavailableFallbackGroupID, group.FieldSortOrder, group.FieldRpmLimit:
+		case group.FieldID, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldUnavailableFallbackGroupID, group.FieldBackupPoolGroupID, group.FieldSortOrder, group.FieldHealthCheckIntervalSec, group.FieldHealthCheckTimeoutSec, group.FieldHealthCheckFailureThreshold, group.FieldHealthCheckSuccessThreshold, group.FieldHealthConsecutiveFailures, group.FieldHealthConsecutiveSuccesses, group.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
-		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldPlatform, group.FieldDisplayBrand, group.FieldDefaultMappedModel:
+		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldPlatform, group.FieldDisplayBrand, group.FieldDefaultMappedModel, group.FieldHealthStatus:
 			values[i] = new(sql.NullString)
-		case group.FieldCreatedAt, group.FieldUpdatedAt, group.FieldDeletedAt:
+		case group.FieldCreatedAt, group.FieldUpdatedAt, group.FieldDeletedAt, group.FieldHealthLastCheckAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -396,6 +418,19 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 				_m.UnavailableFallbackGroupID = new(int64)
 				*_m.UnavailableFallbackGroupID = value.Int64
 			}
+		case group.FieldBackupPoolGroupID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field backup_pool_group_id", values[i])
+			} else if value.Valid {
+				_m.BackupPoolGroupID = new(int64)
+				*_m.BackupPoolGroupID = value.Int64
+			}
+		case group.FieldBackupPoolRefillThresholdPoints:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field backup_pool_refill_threshold_points", values[i])
+			} else if value.Valid {
+				_m.BackupPoolRefillThresholdPoints = value.Float64
+			}
 		case group.FieldModelRouting:
 			if value, ok := values[i].(*[]byte); !ok {
 				return fmt.Errorf("unexpected type %T for field model_routing", values[i])
@@ -477,6 +512,61 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 				if err := json.Unmarshal(*value, &_m.AvailabilityProbeConfig); err != nil {
 					return fmt.Errorf("unmarshal field availability_probe_config: %w", err)
 				}
+			}
+		case group.FieldHealthCheckEnabled:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field health_check_enabled", values[i])
+			} else if value.Valid {
+				_m.HealthCheckEnabled = value.Bool
+			}
+		case group.FieldHealthCheckIntervalSec:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field health_check_interval_sec", values[i])
+			} else if value.Valid {
+				_m.HealthCheckIntervalSec = int(value.Int64)
+			}
+		case group.FieldHealthCheckTimeoutSec:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field health_check_timeout_sec", values[i])
+			} else if value.Valid {
+				_m.HealthCheckTimeoutSec = int(value.Int64)
+			}
+		case group.FieldHealthCheckFailureThreshold:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field health_check_failure_threshold", values[i])
+			} else if value.Valid {
+				_m.HealthCheckFailureThreshold = int(value.Int64)
+			}
+		case group.FieldHealthCheckSuccessThreshold:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field health_check_success_threshold", values[i])
+			} else if value.Valid {
+				_m.HealthCheckSuccessThreshold = int(value.Int64)
+			}
+		case group.FieldHealthLastCheckAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field health_last_check_at", values[i])
+			} else if value.Valid {
+				_m.HealthLastCheckAt = new(time.Time)
+				*_m.HealthLastCheckAt = value.Time
+			}
+		case group.FieldHealthConsecutiveFailures:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field health_consecutive_failures", values[i])
+			} else if value.Valid {
+				_m.HealthConsecutiveFailures = int(value.Int64)
+			}
+		case group.FieldHealthConsecutiveSuccesses:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field health_consecutive_successes", values[i])
+			} else if value.Valid {
+				_m.HealthConsecutiveSuccesses = int(value.Int64)
+			}
+		case group.FieldHealthStatus:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field health_status", values[i])
+			} else if value.Valid {
+				_m.HealthStatus = value.String
 			}
 		case group.FieldRpmLimit:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -663,6 +753,14 @@ func (_m *Group) String() string {
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")
+	if v := _m.BackupPoolGroupID; v != nil {
+		builder.WriteString("backup_pool_group_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("backup_pool_refill_threshold_points=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BackupPoolRefillThresholdPoints))
+	builder.WriteString(", ")
 	builder.WriteString("model_routing=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ModelRouting))
 	builder.WriteString(", ")
@@ -698,6 +796,35 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("availability_probe_config=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AvailabilityProbeConfig))
+	builder.WriteString(", ")
+	builder.WriteString("health_check_enabled=")
+	builder.WriteString(fmt.Sprintf("%v", _m.HealthCheckEnabled))
+	builder.WriteString(", ")
+	builder.WriteString("health_check_interval_sec=")
+	builder.WriteString(fmt.Sprintf("%v", _m.HealthCheckIntervalSec))
+	builder.WriteString(", ")
+	builder.WriteString("health_check_timeout_sec=")
+	builder.WriteString(fmt.Sprintf("%v", _m.HealthCheckTimeoutSec))
+	builder.WriteString(", ")
+	builder.WriteString("health_check_failure_threshold=")
+	builder.WriteString(fmt.Sprintf("%v", _m.HealthCheckFailureThreshold))
+	builder.WriteString(", ")
+	builder.WriteString("health_check_success_threshold=")
+	builder.WriteString(fmt.Sprintf("%v", _m.HealthCheckSuccessThreshold))
+	builder.WriteString(", ")
+	if v := _m.HealthLastCheckAt; v != nil {
+		builder.WriteString("health_last_check_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("health_consecutive_failures=")
+	builder.WriteString(fmt.Sprintf("%v", _m.HealthConsecutiveFailures))
+	builder.WriteString(", ")
+	builder.WriteString("health_consecutive_successes=")
+	builder.WriteString(fmt.Sprintf("%v", _m.HealthConsecutiveSuccesses))
+	builder.WriteString(", ")
+	builder.WriteString("health_status=")
+	builder.WriteString(_m.HealthStatus)
 	builder.WriteString(", ")
 	builder.WriteString("rpm_limit=")
 	builder.WriteString(fmt.Sprintf("%v", _m.RpmLimit))

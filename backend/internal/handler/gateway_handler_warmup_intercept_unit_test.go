@@ -100,6 +100,17 @@ func (f *fakeGroupRepo) BindAccountsToGroup(context.Context, int64, []int64) err
 func (f *fakeGroupRepo) UpdateSortOrders(context.Context, []service.GroupSortOrderUpdate) error {
 	return nil
 }
+func (f *fakeGroupRepo) FindByHealthCheckEnabled(context.Context, bool) ([]*service.Group, error) {
+	return nil, nil
+}
+func (f *fakeGroupRepo) UpdateHealthStatus(context.Context, int64, *service.HealthStatusUpdate) error {
+	return nil
+}
+func (f *fakeGroupRepo) UpdateHealthCheckConfig(context.Context, int64, *service.HealthCheckConfigUpdate) error {
+	return nil
+}
+func (f *fakeGroupRepo) UpdateGroupStatus(context.Context, int64, string) error { return nil }
+func (f *fakeGroupRepo) ForceHealthCheck(context.Context, int64) error          { return nil }
 
 type fakeConcurrencyCache struct{}
 

@@ -2625,6 +2625,14 @@ export default {
         noFallback: '不指定（使用默认分组）',
         hint: '当该分组被停用时，绑定到该分组的 API Key 会优先回退到这里选择的分组；留空则继续回退到同平台默认分组。'
       },
+      backupPool: {
+        title: '备用号池',
+        noPool: '不启用备用号池',
+        poolHint: '仅 OpenAI 分组可用；当本分组 Codex 剩余容量点低于阈值时，会从该分组复制可用账号绑定进来。',
+        threshold: '补充阈值（容量点）',
+        thresholdHint: '容量点按每个账号 min(5h 剩余%, 7d 剩余%) 求和；无新鲜用量快照的可调度账号按 100 计算。',
+        thresholdRequired: '启用备用号池时，补充阈值必须大于 0。'
+      },
       dataSharing: {
         title: '数据共享分组',
         enabled: '已启用',
@@ -2763,6 +2771,26 @@ export default {
         promptPlaceholder: '例如：hi',
         modelRequired: '启用分组可用性探测时必须选择探测模型',
         promptRequired: '启用分组可用性探测时必须填写探测提示词'
+      },
+      health: {
+        title: '健康检查与熔断',
+        hint: '结合主动探测结果与上游错误自动熔断该分组，并在连续成功后恢复。',
+        status: '健康',
+        disabled: '未监控',
+        interval: '检查间隔（秒）',
+        timeout: '超时时间（秒）',
+        failureThreshold: '失败阈值',
+        successThreshold: '恢复阈值',
+        manualCheck: '立即检查',
+        manualCheckTriggered: '已安排手动健康检查',
+        manualCheckFailed: '触发手动健康检查失败',
+        lastCheck: '上次检查',
+        counters: '失败 {failures} / 成功 {successes}',
+        statuses: {
+          unknown: '未知',
+          healthy: '健康',
+          unhealthy: '异常'
+        }
       },
       claudeCode: {
         title: 'Claude Code 客户端限制',
@@ -4492,7 +4520,17 @@ export default {
       maxResultsTooltipExample: '例如填写 100，表示最多保存最近 100 次测试结果；第 101 次结果写入后，最早的一条会被清理。',
       maxResultsTooltipRange: '推荐填写范围：一般可填 20 到 200。只关注近期可用性时可填 20-50；需要回看较长时间的波动趋势时可填 100-200。',
       autoRecover: '自动恢复',
-      autoRecoverHelp: '测试成功后自动恢复异常状态的账号'
+      autoRecoverHelp: '测试成功后自动恢复异常状态的账号',
+      accountCircuitBreaker: '账号级主动熔断',
+      accountCircuitBreakerBadge: '账号熔断',
+      accountCircuitBreakerHelp: '连续探测失败后暂停调度当前账号；后续探针仍会运行，连续成功后自动恢复该账号。',
+      accountRecentResults: '账号最近探针结果',
+      accountRecentResultsHelp: '汇总当前账号所有定时测试计划的最近 20 次结果。',
+      failureThreshold: '失败阈值',
+      successThreshold: '恢复阈值',
+      failureCooldownMinutes: '冷却分钟',
+      timeoutSeconds: '探针超时（秒）',
+      probePolicyHint: '探针超过超时上限会按失败记录。连续失败达到阈值后只暂停这个账号，不影响同组其他账号。阈值上限 10，探针超时上限 300 秒。'
     },
 
     // Proxies Management

@@ -126,6 +126,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	geminiTokenCache := repository.NewGeminiTokenCache(redisClient)
 	qoderTokenProvider := service.NewQoderTokenProvider()
 	compositeTokenCacheInvalidator := service.NewCompositeTokenCacheInvalidator(geminiTokenCache, qoderTokenProvider)
+	groupHealthMonitor := service.NewGroupHealthMonitor(groupRepository, apiKeyAuthCacheInvalidator)
 	rateLimitService := service.ProvideRateLimitService(accountRepository, usageLogRepository, configConfig, geminiQuotaService, tempUnschedCache, timeoutCounterCache, openAI403CounterCache, settingService, compositeTokenCacheInvalidator)
 	identityCache := repository.NewIdentityCache(redisClient)
 	identityService := service.NewIdentityService(identityCache)
@@ -290,10 +291,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	proxyExpiryService := service.ProvideProxyExpiryService(proxyRepository)
 	subscriptionExpiryService := service.ProvideSubscriptionExpiryService(userSubscriptionRepository, settingRepository, notificationEmailService, leaderLockCache, db)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig)
-	groupAvailabilityProbeRunnerService := service.ProvideGroupAvailabilityProbeRunnerService(groupAvailabilityProbeRepository, accountTestService, gatewayService, openAIGatewayService, geminiMessagesCompatService, configConfig)
+	groupAvailabilityProbeRunnerService := service.ProvideGroupAvailabilityProbeRunnerService(groupAvailabilityProbeRepository, accountTestService, gatewayService, openAIGatewayService, geminiMessagesCompatService, groupHealthMonitor, configConfig)
+	groupBackupPoolRefillService := service.ProvideGroupBackupPoolRefillService(accountRepository, groupRepository, settingService)
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v2 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, dataSharingService, dataSharingCaptureWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService)
+	v2 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, dataSharingService, dataSharingCaptureWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, groupBackupPoolRefillService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService)
 	application := &Application{
 		Server:  httpServer,
 		Cleanup: v2,
@@ -351,6 +353,7 @@ func provideCleanup(
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	groupAvailabilityProbeRunner *service.GroupAvailabilityProbeRunnerService,
+	groupBackupPoolRefill *service.GroupBackupPoolRefillService,
 	backupSvc *service.BackupService,
 	paymentOrderExpiry *service.PaymentOrderExpiryService,
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
@@ -501,6 +504,12 @@ func provideCleanup(
 			{"GroupAvailabilityProbeRunnerService", func() error {
 				if groupAvailabilityProbeRunner != nil {
 					groupAvailabilityProbeRunner.Stop()
+				}
+				return nil
+			}},
+			{"GroupBackupPoolRefillService", func() error {
+				if groupBackupPoolRefill != nil {
+					groupBackupPoolRefill.Stop()
 				}
 				return nil
 			}},

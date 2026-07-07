@@ -14,6 +14,12 @@ type OpenAIMessagesDispatchModelConfig = domain.OpenAIMessagesDispatchModelConfi
 type GroupModelsListConfig = domain.GroupModelsListConfig
 type GroupAvailabilityProbeConfig = domain.GroupAvailabilityProbeConfig
 
+const (
+	HealthStatusUnknown   = "unknown"
+	HealthStatusHealthy   = "healthy"
+	HealthStatusUnhealthy = "unhealthy"
+)
+
 type Group struct {
 	ID             int64
 	Name           string
@@ -51,6 +57,10 @@ type Group struct {
 	FallbackGroupIDOnInvalidRequest *int64
 	// UnavailableFallbackGroupID 表示当前分组停用时 API Key 优先回退到的分组。
 	UnavailableFallbackGroupID *int64
+	// BackupPoolGroupID 表示 OpenAI Codex 容量不足时用于复制账号的备用号池分组。
+	BackupPoolGroupID *int64
+	// BackupPoolRefillThresholdPoints 表示触发自动补池的 Codex 容量点阈值。
+	BackupPoolRefillThresholdPoints float64
 
 	// 模型路由配置
 	// key: 模型匹配模式（支持 * 通配符，如 "claude-opus-*"）
@@ -82,6 +92,17 @@ type Group struct {
 	// 一旦设置即接管该分组用户的限流（覆盖用户级 rpm_limit），可被 user-group rpm_override 进一步覆盖。
 	RPMLimit int
 
+	// 健康检查和熔断机制相关字段
+	HealthCheckEnabled          bool       // 是否启用健康检查
+	HealthCheckIntervalSec      int        // 健康检查间隔（秒）
+	HealthCheckTimeoutSec       int        // 单次检查超时时间（秒）
+	HealthCheckFailureThreshold int        // 连续失败多少次后触发熔断
+	HealthCheckSuccessThreshold int        // 熔断后连续成功多少次后自动恢复
+	HealthLastCheckAt           *time.Time // 上次健康检查时间
+	HealthConsecutiveFailures   int        // 当前连续失败次数
+	HealthConsecutiveSuccesses  int        // 当前连续成功次数
+	HealthStatus                string     // 实时健康状态：unknown/healthy/unhealthy
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
@@ -93,6 +114,33 @@ type Group struct {
 
 func (g *Group) IsActive() bool {
 	return g.Status == StatusActive
+}
+
+// IsHealthy 返回分组是否健康（未启用健康检查时始终视为健康）
+func (g *Group) IsHealthy() bool {
+	if g == nil {
+		return false
+	}
+	if !g.HealthCheckEnabled {
+		return true
+	}
+	return normalizeGroupHealthStatus(g.HealthStatus) != HealthStatusUnhealthy
+}
+
+// IsRoutable 返回分组当前是否可用于请求路由。
+func (g *Group) IsRoutable() bool {
+	return g != nil && g.IsActive()
+}
+
+func normalizeGroupHealthStatus(status string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case HealthStatusHealthy:
+		return HealthStatusHealthy
+	case HealthStatusUnhealthy:
+		return HealthStatusUnhealthy
+	default:
+		return HealthStatusUnknown
+	}
 }
 
 // GetImagePrice 根据 image_size 返回对应的图片生成价格

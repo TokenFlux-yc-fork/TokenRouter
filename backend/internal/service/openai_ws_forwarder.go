@@ -57,6 +57,7 @@ const (
 	openAIWSStoreDisabledConnModeOff      = "off"
 
 	openAIWSIngressStagePreviousResponseNotFound = "previous_response_not_found"
+	openAIWSIngressStageResponseFailedRetryable  = "response_failed_retryable"
 	openAIWSMaxPrevResponseIDDeletePasses        = 8
 )
 
@@ -176,7 +177,7 @@ func isOpenAIWSIngressTurnRetryable(err error) bool {
 		return false
 	}
 	switch turnErr.stage {
-	case "write_upstream", "read_upstream":
+	case "write_upstream", "read_upstream", openAIWSIngressStageResponseFailedRetryable:
 		return true
 	default:
 		return false
@@ -2012,6 +2013,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(err.Error())))
 			}
 		}
+		s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, err)
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
 	// cleanExit 标记正常终端事件退出，此时上游不会再发送帧，连接可安全归还复用。
@@ -2323,6 +2325,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		imageCounter.AddSSEData(message)
 		if warning := buildOpenAIWSUpstreamWarning(eventType, message); warning != nil {
 			upstreamWarning = warning
+		}
+
+		if eventType == "response.failed" && !wroteDownstream {
+			failedMessage := extractOpenAISSEErrorMessage(message)
+			if openAIStreamFailedEventShouldFailover(message, failedMessage) {
+				if strings.TrimSpace(failedMessage) == "" {
+					failedMessage = "upstream response failed"
+				}
+				lease.MarkBroken()
+				return nil, wrapOpenAIWSFallback("upstream_error_event", errors.New(failedMessage))
+			}
 		}
 
 		if eventType == "error" {
@@ -3211,6 +3224,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(acquireErr.Error())))
 				}
 			}
+			s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, acquireErr)
 			if errors.Is(acquireErr, errOpenAIWSPreferredConnUnavailable) {
 				return nil, NewOpenAIWSClientCloseError(
 					coderws.StatusPolicyViolation,
@@ -3423,6 +3437,20 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						UpstreamInTok:  usage.InputTokens,
 						UpstreamOutTok: usage.OutputTokens,
 					})
+				}
+				if !wroteDownstream {
+					failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+					if openAIStreamFailedEventShouldFailover(upstreamMessage, failedMessage) {
+						if strings.TrimSpace(failedMessage) == "" {
+							failedMessage = "upstream response failed"
+						}
+						lease.MarkBroken()
+						return nil, wrapOpenAIWSIngressTurnError(
+							openAIWSIngressStageResponseFailedRetryable,
+							errors.New(failedMessage),
+							false,
+						)
+					}
 				}
 			}
 			imageCounter.AddSSEData(upstreamMessage)
@@ -4695,15 +4723,43 @@ func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Contex
 	s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody)
 }
 
+func (s *OpenAIGatewayService) recordOpenAIWSPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.rateLimitService == nil || account == nil {
+		return
+	}
+	s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSDialPassiveAccountFailure(ctx context.Context, account *Account, err error) {
+	if err == nil {
+		return
+	}
+	var dialErr *openAIWSDialError
+	if !errors.As(err, &dialErr) || dialErr == nil {
+		return
+	}
+	switch dialErr.StatusCode {
+	case http.StatusTooManyRequests:
+		return
+	case http.StatusForbidden:
+		if account != nil && account.IsOpenAIOAuth() {
+			return
+		}
+	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, dialErr.StatusCode, []byte(strings.TrimSpace(err.Error())))
+}
+
 // persistOpenAIWSErrorSignal 根据 WS error 事件语义同步账号运行态信号。
 func (s *OpenAIGatewayService) persistOpenAIWSErrorSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string) {
 	if isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
 		s.persistOpenAIWSRateLimitSignal(ctx, account, headers, responseBody, codeRaw, errTypeRaw, msgRaw)
 		return
 	}
-	if openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw) == http.StatusForbidden {
+	statusCode := openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	if statusCode == http.StatusForbidden {
 		s.persistOpenAIWSForbiddenSignal(ctx, account, headers, responseBody)
 	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, statusCode, responseBody)
 }
 
 func (s *OpenAIGatewayService) persistOpenAIWSForbiddenSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
