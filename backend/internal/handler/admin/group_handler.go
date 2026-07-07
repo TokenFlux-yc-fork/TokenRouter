@@ -58,6 +58,10 @@ type CreateGroupRequest struct {
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
 	// UnavailableFallbackGroupID 当前分组停用时 API Key 优先回退到的分组。
 	UnavailableFallbackGroupID *int64 `json:"unavailable_fallback_group_id"`
+	// BackupPoolGroupID OpenAI Codex 容量不足时自动复制账号的备用号池分组。
+	BackupPoolGroupID *int64 `json:"backup_pool_group_id"`
+	// BackupPoolRefillThresholdPoints 触发自动补池的 Codex 容量点阈值。
+	BackupPoolRefillThresholdPoints float64 `json:"backup_pool_refill_threshold_points"`
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
@@ -72,6 +76,11 @@ type CreateGroupRequest struct {
 	MessagesDispatchModelConfig service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	ModelsListConfig            service.GroupModelsListConfig             `json:"models_list_config"`
 	AvailabilityProbeConfig     service.GroupAvailabilityProbeConfig      `json:"availability_probe_config"`
+	HealthCheckEnabled          bool                                      `json:"health_check_enabled"`
+	HealthCheckIntervalSec      int                                       `json:"health_check_interval_sec"`
+	HealthCheckTimeoutSec       int                                       `json:"health_check_timeout_sec"`
+	HealthCheckFailureThreshold int                                       `json:"health_check_failure_threshold"`
+	HealthCheckSuccessThreshold int                                       `json:"health_check_success_threshold"`
 	// 分组 RPM 上限（0 = 不限制）
 	RPMLimit int `json:"rpm_limit"`
 	// 从指定分组复制账号（创建后自动绑定）
@@ -109,6 +118,10 @@ type UpdateGroupRequest struct {
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
 	// UnavailableFallbackGroupID 当前分组停用时 API Key 优先回退到的分组。
 	UnavailableFallbackGroupID *int64 `json:"unavailable_fallback_group_id"`
+	// BackupPoolGroupID OpenAI Codex 容量不足时自动复制账号的备用号池分组。
+	BackupPoolGroupID *int64 `json:"backup_pool_group_id"`
+	// BackupPoolRefillThresholdPoints 触发自动补池的 Codex 容量点阈值。
+	BackupPoolRefillThresholdPoints *float64 `json:"backup_pool_refill_threshold_points"`
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled *bool              `json:"model_routing_enabled"`
@@ -123,6 +136,11 @@ type UpdateGroupRequest struct {
 	MessagesDispatchModelConfig *service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	ModelsListConfig            *service.GroupModelsListConfig             `json:"models_list_config"`
 	AvailabilityProbeConfig     *service.GroupAvailabilityProbeConfig      `json:"availability_probe_config"`
+	HealthCheckEnabled          *bool                                      `json:"health_check_enabled"`
+	HealthCheckIntervalSec      *int                                       `json:"health_check_interval_sec"`
+	HealthCheckTimeoutSec       *int                                       `json:"health_check_timeout_sec"`
+	HealthCheckFailureThreshold *int                                       `json:"health_check_failure_threshold"`
+	HealthCheckSuccessThreshold *int                                       `json:"health_check_success_threshold"`
 	// 分组 RPM 上限（0 = 不限制）；nil 表示未提供不改动
 	RPMLimit *int `json:"rpm_limit"`
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
@@ -274,6 +292,8 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		FallbackGroupID:                 req.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: req.FallbackGroupIDOnInvalidRequest,
 		UnavailableFallbackGroupID:      req.UnavailableFallbackGroupID,
+		BackupPoolGroupID:               req.BackupPoolGroupID,
+		BackupPoolRefillThresholdPoints: req.BackupPoolRefillThresholdPoints,
 		ModelRouting:                    req.ModelRouting,
 		ModelRoutingEnabled:             req.ModelRoutingEnabled,
 		MCPXMLInject:                    req.MCPXMLInject,
@@ -285,6 +305,11 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		MessagesDispatchModelConfig:     req.MessagesDispatchModelConfig,
 		ModelsListConfig:                req.ModelsListConfig,
 		AvailabilityProbeConfig:         req.AvailabilityProbeConfig,
+		HealthCheckEnabled:              req.HealthCheckEnabled,
+		HealthCheckIntervalSec:          req.HealthCheckIntervalSec,
+		HealthCheckTimeoutSec:           req.HealthCheckTimeoutSec,
+		HealthCheckFailureThreshold:     req.HealthCheckFailureThreshold,
+		HealthCheckSuccessThreshold:     req.HealthCheckSuccessThreshold,
 		RPMLimit:                        req.RPMLimit,
 		CopyAccountsFromGroupIDs:        req.CopyAccountsFromGroupIDs,
 	})
@@ -337,6 +362,8 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		FallbackGroupID:                 req.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: req.FallbackGroupIDOnInvalidRequest,
 		UnavailableFallbackGroupID:      req.UnavailableFallbackGroupID,
+		BackupPoolGroupID:               req.BackupPoolGroupID,
+		BackupPoolRefillThresholdPoints: req.BackupPoolRefillThresholdPoints,
 		ModelRouting:                    req.ModelRouting,
 		ModelRoutingEnabled:             req.ModelRoutingEnabled,
 		MCPXMLInject:                    req.MCPXMLInject,
@@ -348,6 +375,11 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		MessagesDispatchModelConfig:     req.MessagesDispatchModelConfig,
 		ModelsListConfig:                req.ModelsListConfig,
 		AvailabilityProbeConfig:         req.AvailabilityProbeConfig,
+		HealthCheckEnabled:              req.HealthCheckEnabled,
+		HealthCheckIntervalSec:          req.HealthCheckIntervalSec,
+		HealthCheckTimeoutSec:           req.HealthCheckTimeoutSec,
+		HealthCheckFailureThreshold:     req.HealthCheckFailureThreshold,
+		HealthCheckSuccessThreshold:     req.HealthCheckSuccessThreshold,
 		RPMLimit:                        req.RPMLimit,
 		CopyAccountsFromGroupIDs:        req.CopyAccountsFromGroupIDs,
 	})
@@ -588,5 +620,104 @@ func (h *GroupHandler) UpdateSortOrder(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"message": "Sort order updated successfully"})
+	response.Success(c, nil)
+}
+
+// GetGroupHealth 获取分组健康状态
+// GET /api/v1/admin/groups/:id/health
+func (h *GroupHandler) GetGroupHealth(c *gin.Context) {
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid group ID")
+		return
+	}
+
+	group, err := h.adminService.GetGroupByID(c.Request.Context(), groupID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"health_check_enabled":           group.HealthCheckEnabled,
+		"health_status":                  group.HealthStatus,
+		"health_last_check_at":           group.HealthLastCheckAt,
+		"health_consecutive_failures":    group.HealthConsecutiveFailures,
+		"health_consecutive_successes":   group.HealthConsecutiveSuccesses,
+		"health_check_interval_sec":      group.HealthCheckIntervalSec,
+		"health_check_timeout_sec":       group.HealthCheckTimeoutSec,
+		"health_check_failure_threshold": group.HealthCheckFailureThreshold,
+		"health_check_success_threshold": group.HealthCheckSuccessThreshold,
+	})
+}
+
+// UpdateHealthCheckConfigRequest 健康检查配置更新请求
+type UpdateHealthCheckConfigRequest struct {
+	Enabled          bool `json:"enabled"`
+	IntervalSec      int  `json:"interval_sec" binding:"omitempty,min=10,max=3600"`
+	TimeoutSec       int  `json:"timeout_sec" binding:"omitempty,min=5,max=60"`
+	FailureThreshold int  `json:"failure_threshold" binding:"omitempty,min=1,max=10"`
+	SuccessThreshold int  `json:"success_threshold" binding:"omitempty,min=1,max=10"`
+}
+
+// UpdateHealthCheckConfig 更新分组健康检查配置
+// PUT /api/v1/admin/groups/:id/health-check
+func (h *GroupHandler) UpdateHealthCheckConfig(c *gin.Context) {
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid group ID")
+		return
+	}
+
+	var req UpdateHealthCheckConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	// 设置默认值
+	if req.IntervalSec == 0 {
+		req.IntervalSec = 60
+	}
+	if req.TimeoutSec == 0 {
+		req.TimeoutSec = 10
+	}
+	if req.FailureThreshold == 0 {
+		req.FailureThreshold = 3
+	}
+	if req.SuccessThreshold == 0 {
+		req.SuccessThreshold = 2
+	}
+
+	config := &service.HealthCheckConfigUpdate{
+		Enabled:          req.Enabled,
+		IntervalSec:      req.IntervalSec,
+		TimeoutSec:       req.TimeoutSec,
+		FailureThreshold: req.FailureThreshold,
+		SuccessThreshold: req.SuccessThreshold,
+	}
+
+	if err := h.adminService.UpdateGroupHealthCheckConfig(c.Request.Context(), groupID, config); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{"message": "Health check config updated"})
+}
+
+// TriggerManualCheck 手动触发健康检查
+// POST /api/v1/admin/groups/:id/manual-check
+func (h *GroupHandler) TriggerManualCheck(c *gin.Context) {
+	groupID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid group ID")
+		return
+	}
+
+	if err := h.adminService.ForceGroupHealthCheck(c.Request.Context(), groupID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{"message": "Manual check triggered, will execute in next cycle"})
 }

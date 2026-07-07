@@ -214,7 +214,7 @@ func TestOpenAIGatewayService_Forward_WSv2ErrorEventUsageLimitPersistsRateLimit(
 	require.WithinDuration(t, time.Unix(resetAt, 0), repo.rateLimitCalls[0], 2*time.Second)
 }
 
-func TestOpenAIGatewayService_Forward_WSv2ErrorEventForbiddenPersistsTempUnschedulable(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2ErrorEventForbiddenNoRefreshTokenKeepsSchedulable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -271,16 +271,15 @@ func TestOpenAIGatewayService_Forward_WSv2ErrorEventForbiddenPersistsTempUnsched
 		openaiWSPool:     pool,
 	}
 
-	before := time.Now()
 	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, &account, body)
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusForbidden, rec.Code)
 	require.Nil(t, upstream.lastReq, "WS 运行中 403 error event 不应回退到同账号 HTTP")
-	require.Len(t, repo.tempCalls, 1)
+	require.Len(t, repo.tempCalls, 0)
 	require.Len(t, repo.rateLimitCalls, 0)
-	require.WithinDuration(t, before.Add(10*time.Minute), repo.tempCalls[0], 2*time.Second)
+	require.Len(t, repo.errorCalls, 0)
 }
 
 func TestOpenAIGatewayService_Forward_WSv2Handshake429PersistsRateLimit(t *testing.T) {
@@ -355,7 +354,7 @@ func TestOpenAIGatewayService_Forward_WSv2Handshake429PersistsRateLimit(t *testi
 	require.Contains(t, repo.updateExtra[0], "codex_usage_updated_at")
 }
 
-func TestOpenAIGatewayService_Forward_WSv2Handshake403PersistsTempUnschedulable(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2Handshake403NoRefreshTokenKeepsSchedulable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -409,15 +408,15 @@ func TestOpenAIGatewayService_Forward_WSv2Handshake403PersistsTempUnschedulable(
 		openaiWSPool:     pool,
 	}
 
-	before := time.Now()
 	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, &account, body)
 	require.Error(t, err)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusForbidden, rec.Code)
 	require.Nil(t, upstream.lastReq, "WS 握手 403 不应回退到同账号 HTTP")
-	require.Len(t, repo.tempCalls, 1)
-	require.WithinDuration(t, before.Add(10*time.Minute), repo.tempCalls[0], 2*time.Second)
+	require.Len(t, repo.tempCalls, 0)
+	require.Len(t, repo.rateLimitCalls, 0)
+	require.Len(t, repo.errorCalls, 0)
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventUsageLimitPersistsRateLimit(t *testing.T) {
@@ -530,7 +529,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventUsageL
 	}
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_Handshake403PersistsTempUnschedulable(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_Handshake403NoRefreshTokenKeepsSchedulable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := newOpenAIWSV2TestConfig()
@@ -616,7 +615,6 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_Handshake403Pers
 	require.NoError(t, err)
 	defer func() { _ = clientConn.CloseNow() }()
 
-	before := time.Now()
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false}`))
 	cancelWrite()
@@ -625,14 +623,15 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_Handshake403Pers
 	select {
 	case serverErr := <-serverErrCh:
 		require.Error(t, serverErr)
-		require.Len(t, repo.tempCalls, 1)
-		require.WithinDuration(t, before.Add(10*time.Minute), repo.tempCalls[0], 2*time.Second)
+		require.Len(t, repo.tempCalls, 0)
+		require.Len(t, repo.rateLimitCalls, 0)
+		require.Len(t, repo.errorCalls, 0)
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 ingress websocket 结束超时")
 	}
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventForbiddenPersistsTempUnschedulable(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventForbiddenNoRefreshTokenKeepsSchedulable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := newOpenAIWSV2TestConfig()
@@ -721,7 +720,6 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventForbid
 	require.NoError(t, err)
 	defer func() { _ = clientConn.CloseNow() }()
 
-	before := time.Now()
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false}`))
 	cancelWrite()
@@ -730,9 +728,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ErrorEventForbid
 	select {
 	case serverErr := <-serverErrCh:
 		require.Error(t, serverErr)
-		require.Len(t, repo.tempCalls, 1)
+		require.Len(t, repo.tempCalls, 0)
 		require.Len(t, repo.rateLimitCalls, 0)
-		require.WithinDuration(t, before.Add(10*time.Minute), repo.tempCalls[0], 2*time.Second)
+		require.Len(t, repo.errorCalls, 0)
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 ingress websocket 结束超时")
 	}

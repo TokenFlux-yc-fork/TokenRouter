@@ -292,6 +292,22 @@
             </span>
           </template>
 
+          <template #cell-health_status="{ row }">
+            <div class="space-y-0.5 text-xs">
+              <span :class="healthStatusBadgeClass(row)">
+                {{ healthStatusLabel(row) }}
+              </span>
+              <div
+                v-if="row.health_check_enabled"
+                class="text-gray-500 dark:text-gray-400"
+              >
+                F{{ row.health_consecutive_failures || 0 }} / S{{
+                  row.health_consecutive_successes || 0
+                }}
+              </div>
+            </div>
+          </template>
+
           <template #cell-actions="{ row }">
             <div class="flex items-center gap-1">
               <button
@@ -629,6 +645,35 @@
           </p>
         </div>
 
+        <div v-if="createForm.platform === 'openai'" class="grid gap-4 md:grid-cols-2">
+          <div>
+            <label class="input-label">{{
+              t("admin.groups.backupPool.title")
+            }}</label>
+            <Select
+              v-model="createForm.backup_pool_group_id"
+              :options="backupPoolGroupOptions"
+              :placeholder="t('admin.groups.backupPool.noPool')"
+            />
+            <p class="input-hint">{{ t("admin.groups.backupPool.poolHint") }}</p>
+          </div>
+          <div>
+            <label class="input-label">{{
+              t("admin.groups.backupPool.threshold")
+            }}</label>
+            <input
+              v-model.number="createForm.backup_pool_refill_threshold_points"
+              type="number"
+              min="0"
+              step="1"
+              class="input"
+            />
+            <p class="input-hint">
+              {{ t("admin.groups.backupPool.thresholdHint") }}
+            </p>
+          </div>
+        </div>
+
         <div>
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -886,6 +931,58 @@
             </div>
           </div>
         </div>
+
+        <div class="border-t pt-4">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {{ t("admin.groups.health.title") }}
+              </label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t("admin.groups.health.hint") }}
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="createForm.health_check_enabled = !createForm.health_check_enabled"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors',
+                createForm.health_check_enabled
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600',
+              ]"
+            >
+              <span
+                :class="[
+                  'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                  createForm.health_check_enabled ? 'translate-x-6' : 'translate-x-1',
+                ]"
+              />
+            </button>
+          </div>
+          <div
+            v-if="createForm.health_check_enabled"
+            class="grid gap-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-dark-600 dark:bg-dark-800/40 md:grid-cols-2"
+          >
+            <div>
+              <label class="input-label">{{ t("admin.groups.health.interval") }}</label>
+              <input v-model.number="createForm.health_check_interval_sec" type="number" min="10" max="3600" class="input" />
+            </div>
+            <div>
+              <label class="input-label">{{ t("admin.groups.health.timeout") }}</label>
+              <input v-model.number="createForm.health_check_timeout_sec" type="number" min="5" max="60" class="input" />
+            </div>
+            <div>
+              <label class="input-label">{{ t("admin.groups.health.failureThreshold") }}</label>
+              <input v-model.number="createForm.health_check_failure_threshold" type="number" min="1" max="10" class="input" />
+            </div>
+            <div>
+              <label class="input-label">{{ t("admin.groups.health.successThreshold") }}</label>
+              <input v-model.number="createForm.health_check_success_threshold" type="number" min="1" max="10" class="input" />
+            </div>
+          </div>
+        </div>
+
         <!-- 图片生成计费配置 -->
         <div
           v-if="
@@ -2099,6 +2196,35 @@
           </p>
         </div>
 
+        <div v-if="editForm.platform === 'openai'" class="grid gap-4 md:grid-cols-2">
+          <div>
+            <label class="input-label">{{
+              t("admin.groups.backupPool.title")
+            }}</label>
+            <Select
+              v-model="editForm.backup_pool_group_id"
+              :options="backupPoolGroupOptionsForEdit"
+              :placeholder="t('admin.groups.backupPool.noPool')"
+            />
+            <p class="input-hint">{{ t("admin.groups.backupPool.poolHint") }}</p>
+          </div>
+          <div>
+            <label class="input-label">{{
+              t("admin.groups.backupPool.threshold")
+            }}</label>
+            <input
+              v-model.number="editForm.backup_pool_refill_threshold_points"
+              type="number"
+              min="0"
+              step="1"
+              class="input"
+            />
+            <p class="input-hint">
+              {{ t("admin.groups.backupPool.thresholdHint") }}
+            </p>
+          </div>
+        </div>
+
         <div>
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -2360,6 +2486,93 @@
                 class="input"
                 :placeholder="t('admin.groups.availabilityProbe.promptPlaceholder')"
               />
+            </div>
+          </div>
+        </div>
+
+        <div class="border-t pt-4">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {{ t("admin.groups.health.title") }}
+              </label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t("admin.groups.health.hint") }}
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                :disabled="
+                  editingGroup?.status !== 'active' ||
+                  editForm.status !== 'active' ||
+                  !editingGroup?.health_check_enabled ||
+                  !editForm.health_check_enabled ||
+                  manualHealthChecking
+                "
+                @click="handleTriggerManualHealthCheck"
+              >
+                <Icon
+                  name="refresh"
+                  size="sm"
+                  :class="manualHealthChecking ? 'animate-spin' : ''"
+                />
+                {{ t("admin.groups.health.manualCheck") }}
+              </button>
+              <button
+                type="button"
+                @click="editForm.health_check_enabled = !editForm.health_check_enabled"
+                :class="[
+                  'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors',
+                  editForm.health_check_enabled
+                    ? 'bg-primary-500'
+                    : 'bg-gray-300 dark:bg-dark-600',
+                ]"
+              >
+                <span
+                  :class="[
+                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                    editForm.health_check_enabled ? 'translate-x-6' : 'translate-x-1',
+                  ]"
+                />
+              </button>
+            </div>
+          </div>
+          <div class="mb-3 rounded-lg bg-gray-50 p-3 text-xs text-gray-600 dark:bg-dark-800 dark:text-gray-300">
+            <span :class="healthStatusBadgeClass(editingGroup)">
+              {{ healthStatusLabel(editingGroup) }}
+            </span>
+            <span class="ml-2">
+              {{ t("admin.groups.health.counters", {
+                failures: editingGroup?.health_consecutive_failures || 0,
+                successes: editingGroup?.health_consecutive_successes || 0,
+              }) }}
+            </span>
+            <span v-if="editingGroup?.health_last_check_at" class="ml-2">
+              {{ t("admin.groups.health.lastCheck") }}:
+              {{ formatHealthCheckTime(editingGroup.health_last_check_at) }}
+            </span>
+          </div>
+          <div
+            v-if="editForm.health_check_enabled"
+            class="grid gap-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4 dark:border-dark-600 dark:bg-dark-800/40 md:grid-cols-2"
+          >
+            <div>
+              <label class="input-label">{{ t("admin.groups.health.interval") }}</label>
+              <input v-model.number="editForm.health_check_interval_sec" type="number" min="10" max="3600" class="input" />
+            </div>
+            <div>
+              <label class="input-label">{{ t("admin.groups.health.timeout") }}</label>
+              <input v-model.number="editForm.health_check_timeout_sec" type="number" min="5" max="60" class="input" />
+            </div>
+            <div>
+              <label class="input-label">{{ t("admin.groups.health.failureThreshold") }}</label>
+              <input v-model.number="editForm.health_check_failure_threshold" type="number" min="1" max="10" class="input" />
+            </div>
+            <div>
+              <label class="input-label">{{ t("admin.groups.health.successThreshold") }}</label>
+              <input v-model.number="editForm.health_check_success_threshold" type="number" min="1" max="10" class="input" />
             </div>
           </div>
         </div>
@@ -3520,6 +3733,7 @@ const allColumns = computed<Column[]>(() => [
   },
   { key: "usage", label: t("admin.groups.columns.usage"), sortable: false },
   { key: "status", label: t("admin.groups.columns.status"), sortable: true },
+  { key: "health_status", label: t("admin.groups.health.status"), sortable: false },
   { key: "actions", label: t("admin.groups.columns.actions"), sortable: false },
 ]);
 
@@ -3650,9 +3864,9 @@ const fallbackGroupOptions = computed(() => {
 
 // 降级分组选项（编辑时）- 排除自身
 const fallbackGroupOptionsForEdit = computed(() => {
-  const options: { value: number | null; label: string }[] = [
-    { value: null, label: t("admin.groups.claudeCode.noFallback") },
-  ];
+	const options: { value: number | null; label: string }[] = [
+	  { value: null, label: t("admin.groups.claudeCode.noFallback") },
+	];
   const currentId = editingGroup.value?.id;
   const eligibleGroups = groups.value.filter(
     (g) =>
@@ -3664,16 +3878,20 @@ const fallbackGroupOptionsForEdit = computed(() => {
   eligibleGroups.forEach((g) => {
     options.push({ value: g.id, label: g.name });
   });
-  return options;
+	return options;
 });
 
-// 不可用回退分组选项（创建时）：仅允许同平台且启用中的分组。
+const isUnavailableFallbackTargetRoutable = (group: AdminGroup) =>
+  group.status === "active" &&
+  (!group.health_check_enabled || group.health_status !== "unhealthy");
+
+// 不可用回退分组选项（创建时）：仅允许同平台且当前可路由的分组。
 const unavailableFallbackGroupOptions = computed(() => {
   const options: { value: number | null; label: string }[] = [
     { value: null, label: t("admin.groups.unavailableFallback.noFallback") },
   ];
   const eligibleGroups = unavailableFallbackGroups.value.filter(
-    (g) => g.platform === createForm.platform && g.status === "active",
+    (g) => g.platform === createForm.platform && isUnavailableFallbackTargetRoutable(g),
   );
   eligibleGroups.forEach((g) => {
     options.push({ value: g.id, label: g.name });
@@ -3690,6 +3908,38 @@ const unavailableFallbackGroupOptionsForEdit = computed(() => {
   const eligibleGroups = unavailableFallbackGroups.value.filter(
     (g) =>
       g.platform === editForm.platform &&
+      isUnavailableFallbackTargetRoutable(g) &&
+      g.id !== currentId,
+  );
+  eligibleGroups.forEach((g) => {
+    options.push({ value: g.id, label: g.name });
+  });
+  return options;
+});
+
+// OpenAI Codex 备用号池选项（创建时）：仅允许同平台启用中的分组。
+const backupPoolGroupOptions = computed(() => {
+  const options: { value: number | null; label: string }[] = [
+    { value: null, label: t("admin.groups.backupPool.noPool") },
+  ];
+  const eligibleGroups = unavailableFallbackGroups.value.filter(
+    (g) => g.platform === "openai" && g.status === "active",
+  );
+  eligibleGroups.forEach((g) => {
+    options.push({ value: g.id, label: g.name });
+  });
+  return options;
+});
+
+// OpenAI Codex 备用号池选项（编辑时）：排除当前分组。
+const backupPoolGroupOptionsForEdit = computed(() => {
+  const options: { value: number | null; label: string }[] = [
+    { value: null, label: t("admin.groups.backupPool.noPool") },
+  ];
+  const currentId = editingGroup.value?.id;
+  const eligibleGroups = unavailableFallbackGroups.value.filter(
+    (g) =>
+      g.platform === "openai" &&
       g.status === "active" &&
       g.id !== currentId,
   );
@@ -3698,6 +3948,23 @@ const unavailableFallbackGroupOptionsForEdit = computed(() => {
   });
   return options;
 });
+
+const isBackupPoolGroupSelectableForEdit = (
+  backupPoolGroupID: number | null,
+  currentGroupID: number,
+  sourceGroups: AdminGroup[],
+): boolean => {
+  if (backupPoolGroupID === null || backupPoolGroupID <= 0) {
+    return false;
+  }
+  return sourceGroups.some(
+    (g) =>
+      g.id === backupPoolGroupID &&
+      g.platform === "openai" &&
+      g.status === "active" &&
+      g.id !== currentGroupID,
+  );
+};
 
 // 无效请求兜底分组选项（创建时）- 仅包含 anthropic 平台且未配置兜底的分组
 const invalidRequestFallbackOptions = computed(() => {
@@ -3790,7 +4057,7 @@ function addEditCopyAccountsGroup(value: string | number | boolean | null) {
 }
 
 const groups = ref<AdminGroup[]>([]);
-// 不可用回退分组需要跨分页选择，因此单独保存全量 active 分组选项来源。
+// 跨分页分组选择需要单独保存全量 active 分组选项来源。
 const unavailableFallbackGroups = ref<AdminGroup[]>([]);
 const loading = ref(false);
 const usageMap = ref<Map<number, { today_cost: number; total_cost: number }>>(
@@ -3834,6 +4101,7 @@ const showEditModal = ref(false);
 const showDeleteDialog = ref(false);
 const showSortModal = ref(false);
 const submitting = ref(false);
+const manualHealthChecking = ref(false);
 const sortSubmitting = ref(false);
 const editingGroup = ref<AdminGroup | null>(null);
 const deletingGroup = ref<AdminGroup | null>(null);
@@ -3861,6 +4129,32 @@ const createAvailabilityProbeModelOptions = computed(() =>
 const editAvailabilityProbeModelOptions = computed(() =>
   buildAvailabilityProbeModelOptions(getAvailabilityProbeCandidateModels(editModelsListState)),
 );
+
+const healthStatusLabel = (group?: AdminGroup | null) => {
+  if (!group?.health_check_enabled) {
+    return t("admin.groups.health.disabled");
+  }
+  const status = group.health_status || "unknown";
+  return t(`admin.groups.health.statuses.${status}`);
+};
+
+const healthStatusBadgeClass = (group?: AdminGroup | null) => {
+  if (!group?.health_check_enabled) return "badge badge-gray";
+  switch (group.health_status) {
+    case "healthy":
+      return "badge badge-success";
+    case "unhealthy":
+      return "badge badge-danger";
+    default:
+      return "badge badge-warning";
+  }
+};
+
+const formatHealthCheckTime = (value?: string | null) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+};
 
 const createForm = reactive({
   name: "",
@@ -3893,6 +4187,9 @@ const createForm = reactive({
   fallback_group_id_on_invalid_request: null as number | null,
   // 分组不可用时优先使用的指定回退分组。
   unavailable_fallback_group_id: null as number | null,
+  // OpenAI Codex 备用号池自动补充配置。
+  backup_pool_group_id: null as number | null,
+  backup_pool_refill_threshold_points: 0,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
   opus_mapped_model: createMessagesDispatchDefaults.opus_mapped_model,
@@ -3919,6 +4216,12 @@ const createForm = reactive({
   availability_probe_interval_minutes: 30,
   availability_probe_timeout_seconds: 30,
   availability_probe_user_agent: "",
+  // 分组健康检查 / 熔断配置
+  health_check_enabled: false,
+  health_check_interval_sec: 60,
+  health_check_timeout_sec: 10,
+  health_check_failure_threshold: 3,
+  health_check_success_threshold: 2,
 });
 
 // 简单账号类型（用于模型路由选择）
@@ -4198,6 +4501,17 @@ const resetAvailabilityProbeFormState = (
   form.availability_probe_user_agent = config?.user_agent ?? "";
 };
 
+const resetHealthCheckFormState = (
+  form: typeof createForm | typeof editForm,
+  group?: AdminGroup | null,
+) => {
+  form.health_check_enabled = group?.health_check_enabled ?? false;
+  form.health_check_interval_sec = group?.health_check_interval_sec ?? 60;
+  form.health_check_timeout_sec = group?.health_check_timeout_sec ?? 10;
+  form.health_check_failure_threshold = group?.health_check_failure_threshold ?? 3;
+  form.health_check_success_threshold = group?.health_check_success_threshold ?? 2;
+};
+
 const buildAvailabilityProbeConfig = (
   form: typeof createForm | typeof editForm,
 ): GroupAvailabilityProbeConfig => {
@@ -4302,6 +4616,9 @@ const editForm = reactive({
   fallback_group_id_on_invalid_request: null as number | null,
   // 分组不可用时优先使用的指定回退分组。
   unavailable_fallback_group_id: null as number | null,
+  // OpenAI Codex 备用号池自动补充配置。
+  backup_pool_group_id: null as number | null,
+  backup_pool_refill_threshold_points: 0,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
   default_mapped_model: '',
@@ -4329,6 +4646,12 @@ const editForm = reactive({
   availability_probe_interval_minutes: 30,
   availability_probe_timeout_seconds: 30,
   availability_probe_user_agent: "",
+  // 分组健康检查 / 熔断配置
+  health_check_enabled: false,
+  health_check_interval_sec: 60,
+  health_check_timeout_sec: 10,
+  health_check_failure_threshold: 3,
+  health_check_success_threshold: 2,
 });
 
 type ImagePricingFormState = {
@@ -4452,11 +4775,14 @@ const loadGroups = async () => {
   }
 };
 
-const loadUnavailableFallbackGroups = async () => {
+const loadUnavailableFallbackGroups = async (): Promise<AdminGroup[] | null> => {
   try {
-    unavailableFallbackGroups.value = await adminAPI.groups.getAll();
+    const activeGroups = await adminAPI.groups.getAll();
+    unavailableFallbackGroups.value = activeGroups;
+    return activeGroups;
   } catch (error) {
     console.error("Error loading unavailable fallback groups:", error);
+    return null;
   }
 };
 
@@ -4596,6 +4922,8 @@ const closeCreateModal = () => {
   createForm.fallback_group_id = null;
   createForm.fallback_group_id_on_invalid_request = null;
   createForm.unavailable_fallback_group_id = null;
+  createForm.backup_pool_group_id = null;
+  createForm.backup_pool_refill_threshold_points = 0;
   resetMessagesDispatchFormState(createForm);
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
@@ -4604,6 +4932,7 @@ const closeCreateModal = () => {
   createForm.copy_accounts_from_group_ids = [];
   createForm.rpm_limit = 0;
   resetAvailabilityProbeFormState(createForm);
+  resetHealthCheckFormState(createForm);
   resetModelsListState(createModelsListState);
   createModelRoutingRules.value = [];
 };
@@ -4618,18 +4947,61 @@ const normalizeImageRateMultiplier = (
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
 };
 
+const normalizeBackupPoolThreshold = (
+  backupPoolGroupID: number | null,
+  value: number | string | null | undefined,
+): number => {
+  if (backupPoolGroupID === null || backupPoolGroupID <= 0) {
+    return 0;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const validateBackupPoolSettings = (
+  platform: GroupPlatform,
+  backupPoolGroupID: number | null,
+  threshold: number | string | null | undefined,
+): boolean => {
+  if (platform !== "openai" || backupPoolGroupID === null || backupPoolGroupID <= 0) {
+    return true;
+  }
+  if (normalizeBackupPoolThreshold(backupPoolGroupID, threshold) <= 0) {
+    appStore.showError(t("admin.groups.backupPool.thresholdRequired"));
+    return false;
+  }
+  return true;
+};
+
 const handleCreateGroup = async () => {
   if (!createForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
     return;
   }
+  if (
+    !validateBackupPoolSettings(
+      createForm.platform,
+      createForm.backup_pool_group_id,
+      createForm.backup_pool_refill_threshold_points,
+    )
+  ) {
+    return;
+  }
   submitting.value = true;
   try {
     const availabilityProbeConfig = buildAvailabilityProbeConfig(createForm);
+    const backupPoolThreshold = normalizeBackupPoolThreshold(
+      createForm.backup_pool_group_id,
+      createForm.backup_pool_refill_threshold_points,
+    );
     // 构建请求数据，包含模型路由配置
     const requestData = {
       ...createForm,
       display_brand: normalizeDisplayBrand(createForm.display_brand),
+      backup_pool_group_id:
+        createForm.platform === "openai" ? createForm.backup_pool_group_id : null,
+      backup_pool_refill_threshold_points:
+        createForm.platform === "openai" ? backupPoolThreshold : 0,
       model_routing: convertRoutingRulesToApiFormat(
         createModelRoutingRules.value,
       ),
@@ -4676,7 +5048,10 @@ const handleCreateGroup = async () => {
     }
   } catch (error: any) {
     appStore.showError(
-      error.response?.data?.detail || error.message || t("admin.groups.failedToCreate"),
+      error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error.message ||
+        t("admin.groups.failedToCreate"),
     );
     console.error("Error creating group:", error);
     // Don't advance tour on error
@@ -4686,6 +5061,8 @@ const handleCreateGroup = async () => {
 };
 
 const handleEdit = async (group: AdminGroup) => {
+  const refreshedActiveGroups = await loadUnavailableFallbackGroups();
+  const activeGroups = refreshedActiveGroups ?? unavailableFallbackGroups.value;
   editingGroup.value = group;
   editForm.name = group.name;
   editForm.description = group.description || "";
@@ -4715,6 +5092,23 @@ const handleEdit = async (group: AdminGroup) => {
     group.fallback_group_id_on_invalid_request;
   editForm.unavailable_fallback_group_id =
     group.unavailable_fallback_group_id;
+  if (
+    group.platform === "openai" &&
+    group.backup_pool_refill_threshold_points > 0 &&
+    (refreshedActiveGroups === null ||
+      isBackupPoolGroupSelectableForEdit(
+        group.backup_pool_group_id,
+        group.id,
+        activeGroups,
+      ))
+  ) {
+    editForm.backup_pool_group_id = group.backup_pool_group_id;
+    editForm.backup_pool_refill_threshold_points =
+      group.backup_pool_refill_threshold_points ?? 0;
+  } else {
+    editForm.backup_pool_group_id = null;
+    editForm.backup_pool_refill_threshold_points = 0;
+  }
   const messagesDispatchFormState = messagesDispatchConfigToFormState(
     group.messages_dispatch_model_config,
   );
@@ -4738,6 +5132,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.copy_accounts_from_group_ids = []; // 复制账号字段每次编辑时重置为空
   editForm.rpm_limit = group.rpm_limit ?? 0;
   resetAvailabilityProbeFormState(editForm, group.availability_probe_config);
+  resetHealthCheckFormState(editForm, group);
   resetModelsListState(editModelsListState, group.models_list_config);
   // 加载模型路由规则（异步加载账号名称）
   editModelRoutingRules.value = await convertApiFormatToRoutingRules(
@@ -4759,13 +5154,15 @@ const closeEditModal = () => {
   editForm.data_sharing_enabled = false;
   editForm.session_isolation_enabled = false;
   editForm.unavailable_fallback_group_id = null;
+  editForm.backup_pool_group_id = null;
+  editForm.backup_pool_refill_threshold_points = 0;
   editForm.copy_accounts_from_group_ids = [];
   resetAvailabilityProbeFormState(editForm);
   editForm.peak_rate_enabled = false;
   editForm.peak_start = "";
   editForm.peak_end = "";
   editForm.peak_rate_multiplier = 1.0;
-  resetAvailabilityProbeFormState(editForm);
+  resetHealthCheckFormState(editForm);
   resetMessagesDispatchFormState(editForm);
   resetModelsListState(editModelsListState);
 };
@@ -4776,10 +5173,23 @@ const handleUpdateGroup = async () => {
     appStore.showError(t("admin.groups.nameRequired"));
     return;
   }
+  if (
+    !validateBackupPoolSettings(
+      editForm.platform,
+      editForm.backup_pool_group_id,
+      editForm.backup_pool_refill_threshold_points,
+    )
+  ) {
+    return;
+  }
 
   submitting.value = true;
   try {
     const availabilityProbeConfig = buildAvailabilityProbeConfig(editForm);
+    const backupPoolThreshold = normalizeBackupPoolThreshold(
+      editForm.backup_pool_group_id,
+      editForm.backup_pool_refill_threshold_points,
+    );
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,
@@ -4794,6 +5204,12 @@ const handleUpdateGroup = async () => {
         editForm.unavailable_fallback_group_id === null
           ? 0
           : editForm.unavailable_fallback_group_id,
+      backup_pool_group_id:
+        editForm.platform === "openai" && editForm.backup_pool_group_id !== null
+          ? editForm.backup_pool_group_id
+          : 0,
+      backup_pool_refill_threshold_points:
+        editForm.platform === "openai" ? backupPoolThreshold : 0,
       model_routing: convertRoutingRulesToApiFormat(
         editModelRoutingRules.value,
       ),
@@ -4836,11 +5252,30 @@ const handleUpdateGroup = async () => {
     loadUnavailableFallbackGroups();
   } catch (error: any) {
     appStore.showError(
-      error.response?.data?.detail || error.message || t("admin.groups.failedToUpdate"),
+      error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error.message ||
+        t("admin.groups.failedToUpdate"),
     );
     console.error("Error updating group:", error);
   } finally {
     submitting.value = false;
+  }
+};
+
+const handleTriggerManualHealthCheck = async () => {
+  if (!editingGroup.value) return;
+  manualHealthChecking.value = true;
+  try {
+    await adminAPI.groups.triggerManualCheck(editingGroup.value.id);
+    appStore.showSuccess(t("admin.groups.health.manualCheckTriggered"));
+    loadGroups();
+  } catch (error: any) {
+    appStore.showError(
+      error.response?.data?.detail || error.message || t("admin.groups.health.manualCheckFailed"),
+    );
+  } finally {
+    manualHealthChecking.value = false;
   }
 };
 
@@ -4895,7 +5330,9 @@ const confirmDelete = async () => {
     loadUnavailableFallbackGroups();
   } catch (error: any) {
     appStore.showError(
-      error.response?.data?.detail || t("admin.groups.failedToDelete"),
+      error.response?.data?.detail ||
+        error.response?.data?.message ||
+        t("admin.groups.failedToDelete"),
     );
     console.error("Error deleting group:", error);
   }
@@ -4919,6 +5356,8 @@ watch(
     }
     if (newVal !== "openai") {
       resetMessagesDispatchFormState(createForm);
+      createForm.backup_pool_group_id = null;
+      createForm.backup_pool_refill_threshold_points = 0;
     }
     if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
       createForm.require_oauth_only = false;
@@ -4966,7 +5405,7 @@ watch(
         (g) =>
           g.id === editForm.unavailable_fallback_group_id &&
           g.platform === newVal &&
-          g.status === "active",
+          isUnavailableFallbackTargetRoutable(g),
       )
     ) {
       editForm.unavailable_fallback_group_id = null;
@@ -4976,6 +5415,20 @@ watch(
     }
     if (newVal !== "openai") {
       resetMessagesDispatchFormState(editForm);
+      editForm.default_mapped_model = "";
+      editForm.backup_pool_group_id = null;
+      editForm.backup_pool_refill_threshold_points = 0;
+    } else if (
+      editForm.backup_pool_group_id &&
+      !unavailableFallbackGroups.value.some(
+        (g) =>
+          g.id === editForm.backup_pool_group_id &&
+          g.platform === "openai" &&
+          g.status === "active" &&
+          g.id !== editingGroup.value?.id,
+      )
+    ) {
+      editForm.backup_pool_group_id = null;
     }
     if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
       editForm.require_oauth_only = false;
@@ -4987,19 +5440,6 @@ watch(
     }
   },
 );
-
-watch(
-  () => editForm.platform,
-  (newVal) => {
-    if (!['anthropic', 'antigravity'].includes(newVal)) {
-      editForm.fallback_group_id_on_invalid_request = null
-    }
-    if (newVal !== 'openai') {
-      editForm.allow_messages_dispatch = false
-      editForm.default_mapped_model = ''
-    }
-  }
-)
 
 // 点击外部关闭账号搜索下拉框
 const handleClickOutside = (event: MouseEvent) => {
@@ -5052,7 +5492,9 @@ const saveSortOrder = async () => {
     loadUnavailableFallbackGroups();
   } catch (error: any) {
     appStore.showError(
-      error.response?.data?.detail || t("admin.groups.failedToUpdateSortOrder"),
+      error.response?.data?.detail ||
+        error.response?.data?.message ||
+        t("admin.groups.failedToUpdateSortOrder"),
     );
     console.error("Error updating sort order:", error);
   } finally {

@@ -176,6 +176,119 @@ func TestOpenAIWSHTTPBridgeRelaysSSEFramesAsWebSocketMessages(t *testing.T) {
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 }
 
+func TestOpenAIWSHTTPBridgeHTTPErrorRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"upstream overloaded"}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:              &config.Config{},
+		httpUpstream:     upstream,
+		rateLimitService: rateLimitService,
+	}
+	account := &Account{
+		ID:          7,
+		Name:        "upstream",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeUpstream,
+		Concurrency: 1,
+		Status:      StatusActive,
+	}
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/ws", nil)
+	var downstream [][]byte
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(),
+		ginCtx,
+		account,
+		"sk-test",
+		[]byte(`{"type":"response.create","generate":true,"model":"gpt-5","stream":true,"input":"hi"}`),
+		1,
+		"gpt-5",
+		"",
+		"",
+		"",
+		1,
+		func(message []byte) error {
+			downstream = append(downstream, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Len(t, downstream, 1)
+	require.Equal(t, "error", gjson.GetBytes(downstream[0], "type").String())
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
+}
+
+func TestOpenAIWSHTTPBridgeErrorEventRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rateLimitService, accountRepo := newPassiveAccountCircuitBreakerRateLimitService()
+	sseBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_bridge_error","model":"gpt-5"}}`,
+		"",
+		`data: {"type":"error","error":{"code":"server_error","type":"server_error","message":"upstream exploded"}}`,
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(sseBody)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:              &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:     upstream,
+		rateLimitService: rateLimitService,
+	}
+	account := &Account{
+		ID:          8,
+		Name:        "upstream",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeUpstream,
+		Concurrency: 1,
+		Status:      StatusActive,
+	}
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/ws", nil)
+	var downstream [][]byte
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(),
+		ginCtx,
+		account,
+		"sk-test",
+		[]byte(`{"type":"response.create","generate":true,"model":"gpt-5","stream":true,"input":"hi"}`),
+		1,
+		"gpt-5",
+		"",
+		"",
+		"",
+		1,
+		func(message []byte) error {
+			downstream = append(downstream, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "resp_bridge_error", result.RequestID)
+	require.Len(t, downstream, 2)
+	require.Equal(t, "error", gjson.GetBytes(downstream[1], "type").String())
+	requireSinglePassiveAccountCircuitBreaker(t, accountRepo, account.ID)
+}
+
 func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

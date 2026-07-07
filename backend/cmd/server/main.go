@@ -154,6 +154,13 @@ func runMainServer() {
 	}
 	defer app.Cleanup()
 
+	// 启动健康检查器（从 wire 注入的实例）
+	// 注意：healthChecker 需要从 wire 中注入，这里先注释等待后续完善
+	// go func() {
+	// 	log.Println("Starting health checker...")
+	// 	healthChecker.Start(context.Background())
+	// }()
+
 	// 启动服务器
 	go func() {
 		if err := app.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

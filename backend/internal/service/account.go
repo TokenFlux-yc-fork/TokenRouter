@@ -1102,6 +1102,16 @@ func (a *Account) IsPoolMode() bool {
 	return false
 }
 
+// IsUpstreamPoolHealthTarget reports whether failures on this account should
+// trigger upstream-pool account scheduling cooldowns. It intentionally excludes
+// ordinary OAuth/API-key accounts unless pool_mode is enabled.
+func (a *Account) IsUpstreamPoolHealthTarget() bool {
+	if a == nil {
+		return false
+	}
+	return a.Type == AccountTypeUpstream || a.IsPoolMode()
+}
+
 const (
 	defaultPoolModeRetryCount = 3
 	maxPoolModeRetryCount     = 10

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,12 +34,15 @@ import (
 // sseDataPrefix matches SSE data lines with optional whitespace after colon.
 // Some upstream APIs return non-standard "data:" without space (should be "data: ").
 var sseDataPrefix = regexp.MustCompile(`^data:\s*`)
+var accountTestHTTPStatusPattern = regexp.MustCompile(`(?i)(?:api returned|returned|failed with status)\s+([1-5][0-9][0-9])`)
 
 const (
 	testClaudeAPIURL      = "https://api.anthropic.com/v1/messages?beta=true"
 	chatgptCodexAPIURL    = "https://chatgpt.com/backend-api/codex/responses"
 	defaultQoderTestModel = "auto"
 )
+
+const accountTestActiveRetryDelay = 500 * time.Millisecond
 
 type accountTestContextKey string
 
@@ -696,11 +700,11 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode == http.StatusTooManyRequests {
+		if resp.StatusCode == http.StatusTooManyRequests && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
 		// 401 Unauthorized: 标记账号为永久错误
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -841,10 +845,10 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode == http.StatusTooManyRequests {
+		if resp.StatusCode == http.StatusTooManyRequests && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
 			errMsg := fmt.Sprintf("Chat Completions authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -949,13 +953,13 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 			mergeAccountExtra(account, updates)
 		}
 		// 探测如返回 429,主动同步限流状态,避免后续短时间内继续选中。
-		if resp.StatusCode == http.StatusTooManyRequests {
+		if resp.StatusCode == http.StatusTooManyRequests && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
+		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
@@ -2031,6 +2035,44 @@ func (s *AccountTestService) RunTestBackgroundWithPromptAndUserAgent(ctx context
 	startedAt := time.Now()
 	ctx = withAccountTestUserAgent(ctx, userAgent)
 
+	var retryAccount *Account
+	if s != nil && s.accountRepo != nil {
+		if account, err := s.accountRepo.GetByID(ctx, accountID); err == nil {
+			retryAccount = account
+		}
+	}
+
+	maxRetries := 0
+	if retryAccount != nil && retryAccount.IsPoolMode() {
+		maxRetries = retryAccount.GetPoolModeRetryCount()
+	}
+
+	var lastResult *ScheduledTestResult
+	for attempt := 0; ; attempt++ {
+		result := s.runTestBackgroundOnce(ctx, accountID, modelID, prompt, startedAt)
+		lastResult = result
+		if result.Status == "success" {
+			return result, nil
+		}
+
+		statusCode, retryable := shouldRetryPoolModeAccountTest(retryAccount, result.ErrorMessage)
+		if !retryable || attempt >= maxRetries {
+			if attempt > 0 && result.ErrorMessage != "" {
+				result.ErrorMessage = fmt.Sprintf("%s (active retry exhausted after %d retry attempt(s))", result.ErrorMessage, attempt)
+			}
+			return result, nil
+		}
+
+		log.Printf("Account test active retry: account=%d status=%d retry=%d/%d", accountID, statusCode, attempt+1, maxRetries)
+		select {
+		case <-ctx.Done():
+			return failedScheduledTestResult(startedAt, ctx.Err().Error(), lastResult), nil
+		case <-time.After(accountTestActiveRetryDelay):
+		}
+	}
+}
+
+func (s *AccountTestService) runTestBackgroundOnce(ctx context.Context, accountID int64, modelID string, prompt string, startedAt time.Time) *ScheduledTestResult {
 	w := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(w)
 	ginCtx.Request = (&http.Request{}).WithContext(ctx)
@@ -2056,7 +2098,34 @@ func (s *AccountTestService) RunTestBackgroundWithPromptAndUserAgent(ctx context
 		LatencyMs:    finishedAt.Sub(startedAt).Milliseconds(),
 		StartedAt:    startedAt,
 		FinishedAt:   finishedAt,
-	}, nil
+	}
+}
+
+func shouldRetryPoolModeAccountTest(account *Account, errorMessage string) (int, bool) {
+	if account == nil || !account.IsPoolMode() {
+		return 0, false
+	}
+	statusCode, ok := extractAccountTestHTTPStatus(errorMessage)
+	if !ok {
+		return 0, false
+	}
+	return statusCode, account.IsPoolModeRetryableStatus(statusCode)
+}
+
+func shouldDeferPoolModeAccountTestState(account *Account, statusCode int) bool {
+	return account != nil && account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode)
+}
+
+func extractAccountTestHTTPStatus(message string) (int, bool) {
+	match := accountTestHTTPStatusPattern.FindStringSubmatch(message)
+	if len(match) != 2 {
+		return 0, false
+	}
+	statusCode, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0, false
+	}
+	return statusCode, true
 }
 
 // parseTestSSEOutput extracts response text and error message from captured SSE output.

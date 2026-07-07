@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 18 // v18：认证快照包含分组高峰倍率字段
+const apiKeyAuthSnapshotVersion = 19 // v19：认证快照包含分组高峰倍率与健康状态字段
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -240,8 +240,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		},
 	}
 
-	// 填充 (user, group) RPM override —— 仅对可用分组预取，避免停用分组的 override 进入认证快照。
-	if apiKey.GroupID != nil && *apiKey.GroupID > 0 && apiKey.Group != nil && apiKey.Group.IsActive() && s.userGroupRateRepo != nil {
+	// 填充 (user, group) RPM override —— 仅对可路由分组预取，避免停用分组的 override 进入认证快照。
+	if apiKey.GroupID != nil && *apiKey.GroupID > 0 && apiKey.Group != nil && apiKey.Group.IsRoutable() && s.userGroupRateRepo != nil {
 		override, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, apiKey.UserID, *apiKey.GroupID)
 		if err == nil && override != nil {
 			snapshot.User.UserGroupRPMOverride = override
@@ -276,6 +276,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			DefaultMappedModel:              apiKey.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     apiKey.Group.MessagesDispatchModelConfig,
 			ModelsListConfig:                apiKey.Group.ModelsListConfig,
+			HealthCheckEnabled:              apiKey.Group.HealthCheckEnabled,
+			HealthStatus:                    apiKey.Group.HealthStatus,
 			RPMLimit:                        apiKey.Group.RPMLimit,
 			PeakRateEnabled:                 apiKey.Group.PeakRateEnabled,
 			PeakStart:                       apiKey.Group.PeakStart,
@@ -355,6 +357,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			DefaultMappedModel:              snapshot.Group.DefaultMappedModel,
 			MessagesDispatchModelConfig:     snapshot.Group.MessagesDispatchModelConfig,
 			ModelsListConfig:                snapshot.Group.ModelsListConfig,
+			HealthCheckEnabled:              snapshot.Group.HealthCheckEnabled,
+			HealthStatus:                    snapshot.Group.HealthStatus,
 			RPMLimit:                        snapshot.Group.RPMLimit,
 			PeakRateEnabled:                 snapshot.Group.PeakRateEnabled,
 			PeakStart:                       snapshot.Group.PeakStart,

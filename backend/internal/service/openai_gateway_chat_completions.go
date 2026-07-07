@@ -625,7 +625,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				cyberPolicyErr = errOpenAICyberPolicyForwarded
 				return true
 			}
-			if openAIStreamFailedEventShouldFailover(payloadBytes, message) {
+			if !openAIStreamClientOutputStarted(c, clientOutputStarted) && openAIStreamFailedEventShouldFailover(payloadBytes, message) {
 				streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
 				return true
 			}
@@ -637,7 +637,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				},
 			})
 			if !clientDisconnected {
-				if !clientOutputStarted {
+				if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
 					writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", message)
 					clientOutputStarted = true
 				} else if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", errorPayload); err != nil {

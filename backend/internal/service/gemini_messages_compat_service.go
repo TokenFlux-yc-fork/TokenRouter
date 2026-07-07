@@ -812,6 +812,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -968,6 +971,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		if s.rateLimitService != nil {
 			switch s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody) {
 			case ErrorPolicySkipped:
+				s.rateLimitService.recordPassiveAccountFailure(ctx, account, resp.StatusCode, respBody)
 				upstreamReqID := resp.Header.Get(requestIDHeader)
 				if upstreamReqID == "" {
 					upstreamReqID = resp.Header.Get("x-goog-request-id")
@@ -1343,6 +1347,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -1486,6 +1493,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		if s.rateLimitService != nil {
 			switch s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody) {
 			case ErrorPolicySkipped:
+				s.rateLimitService.recordPassiveAccountFailure(ctx, account, resp.StatusCode, respBody)
 				respBody = unwrapIfNeeded(isOAuth, respBody)
 				contentType := resp.Header.Get("Content-Type")
 				if contentType == "" {
@@ -2758,6 +2766,9 @@ func (s *GeminiMessagesCompatService) ForwardAIStudioGET(ctx context.Context, ac
 
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
+		if s.rateLimitService != nil {
+			s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -2903,6 +2914,9 @@ func asInt(v any) (int, bool) {
 }
 
 func (s *GeminiMessagesCompatService) handleGeminiUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, body []byte) {
+	if s.rateLimitService != nil && shouldRecordGeminiPassiveAccountBeforeLocalHandling(statusCode) {
+		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
+	}
 	// 遵守自定义错误码策略：未命中则跳过所有限流处理
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return
@@ -2956,6 +2970,13 @@ func (s *GeminiMessagesCompatService) handleGeminiUpstreamError(ctx context.Cont
 	_ = s.accountRepo.SetRateLimited(ctx, account.ID, resetTime)
 	logger.LegacyPrintf("service.gemini_messages_compat", "[Gemini 429] Account %d rate limited until %v (oauth_type=%s, tier=%s)",
 		account.ID, resetTime, oauthType, tierID)
+}
+
+func shouldRecordGeminiPassiveAccountBeforeLocalHandling(statusCode int) bool {
+	if statusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return statusCode >= http.StatusInternalServerError && statusCode != 529
 }
 
 // ParseGeminiRateLimitResetTime 解析 Gemini 格式的 429 响应，返回重置时间的 Unix 时间戳

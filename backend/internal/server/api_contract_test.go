@@ -372,6 +372,17 @@ func TestAPIContracts(t *testing.T) {
 						"allow_messages_dispatch": false,
 						"data_sharing_enabled": false,
 						"session_isolation_enabled": false,
+						"health_check_enabled": false,
+						"health_check_interval_sec": 0,
+						"health_check_timeout_sec": 0,
+						"health_check_failure_threshold": 0,
+						"health_check_success_threshold": 0,
+						"health_last_check_at": null,
+						"health_consecutive_failures": 0,
+						"health_consecutive_successes": 0,
+						"health_status": "",
+						"backup_pool_group_id": null,
+						"backup_pool_refill_threshold_points": 0,
 						"fallback_group_id": null,
 						"fallback_group_id_on_invalid_request": null,
 						"unavailable_fallback_group_id": null,
@@ -1872,6 +1883,21 @@ func (stubGroupRepo) GetAccountIDsByGroupIDs(ctx context.Context, groupIDs []int
 }
 
 func (stubGroupRepo) UpdateSortOrders(ctx context.Context, updates []service.GroupSortOrderUpdate) error {
+	return nil
+}
+func (stubGroupRepo) FindByHealthCheckEnabled(ctx context.Context, enabled bool) ([]*service.Group, error) {
+	return nil, nil
+}
+func (stubGroupRepo) UpdateHealthStatus(ctx context.Context, groupID int64, update *service.HealthStatusUpdate) error {
+	return nil
+}
+func (stubGroupRepo) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *service.HealthCheckConfigUpdate) error {
+	return nil
+}
+func (stubGroupRepo) UpdateGroupStatus(ctx context.Context, groupID int64, status string) error {
+	return nil
+}
+func (stubGroupRepo) ForceHealthCheck(ctx context.Context, groupID int64) error {
 	return nil
 }
 
