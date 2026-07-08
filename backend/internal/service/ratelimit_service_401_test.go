@@ -351,6 +351,36 @@ func TestRateLimitService_HandleUpstreamError_OpenAIOAuth401NoRefreshTokenKeepsS
 	})
 }
 
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth401NoMatchingRuleKeepsSchedulableWithRefreshToken(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	invalidator := &tokenCacheInvalidatorRecorder{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetTokenCacheInvalidator(invalidator)
+	account := &Account{
+		ID:       4792,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "at",
+			"refresh_token": "rt",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusUnauthorized,
+		http.Header{},
+		[]byte(`{"error":{"message":"Unauthorized","type":"rejected_by_access_enforcement","code":"no_matching_rule","param":null},"status":401}`),
+	)
+
+	require.True(t, shouldDisable, "当前请求应 failover，但账号状态不能被写坏")
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+	require.Empty(t, invalidator.accounts, "no_matching_rule 不是 token 过期，不应触发刷新/失效缓存")
+}
+
 func TestRateLimitService_HandleUpstreamError_OpenAIOAuth401FilteredRefreshTokenStillTempUnschedulable(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{
 		mockAccountRepoForGemini: mockAccountRepoForGemini{

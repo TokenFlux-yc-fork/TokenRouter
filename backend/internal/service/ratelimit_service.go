@@ -258,6 +258,21 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			shouldDisable = true
 			break
 		}
+		// OpenAI access enforcement 的 no_matching_rule 不是账号凭据失效。
+		// 生产现象: /v1/responses/input_tokens 会对仍可正常处理 /v1/responses 的 ChatGPT Plus
+		// OAuth 账号返回 401 rejected_by_access_enforcement/no_matching_rule；如果这里按普通 OAuth
+		// 401 写 temp_unschedulable，会把可用账号临时踢出调度池。此类错误只对当前请求 failover，
+		// 不刷新/失效 token cache，也不写账号状态。
+		if authAccount.IsOpenAIOAuth() && isOpenAITransientAccessEnforcement401(responseBody) {
+			slog.Info(
+				"openai_oauth_401_access_enforcement_state_skipped",
+				"account_id", authAccount.ID,
+				"code", openai401Code,
+				"error_type", extractUpstreamErrorType(responseBody),
+			)
+			shouldDisable = true
+			break
+		}
 		// OpenAI access-token-only OAuth（没有 refresh_token）由外部会话/导入链路维护 token。
 		// 401 只能说明本次请求使用的 bearer 被上游拒绝，不能通过本服务自愈；因此只让当前请求
 		// failover，并清掉 access token 缓存，不能写入 temp_unschedulable 或 SetError，避免把账号
@@ -382,6 +397,33 @@ func isOpenAIOAuthAccessTokenOnly(account *Account) bool {
 	}
 	return strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" &&
 		strings.TrimSpace(account.GetOpenAIAccessToken()) != ""
+}
+
+func isOpenAITransientAccessEnforcement401(body []byte) bool {
+	code := strings.TrimSpace(extractUpstreamErrorCode(body))
+	if code == "no_matching_rule" {
+		return true
+	}
+	errorType := extractUpstreamErrorType(body)
+	if errorType != "rejected_by_access_enforcement" {
+		return false
+	}
+	msg := strings.TrimSpace(extractUpstreamErrorMessage(body))
+	return strings.EqualFold(msg, "Unauthorized")
+}
+
+func extractUpstreamErrorType(body []byte) string {
+	for _, path := range []string{
+		"error.type",
+		"response.error.type",
+		"response.status_details.error.type",
+		"type",
+	} {
+		if typ := strings.TrimSpace(gjson.GetBytes(body, path).String()); typ != "" {
+			return typ
+		}
+	}
+	return ""
 }
 
 func resolveOpenAIOAuthAccountForTokenState(ctx context.Context, repo AccountRepository, account *Account) *Account {

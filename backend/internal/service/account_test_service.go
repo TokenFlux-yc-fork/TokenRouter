@@ -1018,11 +1018,15 @@ func (s *AccountTestService) shouldSkipOpenAIAccountTest401State(ctx context.Con
 		return false
 	}
 	account = resolveOpenAIOAuthAccountForTokenState(ctx, s.accountRepo, account)
-	if !isOpenAIOAuthAccessTokenOnly(account) {
-		return false
-	}
 	code := extractUpstreamErrorCode(body)
 	if code == "token_invalidated" || code == "token_revoked" {
+		return false
+	}
+	if account.IsOpenAIOAuth() && isOpenAITransientAccessEnforcement401(body) {
+		log.Printf("OpenAI account test 401 skipped state update for access-enforcement response: account=%d code=%s", account.ID, code)
+		return true
+	}
+	if !isOpenAIOAuthAccessTokenOnly(account) {
 		return false
 	}
 	log.Printf("OpenAI account test 401 skipped state update for no-refresh-token account: account=%d code=%s", account.ID, code)

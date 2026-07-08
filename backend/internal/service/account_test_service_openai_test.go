@@ -511,6 +511,40 @@ func TestAccountTestService_OpenAI401NoRefreshTokenKeepsSchedulable(t *testing.T
 	require.True(t, account.Schedulable)
 }
 
+func TestAccountTestService_OpenAI401NoMatchingRuleWithRefreshTokenKeepsSchedulable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusUnauthorized, `{
+		"error":{"message":"Unauthorized","type":"rejected_by_access_enforcement","code":"no_matching_rule","param":null},
+		"status":401
+	}`)
+
+	repo := &openAIAccountTestRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+	account := &Account{
+		ID:          183,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":  "test-token",
+			"refresh_token": "refresh-token",
+		},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+
+	require.Error(t, err)
+	require.Zero(t, repo.setErrorID, "OpenAI OAuth account test 401 no_matching_rule must not mark account error even with refresh_token")
+	require.Empty(t, repo.setErrorMsg)
+	require.Equal(t, StatusActive, account.Status)
+	require.True(t, account.Schedulable)
+}
+
 func TestAccountTestService_OpenAI401PersonalAccessTokenKeepsSchedulable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
