@@ -125,6 +125,40 @@ func TestOpenAIRuntimeBlock_SkipsNoRefreshOAuth401(t *testing.T) {
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "no-rt 账号不能被运行时临时剔除调度池")
 }
 
+func TestOpenAIRuntimeBlock_SkipsNoRefreshOAuth401FromFilteredSnapshot(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{
+				49: &Account{
+					ID:       49,
+					Platform: PlatformOpenAI,
+					Type:     AccountTypeOAuth,
+					Credentials: map[string]any{
+						"access_token": "db-access-token",
+					},
+				},
+			},
+		},
+	}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{
+		accountRepo:      repo,
+		rateLimitService: rateLimitService,
+	}
+	account := &Account{
+		ID:          49,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{},
+	}
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusUnauthorized, http.Header{}, []byte("unauthorized"))
+
+	require.True(t, shouldDisable, "当前请求仍应 failover")
+	require.Equal(t, 0, repo.tempCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "过滤后的调度快照也不能让 no-rt 账号被运行时剔除")
+}
+
 func TestOpenAIRuntimeBlock_DoesNotShortenExistingBlock(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 46, Platform: PlatformOpenAI, Type: AccountTypeOAuth}

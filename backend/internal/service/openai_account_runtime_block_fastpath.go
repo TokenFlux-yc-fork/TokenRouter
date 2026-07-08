@@ -61,14 +61,18 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		return true
 	}
 	shouldDisable := s.rateLimitService.HandleUpstreamError(stateCtx, account, statusCode, headers, responseBody)
-	if shouldDisable && !shouldSkipOpenAIRuntimeBlock(account, statusCode) {
+	if shouldDisable && !s.shouldSkipOpenAIRuntimeBlock(stateCtx, account, statusCode) {
 		s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
 	}
 	return shouldDisable
 }
 
-func shouldSkipOpenAIRuntimeBlock(account *Account, statusCode int) bool {
-	return statusCode == http.StatusUnauthorized && isOpenAIOAuthAccessTokenOnly(account)
+func (s *OpenAIGatewayService) shouldSkipOpenAIRuntimeBlock(ctx context.Context, account *Account, statusCode int) bool {
+	if statusCode != http.StatusUnauthorized {
+		return false
+	}
+	account = resolveOpenAIOAuthAccountForTokenState(ctx, s.accountRepo, account)
+	return isOpenAIOAuthAccessTokenOnly(account)
 }
 
 func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {

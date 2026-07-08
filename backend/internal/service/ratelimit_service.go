@@ -246,6 +246,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		if resolved, rerr := resolveCredentialAccount(ctx, s.accountRepo, account); rerr == nil && resolved != nil {
 			authAccount = resolved
 		}
+		authAccount = resolveOpenAIOAuthAccountForTokenState(ctx, s.accountRepo, authAccount)
 		// OpenAI: token_invalidated / token_revoked 表示 token 被永久作废（非过期），直接标记 error
 		openai401Code := extractUpstreamErrorCode(responseBody)
 		if authAccount.Platform == PlatformOpenAI && (openai401Code == "token_invalidated" || openai401Code == "token_revoked") {
@@ -379,11 +380,23 @@ func isOpenAIOAuthAccessTokenOnly(account *Account) bool {
 	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
 		return false
 	}
-	if account.IsOpenAIPersonalAccessToken() {
-		return false
-	}
 	return strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" &&
 		strings.TrimSpace(account.GetOpenAIAccessToken()) != ""
+}
+
+func resolveOpenAIOAuthAccountForTokenState(ctx context.Context, repo AccountRepository, account *Account) *Account {
+	if account == nil || repo == nil || !account.IsOpenAIOAuth() || account.ID <= 0 {
+		return account
+	}
+	if strings.TrimSpace(account.GetOpenAIAccessToken()) != "" ||
+		strings.TrimSpace(account.GetOpenAIRefreshToken()) != "" {
+		return account
+	}
+	latest, err := repo.GetByID(ctx, account.ID)
+	if err != nil || latest == nil {
+		return account
+	}
+	return latest
 }
 
 func (s *RateLimitService) RecordUpstreamRequestFailure(ctx context.Context, account *Account, err error) {
@@ -921,6 +934,7 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	account = resolveOpenAIOAuthAccountForTokenState(ctx, s.accountRepo, account)
 	msg := buildForbiddenErrorMessage(
 		"Access forbidden (403):",
 		upstreamMsg,
