@@ -412,6 +412,17 @@ func isOpenAITransientAccessEnforcement401(body []byte) bool {
 	return strings.EqualFold(msg, "Unauthorized")
 }
 
+func isOpenAIHTMLResponseBody(body []byte) bool {
+	raw := strings.TrimSpace(string(body))
+	if raw == "" {
+		return false
+	}
+	lower := strings.ToLower(raw)
+	return strings.HasPrefix(lower, "<!doctype html") ||
+		strings.HasPrefix(lower, "<html") ||
+		strings.Contains(lower, "<html")
+}
+
 func extractUpstreamErrorType(body []byte) string {
 	for _, path := range []string{
 		"error.type",
@@ -983,6 +994,15 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		responseBody,
 		"account may be suspended or lack permissions",
 	)
+	// OpenAI access enforcement 会在 /v1/responses/input_tokens 等探测/计数路径对可用
+	// ChatGPT OAuth 账号返回 403 HTML interstitial。生产已确认同一账号前后仍可正常完成
+	// /v1/responses 200；这不是账号凭据失效，不能写 temp_unschedulable，也不能累加
+	// 403 阈值计数。当前请求 failover 即可。
+	if account.IsOpenAIOAuth() && isOpenAIHTMLResponseBody(responseBody) {
+		s.ResetOpenAI403Counter(ctx, account.ID)
+		slog.Info("openai_oauth_403_html_state_skipped", "account_id", account.ID)
+		return true
+	}
 	// OpenAI access-token-only OAuth（没有 refresh_token）由外部会话/导入链路维护 token。
 	// 这类账号的上游 403 常见于临时边缘/会话判定，不能写入 temp_unschedulable 或 SetError，
 	// 否则会把仍可由外部刷新/替换 token 的账号从调度池剔除；当前请求 failover 即可。

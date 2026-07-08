@@ -498,6 +498,42 @@ func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403UsesTempUnschedulabl
 	require.Contains(t, repo.lastTempReason, "(1/3)")
 }
 
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403HTMLKeepsSchedulableWithRefreshToken(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	counter := &openAI403CounterCacheStub{counts: []int64{1}}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetOpenAI403CounterCache(counter)
+	account := &Account{
+		ID:       4804,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "at",
+			"refresh_token": "rt",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusForbidden,
+		http.Header{},
+		[]byte(`<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style global>body{font-family:Arial,Helvetica,sans-serif}.container{display:flex}</style>
+  </head>
+</html>`),
+	)
+
+	require.True(t, shouldDisable, "当前请求应 failover，但账号状态不能被写坏")
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, []int64{account.ID}, counter.resetCalls)
+	require.Nil(t, account.TempUnschedulableUntil)
+	require.Empty(t, account.TempUnschedulableReason)
+}
+
 func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403DisabledUsesSetError(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{1}}
