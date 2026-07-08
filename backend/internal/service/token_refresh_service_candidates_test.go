@@ -196,3 +196,33 @@ func TestTokenRefreshService_RefreshFailureDoesNotCallPrivacy(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenRefreshService_OpenAIMissingExpiresAtInvalidClientDoesNotSetAccountError(t *testing.T) {
+	repo := &tokenRefreshCandidateRepo{}
+	svc := &TokenRefreshService{
+		accountRepo:   repo,
+		refreshPolicy: DefaultBackgroundRefreshPolicy(),
+		cfg:           &config.TokenRefreshConfig{MaxRetries: 1, RetryBackoffSeconds: 0},
+	}
+	account := &Account{
+		ID:       4796,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "current-access-token",
+			"refresh_token": "refresh-token",
+		},
+	}
+
+	err := svc.refreshWithRetry(
+		context.Background(),
+		account,
+		&tokenRefreshTestRefresher{err: errors.New("token refresh failed: invalid_client")},
+		nil,
+		time.Hour,
+	)
+
+	require.Error(t, err)
+	require.Zero(t, repo.setErrorCalls)
+	require.Zero(t, repo.setTempUnschedCalls)
+}
