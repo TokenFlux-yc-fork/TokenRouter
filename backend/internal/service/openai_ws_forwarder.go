@@ -418,14 +418,34 @@ func (s *OpenAIGatewayService) persistOpenAIWSErrorSignal(ctx context.Context, a
 	if statusCode == http.StatusForbidden {
 		s.persistOpenAIWSForbiddenSignal(ctx, account, headers, responseBody)
 	}
-	s.recordOpenAIWSPassiveAccountFailure(ctx, account, statusCode, responseBody)
 }
 
 func (s *OpenAIGatewayService) recordOpenAIWSPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
 	if s == nil || s.rateLimitService == nil || account == nil {
 		return
 	}
+	if IsOpenAICyberWarningPayload(responseBody, extractOpenAIWSUpstreamWarningMessage(responseBody)) {
+		return
+	}
 	s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSFinalErrorEventPassiveAccountFailure(
+	ctx context.Context,
+	account *Account,
+	responseBody []byte,
+	codeRaw string,
+	errTypeRaw string,
+	msgRaw string,
+) {
+	if isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
+		return
+	}
+	statusCode := openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	if statusCode == http.StatusForbidden {
+		return
+	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, statusCode, responseBody)
 }
 
 func (s *OpenAIGatewayService) recordOpenAIWSDialPassiveAccountFailure(ctx context.Context, account *Account, err error) {

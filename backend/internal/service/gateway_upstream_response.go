@@ -518,6 +518,10 @@ func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, re
 	if s.rateLimitService == nil {
 		return
 	}
+	if account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
+		logger.LegacyPrintf("service.gateway", "Account %d: deferring passive account circuit breaker until same-account retries are exhausted for status %d", account.ID, statusCode)
+		return
+	}
 
 	// OAuth/Setup Token 账号的 403：按上游错误策略处理账号状态。
 	if account.IsOAuth() && statusCode == 403 {

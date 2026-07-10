@@ -412,7 +412,7 @@ func (s *RateLimitService) recordPassiveAccountFailure(ctx context.Context, acco
 	if s == nil || s.accountRepo == nil || account == nil {
 		return
 	}
-	if !shouldRecordPassiveAccountCircuitBreaker(account, statusCode) {
+	if !shouldRecordPassiveAccountCircuitBreaker(account, statusCode, responseBody) {
 		return
 	}
 	if s.hasScheduledAccountCircuitBreaker(ctx, account.ID) {
@@ -472,11 +472,15 @@ func (s *RateLimitService) hasScheduledAccountCircuitBreaker(ctx context.Context
 	return false
 }
 
-func shouldRecordPassiveAccountCircuitBreaker(account *Account, statusCode int) bool {
+func shouldRecordPassiveAccountCircuitBreaker(account *Account, statusCode int, responseBody []byte) bool {
 	if account == nil || !account.IsUpstreamPoolHealthTarget() {
 		return false
 	}
 	if statusCode == 0 || statusCode >= http.StatusInternalServerError {
+		return true
+	}
+	if account.Platform == PlatformOpenAI && account.IsPoolMode() &&
+		isOpenAITransientProcessingError(statusCode, extractUpstreamErrorMessage(responseBody), responseBody) {
 		return true
 	}
 	if account.Type == AccountTypeUpstream && isPoolModeRetryableStatus(statusCode) {
