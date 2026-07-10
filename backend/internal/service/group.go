@@ -14,6 +14,12 @@ type OpenAIMessagesDispatchModelConfig = domain.OpenAIMessagesDispatchModelConfi
 type GroupModelsListConfig = domain.GroupModelsListConfig
 type GroupAvailabilityProbeConfig = domain.GroupAvailabilityProbeConfig
 
+const (
+	HealthStatusUnknown   = "unknown"
+	HealthStatusHealthy   = "healthy"
+	HealthStatusUnhealthy = "unhealthy"
+)
+
 type Group struct {
 	ID             int64
 	Name           string
@@ -90,6 +96,16 @@ type Group struct {
 	// 一旦设置即接管该分组用户的限流（覆盖用户级 rpm_limit），可被 user-group rpm_override 进一步覆盖。
 	RPMLimit int
 
+	HealthCheckEnabled          bool
+	HealthCheckIntervalSec      int
+	HealthCheckTimeoutSec       int
+	HealthCheckFailureThreshold int
+	HealthCheckSuccessThreshold int
+	HealthLastCheckAt           *time.Time
+	HealthConsecutiveFailures   int
+	HealthConsecutiveSuccesses  int
+	HealthStatus                string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
@@ -101,6 +117,34 @@ type Group struct {
 
 func (g *Group) IsActive() bool {
 	return g.Status == StatusActive
+}
+
+// IsHealthy reports the active-probe state. It is observability-only and does
+// not participate in routing decisions.
+func (g *Group) IsHealthy() bool {
+	if g == nil {
+		return false
+	}
+	if !g.HealthCheckEnabled {
+		return true
+	}
+	return normalizeGroupHealthStatus(g.HealthStatus) != HealthStatusUnhealthy
+}
+
+// IsRoutable preserves production behavior: group health is not a routing gate.
+func (g *Group) IsRoutable() bool {
+	return g != nil && g.IsActive()
+}
+
+func normalizeGroupHealthStatus(status string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case HealthStatusHealthy:
+		return HealthStatusHealthy
+	case HealthStatusUnhealthy:
+		return HealthStatusUnhealthy
+	default:
+		return HealthStatusUnknown
+	}
 }
 
 // GetImagePrice 根据 image_size 返回对应的图片生成价格

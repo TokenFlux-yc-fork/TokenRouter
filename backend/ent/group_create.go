@@ -633,6 +633,132 @@ func (_c *GroupCreate) SetNillableAvailabilityProbeConfig(v *domain.GroupAvailab
 	return _c
 }
 
+// SetHealthCheckEnabled sets the "health_check_enabled" field.
+func (_c *GroupCreate) SetHealthCheckEnabled(v bool) *GroupCreate {
+	_c.mutation.SetHealthCheckEnabled(v)
+	return _c
+}
+
+// SetNillableHealthCheckEnabled sets the "health_check_enabled" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthCheckEnabled(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetHealthCheckEnabled(*v)
+	}
+	return _c
+}
+
+// SetHealthCheckIntervalSec sets the "health_check_interval_sec" field.
+func (_c *GroupCreate) SetHealthCheckIntervalSec(v int) *GroupCreate {
+	_c.mutation.SetHealthCheckIntervalSec(v)
+	return _c
+}
+
+// SetNillableHealthCheckIntervalSec sets the "health_check_interval_sec" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthCheckIntervalSec(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetHealthCheckIntervalSec(*v)
+	}
+	return _c
+}
+
+// SetHealthCheckTimeoutSec sets the "health_check_timeout_sec" field.
+func (_c *GroupCreate) SetHealthCheckTimeoutSec(v int) *GroupCreate {
+	_c.mutation.SetHealthCheckTimeoutSec(v)
+	return _c
+}
+
+// SetNillableHealthCheckTimeoutSec sets the "health_check_timeout_sec" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthCheckTimeoutSec(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetHealthCheckTimeoutSec(*v)
+	}
+	return _c
+}
+
+// SetHealthCheckFailureThreshold sets the "health_check_failure_threshold" field.
+func (_c *GroupCreate) SetHealthCheckFailureThreshold(v int) *GroupCreate {
+	_c.mutation.SetHealthCheckFailureThreshold(v)
+	return _c
+}
+
+// SetNillableHealthCheckFailureThreshold sets the "health_check_failure_threshold" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthCheckFailureThreshold(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetHealthCheckFailureThreshold(*v)
+	}
+	return _c
+}
+
+// SetHealthCheckSuccessThreshold sets the "health_check_success_threshold" field.
+func (_c *GroupCreate) SetHealthCheckSuccessThreshold(v int) *GroupCreate {
+	_c.mutation.SetHealthCheckSuccessThreshold(v)
+	return _c
+}
+
+// SetNillableHealthCheckSuccessThreshold sets the "health_check_success_threshold" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthCheckSuccessThreshold(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetHealthCheckSuccessThreshold(*v)
+	}
+	return _c
+}
+
+// SetHealthLastCheckAt sets the "health_last_check_at" field.
+func (_c *GroupCreate) SetHealthLastCheckAt(v time.Time) *GroupCreate {
+	_c.mutation.SetHealthLastCheckAt(v)
+	return _c
+}
+
+// SetNillableHealthLastCheckAt sets the "health_last_check_at" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthLastCheckAt(v *time.Time) *GroupCreate {
+	if v != nil {
+		_c.SetHealthLastCheckAt(*v)
+	}
+	return _c
+}
+
+// SetHealthConsecutiveFailures sets the "health_consecutive_failures" field.
+func (_c *GroupCreate) SetHealthConsecutiveFailures(v int) *GroupCreate {
+	_c.mutation.SetHealthConsecutiveFailures(v)
+	return _c
+}
+
+// SetNillableHealthConsecutiveFailures sets the "health_consecutive_failures" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthConsecutiveFailures(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetHealthConsecutiveFailures(*v)
+	}
+	return _c
+}
+
+// SetHealthConsecutiveSuccesses sets the "health_consecutive_successes" field.
+func (_c *GroupCreate) SetHealthConsecutiveSuccesses(v int) *GroupCreate {
+	_c.mutation.SetHealthConsecutiveSuccesses(v)
+	return _c
+}
+
+// SetNillableHealthConsecutiveSuccesses sets the "health_consecutive_successes" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthConsecutiveSuccesses(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetHealthConsecutiveSuccesses(*v)
+	}
+	return _c
+}
+
+// SetHealthStatus sets the "health_status" field.
+func (_c *GroupCreate) SetHealthStatus(v string) *GroupCreate {
+	_c.mutation.SetHealthStatus(v)
+	return _c
+}
+
+// SetNillableHealthStatus sets the "health_status" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableHealthStatus(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetHealthStatus(*v)
+	}
+	return _c
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (_c *GroupCreate) SetRpmLimit(v int) *GroupCreate {
 	_c.mutation.SetRpmLimit(v)
@@ -921,6 +1047,38 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultAvailabilityProbeConfig
 		_c.mutation.SetAvailabilityProbeConfig(v)
 	}
+	if _, ok := _c.mutation.HealthCheckEnabled(); !ok {
+		v := group.DefaultHealthCheckEnabled
+		_c.mutation.SetHealthCheckEnabled(v)
+	}
+	if _, ok := _c.mutation.HealthCheckIntervalSec(); !ok {
+		v := group.DefaultHealthCheckIntervalSec
+		_c.mutation.SetHealthCheckIntervalSec(v)
+	}
+	if _, ok := _c.mutation.HealthCheckTimeoutSec(); !ok {
+		v := group.DefaultHealthCheckTimeoutSec
+		_c.mutation.SetHealthCheckTimeoutSec(v)
+	}
+	if _, ok := _c.mutation.HealthCheckFailureThreshold(); !ok {
+		v := group.DefaultHealthCheckFailureThreshold
+		_c.mutation.SetHealthCheckFailureThreshold(v)
+	}
+	if _, ok := _c.mutation.HealthCheckSuccessThreshold(); !ok {
+		v := group.DefaultHealthCheckSuccessThreshold
+		_c.mutation.SetHealthCheckSuccessThreshold(v)
+	}
+	if _, ok := _c.mutation.HealthConsecutiveFailures(); !ok {
+		v := group.DefaultHealthConsecutiveFailures
+		_c.mutation.SetHealthConsecutiveFailures(v)
+	}
+	if _, ok := _c.mutation.HealthConsecutiveSuccesses(); !ok {
+		v := group.DefaultHealthConsecutiveSuccesses
+		_c.mutation.SetHealthConsecutiveSuccesses(v)
+	}
+	if _, ok := _c.mutation.HealthStatus(); !ok {
+		v := group.DefaultHealthStatus
+		_c.mutation.SetHealthStatus(v)
+	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		v := group.DefaultRpmLimit
 		_c.mutation.SetRpmLimit(v)
@@ -1071,6 +1229,35 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.AvailabilityProbeConfig(); !ok {
 		return &ValidationError{Name: "availability_probe_config", err: errors.New(`ent: missing required field "Group.availability_probe_config"`)}
+	}
+	if _, ok := _c.mutation.HealthCheckEnabled(); !ok {
+		return &ValidationError{Name: "health_check_enabled", err: errors.New(`ent: missing required field "Group.health_check_enabled"`)}
+	}
+	if _, ok := _c.mutation.HealthCheckIntervalSec(); !ok {
+		return &ValidationError{Name: "health_check_interval_sec", err: errors.New(`ent: missing required field "Group.health_check_interval_sec"`)}
+	}
+	if _, ok := _c.mutation.HealthCheckTimeoutSec(); !ok {
+		return &ValidationError{Name: "health_check_timeout_sec", err: errors.New(`ent: missing required field "Group.health_check_timeout_sec"`)}
+	}
+	if _, ok := _c.mutation.HealthCheckFailureThreshold(); !ok {
+		return &ValidationError{Name: "health_check_failure_threshold", err: errors.New(`ent: missing required field "Group.health_check_failure_threshold"`)}
+	}
+	if _, ok := _c.mutation.HealthCheckSuccessThreshold(); !ok {
+		return &ValidationError{Name: "health_check_success_threshold", err: errors.New(`ent: missing required field "Group.health_check_success_threshold"`)}
+	}
+	if _, ok := _c.mutation.HealthConsecutiveFailures(); !ok {
+		return &ValidationError{Name: "health_consecutive_failures", err: errors.New(`ent: missing required field "Group.health_consecutive_failures"`)}
+	}
+	if _, ok := _c.mutation.HealthConsecutiveSuccesses(); !ok {
+		return &ValidationError{Name: "health_consecutive_successes", err: errors.New(`ent: missing required field "Group.health_consecutive_successes"`)}
+	}
+	if _, ok := _c.mutation.HealthStatus(); !ok {
+		return &ValidationError{Name: "health_status", err: errors.New(`ent: missing required field "Group.health_status"`)}
+	}
+	if v, ok := _c.mutation.HealthStatus(); ok {
+		if err := group.HealthStatusValidator(v); err != nil {
+			return &ValidationError{Name: "health_status", err: fmt.Errorf(`ent: validator failed for field "Group.health_status": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		return &ValidationError{Name: "rpm_limit", err: errors.New(`ent: missing required field "Group.rpm_limit"`)}
@@ -1287,6 +1474,42 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AvailabilityProbeConfig(); ok {
 		_spec.SetField(group.FieldAvailabilityProbeConfig, field.TypeJSON, value)
 		_node.AvailabilityProbeConfig = value
+	}
+	if value, ok := _c.mutation.HealthCheckEnabled(); ok {
+		_spec.SetField(group.FieldHealthCheckEnabled, field.TypeBool, value)
+		_node.HealthCheckEnabled = value
+	}
+	if value, ok := _c.mutation.HealthCheckIntervalSec(); ok {
+		_spec.SetField(group.FieldHealthCheckIntervalSec, field.TypeInt, value)
+		_node.HealthCheckIntervalSec = value
+	}
+	if value, ok := _c.mutation.HealthCheckTimeoutSec(); ok {
+		_spec.SetField(group.FieldHealthCheckTimeoutSec, field.TypeInt, value)
+		_node.HealthCheckTimeoutSec = value
+	}
+	if value, ok := _c.mutation.HealthCheckFailureThreshold(); ok {
+		_spec.SetField(group.FieldHealthCheckFailureThreshold, field.TypeInt, value)
+		_node.HealthCheckFailureThreshold = value
+	}
+	if value, ok := _c.mutation.HealthCheckSuccessThreshold(); ok {
+		_spec.SetField(group.FieldHealthCheckSuccessThreshold, field.TypeInt, value)
+		_node.HealthCheckSuccessThreshold = value
+	}
+	if value, ok := _c.mutation.HealthLastCheckAt(); ok {
+		_spec.SetField(group.FieldHealthLastCheckAt, field.TypeTime, value)
+		_node.HealthLastCheckAt = &value
+	}
+	if value, ok := _c.mutation.HealthConsecutiveFailures(); ok {
+		_spec.SetField(group.FieldHealthConsecutiveFailures, field.TypeInt, value)
+		_node.HealthConsecutiveFailures = value
+	}
+	if value, ok := _c.mutation.HealthConsecutiveSuccesses(); ok {
+		_spec.SetField(group.FieldHealthConsecutiveSuccesses, field.TypeInt, value)
+		_node.HealthConsecutiveSuccesses = value
+	}
+	if value, ok := _c.mutation.HealthStatus(); ok {
+		_spec.SetField(group.FieldHealthStatus, field.TypeString, value)
+		_node.HealthStatus = value
 	}
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
@@ -2137,6 +2360,156 @@ func (u *GroupUpsert) SetAvailabilityProbeConfig(v domain.GroupAvailabilityProbe
 // UpdateAvailabilityProbeConfig sets the "availability_probe_config" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateAvailabilityProbeConfig() *GroupUpsert {
 	u.SetExcluded(group.FieldAvailabilityProbeConfig)
+	return u
+}
+
+// SetHealthCheckEnabled sets the "health_check_enabled" field.
+func (u *GroupUpsert) SetHealthCheckEnabled(v bool) *GroupUpsert {
+	u.Set(group.FieldHealthCheckEnabled, v)
+	return u
+}
+
+// UpdateHealthCheckEnabled sets the "health_check_enabled" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthCheckEnabled() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthCheckEnabled)
+	return u
+}
+
+// SetHealthCheckIntervalSec sets the "health_check_interval_sec" field.
+func (u *GroupUpsert) SetHealthCheckIntervalSec(v int) *GroupUpsert {
+	u.Set(group.FieldHealthCheckIntervalSec, v)
+	return u
+}
+
+// UpdateHealthCheckIntervalSec sets the "health_check_interval_sec" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthCheckIntervalSec() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthCheckIntervalSec)
+	return u
+}
+
+// AddHealthCheckIntervalSec adds v to the "health_check_interval_sec" field.
+func (u *GroupUpsert) AddHealthCheckIntervalSec(v int) *GroupUpsert {
+	u.Add(group.FieldHealthCheckIntervalSec, v)
+	return u
+}
+
+// SetHealthCheckTimeoutSec sets the "health_check_timeout_sec" field.
+func (u *GroupUpsert) SetHealthCheckTimeoutSec(v int) *GroupUpsert {
+	u.Set(group.FieldHealthCheckTimeoutSec, v)
+	return u
+}
+
+// UpdateHealthCheckTimeoutSec sets the "health_check_timeout_sec" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthCheckTimeoutSec() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthCheckTimeoutSec)
+	return u
+}
+
+// AddHealthCheckTimeoutSec adds v to the "health_check_timeout_sec" field.
+func (u *GroupUpsert) AddHealthCheckTimeoutSec(v int) *GroupUpsert {
+	u.Add(group.FieldHealthCheckTimeoutSec, v)
+	return u
+}
+
+// SetHealthCheckFailureThreshold sets the "health_check_failure_threshold" field.
+func (u *GroupUpsert) SetHealthCheckFailureThreshold(v int) *GroupUpsert {
+	u.Set(group.FieldHealthCheckFailureThreshold, v)
+	return u
+}
+
+// UpdateHealthCheckFailureThreshold sets the "health_check_failure_threshold" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthCheckFailureThreshold() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthCheckFailureThreshold)
+	return u
+}
+
+// AddHealthCheckFailureThreshold adds v to the "health_check_failure_threshold" field.
+func (u *GroupUpsert) AddHealthCheckFailureThreshold(v int) *GroupUpsert {
+	u.Add(group.FieldHealthCheckFailureThreshold, v)
+	return u
+}
+
+// SetHealthCheckSuccessThreshold sets the "health_check_success_threshold" field.
+func (u *GroupUpsert) SetHealthCheckSuccessThreshold(v int) *GroupUpsert {
+	u.Set(group.FieldHealthCheckSuccessThreshold, v)
+	return u
+}
+
+// UpdateHealthCheckSuccessThreshold sets the "health_check_success_threshold" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthCheckSuccessThreshold() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthCheckSuccessThreshold)
+	return u
+}
+
+// AddHealthCheckSuccessThreshold adds v to the "health_check_success_threshold" field.
+func (u *GroupUpsert) AddHealthCheckSuccessThreshold(v int) *GroupUpsert {
+	u.Add(group.FieldHealthCheckSuccessThreshold, v)
+	return u
+}
+
+// SetHealthLastCheckAt sets the "health_last_check_at" field.
+func (u *GroupUpsert) SetHealthLastCheckAt(v time.Time) *GroupUpsert {
+	u.Set(group.FieldHealthLastCheckAt, v)
+	return u
+}
+
+// UpdateHealthLastCheckAt sets the "health_last_check_at" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthLastCheckAt() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthLastCheckAt)
+	return u
+}
+
+// ClearHealthLastCheckAt clears the value of the "health_last_check_at" field.
+func (u *GroupUpsert) ClearHealthLastCheckAt() *GroupUpsert {
+	u.SetNull(group.FieldHealthLastCheckAt)
+	return u
+}
+
+// SetHealthConsecutiveFailures sets the "health_consecutive_failures" field.
+func (u *GroupUpsert) SetHealthConsecutiveFailures(v int) *GroupUpsert {
+	u.Set(group.FieldHealthConsecutiveFailures, v)
+	return u
+}
+
+// UpdateHealthConsecutiveFailures sets the "health_consecutive_failures" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthConsecutiveFailures() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthConsecutiveFailures)
+	return u
+}
+
+// AddHealthConsecutiveFailures adds v to the "health_consecutive_failures" field.
+func (u *GroupUpsert) AddHealthConsecutiveFailures(v int) *GroupUpsert {
+	u.Add(group.FieldHealthConsecutiveFailures, v)
+	return u
+}
+
+// SetHealthConsecutiveSuccesses sets the "health_consecutive_successes" field.
+func (u *GroupUpsert) SetHealthConsecutiveSuccesses(v int) *GroupUpsert {
+	u.Set(group.FieldHealthConsecutiveSuccesses, v)
+	return u
+}
+
+// UpdateHealthConsecutiveSuccesses sets the "health_consecutive_successes" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthConsecutiveSuccesses() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthConsecutiveSuccesses)
+	return u
+}
+
+// AddHealthConsecutiveSuccesses adds v to the "health_consecutive_successes" field.
+func (u *GroupUpsert) AddHealthConsecutiveSuccesses(v int) *GroupUpsert {
+	u.Add(group.FieldHealthConsecutiveSuccesses, v)
+	return u
+}
+
+// SetHealthStatus sets the "health_status" field.
+func (u *GroupUpsert) SetHealthStatus(v string) *GroupUpsert {
+	u.Set(group.FieldHealthStatus, v)
+	return u
+}
+
+// UpdateHealthStatus sets the "health_status" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateHealthStatus() *GroupUpsert {
+	u.SetExcluded(group.FieldHealthStatus)
 	return u
 }
 
@@ -3036,6 +3409,181 @@ func (u *GroupUpsertOne) SetAvailabilityProbeConfig(v domain.GroupAvailabilityPr
 func (u *GroupUpsertOne) UpdateAvailabilityProbeConfig() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateAvailabilityProbeConfig()
+	})
+}
+
+// SetHealthCheckEnabled sets the "health_check_enabled" field.
+func (u *GroupUpsertOne) SetHealthCheckEnabled(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckEnabled(v)
+	})
+}
+
+// UpdateHealthCheckEnabled sets the "health_check_enabled" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthCheckEnabled() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckEnabled()
+	})
+}
+
+// SetHealthCheckIntervalSec sets the "health_check_interval_sec" field.
+func (u *GroupUpsertOne) SetHealthCheckIntervalSec(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckIntervalSec(v)
+	})
+}
+
+// AddHealthCheckIntervalSec adds v to the "health_check_interval_sec" field.
+func (u *GroupUpsertOne) AddHealthCheckIntervalSec(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthCheckIntervalSec(v)
+	})
+}
+
+// UpdateHealthCheckIntervalSec sets the "health_check_interval_sec" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthCheckIntervalSec() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckIntervalSec()
+	})
+}
+
+// SetHealthCheckTimeoutSec sets the "health_check_timeout_sec" field.
+func (u *GroupUpsertOne) SetHealthCheckTimeoutSec(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckTimeoutSec(v)
+	})
+}
+
+// AddHealthCheckTimeoutSec adds v to the "health_check_timeout_sec" field.
+func (u *GroupUpsertOne) AddHealthCheckTimeoutSec(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthCheckTimeoutSec(v)
+	})
+}
+
+// UpdateHealthCheckTimeoutSec sets the "health_check_timeout_sec" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthCheckTimeoutSec() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckTimeoutSec()
+	})
+}
+
+// SetHealthCheckFailureThreshold sets the "health_check_failure_threshold" field.
+func (u *GroupUpsertOne) SetHealthCheckFailureThreshold(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckFailureThreshold(v)
+	})
+}
+
+// AddHealthCheckFailureThreshold adds v to the "health_check_failure_threshold" field.
+func (u *GroupUpsertOne) AddHealthCheckFailureThreshold(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthCheckFailureThreshold(v)
+	})
+}
+
+// UpdateHealthCheckFailureThreshold sets the "health_check_failure_threshold" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthCheckFailureThreshold() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckFailureThreshold()
+	})
+}
+
+// SetHealthCheckSuccessThreshold sets the "health_check_success_threshold" field.
+func (u *GroupUpsertOne) SetHealthCheckSuccessThreshold(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckSuccessThreshold(v)
+	})
+}
+
+// AddHealthCheckSuccessThreshold adds v to the "health_check_success_threshold" field.
+func (u *GroupUpsertOne) AddHealthCheckSuccessThreshold(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthCheckSuccessThreshold(v)
+	})
+}
+
+// UpdateHealthCheckSuccessThreshold sets the "health_check_success_threshold" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthCheckSuccessThreshold() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckSuccessThreshold()
+	})
+}
+
+// SetHealthLastCheckAt sets the "health_last_check_at" field.
+func (u *GroupUpsertOne) SetHealthLastCheckAt(v time.Time) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthLastCheckAt(v)
+	})
+}
+
+// UpdateHealthLastCheckAt sets the "health_last_check_at" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthLastCheckAt() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthLastCheckAt()
+	})
+}
+
+// ClearHealthLastCheckAt clears the value of the "health_last_check_at" field.
+func (u *GroupUpsertOne) ClearHealthLastCheckAt() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearHealthLastCheckAt()
+	})
+}
+
+// SetHealthConsecutiveFailures sets the "health_consecutive_failures" field.
+func (u *GroupUpsertOne) SetHealthConsecutiveFailures(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthConsecutiveFailures(v)
+	})
+}
+
+// AddHealthConsecutiveFailures adds v to the "health_consecutive_failures" field.
+func (u *GroupUpsertOne) AddHealthConsecutiveFailures(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthConsecutiveFailures(v)
+	})
+}
+
+// UpdateHealthConsecutiveFailures sets the "health_consecutive_failures" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthConsecutiveFailures() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthConsecutiveFailures()
+	})
+}
+
+// SetHealthConsecutiveSuccesses sets the "health_consecutive_successes" field.
+func (u *GroupUpsertOne) SetHealthConsecutiveSuccesses(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthConsecutiveSuccesses(v)
+	})
+}
+
+// AddHealthConsecutiveSuccesses adds v to the "health_consecutive_successes" field.
+func (u *GroupUpsertOne) AddHealthConsecutiveSuccesses(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthConsecutiveSuccesses(v)
+	})
+}
+
+// UpdateHealthConsecutiveSuccesses sets the "health_consecutive_successes" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthConsecutiveSuccesses() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthConsecutiveSuccesses()
+	})
+}
+
+// SetHealthStatus sets the "health_status" field.
+func (u *GroupUpsertOne) SetHealthStatus(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthStatus(v)
+	})
+}
+
+// UpdateHealthStatus sets the "health_status" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateHealthStatus() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthStatus()
 	})
 }
 
@@ -4108,6 +4656,181 @@ func (u *GroupUpsertBulk) SetAvailabilityProbeConfig(v domain.GroupAvailabilityP
 func (u *GroupUpsertBulk) UpdateAvailabilityProbeConfig() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateAvailabilityProbeConfig()
+	})
+}
+
+// SetHealthCheckEnabled sets the "health_check_enabled" field.
+func (u *GroupUpsertBulk) SetHealthCheckEnabled(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckEnabled(v)
+	})
+}
+
+// UpdateHealthCheckEnabled sets the "health_check_enabled" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthCheckEnabled() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckEnabled()
+	})
+}
+
+// SetHealthCheckIntervalSec sets the "health_check_interval_sec" field.
+func (u *GroupUpsertBulk) SetHealthCheckIntervalSec(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckIntervalSec(v)
+	})
+}
+
+// AddHealthCheckIntervalSec adds v to the "health_check_interval_sec" field.
+func (u *GroupUpsertBulk) AddHealthCheckIntervalSec(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthCheckIntervalSec(v)
+	})
+}
+
+// UpdateHealthCheckIntervalSec sets the "health_check_interval_sec" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthCheckIntervalSec() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckIntervalSec()
+	})
+}
+
+// SetHealthCheckTimeoutSec sets the "health_check_timeout_sec" field.
+func (u *GroupUpsertBulk) SetHealthCheckTimeoutSec(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckTimeoutSec(v)
+	})
+}
+
+// AddHealthCheckTimeoutSec adds v to the "health_check_timeout_sec" field.
+func (u *GroupUpsertBulk) AddHealthCheckTimeoutSec(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthCheckTimeoutSec(v)
+	})
+}
+
+// UpdateHealthCheckTimeoutSec sets the "health_check_timeout_sec" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthCheckTimeoutSec() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckTimeoutSec()
+	})
+}
+
+// SetHealthCheckFailureThreshold sets the "health_check_failure_threshold" field.
+func (u *GroupUpsertBulk) SetHealthCheckFailureThreshold(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckFailureThreshold(v)
+	})
+}
+
+// AddHealthCheckFailureThreshold adds v to the "health_check_failure_threshold" field.
+func (u *GroupUpsertBulk) AddHealthCheckFailureThreshold(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthCheckFailureThreshold(v)
+	})
+}
+
+// UpdateHealthCheckFailureThreshold sets the "health_check_failure_threshold" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthCheckFailureThreshold() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckFailureThreshold()
+	})
+}
+
+// SetHealthCheckSuccessThreshold sets the "health_check_success_threshold" field.
+func (u *GroupUpsertBulk) SetHealthCheckSuccessThreshold(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthCheckSuccessThreshold(v)
+	})
+}
+
+// AddHealthCheckSuccessThreshold adds v to the "health_check_success_threshold" field.
+func (u *GroupUpsertBulk) AddHealthCheckSuccessThreshold(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthCheckSuccessThreshold(v)
+	})
+}
+
+// UpdateHealthCheckSuccessThreshold sets the "health_check_success_threshold" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthCheckSuccessThreshold() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthCheckSuccessThreshold()
+	})
+}
+
+// SetHealthLastCheckAt sets the "health_last_check_at" field.
+func (u *GroupUpsertBulk) SetHealthLastCheckAt(v time.Time) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthLastCheckAt(v)
+	})
+}
+
+// UpdateHealthLastCheckAt sets the "health_last_check_at" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthLastCheckAt() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthLastCheckAt()
+	})
+}
+
+// ClearHealthLastCheckAt clears the value of the "health_last_check_at" field.
+func (u *GroupUpsertBulk) ClearHealthLastCheckAt() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearHealthLastCheckAt()
+	})
+}
+
+// SetHealthConsecutiveFailures sets the "health_consecutive_failures" field.
+func (u *GroupUpsertBulk) SetHealthConsecutiveFailures(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthConsecutiveFailures(v)
+	})
+}
+
+// AddHealthConsecutiveFailures adds v to the "health_consecutive_failures" field.
+func (u *GroupUpsertBulk) AddHealthConsecutiveFailures(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthConsecutiveFailures(v)
+	})
+}
+
+// UpdateHealthConsecutiveFailures sets the "health_consecutive_failures" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthConsecutiveFailures() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthConsecutiveFailures()
+	})
+}
+
+// SetHealthConsecutiveSuccesses sets the "health_consecutive_successes" field.
+func (u *GroupUpsertBulk) SetHealthConsecutiveSuccesses(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthConsecutiveSuccesses(v)
+	})
+}
+
+// AddHealthConsecutiveSuccesses adds v to the "health_consecutive_successes" field.
+func (u *GroupUpsertBulk) AddHealthConsecutiveSuccesses(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddHealthConsecutiveSuccesses(v)
+	})
+}
+
+// UpdateHealthConsecutiveSuccesses sets the "health_consecutive_successes" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthConsecutiveSuccesses() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthConsecutiveSuccesses()
+	})
+}
+
+// SetHealthStatus sets the "health_status" field.
+func (u *GroupUpsertBulk) SetHealthStatus(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetHealthStatus(v)
+	})
+}
+
+// UpdateHealthStatus sets the "health_status" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateHealthStatus() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateHealthStatus()
 	})
 }
 

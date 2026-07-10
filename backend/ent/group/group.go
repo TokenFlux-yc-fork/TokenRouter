@@ -106,6 +106,24 @@ const (
 	FieldModelsListConfig = "models_list_config"
 	// FieldAvailabilityProbeConfig holds the string denoting the availability_probe_config field in the database.
 	FieldAvailabilityProbeConfig = "availability_probe_config"
+	// FieldHealthCheckEnabled holds the string denoting the health_check_enabled field in the database.
+	FieldHealthCheckEnabled = "health_check_enabled"
+	// FieldHealthCheckIntervalSec holds the string denoting the health_check_interval_sec field in the database.
+	FieldHealthCheckIntervalSec = "health_check_interval_sec"
+	// FieldHealthCheckTimeoutSec holds the string denoting the health_check_timeout_sec field in the database.
+	FieldHealthCheckTimeoutSec = "health_check_timeout_sec"
+	// FieldHealthCheckFailureThreshold holds the string denoting the health_check_failure_threshold field in the database.
+	FieldHealthCheckFailureThreshold = "health_check_failure_threshold"
+	// FieldHealthCheckSuccessThreshold holds the string denoting the health_check_success_threshold field in the database.
+	FieldHealthCheckSuccessThreshold = "health_check_success_threshold"
+	// FieldHealthLastCheckAt holds the string denoting the health_last_check_at field in the database.
+	FieldHealthLastCheckAt = "health_last_check_at"
+	// FieldHealthConsecutiveFailures holds the string denoting the health_consecutive_failures field in the database.
+	FieldHealthConsecutiveFailures = "health_consecutive_failures"
+	// FieldHealthConsecutiveSuccesses holds the string denoting the health_consecutive_successes field in the database.
+	FieldHealthConsecutiveSuccesses = "health_consecutive_successes"
+	// FieldHealthStatus holds the string denoting the health_status field in the database.
+	FieldHealthStatus = "health_status"
 	// FieldRpmLimit holds the string denoting the rpm_limit field in the database.
 	FieldRpmLimit = "rpm_limit"
 	// FieldDataSharingEnabled holds the string denoting the data_sharing_enabled field in the database.
@@ -230,6 +248,15 @@ var Columns = []string{
 	FieldMessagesDispatchModelConfig,
 	FieldModelsListConfig,
 	FieldAvailabilityProbeConfig,
+	FieldHealthCheckEnabled,
+	FieldHealthCheckIntervalSec,
+	FieldHealthCheckTimeoutSec,
+	FieldHealthCheckFailureThreshold,
+	FieldHealthCheckSuccessThreshold,
+	FieldHealthLastCheckAt,
+	FieldHealthConsecutiveFailures,
+	FieldHealthConsecutiveSuccesses,
+	FieldHealthStatus,
 	FieldRpmLimit,
 	FieldDataSharingEnabled,
 	FieldSessionIsolationEnabled,
@@ -345,6 +372,24 @@ var (
 	DefaultModelsListConfig domain.GroupModelsListConfig
 	// DefaultAvailabilityProbeConfig holds the default value on creation for the "availability_probe_config" field.
 	DefaultAvailabilityProbeConfig domain.GroupAvailabilityProbeConfig
+	// DefaultHealthCheckEnabled holds the default value on creation for the "health_check_enabled" field.
+	DefaultHealthCheckEnabled bool
+	// DefaultHealthCheckIntervalSec holds the default value on creation for the "health_check_interval_sec" field.
+	DefaultHealthCheckIntervalSec int
+	// DefaultHealthCheckTimeoutSec holds the default value on creation for the "health_check_timeout_sec" field.
+	DefaultHealthCheckTimeoutSec int
+	// DefaultHealthCheckFailureThreshold holds the default value on creation for the "health_check_failure_threshold" field.
+	DefaultHealthCheckFailureThreshold int
+	// DefaultHealthCheckSuccessThreshold holds the default value on creation for the "health_check_success_threshold" field.
+	DefaultHealthCheckSuccessThreshold int
+	// DefaultHealthConsecutiveFailures holds the default value on creation for the "health_consecutive_failures" field.
+	DefaultHealthConsecutiveFailures int
+	// DefaultHealthConsecutiveSuccesses holds the default value on creation for the "health_consecutive_successes" field.
+	DefaultHealthConsecutiveSuccesses int
+	// DefaultHealthStatus holds the default value on creation for the "health_status" field.
+	DefaultHealthStatus string
+	// HealthStatusValidator is a validator for the "health_status" field. It is called by the builders before save.
+	HealthStatusValidator func(string) error
 	// DefaultRpmLimit holds the default value on creation for the "rpm_limit" field.
 	DefaultRpmLimit int
 	// DefaultDataSharingEnabled holds the default value on creation for the "data_sharing_enabled" field.
@@ -559,6 +604,51 @@ func ByRequirePrivacySet(opts ...sql.OrderTermOption) OrderOption {
 // ByDefaultMappedModel orders the results by the default_mapped_model field.
 func ByDefaultMappedModel(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDefaultMappedModel, opts...).ToFunc()
+}
+
+// ByHealthCheckEnabled orders the results by the health_check_enabled field.
+func ByHealthCheckEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthCheckEnabled, opts...).ToFunc()
+}
+
+// ByHealthCheckIntervalSec orders the results by the health_check_interval_sec field.
+func ByHealthCheckIntervalSec(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthCheckIntervalSec, opts...).ToFunc()
+}
+
+// ByHealthCheckTimeoutSec orders the results by the health_check_timeout_sec field.
+func ByHealthCheckTimeoutSec(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthCheckTimeoutSec, opts...).ToFunc()
+}
+
+// ByHealthCheckFailureThreshold orders the results by the health_check_failure_threshold field.
+func ByHealthCheckFailureThreshold(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthCheckFailureThreshold, opts...).ToFunc()
+}
+
+// ByHealthCheckSuccessThreshold orders the results by the health_check_success_threshold field.
+func ByHealthCheckSuccessThreshold(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthCheckSuccessThreshold, opts...).ToFunc()
+}
+
+// ByHealthLastCheckAt orders the results by the health_last_check_at field.
+func ByHealthLastCheckAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthLastCheckAt, opts...).ToFunc()
+}
+
+// ByHealthConsecutiveFailures orders the results by the health_consecutive_failures field.
+func ByHealthConsecutiveFailures(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthConsecutiveFailures, opts...).ToFunc()
+}
+
+// ByHealthConsecutiveSuccesses orders the results by the health_consecutive_successes field.
+func ByHealthConsecutiveSuccesses(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthConsecutiveSuccesses, opts...).ToFunc()
+}
+
+// ByHealthStatus orders the results by the health_status field.
+func ByHealthStatus(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthStatus, opts...).ToFunc()
 }
 
 // ByRpmLimit orders the results by the rpm_limit field.

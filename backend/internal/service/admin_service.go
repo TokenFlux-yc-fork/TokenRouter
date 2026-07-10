@@ -51,6 +51,8 @@ type AdminService interface {
 	ClearGroupRPMOverrides(ctx context.Context, groupID int64) error
 	BatchSetGroupRPMOverrides(ctx context.Context, groupID int64, entries []GroupRPMOverrideInput) error
 	UpdateGroupSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error
+	UpdateGroupHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error
+	ForceGroupHealthCheck(ctx context.Context, groupID int64) error
 
 	// API Key management (admin)
 	AdminResetAPIKeyRateLimitUsage(ctx context.Context, keyID int64) (*APIKey, error)
@@ -250,7 +252,12 @@ type CreateGroupInput struct {
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
 	ModelsListConfig            GroupModelsListConfig
 	// AvailabilityProbeConfig 控制分组主动可用性探测。
-	AvailabilityProbeConfig GroupAvailabilityProbeConfig
+	AvailabilityProbeConfig     GroupAvailabilityProbeConfig
+	HealthCheckEnabled          bool
+	HealthCheckIntervalSec      int
+	HealthCheckTimeoutSec       int
+	HealthCheckFailureThreshold int
+	HealthCheckSuccessThreshold int
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
 	RPMLimit int
 	// 从指定分组复制账号（创建分组后在同一事务内绑定）
@@ -311,7 +318,12 @@ type UpdateGroupInput struct {
 	MessagesDispatchModelConfig *OpenAIMessagesDispatchModelConfig
 	ModelsListConfig            *GroupModelsListConfig
 	// AvailabilityProbeConfig 为 nil 时不修改探测配置。
-	AvailabilityProbeConfig *GroupAvailabilityProbeConfig
+	AvailabilityProbeConfig     *GroupAvailabilityProbeConfig
+	HealthCheckEnabled          *bool
+	HealthCheckIntervalSec      *int
+	HealthCheckTimeoutSec       *int
+	HealthCheckFailureThreshold *int
+	HealthCheckSuccessThreshold *int
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
 	RPMLimit *int
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
