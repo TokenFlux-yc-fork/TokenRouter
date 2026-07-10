@@ -42,7 +42,10 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 		FROM groups
 		WHERE deleted_at IS NULL
 		  AND status = 'active'
-		  AND availability_probe_config @> '{"enabled": true}'::jsonb
+		  AND (
+		    availability_probe_config @> '{"enabled": true}'::jsonb
+		    OR health_check_enabled = true
+		  )
 		ON CONFLICT (group_id) DO NOTHING
 	`, now); err != nil {
 		return nil, err
@@ -56,7 +59,10 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 			WHERE g.id = s.group_id
 			  AND g.deleted_at IS NULL
 			  AND g.status = 'active'
-			  AND g.availability_probe_config @> '{"enabled": true}'::jsonb
+			  AND (
+			    g.availability_probe_config @> '{"enabled": true}'::jsonb
+			    OR g.health_check_enabled = true
+			  )
 		)
 	`); err != nil {
 		return nil, err
@@ -69,7 +75,10 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 			JOIN groups g ON g.id = s.group_id
 			WHERE g.deleted_at IS NULL
 			  AND g.status = 'active'
-			  AND g.availability_probe_config @> '{"enabled": true}'::jsonb
+			  AND (
+			    g.availability_probe_config @> '{"enabled": true}'::jsonb
+			    OR g.health_check_enabled = true
+			  )
 			  AND (s.next_run_at IS NULL OR s.next_run_at <= $1)
 			  AND (s.locked_until IS NULL OR s.locked_until <= $1)
 			ORDER BY COALESCE(s.next_run_at, 'epoch'::timestamptz), s.group_id
@@ -85,7 +94,12 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 			WHERE s.group_id = due.group_id
 			RETURNING s.group_id
 		)
-		SELECT g.id, g.name, g.platform, g.availability_probe_config
+		SELECT
+			g.id, g.name, g.platform, g.availability_probe_config,
+			g.health_check_enabled, g.health_check_interval_sec, g.health_check_timeout_sec,
+			g.health_check_failure_threshold, g.health_check_success_threshold,
+			g.health_consecutive_failures, g.health_consecutive_successes,
+			g.health_status, g.health_last_check_at
 		FROM claimed c
 		JOIN groups g ON g.id = c.group_id
 		ORDER BY g.id
@@ -99,7 +113,21 @@ func (r *groupAvailabilityProbeRepository) ClaimDue(ctx context.Context, now tim
 	for rows.Next() {
 		var item service.GroupAvailabilityProbeDueGroup
 		var rawConfig []byte
-		if err := rows.Scan(&item.GroupID, &item.Name, &item.Platform, &rawConfig); err != nil {
+		if err := rows.Scan(
+			&item.GroupID,
+			&item.Name,
+			&item.Platform,
+			&rawConfig,
+			&item.HealthCheckEnabled,
+			&item.HealthCheckIntervalSec,
+			&item.HealthCheckTimeoutSec,
+			&item.HealthCheckFailureThreshold,
+			&item.HealthCheckSuccessThreshold,
+			&item.HealthConsecutiveFailures,
+			&item.HealthConsecutiveSuccesses,
+			&item.HealthStatus,
+			&item.HealthLastCheckAt,
+		); err != nil {
 			return nil, err
 		}
 		if len(rawConfig) > 0 {
@@ -215,6 +243,7 @@ func (r *groupAvailabilityProbeRepository) GetSummaryByGroupIDs(ctx context.Cont
 		WHERE group_id = ANY($1)
 		  AND started_at >= $2
 		  AND started_at < $3
+		  AND model_id <> ''
 		GROUP BY group_id, bucket_index
 	`, pq.Array(groupIDs), startUTC, endUTC, bucketMinutes)
 	if err != nil {
@@ -257,6 +286,7 @@ func (r *groupAvailabilityProbeRepository) GetSummaryByGroupIDs(ctx context.Cont
 			group_id, status, finished_at
 		FROM group_availability_probe_results
 		WHERE group_id = ANY($1)
+		  AND model_id <> ''
 		ORDER BY group_id, started_at DESC, id DESC
 	`, pq.Array(groupIDs))
 	if err != nil {
