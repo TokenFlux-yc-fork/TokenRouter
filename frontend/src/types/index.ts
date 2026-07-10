@@ -681,6 +681,10 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  // OpenAI Codex 备用号池配置（仅管理员可见）
+  backup_pool_group_id: number | null
+  backup_pool_refill_threshold_points: number
+
   // 模型路由配置（仅管理员可见，内部信息）
   model_routing: Record<string, number[]> | null
   model_routing_enabled: boolean
@@ -820,6 +824,8 @@ export interface CreateGroupRequest {
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
   unavailable_fallback_group_id?: number | null
+  backup_pool_group_id?: number | null
+  backup_pool_refill_threshold_points?: number
   mcp_xml_inject?: boolean
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
@@ -871,6 +877,8 @@ export interface UpdateGroupRequest {
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
   unavailable_fallback_group_id?: number | null
+  backup_pool_group_id?: number | null
+  backup_pool_refill_threshold_points?: number
   mcp_xml_inject?: boolean
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
