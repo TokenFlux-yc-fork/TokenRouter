@@ -1382,6 +1382,84 @@ func TestOpenAIStreamingResponseFailedCapacityBeforeOutputReturnsFailover(t *tes
 	require.Empty(t, rec.Body.String())
 }
 
+func TestOpenAIStreamingCapacityUsesCurrentAttemptOutputBaseline(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	testCases := []struct {
+		name        string
+		passthrough bool
+		priorPing   bool
+		bindRule    bool
+	}{
+		{name: "main_after_prior_ping", priorPing: true},
+		{name: "passthrough_after_prior_ping", passthrough: true, priorPing: true},
+		{name: "main_bypasses_matching_passthrough_rule", bindRule: true},
+		{name: "passthrough_bypasses_matching_passthrough_rule", passthrough: true, bindRule: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			if tc.priorPing {
+				_, err := c.Writer.WriteString(":\n\n")
+				require.NoError(t, err)
+			}
+			bodyBeforeAttempt := rec.Body.String()
+
+			if tc.bindRule {
+				rule := newNonFailoverPassthroughRule(
+					http.StatusServiceUnavailable,
+					"selected model is at capacity",
+					http.StatusTeapot,
+					"capacity must not reach the client",
+				)
+				rule.Platforms = []string{PlatformOpenAI}
+				ruleSvc := &ErrorPassthroughService{}
+				ruleSvc.setLocalCache([]*model.ErrorPassthroughRule{rule})
+				BindErrorPassthroughService(c, ruleSvc)
+			}
+
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					"event: response.created",
+					`data: {"type":"response.created","response":{"id":"resp_capacity_baseline"}}`,
+					"",
+					"event: response.failed",
+					`data: {"type":"response.failed","response":{"id":"resp_capacity_baseline","instructions":"echoed context_length_exceeded and cybersecurity risk text","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`,
+					"",
+				}, "\n"))),
+				Header: http.Header{"X-Request-Id": []string{"rid-capacity-baseline"}},
+			}
+			account := &Account{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Name:        "pool-account",
+				Type:        AccountTypeAPIKey,
+				Credentials: map[string]any{"pool_mode": true},
+			}
+			svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+			var err error
+			if tc.passthrough {
+				_, err = svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+			} else {
+				_, err = svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+			}
+
+			require.Error(t, err)
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.True(t, failoverErr.RetryableOnSameAccount)
+			require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
+			require.Equal(t, bodyBeforeAttempt, rec.Body.String(), "failed attempt must not add downstream output")
+			require.False(t, IsResponseCommitted(c), "capacity must bypass configured passthrough rules")
+		})
+	}
+}
+
 func TestOpenAIStreamingResponseFailedBeforeOutputServerOverloadedCodeReturnsFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{

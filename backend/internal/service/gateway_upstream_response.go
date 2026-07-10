@@ -281,28 +281,78 @@ func ExtractUpstreamErrorMessage(body []byte) string {
 	return extractUpstreamErrorMessage(body)
 }
 
+func isGenericEmbeddedUpstreamMessageEnvelope(value string) bool {
+	if isGenericUpstreamEnvelopeCode(value) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "error", "response.failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func canUnwrapEmbeddedUpstreamErrorMessage(body []byte, codePath string) bool {
+	typePath := strings.TrimSuffix(codePath, "code") + "type"
+	for _, path := range []string{codePath, typePath, "code"} {
+		code := strings.TrimSpace(gjson.GetBytes(body, path).String())
+		if code != "" && !isGenericEmbeddedUpstreamMessageEnvelope(code) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasAuthoritativeEmbeddedUpstreamErrorMessage(body []byte) bool {
+	if !gjson.ValidBytes(body) {
+		return false
+	}
+	for _, candidate := range []struct {
+		messagePath string
+		codePath    string
+	}{
+		{messagePath: "error.message", codePath: "error.code"},
+		{messagePath: "response.error.message", codePath: "response.error.code"},
+		{messagePath: "response.status_details.error.message", codePath: "response.status_details.error.code"},
+		{messagePath: "message", codePath: "code"},
+	} {
+		message := gjson.GetBytes(body, candidate.messagePath).String()
+		if len(embeddedJSONCandidates(message)) > 0 && !canUnwrapEmbeddedUpstreamErrorMessage(body, candidate.codePath) {
+			return true
+		}
+	}
+	return false
+}
+
 func extractUpstreamErrorMessage(body []byte) string {
 	// Claude 风格：{"type":"error","error":{"type":"...","message":"..."}}
 	if m := gjson.GetBytes(body, "error.message").String(); strings.TrimSpace(m) != "" {
 		// 有些上游会把完整 JSON 作为字符串塞进 message
-		if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
-			return innerMsg
+		if canUnwrapEmbeddedUpstreamErrorMessage(body, "error.code") {
+			if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+				return innerMsg
+			}
 		}
 		return m
 	}
 
 	// OpenAI Responses 风格：{"response":{"error":{"message":"..."}}}
 	if m := gjson.GetBytes(body, "response.error.message").String(); strings.TrimSpace(m) != "" {
-		if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
-			return innerMsg
+		if canUnwrapEmbeddedUpstreamErrorMessage(body, "response.error.code") {
+			if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+				return innerMsg
+			}
 		}
 		return m
 	}
 
 	// OpenAI Responses status_details 风格：{"response":{"status_details":{"error":{"message":"..."}}}}
 	if m := gjson.GetBytes(body, "response.status_details.error.message").String(); strings.TrimSpace(m) != "" {
-		if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
-			return innerMsg
+		if canUnwrapEmbeddedUpstreamErrorMessage(body, "response.status_details.error.code") {
+			if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+				return innerMsg
+			}
 		}
 		return m
 	}
@@ -314,8 +364,10 @@ func extractUpstreamErrorMessage(body []byte) string {
 
 	// 兜底：尝试顶层 message
 	if m := gjson.GetBytes(body, "message").String(); strings.TrimSpace(m) != "" {
-		if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
-			return innerMsg
+		if canUnwrapEmbeddedUpstreamErrorMessage(body, "code") {
+			if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+				return innerMsg
+			}
 		}
 		return m
 	}
@@ -411,7 +463,7 @@ func embeddedJSONCandidates(text string) []string {
 
 func isGenericUpstreamEnvelopeCode(code string) bool {
 	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "upstream_error", "api_error", "server_error", "bad_request", "invalid_request", "invalid_request_error":
+	case "upstream_error", "api_error":
 		return true
 	default:
 		return false

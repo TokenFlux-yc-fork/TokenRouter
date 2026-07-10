@@ -67,6 +67,17 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 	if err == nil {
 		return nil
 	}
+	// HTTP upstream requests use context.WithoutCancel so usage can still be
+	// drained after disconnect. The original request context remains the
+	// authority for whether a new account attempt is allowed.
+	if ctx != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
 	safeErr := sanitizeUpstreamErrorMessage(err.Error())
 	platform, accountName := "", ""
 	var accountID int64
@@ -86,10 +97,6 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 		Message:            safeErr,
 	})
 
-	// 客户端断开不是账号故障，不应切换到其它账号继续消耗请求。
-	if errors.Is(err, context.Canceled) {
-		return err
-	}
 	if classifyOpenAITransportError(err).Persistent {
 		s.tempUnscheduleOpenAITransportError(ctx, account, safeErr)
 	}

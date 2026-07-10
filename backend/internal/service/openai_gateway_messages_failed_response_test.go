@@ -148,6 +148,8 @@ func TestForwardAsAnthropic_StreamingCapacityBeforeOutputReturnsFailover(t *test
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.created","response":{"id":"resp_capacity_before_output","model":"gpt-5.5","status":"in_progress","output":[]}}`,
+			"",
 			`event: response.failed`,
 			`data: {"type":"response.failed","response":{"id":"resp_capacity_before_output","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`,
 			"",
@@ -161,7 +163,7 @@ func TestForwardAsAnthropic_StreamingCapacityBeforeOutputReturnsFailover(t *test
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
 	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
-	require.NotNil(t, result)
+	require.Nil(t, result)
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
 }
@@ -201,7 +203,7 @@ func TestForwardAsAnthropic_StreamingCapacityAfterOutputDoesNotFailover(t *testi
 	require.Contains(t, rec.Body.String(), "Selected model is at capacity")
 }
 
-func TestForwardAsAnthropic_StreamingCapacityAfterKeepaliveWritesSSEError(t *testing.T) {
+func TestForwardAsAnthropic_StreamingCapacityAfterKeepaliveStillReturnsFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := []byte(`{"model":"gpt-5.5","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
@@ -226,9 +228,10 @@ func TestForwardAsAnthropic_StreamingCapacityAfterKeepaliveWritesSSEError(t *tes
 
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr))
-	require.NotNil(t, result)
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
+	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.Contains(t, rec.Body.String(), ":\n\n")
-	require.Contains(t, rec.Body.String(), "event: error")
-	require.Contains(t, rec.Body.String(), "Selected model is at capacity")
+	require.NotContains(t, rec.Body.String(), "event: error")
+	require.NotContains(t, rec.Body.String(), "Selected model is at capacity")
 }
