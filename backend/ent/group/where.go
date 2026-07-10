@@ -260,6 +260,51 @@ func DefaultMappedModel(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDefaultMappedModel, v))
 }
 
+// HealthCheckEnabled applies equality check predicate on the "health_check_enabled" field. It's identical to HealthCheckEnabledEQ.
+func HealthCheckEnabled(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckEnabled, v))
+}
+
+// HealthCheckIntervalSec applies equality check predicate on the "health_check_interval_sec" field. It's identical to HealthCheckIntervalSecEQ.
+func HealthCheckIntervalSec(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckIntervalSec, v))
+}
+
+// HealthCheckTimeoutSec applies equality check predicate on the "health_check_timeout_sec" field. It's identical to HealthCheckTimeoutSecEQ.
+func HealthCheckTimeoutSec(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckTimeoutSec, v))
+}
+
+// HealthCheckFailureThreshold applies equality check predicate on the "health_check_failure_threshold" field. It's identical to HealthCheckFailureThresholdEQ.
+func HealthCheckFailureThreshold(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckFailureThreshold, v))
+}
+
+// HealthCheckSuccessThreshold applies equality check predicate on the "health_check_success_threshold" field. It's identical to HealthCheckSuccessThresholdEQ.
+func HealthCheckSuccessThreshold(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckSuccessThreshold, v))
+}
+
+// HealthLastCheckAt applies equality check predicate on the "health_last_check_at" field. It's identical to HealthLastCheckAtEQ.
+func HealthLastCheckAt(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthLastCheckAt, v))
+}
+
+// HealthConsecutiveFailures applies equality check predicate on the "health_consecutive_failures" field. It's identical to HealthConsecutiveFailuresEQ.
+func HealthConsecutiveFailures(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthConsecutiveFailures, v))
+}
+
+// HealthConsecutiveSuccesses applies equality check predicate on the "health_consecutive_successes" field. It's identical to HealthConsecutiveSuccessesEQ.
+func HealthConsecutiveSuccesses(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthConsecutiveSuccesses, v))
+}
+
+// HealthStatus applies equality check predicate on the "health_status" field. It's identical to HealthStatusEQ.
+func HealthStatus(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthStatus, v))
+}
+
 // RpmLimit applies equality check predicate on the "rpm_limit" field. It's identical to RpmLimitEQ.
 func RpmLimit(v int) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldRpmLimit, v))
@@ -1853,6 +1898,371 @@ func DefaultMappedModelEqualFold(v string) predicate.Group {
 // DefaultMappedModelContainsFold applies the ContainsFold predicate on the "default_mapped_model" field.
 func DefaultMappedModelContainsFold(v string) predicate.Group {
 	return predicate.Group(sql.FieldContainsFold(FieldDefaultMappedModel, v))
+}
+
+// HealthCheckEnabledEQ applies the EQ predicate on the "health_check_enabled" field.
+func HealthCheckEnabledEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckEnabled, v))
+}
+
+// HealthCheckEnabledNEQ applies the NEQ predicate on the "health_check_enabled" field.
+func HealthCheckEnabledNEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthCheckEnabled, v))
+}
+
+// HealthCheckIntervalSecEQ applies the EQ predicate on the "health_check_interval_sec" field.
+func HealthCheckIntervalSecEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckIntervalSec, v))
+}
+
+// HealthCheckIntervalSecNEQ applies the NEQ predicate on the "health_check_interval_sec" field.
+func HealthCheckIntervalSecNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthCheckIntervalSec, v))
+}
+
+// HealthCheckIntervalSecIn applies the In predicate on the "health_check_interval_sec" field.
+func HealthCheckIntervalSecIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldHealthCheckIntervalSec, vs...))
+}
+
+// HealthCheckIntervalSecNotIn applies the NotIn predicate on the "health_check_interval_sec" field.
+func HealthCheckIntervalSecNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldHealthCheckIntervalSec, vs...))
+}
+
+// HealthCheckIntervalSecGT applies the GT predicate on the "health_check_interval_sec" field.
+func HealthCheckIntervalSecGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldHealthCheckIntervalSec, v))
+}
+
+// HealthCheckIntervalSecGTE applies the GTE predicate on the "health_check_interval_sec" field.
+func HealthCheckIntervalSecGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldHealthCheckIntervalSec, v))
+}
+
+// HealthCheckIntervalSecLT applies the LT predicate on the "health_check_interval_sec" field.
+func HealthCheckIntervalSecLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldHealthCheckIntervalSec, v))
+}
+
+// HealthCheckIntervalSecLTE applies the LTE predicate on the "health_check_interval_sec" field.
+func HealthCheckIntervalSecLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldHealthCheckIntervalSec, v))
+}
+
+// HealthCheckTimeoutSecEQ applies the EQ predicate on the "health_check_timeout_sec" field.
+func HealthCheckTimeoutSecEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckTimeoutSec, v))
+}
+
+// HealthCheckTimeoutSecNEQ applies the NEQ predicate on the "health_check_timeout_sec" field.
+func HealthCheckTimeoutSecNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthCheckTimeoutSec, v))
+}
+
+// HealthCheckTimeoutSecIn applies the In predicate on the "health_check_timeout_sec" field.
+func HealthCheckTimeoutSecIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldHealthCheckTimeoutSec, vs...))
+}
+
+// HealthCheckTimeoutSecNotIn applies the NotIn predicate on the "health_check_timeout_sec" field.
+func HealthCheckTimeoutSecNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldHealthCheckTimeoutSec, vs...))
+}
+
+// HealthCheckTimeoutSecGT applies the GT predicate on the "health_check_timeout_sec" field.
+func HealthCheckTimeoutSecGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldHealthCheckTimeoutSec, v))
+}
+
+// HealthCheckTimeoutSecGTE applies the GTE predicate on the "health_check_timeout_sec" field.
+func HealthCheckTimeoutSecGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldHealthCheckTimeoutSec, v))
+}
+
+// HealthCheckTimeoutSecLT applies the LT predicate on the "health_check_timeout_sec" field.
+func HealthCheckTimeoutSecLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldHealthCheckTimeoutSec, v))
+}
+
+// HealthCheckTimeoutSecLTE applies the LTE predicate on the "health_check_timeout_sec" field.
+func HealthCheckTimeoutSecLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldHealthCheckTimeoutSec, v))
+}
+
+// HealthCheckFailureThresholdEQ applies the EQ predicate on the "health_check_failure_threshold" field.
+func HealthCheckFailureThresholdEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckFailureThreshold, v))
+}
+
+// HealthCheckFailureThresholdNEQ applies the NEQ predicate on the "health_check_failure_threshold" field.
+func HealthCheckFailureThresholdNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthCheckFailureThreshold, v))
+}
+
+// HealthCheckFailureThresholdIn applies the In predicate on the "health_check_failure_threshold" field.
+func HealthCheckFailureThresholdIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldHealthCheckFailureThreshold, vs...))
+}
+
+// HealthCheckFailureThresholdNotIn applies the NotIn predicate on the "health_check_failure_threshold" field.
+func HealthCheckFailureThresholdNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldHealthCheckFailureThreshold, vs...))
+}
+
+// HealthCheckFailureThresholdGT applies the GT predicate on the "health_check_failure_threshold" field.
+func HealthCheckFailureThresholdGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldHealthCheckFailureThreshold, v))
+}
+
+// HealthCheckFailureThresholdGTE applies the GTE predicate on the "health_check_failure_threshold" field.
+func HealthCheckFailureThresholdGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldHealthCheckFailureThreshold, v))
+}
+
+// HealthCheckFailureThresholdLT applies the LT predicate on the "health_check_failure_threshold" field.
+func HealthCheckFailureThresholdLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldHealthCheckFailureThreshold, v))
+}
+
+// HealthCheckFailureThresholdLTE applies the LTE predicate on the "health_check_failure_threshold" field.
+func HealthCheckFailureThresholdLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldHealthCheckFailureThreshold, v))
+}
+
+// HealthCheckSuccessThresholdEQ applies the EQ predicate on the "health_check_success_threshold" field.
+func HealthCheckSuccessThresholdEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthCheckSuccessThreshold, v))
+}
+
+// HealthCheckSuccessThresholdNEQ applies the NEQ predicate on the "health_check_success_threshold" field.
+func HealthCheckSuccessThresholdNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthCheckSuccessThreshold, v))
+}
+
+// HealthCheckSuccessThresholdIn applies the In predicate on the "health_check_success_threshold" field.
+func HealthCheckSuccessThresholdIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldHealthCheckSuccessThreshold, vs...))
+}
+
+// HealthCheckSuccessThresholdNotIn applies the NotIn predicate on the "health_check_success_threshold" field.
+func HealthCheckSuccessThresholdNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldHealthCheckSuccessThreshold, vs...))
+}
+
+// HealthCheckSuccessThresholdGT applies the GT predicate on the "health_check_success_threshold" field.
+func HealthCheckSuccessThresholdGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldHealthCheckSuccessThreshold, v))
+}
+
+// HealthCheckSuccessThresholdGTE applies the GTE predicate on the "health_check_success_threshold" field.
+func HealthCheckSuccessThresholdGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldHealthCheckSuccessThreshold, v))
+}
+
+// HealthCheckSuccessThresholdLT applies the LT predicate on the "health_check_success_threshold" field.
+func HealthCheckSuccessThresholdLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldHealthCheckSuccessThreshold, v))
+}
+
+// HealthCheckSuccessThresholdLTE applies the LTE predicate on the "health_check_success_threshold" field.
+func HealthCheckSuccessThresholdLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldHealthCheckSuccessThreshold, v))
+}
+
+// HealthLastCheckAtEQ applies the EQ predicate on the "health_last_check_at" field.
+func HealthLastCheckAtEQ(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthLastCheckAt, v))
+}
+
+// HealthLastCheckAtNEQ applies the NEQ predicate on the "health_last_check_at" field.
+func HealthLastCheckAtNEQ(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthLastCheckAt, v))
+}
+
+// HealthLastCheckAtIn applies the In predicate on the "health_last_check_at" field.
+func HealthLastCheckAtIn(vs ...time.Time) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldHealthLastCheckAt, vs...))
+}
+
+// HealthLastCheckAtNotIn applies the NotIn predicate on the "health_last_check_at" field.
+func HealthLastCheckAtNotIn(vs ...time.Time) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldHealthLastCheckAt, vs...))
+}
+
+// HealthLastCheckAtGT applies the GT predicate on the "health_last_check_at" field.
+func HealthLastCheckAtGT(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldHealthLastCheckAt, v))
+}
+
+// HealthLastCheckAtGTE applies the GTE predicate on the "health_last_check_at" field.
+func HealthLastCheckAtGTE(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldHealthLastCheckAt, v))
+}
+
+// HealthLastCheckAtLT applies the LT predicate on the "health_last_check_at" field.
+func HealthLastCheckAtLT(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldHealthLastCheckAt, v))
+}
+
+// HealthLastCheckAtLTE applies the LTE predicate on the "health_last_check_at" field.
+func HealthLastCheckAtLTE(v time.Time) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldHealthLastCheckAt, v))
+}
+
+// HealthLastCheckAtIsNil applies the IsNil predicate on the "health_last_check_at" field.
+func HealthLastCheckAtIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldHealthLastCheckAt))
+}
+
+// HealthLastCheckAtNotNil applies the NotNil predicate on the "health_last_check_at" field.
+func HealthLastCheckAtNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldHealthLastCheckAt))
+}
+
+// HealthConsecutiveFailuresEQ applies the EQ predicate on the "health_consecutive_failures" field.
+func HealthConsecutiveFailuresEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthConsecutiveFailures, v))
+}
+
+// HealthConsecutiveFailuresNEQ applies the NEQ predicate on the "health_consecutive_failures" field.
+func HealthConsecutiveFailuresNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthConsecutiveFailures, v))
+}
+
+// HealthConsecutiveFailuresIn applies the In predicate on the "health_consecutive_failures" field.
+func HealthConsecutiveFailuresIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldHealthConsecutiveFailures, vs...))
+}
+
+// HealthConsecutiveFailuresNotIn applies the NotIn predicate on the "health_consecutive_failures" field.
+func HealthConsecutiveFailuresNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldHealthConsecutiveFailures, vs...))
+}
+
+// HealthConsecutiveFailuresGT applies the GT predicate on the "health_consecutive_failures" field.
+func HealthConsecutiveFailuresGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldHealthConsecutiveFailures, v))
+}
+
+// HealthConsecutiveFailuresGTE applies the GTE predicate on the "health_consecutive_failures" field.
+func HealthConsecutiveFailuresGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldHealthConsecutiveFailures, v))
+}
+
+// HealthConsecutiveFailuresLT applies the LT predicate on the "health_consecutive_failures" field.
+func HealthConsecutiveFailuresLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldHealthConsecutiveFailures, v))
+}
+
+// HealthConsecutiveFailuresLTE applies the LTE predicate on the "health_consecutive_failures" field.
+func HealthConsecutiveFailuresLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldHealthConsecutiveFailures, v))
+}
+
+// HealthConsecutiveSuccessesEQ applies the EQ predicate on the "health_consecutive_successes" field.
+func HealthConsecutiveSuccessesEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthConsecutiveSuccesses, v))
+}
+
+// HealthConsecutiveSuccessesNEQ applies the NEQ predicate on the "health_consecutive_successes" field.
+func HealthConsecutiveSuccessesNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthConsecutiveSuccesses, v))
+}
+
+// HealthConsecutiveSuccessesIn applies the In predicate on the "health_consecutive_successes" field.
+func HealthConsecutiveSuccessesIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldHealthConsecutiveSuccesses, vs...))
+}
+
+// HealthConsecutiveSuccessesNotIn applies the NotIn predicate on the "health_consecutive_successes" field.
+func HealthConsecutiveSuccessesNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldHealthConsecutiveSuccesses, vs...))
+}
+
+// HealthConsecutiveSuccessesGT applies the GT predicate on the "health_consecutive_successes" field.
+func HealthConsecutiveSuccessesGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldHealthConsecutiveSuccesses, v))
+}
+
+// HealthConsecutiveSuccessesGTE applies the GTE predicate on the "health_consecutive_successes" field.
+func HealthConsecutiveSuccessesGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldHealthConsecutiveSuccesses, v))
+}
+
+// HealthConsecutiveSuccessesLT applies the LT predicate on the "health_consecutive_successes" field.
+func HealthConsecutiveSuccessesLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldHealthConsecutiveSuccesses, v))
+}
+
+// HealthConsecutiveSuccessesLTE applies the LTE predicate on the "health_consecutive_successes" field.
+func HealthConsecutiveSuccessesLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldHealthConsecutiveSuccesses, v))
+}
+
+// HealthStatusEQ applies the EQ predicate on the "health_status" field.
+func HealthStatusEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldHealthStatus, v))
+}
+
+// HealthStatusNEQ applies the NEQ predicate on the "health_status" field.
+func HealthStatusNEQ(v string) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldHealthStatus, v))
+}
+
+// HealthStatusIn applies the In predicate on the "health_status" field.
+func HealthStatusIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldHealthStatus, vs...))
+}
+
+// HealthStatusNotIn applies the NotIn predicate on the "health_status" field.
+func HealthStatusNotIn(vs ...string) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldHealthStatus, vs...))
+}
+
+// HealthStatusGT applies the GT predicate on the "health_status" field.
+func HealthStatusGT(v string) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldHealthStatus, v))
+}
+
+// HealthStatusGTE applies the GTE predicate on the "health_status" field.
+func HealthStatusGTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldHealthStatus, v))
+}
+
+// HealthStatusLT applies the LT predicate on the "health_status" field.
+func HealthStatusLT(v string) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldHealthStatus, v))
+}
+
+// HealthStatusLTE applies the LTE predicate on the "health_status" field.
+func HealthStatusLTE(v string) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldHealthStatus, v))
+}
+
+// HealthStatusContains applies the Contains predicate on the "health_status" field.
+func HealthStatusContains(v string) predicate.Group {
+	return predicate.Group(sql.FieldContains(FieldHealthStatus, v))
+}
+
+// HealthStatusHasPrefix applies the HasPrefix predicate on the "health_status" field.
+func HealthStatusHasPrefix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasPrefix(FieldHealthStatus, v))
+}
+
+// HealthStatusHasSuffix applies the HasSuffix predicate on the "health_status" field.
+func HealthStatusHasSuffix(v string) predicate.Group {
+	return predicate.Group(sql.FieldHasSuffix(FieldHealthStatus, v))
+}
+
+// HealthStatusEqualFold applies the EqualFold predicate on the "health_status" field.
+func HealthStatusEqualFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldEqualFold(FieldHealthStatus, v))
+}
+
+// HealthStatusContainsFold applies the ContainsFold predicate on the "health_status" field.
+func HealthStatusContainsFold(v string) predicate.Group {
+	return predicate.Group(sql.FieldContainsFold(FieldHealthStatus, v))
 }
 
 // RpmLimitEQ applies the EQ predicate on the "rpm_limit" field.

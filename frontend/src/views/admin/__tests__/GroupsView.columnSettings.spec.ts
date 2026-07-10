@@ -42,6 +42,7 @@ const messages: Record<string, string> = {
   'admin.groups.columns.capacity': 'Capacity',
   'admin.groups.columns.usage': 'Usage',
   'admin.groups.columns.status': 'Status',
+  'admin.groups.health.status': 'Health',
   'admin.groups.columns.actions': 'Actions',
 }
 
@@ -279,6 +280,7 @@ describe('admin GroupsView column settings', () => {
       'capacity',
       'usage',
       'status',
+      'health_status',
       'actions',
     ])
   })
@@ -302,6 +304,7 @@ describe('admin GroupsView column settings', () => {
       'session_isolation_enabled',
       'account_count',
       'status',
+      'health_status',
       'actions',
     ])
   })
@@ -324,6 +327,7 @@ describe('admin GroupsView column settings', () => {
       'account_count',
       'capacity',
       'status',
+      'health_status',
       'actions',
     ])
     expect(localStorage.getItem('group-hidden-columns')).toBe(JSON.stringify(['usage']))
