@@ -758,6 +758,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		pendingPreamble := make([][]byte, 0, 2)
 		firstEventType := ""
 		lastEventType := ""
+		var pendingErrorBody []byte
+		pendingErrorCode := ""
+		pendingErrorType := ""
+		pendingErrorMessage := ""
 		needModelReplace := false
 		clientDisconnected := false
 		emitClientMessage := func(message []byte) error {
@@ -800,6 +804,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
 			if readErr != nil {
 				lease.MarkBroken()
+				if len(pendingErrorBody) > 0 {
+					s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, pendingErrorBody, pendingErrorCode, pendingErrorType, pendingErrorMessage)
+				}
 				return nil, wrapOpenAIWSIngressTurnError(
 					"read_upstream",
 					fmt.Errorf("read upstream websocket event: %w", readErr),
@@ -886,6 +893,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						ResponseHeaders: cloneHeader(lease.HandshakeHeaders()),
 					}
 				}
+				pendingErrorBody = append(pendingErrorBody[:0], upstreamMessage...)
+				pendingErrorCode = errCodeRaw
+				pendingErrorType = errTypeRaw
+				pendingErrorMessage = errMsgRaw
 			}
 			if warning := buildOpenAIWSUpstreamWarning(eventType, upstreamMessage); warning != nil && hooks != nil && hooks.OnUpstreamError != nil {
 				hooks.OnUpstreamError(turn, originalModel, warning.StatusCode, warning.ResponseBody, warning.Message)
@@ -978,6 +989,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				)
 			}
 			if isTerminalEvent {
+				switch eventType {
+				case "response.completed", "response.done":
+					pendingErrorBody = nil
+				default:
+					if len(pendingErrorBody) > 0 {
+						s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, pendingErrorBody, pendingErrorCode, pendingErrorType, pendingErrorMessage)
+					}
+				}
 				terminalResponseBody = openAIWSTerminalEventResponseBody(upstreamMessage)
 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
 				if clientDisconnected {

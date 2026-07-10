@@ -388,6 +388,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
 			s.persistOpenAIWSErrorSignal(ctx, account, resp.Header, upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
+			s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
 			errMessage := strings.TrimSpace(errMsgRaw)
 			if errMessage == "" {
 				errMessage = "upstream error event"

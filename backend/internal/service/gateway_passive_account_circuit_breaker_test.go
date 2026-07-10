@@ -25,7 +25,15 @@ type gatewayPassiveBreakerCall struct {
 
 type gatewayPassiveBreakerAccountRepo struct {
 	AccountRepository
-	calls []gatewayPassiveBreakerCall
+	account *Account
+	calls   []gatewayPassiveBreakerCall
+}
+
+func (r *gatewayPassiveBreakerAccountRepo) GetByID(_ context.Context, accountID int64) (*Account, error) {
+	if r.account == nil || r.account.ID != accountID {
+		return nil, errors.New("account not found")
+	}
+	return r.account, nil
 }
 
 func (r *gatewayPassiveBreakerAccountRepo) SetTempUnschedulable(_ context.Context, accountID int64, until time.Time, reason string) error {
@@ -135,6 +143,92 @@ func TestGatewayRetryExhaustedRecordsPassiveAccountCircuitBreaker(t *testing.T) 
 	requireGatewayPassiveAccountBreaker(t, repo, account, http.StatusServiceUnavailable)
 }
 
+func TestGatewayRetryablePoolFailureDefersPassiveAccountCircuitBreakerUntilHandlerRetryExhaustion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newGatewayPassiveBreakerAccount(705, PlatformAnthropic)
+	repo := &gatewayPassiveBreakerAccountRepo{account: account}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &GatewayService{
+		accountRepo:      repo,
+		rateLimitService: rateLimitService,
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"temporarily busy"}}`)),
+	}
+
+	svc.handleRetryExhaustedSideEffects(context.Background(), resp, account)
+
+	require.Empty(t, repo.calls)
+	require.Nil(t, account.TempUnschedulableUntil)
+	require.True(t, account.IsSchedulable(), "same-account retry must remain selectable")
+
+	svc.TempUnscheduleRetryableError(context.Background(), account.ID, &UpstreamFailoverError{
+		StatusCode:             http.StatusTooManyRequests,
+		ResponseBody:           []byte(`{"error":{"message":"temporarily busy"}}`),
+		RetryableOnSameAccount: true,
+	})
+
+	requireGatewayPassiveAccountBreaker(t, repo, account, http.StatusTooManyRequests)
+	require.False(t, account.IsSchedulable())
+}
+
+func TestOpenAIRetryableSynthetic502RecordsPassiveAccountCircuitBreakerAfterHandlerRetryExhaustion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newGatewayPassiveBreakerAccount(708, PlatformOpenAI)
+	repo := &gatewayPassiveBreakerAccountRepo{account: account}
+	svc := &OpenAIGatewayService{
+		accountRepo:      repo,
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+
+	svc.TempUnscheduleRetryableError(context.Background(), account.ID, &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           []byte(`{"error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}`),
+		RetryableOnSameAccount: true,
+	})
+
+	requireGatewayPassiveAccountBreaker(t, repo, account, http.StatusBadGateway)
+}
+
+func TestOpenAIRetryableCapacity400RecordsPassiveAccountCircuitBreakerAfterHandlerRetryExhaustion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newGatewayPassiveBreakerAccount(709, PlatformOpenAI)
+	repo := &gatewayPassiveBreakerAccountRepo{account: account}
+	svc := &OpenAIGatewayService{
+		accountRepo:      repo,
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+
+	svc.TempUnscheduleRetryableError(context.Background(), account.ID, &UpstreamFailoverError{
+		StatusCode:             http.StatusBadRequest,
+		ResponseBody:           []byte(`{"error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}`),
+		RetryableOnSameAccount: true,
+	})
+
+	requireGatewayPassiveAccountBreaker(t, repo, account, http.StatusBadRequest)
+}
+
+func TestOpenAIRetryableOrdinary400DoesNotRecordPassiveAccountCircuitBreaker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newGatewayPassiveBreakerAccount(710, PlatformOpenAI)
+	repo := &gatewayPassiveBreakerAccountRepo{account: account}
+	svc := &OpenAIGatewayService{
+		accountRepo:      repo,
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+
+	svc.TempUnscheduleRetryableError(context.Background(), account.ID, &UpstreamFailoverError{
+		StatusCode:             http.StatusBadRequest,
+		ResponseBody:           []byte(`{"error":{"code":"invalid_request_error","message":"Missing required parameter: input."}}`),
+		RetryableOnSameAccount: true,
+	})
+
+	require.Empty(t, repo.calls)
+	require.Nil(t, account.TempUnschedulableUntil)
+}
+
 func TestGeminiNative503FinalExitRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &gatewayPassiveBreakerAccountRepo{}
@@ -181,6 +275,58 @@ func TestGeminiChatCompletionsTransportRetrySuccessDoesNotRecordPassiveAccountCi
 	body := []byte(`{"model":"gemini-test-model","messages":[{"role":"user","content":"ping"}]}`)
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 2, upstream.calls)
+	require.Empty(t, repo.calls)
+	require.Nil(t, account.TempUnschedulableUntil)
+}
+
+func TestGeminiMessagesTransportRetrySuccessDoesNotRecordPassiveAccountCircuitBreaker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &gatewayPassiveBreakerAccountRepo{}
+	account := newGatewayPassiveBreakerAccount(706, PlatformGemini)
+	upstream := &gatewayPassiveBreakerRetryThenSuccessUpstream{}
+	svc := &GeminiMessagesCompatService{
+		cfg:              &config.Config{},
+		httpUpstream:     upstream,
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+	c := newGatewayPassiveBreakerContext()
+	body := []byte(`{"model":"gemini-test-model","messages":[{"role":"user","content":"ping"}]}`)
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 2, upstream.calls)
+	require.Empty(t, repo.calls)
+	require.Nil(t, account.TempUnschedulableUntil)
+}
+
+func TestGeminiNativeTransportRetrySuccessDoesNotRecordPassiveAccountCircuitBreaker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &gatewayPassiveBreakerAccountRepo{}
+	account := newGatewayPassiveBreakerAccount(707, PlatformGemini)
+	account.Credentials["base_url"] = "https://gemini-breaker.test"
+	upstream := &gatewayPassiveBreakerRetryThenSuccessUpstream{}
+	svc := &GeminiMessagesCompatService{
+		cfg:              &config.Config{},
+		httpUpstream:     upstream,
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+	c := newGatewayPassiveBreakerContext()
+
+	result, err := svc.ForwardNative(
+		context.Background(),
+		c,
+		account,
+		"gemini-test-model",
+		"generateContent",
+		false,
+		[]byte(`{"contents":[{"role":"user","parts":[{"text":"ping"}]}]}`),
+	)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)

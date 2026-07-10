@@ -577,6 +577,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 	}
 
+	var observedErrorSignal struct {
+		sync.Mutex
+		body    []byte
+		code    string
+		errType string
+		message string
+	}
 	relayResult, relayExit := openaiwsv2.RunEntry(openaiwsv2.EntryInput{
 		Ctx:                ctx,
 		ClientConn:         policyClientConn,
@@ -673,6 +680,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				case "error":
 					errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
 					s.persistOpenAIWSErrorSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
+					observedErrorSignal.Lock()
+					observedErrorSignal.body = append(observedErrorSignal.body[:0], payload...)
+					observedErrorSignal.code = errCodeRaw
+					observedErrorSignal.errType = errTypeRaw
+					observedErrorSignal.message = errMsgRaw
+					observedErrorSignal.Unlock()
 					if isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
 						logOpenAIWSV2Passthrough(
 							"relay_rate_limit_failover account_id=%d err_code=%s err_type=%s err_message=%s",
@@ -692,10 +705,22 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 							truncateOpenAIWSLogValue(errTypeRaw, openAIWSLogValueMaxLen),
 							truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
 						)
+						if wroteDownstream {
+							s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, payload, errCodeRaw, errTypeRaw, errMsgRaw)
+						}
 						return retryableFailure(http.StatusBadGateway)
 					}
 				case "response.failed":
 					failedMessage := extractOpenAISSEErrorMessage(payload)
+					errCodeRaw := extractUpstreamErrorCode(payload)
+					errTypeRaw := extractUpstreamErrorType(payload)
+					s.persistOpenAIWSErrorSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, failedMessage)
+					observedErrorSignal.Lock()
+					observedErrorSignal.body = append(observedErrorSignal.body[:0], payload...)
+					observedErrorSignal.code = errCodeRaw
+					observedErrorSignal.errType = errTypeRaw
+					observedErrorSignal.message = failedMessage
+					observedErrorSignal.Unlock()
 					if openAIStreamFailedEventShouldFailover(payload, failedMessage) {
 						logOpenAIWSV2Passthrough(
 							"relay_transient_failover account_id=%d event_type=%s err_code=%s err_message=%s",
@@ -704,8 +729,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 							truncateOpenAIWSLogValue(extractUpstreamErrorCode(payload), openAIWSLogValueMaxLen),
 							truncateOpenAIWSLogValue(failedMessage, openAIWSLogValueMaxLen),
 						)
+						if wroteDownstream {
+							s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, payload, errCodeRaw, errTypeRaw, failedMessage)
+						}
 						return retryableFailure(http.StatusBadGateway)
 					}
+					s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, payload, errCodeRaw, errTypeRaw, failedMessage)
 				}
 				return nil
 			},
@@ -785,7 +814,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		turnCount,
 	)
 	if shouldRecordOpenAIWSRelayPassiveAccountFailure(relayExit.Stage) {
-		s.recordOpenAIWSPassiveAccountFailure(ctx, account, 0, []byte(relayErrorText(relayExit.Err)))
+		observedErrorSignal.Lock()
+		errorBody := append([]byte(nil), observedErrorSignal.body...)
+		errorCode := observedErrorSignal.code
+		errorType := observedErrorSignal.errType
+		errorMessage := observedErrorSignal.message
+		observedErrorSignal.Unlock()
+		if len(errorBody) > 0 {
+			s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, errorBody, errorCode, errorType, errorMessage)
+		} else {
+			s.recordOpenAIWSPassiveAccountFailure(ctx, account, 0, []byte(relayErrorText(relayExit.Err)))
+		}
 	}
 
 	relayErr := relayExit.Err

@@ -812,9 +812,6 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
-			if s.rateLimitService != nil {
-				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
-			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -828,6 +825,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream request failed, retry %d/%d: %v", account.ID, attempt, geminiMaxRetries, err)
 				sleepGeminiBackoff(attempt)
 				continue
+			}
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
 			}
 			setOpsUpstreamError(c, 0, safeErr, "")
 			return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries: "+safeErr)
@@ -1347,9 +1347,6 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
-			if s.rateLimitService != nil {
-				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
-			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -1363,6 +1360,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				logger.LegacyPrintf("service.gemini_messages_compat", "Gemini account %d: upstream request failed, retry %d/%d: %v", account.ID, attempt, geminiMaxRetries, err)
 				sleepGeminiBackoff(attempt)
 				continue
+			}
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
 			}
 			if action == "countTokens" {
 				estimated := estimateGeminiCountTokens(body)
