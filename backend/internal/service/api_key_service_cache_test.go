@@ -213,6 +213,18 @@ func (s *authGroupRepoStub) UpdateSortOrders(ctx context.Context, updates []Grou
 	panic("unexpected UpdateSortOrders call")
 }
 
+func (s *authGroupRepoStub) UpdateHealthStatus(context.Context, int64, *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+
+func (s *authGroupRepoStub) UpdateHealthCheckConfig(context.Context, int64, *HealthCheckConfigUpdate) error {
+	panic("unexpected UpdateHealthCheckConfig call")
+}
+
+func (s *authGroupRepoStub) ForceHealthCheck(context.Context, int64) error {
+	panic("unexpected ForceHealthCheck call")
+}
+
 type authUserGroupRateRepoStub struct {
 	overrides map[int64]*int
 	calls     []int64
