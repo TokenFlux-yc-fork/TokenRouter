@@ -265,8 +265,9 @@ func TestRateLimitService_HandleUpstreamError_OAuth401DoesNotOverwriteCredential
 	require.Nil(t, repo.lastCredentials, "no credentials should have been persisted")
 }
 
-// 缺失 refresh_token 的 OAuth 账号 401 后无法靠冷却窗口自愈，应直接标记 error。
-func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t *testing.T) {
+// OpenAI access-token-only 账号由外部会话维护 token。普通 401 应让当前请求
+// failover，但不能据此把账号写成临时或永久不可调度。
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth401NoRefreshTokenKeepsSchedulable(t *testing.T) {
 	t.Run("openai_no_refresh_token", func(t *testing.T) {
 		repo := &rateLimitAccountRepoStub{}
 		invalidator := &tokenCacheInvalidatorRecorder{}
@@ -283,11 +284,10 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 
 		shouldDisable := service.HandleUpstreamError(context.Background(), account, 401, http.Header{}, []byte("unauthorized"))
 
-		require.True(t, shouldDisable)
-		require.Equal(t, 1, repo.setErrorCalls)
+		require.True(t, shouldDisable, "当前请求仍应 failover 到其它账号")
+		require.Equal(t, 0, repo.setErrorCalls)
 		require.Equal(t, 0, repo.tempCalls)
 		require.Equal(t, 0, repo.updateCredentialsCalls)
-		require.Contains(t, repo.lastErrorMsg, "refresh_token missing")
 		require.Len(t, invalidator.accounts, 1)
 	})
 
@@ -335,6 +335,128 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 	})
 }
 
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth401FilteredSnapshotUsesDatabaseCredentials(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{
+				2885: {
+					ID:       2885,
+					Platform: PlatformOpenAI,
+					Type:     AccountTypeOAuth,
+					Credentials: map[string]any{
+						"access_token": "db-access-token",
+					},
+				},
+			},
+		},
+	}
+	invalidator := &tokenCacheInvalidatorRecorder{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetTokenCacheInvalidator(invalidator)
+	account := &Account{
+		ID:          2885,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{},
+	}
+
+	shouldDisable := service.HandleUpstreamError(context.Background(), account, http.StatusUnauthorized, http.Header{}, []byte("unauthorized"))
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Len(t, invalidator.accounts, 1)
+	require.Equal(t, "db-access-token", invalidator.accounts[0].GetOpenAIAccessToken())
+}
+
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth401FilteredRefreshTokenStillTempUnschedulable(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{
+				2887: {
+					ID:       2887,
+					Platform: PlatformOpenAI,
+					Type:     AccountTypeOAuth,
+					Credentials: map[string]any{
+						"access_token":  "db-access-token",
+						"refresh_token": "db-refresh-token",
+					},
+				},
+			},
+		},
+	}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:          2887,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{},
+	}
+
+	shouldDisable := service.HandleUpstreamError(context.Background(), account, http.StatusUnauthorized, http.Header{}, []byte("unauthorized"))
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 1, repo.tempCalls)
+	require.Equal(t, int64(2887), repo.lastTempID)
+}
+
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth401NoMatchingRuleKeepsSchedulable(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	invalidator := &tokenCacheInvalidatorRecorder{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetTokenCacheInvalidator(invalidator)
+	account := &Account{
+		ID:       4792,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "at",
+			"refresh_token": "rt",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusUnauthorized,
+		http.Header{},
+		[]byte(`{"error":{"message":"Unauthorized","type":"rejected_by_access_enforcement","code":"no_matching_rule"},"status":401}`),
+	)
+
+	require.True(t, shouldDisable, "当前请求应 failover，但账号状态不能被写坏")
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, 0, repo.updateCredentialsCalls)
+	require.Empty(t, invalidator.accounts, "access enforcement 不是 token 过期，不应失效缓存")
+}
+
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth401InvalidatedRemainsPermanent(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       4793,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "at",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusUnauthorized,
+		http.Header{},
+		[]byte(`{"error":{"message":"token invalidated","code":"token_invalidated"}}`),
+	)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Equal(t, account.ID, repo.lastErrorID)
+	require.Equal(t, 0, repo.tempCalls)
+}
+
 func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403UsesTempUnschedulable(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
 	counter := &openAI403CounterCacheStub{counts: []int64{1}}
@@ -372,6 +494,37 @@ func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403UsesTempUnschedulabl
 	require.WithinDuration(t, before.Add(7*time.Minute), repo.lastTempUntil, 2*time.Second)
 	require.Contains(t, repo.lastTempReason, "temporary forbidden")
 	require.Contains(t, repo.lastTempReason, "(1/3)")
+}
+
+func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403HTMLKeepsSchedulable(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	counter := &openAI403CounterCacheStub{counts: []int64{1}}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetOpenAI403CounterCache(counter)
+	account := &Account{
+		ID:       4804,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "at",
+			"refresh_token": "rt",
+		},
+	}
+
+	shouldDisable := service.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusForbidden,
+		http.Header{},
+		[]byte(`<html><head><meta name="viewport" content="width=device-width"></head></html>`),
+	)
+
+	require.True(t, shouldDisable, "当前请求应 failover，但账号状态不能被写坏")
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.Equal(t, []int64{account.ID}, counter.resetCalls)
+	require.Nil(t, account.TempUnschedulableUntil)
+	require.Empty(t, account.TempUnschedulableReason)
 }
 
 func TestRateLimitService_HandleUpstreamError_OpenAIOAuth403DisabledUsesSetError(t *testing.T) {
