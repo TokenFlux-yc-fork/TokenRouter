@@ -672,6 +672,54 @@ func (_u *GroupUpdate) ClearUnavailableFallbackGroupID() *GroupUpdate {
 	return _u
 }
 
+// SetBackupPoolGroupID sets the "backup_pool_group_id" field.
+func (_u *GroupUpdate) SetBackupPoolGroupID(v int64) *GroupUpdate {
+	_u.mutation.ResetBackupPoolGroupID()
+	_u.mutation.SetBackupPoolGroupID(v)
+	return _u
+}
+
+// SetNillableBackupPoolGroupID sets the "backup_pool_group_id" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableBackupPoolGroupID(v *int64) *GroupUpdate {
+	if v != nil {
+		_u.SetBackupPoolGroupID(*v)
+	}
+	return _u
+}
+
+// AddBackupPoolGroupID adds value to the "backup_pool_group_id" field.
+func (_u *GroupUpdate) AddBackupPoolGroupID(v int64) *GroupUpdate {
+	_u.mutation.AddBackupPoolGroupID(v)
+	return _u
+}
+
+// ClearBackupPoolGroupID clears the value of the "backup_pool_group_id" field.
+func (_u *GroupUpdate) ClearBackupPoolGroupID() *GroupUpdate {
+	_u.mutation.ClearBackupPoolGroupID()
+	return _u
+}
+
+// SetBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field.
+func (_u *GroupUpdate) SetBackupPoolRefillThresholdPoints(v float64) *GroupUpdate {
+	_u.mutation.ResetBackupPoolRefillThresholdPoints()
+	_u.mutation.SetBackupPoolRefillThresholdPoints(v)
+	return _u
+}
+
+// SetNillableBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableBackupPoolRefillThresholdPoints(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetBackupPoolRefillThresholdPoints(*v)
+	}
+	return _u
+}
+
+// AddBackupPoolRefillThresholdPoints adds value to the "backup_pool_refill_threshold_points" field.
+func (_u *GroupUpdate) AddBackupPoolRefillThresholdPoints(v float64) *GroupUpdate {
+	_u.mutation.AddBackupPoolRefillThresholdPoints(v)
+	return _u
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (_u *GroupUpdate) SetModelRouting(v map[string][]int64) *GroupUpdate {
 	_u.mutation.SetModelRouting(v)
@@ -1353,6 +1401,21 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.UnavailableFallbackGroupIDCleared() {
 		_spec.ClearField(group.FieldUnavailableFallbackGroupID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.BackupPoolGroupID(); ok {
+		_spec.SetField(group.FieldBackupPoolGroupID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedBackupPoolGroupID(); ok {
+		_spec.AddField(group.FieldBackupPoolGroupID, field.TypeInt64, value)
+	}
+	if _u.mutation.BackupPoolGroupIDCleared() {
+		_spec.ClearField(group.FieldBackupPoolGroupID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.BackupPoolRefillThresholdPoints(); ok {
+		_spec.SetField(group.FieldBackupPoolRefillThresholdPoints, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBackupPoolRefillThresholdPoints(); ok {
+		_spec.AddField(group.FieldBackupPoolRefillThresholdPoints, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.ModelRouting(); ok {
 		_spec.SetField(group.FieldModelRouting, field.TypeJSON, value)
@@ -2332,6 +2395,54 @@ func (_u *GroupUpdateOne) ClearUnavailableFallbackGroupID() *GroupUpdateOne {
 	return _u
 }
 
+// SetBackupPoolGroupID sets the "backup_pool_group_id" field.
+func (_u *GroupUpdateOne) SetBackupPoolGroupID(v int64) *GroupUpdateOne {
+	_u.mutation.ResetBackupPoolGroupID()
+	_u.mutation.SetBackupPoolGroupID(v)
+	return _u
+}
+
+// SetNillableBackupPoolGroupID sets the "backup_pool_group_id" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableBackupPoolGroupID(v *int64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetBackupPoolGroupID(*v)
+	}
+	return _u
+}
+
+// AddBackupPoolGroupID adds value to the "backup_pool_group_id" field.
+func (_u *GroupUpdateOne) AddBackupPoolGroupID(v int64) *GroupUpdateOne {
+	_u.mutation.AddBackupPoolGroupID(v)
+	return _u
+}
+
+// ClearBackupPoolGroupID clears the value of the "backup_pool_group_id" field.
+func (_u *GroupUpdateOne) ClearBackupPoolGroupID() *GroupUpdateOne {
+	_u.mutation.ClearBackupPoolGroupID()
+	return _u
+}
+
+// SetBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field.
+func (_u *GroupUpdateOne) SetBackupPoolRefillThresholdPoints(v float64) *GroupUpdateOne {
+	_u.mutation.ResetBackupPoolRefillThresholdPoints()
+	_u.mutation.SetBackupPoolRefillThresholdPoints(v)
+	return _u
+}
+
+// SetNillableBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableBackupPoolRefillThresholdPoints(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetBackupPoolRefillThresholdPoints(*v)
+	}
+	return _u
+}
+
+// AddBackupPoolRefillThresholdPoints adds value to the "backup_pool_refill_threshold_points" field.
+func (_u *GroupUpdateOne) AddBackupPoolRefillThresholdPoints(v float64) *GroupUpdateOne {
+	_u.mutation.AddBackupPoolRefillThresholdPoints(v)
+	return _u
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (_u *GroupUpdateOne) SetModelRouting(v map[string][]int64) *GroupUpdateOne {
 	_u.mutation.SetModelRouting(v)
@@ -3043,6 +3154,21 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.UnavailableFallbackGroupIDCleared() {
 		_spec.ClearField(group.FieldUnavailableFallbackGroupID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.BackupPoolGroupID(); ok {
+		_spec.SetField(group.FieldBackupPoolGroupID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedBackupPoolGroupID(); ok {
+		_spec.AddField(group.FieldBackupPoolGroupID, field.TypeInt64, value)
+	}
+	if _u.mutation.BackupPoolGroupIDCleared() {
+		_spec.ClearField(group.FieldBackupPoolGroupID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.BackupPoolRefillThresholdPoints(); ok {
+		_spec.SetField(group.FieldBackupPoolRefillThresholdPoints, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBackupPoolRefillThresholdPoints(); ok {
+		_spec.AddField(group.FieldBackupPoolRefillThresholdPoints, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.ModelRouting(); ok {
 		_spec.SetField(group.FieldModelRouting, field.TypeJSON, value)
