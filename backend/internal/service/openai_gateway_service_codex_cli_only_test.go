@@ -330,6 +330,64 @@ func TestOpenAICapacityClassificationIgnoresEchoedRequestFields(t *testing.T) {
 	require.True(t, openAIStreamFailedEventShouldFailover(body, message))
 }
 
+func TestOpenAIFailoverFinalDecisions(t *testing.T) {
+	testCases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "authoritative overload code beats outer context detail",
+			body: `{"type":"response.failed","detail":"context_length_exceeded diagnostic","response":{"error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`,
+			want: true,
+		},
+		{
+			name: "authoritative slow down code beats outer cyber message",
+			body: `{"type":"response.failed","message":"This request may pose a cybersecurity risk.","response":{"error":{"code":"slow_down","message":"Please retry later."}}}`,
+			want: true,
+		},
+		{
+			name: "ordinary bad request does not fail over",
+			body: `{"type":"response.failed","response":{"error":{"code":"bad_request","message":"Missing required field: input"}}}`,
+			want: false,
+		},
+		{
+			name: "capacity message with bad request code still fails over",
+			body: `{"type":"response.failed","response":{"error":{"code":"bad_request","message":"Selected model is at capacity. Please try a different model."}}}`,
+			want: true,
+		},
+		{
+			name: "context error does not fail over",
+			body: `{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"Maximum context length exceeded"}}}`,
+			want: false,
+		},
+		{
+			name: "cyber error does not fail over",
+			body: `{"type":"response.failed","response":{"error":{"code":"cyber_policy","message":"This request may pose a cybersecurity risk."}}}`,
+			want: false,
+		},
+		{
+			name: "overload code does not override its own cyber message",
+			body: `{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"This request may pose a cybersecurity risk."}}}`,
+			want: false,
+		},
+	}
+
+	svc := &OpenAIGatewayService{}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(tc.body)
+			message := extractUpstreamErrorMessage(body)
+			t.Run("http", func(t *testing.T) {
+				require.Equal(t, tc.want, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadRequest, message, body))
+			})
+			t.Run("sse", func(t *testing.T) {
+				require.Equal(t, tc.want, openAIStreamFailedEventShouldFailover(body, message))
+			})
+		})
+	}
+}
+
 func TestExtractUpstreamErrorMessageAndCodeResponsesFormat(t *testing.T) {
 	require.Equal(t,
 		"Selected model is at capacity. Please try a different model.",
