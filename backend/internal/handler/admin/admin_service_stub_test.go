@@ -683,6 +683,14 @@ func (s *stubAdminService) UpdateGroupSortOrders(ctx context.Context, updates []
 	return nil
 }
 
+func (s *stubAdminService) UpdateGroupHealthCheckConfig(context.Context, int64, *service.HealthCheckConfigUpdate) error {
+	return nil
+}
+
+func (s *stubAdminService) ForceGroupHealthCheck(context.Context, int64) error {
+	return nil
+}
+
 func (s *stubAdminService) AdminResetAPIKeyRateLimitUsage(ctx context.Context, keyID int64) (*service.APIKey, error) {
 	for i := range s.apiKeys {
 		if s.apiKeys[i].ID == keyID {
