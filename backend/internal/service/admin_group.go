@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	dbent "github.com/TokenFlux/TokenRouter/ent"
@@ -195,6 +196,16 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 			return nil, err
 		}
 	}
+	backupPoolGroupID := input.BackupPoolGroupID
+	backupPoolThreshold := input.BackupPoolRefillThresholdPoints
+	if backupPoolGroupID != nil && *backupPoolGroupID <= 0 {
+		backupPoolGroupID = nil
+	}
+	if backupPoolGroupID == nil {
+		backupPoolThreshold = 0
+	} else if err := s.validateBackupPoolGroup(ctx, 0, platform, *backupPoolGroupID, backupPoolThreshold); err != nil {
+		return nil, err
+	}
 	fallbackOnInvalidRequest := input.FallbackGroupIDOnInvalidRequest
 	if fallbackOnInvalidRequest != nil && *fallbackOnInvalidRequest <= 0 {
 		fallbackOnInvalidRequest = nil
@@ -286,6 +297,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		FallbackGroupID:                 input.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: fallbackOnInvalidRequest,
 		UnavailableFallbackGroupID:      unavailableFallbackGroupID,
+		BackupPoolGroupID:               backupPoolGroupID,
+		BackupPoolRefillThresholdPoints: backupPoolThreshold,
 		ModelRouting:                    input.ModelRouting,
 		MCPXMLInject:                    mcpXMLInject,
 		SupportedModelScopes:            input.SupportedModelScopes,
@@ -416,6 +429,54 @@ func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Con
 		return fmt.Errorf("fallback group cannot have invalid request fallback configured")
 	}
 	return nil
+}
+
+// validateBackupPoolGroup 校验 OpenAI Codex 备用号池自动补充配置。
+func (s *adminServiceImpl) validateBackupPoolGroup(ctx context.Context, currentGroupID int64, platform string, backupGroupID int64, thresholdPoints float64) error {
+	if platform != PlatformOpenAI {
+		return backupPoolConfigError("backup pool auto refill only supports openai groups")
+	}
+	if currentGroupID > 0 && currentGroupID == backupGroupID {
+		return backupPoolConfigError("cannot set self as backup pool group")
+	}
+	if thresholdPoints <= 0 || math.IsNaN(thresholdPoints) || math.IsInf(thresholdPoints, 0) {
+		return backupPoolConfigError("backup pool refill threshold points must be > 0")
+	}
+	backupGroup, err := s.groupRepo.GetByIDLite(ctx, backupGroupID)
+	if err != nil {
+		return backupPoolConfigError("backup pool group not found").WithCause(err)
+	}
+	if backupGroup.Platform != platform {
+		return backupPoolConfigError("backup pool group must use the same platform")
+	}
+	if !backupGroup.IsActive() {
+		return backupPoolConfigError("backup pool group must be active")
+	}
+	return nil
+}
+
+func backupPoolConfigError(message string) *infraerrors.ApplicationError {
+	return infraerrors.BadRequest("BACKUP_POOL_INVALID_CONFIG", message)
+}
+
+func backupPoolConfigErrorCanSelfHeal(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrGroupNotFound) {
+		return true
+	}
+	var appErr *infraerrors.ApplicationError
+	if !errors.As(err, &appErr) || appErr.Reason != "BACKUP_POOL_INVALID_CONFIG" {
+		return false
+	}
+	switch appErr.Message {
+	case "backup pool group must use the same platform",
+		"backup pool group must be active":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error) {
@@ -591,6 +652,40 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 	}
 	group.UnavailableFallbackGroupID = unavailableFallbackGroupID
+	backupPoolGroupID := group.BackupPoolGroupID
+	if input.BackupPoolGroupID != nil {
+		if *input.BackupPoolGroupID > 0 {
+			backupPoolGroupID = input.BackupPoolGroupID
+		} else {
+			backupPoolGroupID = nil
+		}
+	}
+	backupPoolThreshold := group.BackupPoolRefillThresholdPoints
+	if input.BackupPoolRefillThresholdPoints != nil {
+		backupPoolThreshold = *input.BackupPoolRefillThresholdPoints
+	}
+	backupPoolConfigTouched := input.BackupPoolGroupID != nil || input.BackupPoolRefillThresholdPoints != nil
+	if group.Platform != PlatformOpenAI {
+		if input.BackupPoolGroupID != nil && *input.BackupPoolGroupID > 0 {
+			return nil, backupPoolConfigError("backup pool auto refill only supports openai groups")
+		}
+		backupPoolGroupID = nil
+		backupPoolThreshold = 0
+	} else if backupPoolGroupID == nil {
+		backupPoolThreshold = 0
+	} else if !backupPoolRefillThresholdEnabled(backupPoolThreshold) && !backupPoolConfigTouched {
+		backupPoolGroupID = nil
+		backupPoolThreshold = 0
+	} else if err := s.validateBackupPoolGroup(ctx, id, group.Platform, *backupPoolGroupID, backupPoolThreshold); err != nil {
+		if !backupPoolConfigTouched && backupPoolConfigErrorCanSelfHeal(err) {
+			backupPoolGroupID = nil
+			backupPoolThreshold = 0
+		} else {
+			return nil, err
+		}
+	}
+	group.BackupPoolGroupID = backupPoolGroupID
+	group.BackupPoolRefillThresholdPoints = backupPoolThreshold
 
 	// 模型路由配置
 	if input.ModelRouting != nil {
