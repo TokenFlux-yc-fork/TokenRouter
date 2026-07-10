@@ -546,7 +546,13 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 					failedMessage = "upstream response failed"
 				}
 				lease.MarkBroken()
-				return nil, wrapOpenAIWSFallback("upstream_error_event", errors.New(failedMessage))
+				failoverErr := &UpstreamFailoverError{
+					StatusCode:             http.StatusBadGateway,
+					ResponseBody:           append([]byte(nil), message...),
+					ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+					RetryableOnSameAccount: account.IsPoolMode() && isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, message),
+				}
+				return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", failedMessage, failoverErr))
 			}
 		}
 

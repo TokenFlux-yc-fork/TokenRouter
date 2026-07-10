@@ -319,6 +319,8 @@ func TestForwardAsChatCompletions_BufferedContextWindowResponseFailedReturnsErro
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_capacity_before_output","model":"gpt-5.5","status":"in_progress","output":[]}}`,
+		"",
 		`event: response.failed`,
 		`data: {"type":"response.failed","response":{"id":"resp_failed","object":"response","model":"gpt-5.5","status":"failed","output":[],"error":{"code":"upstream_error","message":"input exceeds the context window"}}}`,
 		"",
@@ -456,6 +458,8 @@ func TestForwardAsChatCompletions_StreamCapacityBeforeOutputReturnsFailover(t *t
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	upstreamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_capacity_before_output","model":"gpt-5.5","status":"in_progress","output":[]}}`,
+		"",
 		`event: response.failed`,
 		`data: {"type":"response.failed","response":{"id":"resp_capacity_before_output","object":"response","model":"gpt-5.5","status":"failed","output":[],"error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`,
 		"",
@@ -490,7 +494,7 @@ func TestForwardAsChatCompletions_StreamCapacityBeforeOutputReturnsFailover(t *t
 	require.Empty(t, rec.Body.String())
 }
 
-func TestForwardAsChatCompletions_StreamCapacityAfterKeepaliveWritesSSEError(t *testing.T) {
+func TestForwardAsChatCompletions_StreamCapacityAfterKeepaliveStillReturnsFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -526,12 +530,13 @@ func TestForwardAsChatCompletions_StreamCapacityAfterKeepaliveWritesSSEError(t *
 
 	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "gpt-5.5")
 	require.Error(t, err)
-	require.NotNil(t, result)
+	require.Nil(t, result)
 	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr))
+	require.ErrorAs(t, err, &failoverErr)
+	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.Contains(t, rec.Body.String(), ":\n\n")
-	require.Contains(t, rec.Body.String(), "data: {\"error\"")
-	require.Contains(t, rec.Body.String(), "Selected model is at capacity")
+	require.NotContains(t, rec.Body.String(), "data: {\"error\"")
+	require.NotContains(t, rec.Body.String(), "Selected model is at capacity")
 }
 
 func TestForwardAsChatCompletions_StreamsUsageWithoutClientStreamOptions(t *testing.T) {

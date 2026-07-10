@@ -41,6 +41,7 @@ type openaiNonStreamingResult struct {
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string) (*openaiStreamingResult, error) {
+	outputBaseline := captureOpenAIStreamOutputBaseline(c)
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
@@ -190,7 +191,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
 		if !sawTerminalEvent {
-			if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+			if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 				return resultWithUsage(), s.newOpenAIStreamFailoverError(
 					c,
 					account,
@@ -240,7 +241,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			sendErrorEvent("response_too_large")
 			return resultWithUsage(), scanErr, true
 		}
-		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+		if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 			msg := "OpenAI stream disconnected before completion"
 			if errText := strings.TrimSpace(scanErr.Error()); errText != "" {
 				msg += ": " + errText
@@ -290,7 +291,12 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 						UpstreamOutTok: usage.OutputTokens,
 					})
 				}
-				if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+				if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
+					if isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, dataBytes) {
+						sawFailedEvent = true
+						streamEarlyErr = s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, dataBytes, failedMessage)
+						return
+					}
 					if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, dataBytes, failedMessage); matched {
 						sawFailedEvent = true
 						// 命中透传规则也要记录 ops 上游错误事件（对齐 CC/Messages 与
@@ -354,7 +360,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if sanitizedData, sanitized := sanitizeOpenAIResponseFailedEventForClient(
 				dataBytes,
 				eventType,
-				openAIStreamClientOutputStarted(c, clientOutputStarted),
+				openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline),
 			); sanitized {
 				dataBytes = sanitizedData
 				data = string(sanitizedData)
@@ -498,7 +504,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 			}
-			if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+			if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 				return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, nil, "OpenAI stream data interval timeout")
 			}
 			sendErrorEvent("stream_timeout")
@@ -508,7 +514,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if clientDisconnected {
 				continue
 			}
-			if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+			if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 				continue
 			}
 			if time.Since(lastDownstreamWriteAt) < keepaliveInterval {

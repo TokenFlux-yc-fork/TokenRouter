@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -102,6 +103,25 @@ func TestHandleOpenAIUpstreamTransportError_WrappedContextCanceledNoFailover(t *
 	require.False(t, errors.As(err, &failoverErr), "wrapped context.Canceled must not return *UpstreamFailoverError")
 	require.Empty(t, repo.tempUnschedCalls)
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
+func TestHandleOpenAIUpstreamTransportError_CanceledRequestContextWithEOFNoFailover(t *testing.T) {
+	repo := &openAITransportAccountRepoStub{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	account := &Account{ID: 79, Name: "healthy3", Platform: PlatformOpenAI}
+	c, _ := newOpenAITransportErrTestContext()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := svc.handleOpenAIUpstreamTransportError(ctx, c, account, io.EOF, false)
+
+	require.ErrorIs(t, err, context.Canceled)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr), "canceled request context must suppress failover even when detached transport returns EOF")
+	require.Empty(t, repo.tempUnschedCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	_, recorded := c.Get(OpsUpstreamErrorsKey)
+	require.False(t, recorded, "client cancellation must not be recorded as an upstream account failure")
 }
 
 func newOpenAITransportForwardTestService(upstream *httpUpstreamRecorder) *OpenAIGatewayService {

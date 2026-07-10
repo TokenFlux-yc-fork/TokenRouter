@@ -305,6 +305,29 @@ func TestIsOpenAITransientProcessingError(t *testing.T) {
 		"This request has been flagged for potentially high-risk cyber activity.",
 		[]byte(`{"type":"response.failed","response":{"instructions":"The selected model is at capacity. Please try again later.","error":{"code":"cyber_policy","message":"This request has been flagged for potentially high-risk cyber activity."}}}`),
 	))
+
+	require.False(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"This request has been flagged for potentially high-risk cyber activity.",
+		[]byte(`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"This request has been flagged for potentially high-risk cyber activity."}}}`),
+	))
+
+	require.False(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"The requested file is temporarily unavailable.",
+		[]byte(`{"error":{"message":"The requested file is temporarily unavailable."}}`),
+	))
+}
+
+func TestOpenAICapacityClassificationIgnoresEchoedRequestFields(t *testing.T) {
+	body := []byte(`{"type":"response.failed","response":{"instructions":"echoed context_length_exceeded and cybersecurity risk text","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`)
+	message := extractUpstreamErrorMessage(body)
+
+	require.False(t, isOpenAIContextWindowError(message, body))
+	require.False(t, IsOpenAICyberWarningPayload(body, message))
+	require.True(t, isOpenAITransientProcessingError(http.StatusBadRequest, message, body))
+	require.True(t, (&OpenAIGatewayService{}).shouldFailoverOpenAIUpstreamResponse(http.StatusBadRequest, message, body))
+	require.True(t, openAIStreamFailedEventShouldFailover(body, message))
 }
 
 func TestExtractUpstreamErrorMessageAndCodeResponsesFormat(t *testing.T) {
@@ -331,6 +354,10 @@ func TestExtractUpstreamErrorMessageAndCodeResponsesFormat(t *testing.T) {
 	require.Equal(t,
 		"prefixed nested capacity",
 		extractUpstreamErrorMessage([]byte(`{"message":"upstream returned: {\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"prefixed nested capacity\"}} trailing"}`)),
+	)
+	require.Equal(t,
+		"event wrapped nested capacity",
+		extractUpstreamErrorMessage([]byte(`{"type":"response.failed","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"event wrapped nested capacity\"}}"}`)),
 	)
 	require.Equal(t,
 		"server_is_overloaded",
@@ -362,8 +389,24 @@ func TestExtractUpstreamErrorMessageAndCodeResponsesFormat(t *testing.T) {
 		extractUpstreamErrorCode([]byte(`{"error":{"message":"{\"response\":{\"status_details\":{\"error\":{\"code\":\"slow_down\",\"message\":\"nested status details\"}}}} trailing text"}}`)),
 	)
 	require.Equal(t,
-		"server_is_overloaded",
-		extractUpstreamErrorCode([]byte(`{"error":{"code":"invalid_request_error","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"wrapped generic error code\"}}"}}`)),
+		"invalid_request_error",
+		extractUpstreamErrorCode([]byte(`{"error":{"code":"invalid_request_error","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"quoted request data\"}}"}}`)),
+	)
+	require.False(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		"invalid request",
+		[]byte(`{"error":{"code":"invalid_request_error","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"quoted request data\"}}"}}`),
+	))
+	quotedCapacity := []byte(`{"error":{"code":"invalid_request_error","message":"{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"Selected model is at capacity. Please try a different model.\"}}"}}`)
+	require.Equal(t, "invalid_request_error", extractUpstreamErrorCode(quotedCapacity))
+	require.False(t, isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		extractUpstreamErrorMessage(quotedCapacity),
+		quotedCapacity,
+	))
+	require.Equal(t,
+		"server_error",
+		extractUpstreamErrorCode([]byte(`{"error":{"code":"server_error","message":"diagnostic payload: {\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"quoted diagnostic\"}}"}}`)),
 	)
 	require.Equal(t,
 		"server_is_overloaded",

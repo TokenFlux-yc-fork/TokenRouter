@@ -591,11 +591,36 @@ type openaiNonStreamingResultPassthrough struct {
 	responseBody     []byte
 }
 
-func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool) bool {
+type openAIStreamOutputBaseline struct {
+	written bool
+	size    int
+}
+
+func captureOpenAIStreamOutputBaseline(c *gin.Context) openAIStreamOutputBaseline {
+	if c == nil || c.Writer == nil {
+		return openAIStreamOutputBaseline{size: -1}
+	}
+	return openAIStreamOutputBaseline{
+		written: c.Writer.Written(),
+		size:    c.Writer.Size(),
+	}
+}
+
+func openAIStreamClientOutputStarted(c *gin.Context, localStarted bool, baselines ...openAIStreamOutputBaseline) bool {
 	if localStarted {
 		return true
 	}
-	return c != nil && c.Writer != nil && c.Writer.Written()
+	if c == nil || c.Writer == nil {
+		return false
+	}
+	if len(baselines) == 0 {
+		return c.Writer.Written()
+	}
+	baseline := baselines[0]
+	if c.Writer.Size() > baseline.size {
+		return true
+	}
+	return !baseline.written && c.Writer.Written()
 }
 
 func openAIStreamEventIsPreamble(eventType string) bool {
@@ -836,6 +861,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	originalModel string,
 	mappedModel string,
 ) (*openaiStreamingResultPassthrough, error) {
+	outputBaseline := captureOpenAIStreamOutputBaseline(c)
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 
 	c.Header("Content-Type", "text/event-stream")
@@ -936,7 +962,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 						UpstreamOutTok: usage.OutputTokens,
 					})
 				}
-				if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+				if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
+					if isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, dataBytes) {
+						return resultWithUsage(),
+							s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, dataBytes, failedMessage)
+					}
 					if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, dataBytes, failedMessage); matched {
 						// 命中透传规则也要记录 ops 上游错误事件（对齐 CC/Messages 与
 						// antigravity 先例），否则透传命中的 failed 在监控中不可见。
@@ -999,7 +1029,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			if sanitizedData, sanitized := sanitizeOpenAIResponseFailedEventForClient(
 				dataBytes,
 				eventType,
-				openAIStreamClientOutputStarted(c, clientOutputStarted),
+				openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline),
 			); sanitized {
 				dataBytes = sanitizedData
 				trimmedData = strings.TrimSpace(string(sanitizedData))
@@ -1049,7 +1079,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, err)
 			return resultWithUsage(), err
 		}
-		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+		if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 			msg := "OpenAI stream disconnected before completion"
 			if errText := strings.TrimSpace(err.Error()); errText != "" {
 				msg += ": " + errText
@@ -1078,7 +1108,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			zap.Int64("account_id", account.ID),
 			zap.String("upstream_request_id", upstreamRequestID),
 		).Info("OpenAI passthrough 上游流在未收到 [DONE] 时结束，疑似断流")
-		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+		if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 			return resultWithUsage(),
 				s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI stream ended before a terminal event")
 		}
