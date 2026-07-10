@@ -66,6 +66,10 @@ type CreateGroupRequest struct {
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
 	// UnavailableFallbackGroupID 当前分组停用时 API Key 优先回退到的分组。
 	UnavailableFallbackGroupID *int64 `json:"unavailable_fallback_group_id"`
+	// BackupPoolGroupID OpenAI Codex 容量不足时自动复制账号的备用号池分组。
+	BackupPoolGroupID *int64 `json:"backup_pool_group_id"`
+	// BackupPoolRefillThresholdPoints 触发自动补池的 Codex 容量点阈值。
+	BackupPoolRefillThresholdPoints float64 `json:"backup_pool_refill_threshold_points"`
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
@@ -125,6 +129,10 @@ type UpdateGroupRequest struct {
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
 	// UnavailableFallbackGroupID 当前分组停用时 API Key 优先回退到的分组。
 	UnavailableFallbackGroupID *int64 `json:"unavailable_fallback_group_id"`
+	// BackupPoolGroupID OpenAI Codex 容量不足时自动复制账号的备用号池分组。
+	BackupPoolGroupID *int64 `json:"backup_pool_group_id"`
+	// BackupPoolRefillThresholdPoints 触发自动补池的 Codex 容量点阈值。
+	BackupPoolRefillThresholdPoints *float64 `json:"backup_pool_refill_threshold_points"`
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled *bool              `json:"model_routing_enabled"`
@@ -298,6 +306,8 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		FallbackGroupID:                 req.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: req.FallbackGroupIDOnInvalidRequest,
 		UnavailableFallbackGroupID:      req.UnavailableFallbackGroupID,
+		BackupPoolGroupID:               req.BackupPoolGroupID,
+		BackupPoolRefillThresholdPoints: req.BackupPoolRefillThresholdPoints,
 		ModelRouting:                    req.ModelRouting,
 		ModelRoutingEnabled:             req.ModelRoutingEnabled,
 		MCPXMLInject:                    req.MCPXMLInject,
@@ -369,6 +379,8 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		FallbackGroupID:                 req.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: req.FallbackGroupIDOnInvalidRequest,
 		UnavailableFallbackGroupID:      req.UnavailableFallbackGroupID,
+		BackupPoolGroupID:               req.BackupPoolGroupID,
+		BackupPoolRefillThresholdPoints: req.BackupPoolRefillThresholdPoints,
 		ModelRouting:                    req.ModelRouting,
 		ModelRoutingEnabled:             req.ModelRoutingEnabled,
 		MCPXMLInject:                    req.MCPXMLInject,

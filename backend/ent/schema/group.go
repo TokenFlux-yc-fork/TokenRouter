@@ -148,6 +148,13 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("当前分组不可用时优先回退使用的分组 ID"),
+		field.Int64("backup_pool_group_id").
+			Optional().
+			Nillable().
+			Comment("OpenAI Codex 备用号池分组 ID；目标分组容量不足时从该分组复制账号绑定"),
+		field.Float("backup_pool_refill_threshold_points").
+			Default(0).
+			Comment("OpenAI Codex 备用号池自动补充阈值（容量点）；0 表示禁用"),
 
 		// 模型路由配置 (added by migration 040)
 		field.JSON("model_routing", map[string][]int64{}).

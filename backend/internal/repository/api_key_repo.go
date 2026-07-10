@@ -1080,6 +1080,8 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		FallbackGroupID:                 g.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: g.FallbackGroupIDOnInvalidRequest,
 		UnavailableFallbackGroupID:      g.UnavailableFallbackGroupID,
+		BackupPoolGroupID:               g.BackupPoolGroupID,
+		BackupPoolRefillThresholdPoints: service.NormalizeBackupPoolRefillThresholdPoints(g.BackupPoolRefillThresholdPoints),
 		ModelRouting:                    g.ModelRouting,
 		ModelRoutingEnabled:             g.ModelRoutingEnabled,
 		MCPXMLInject:                    g.McpXMLInject,

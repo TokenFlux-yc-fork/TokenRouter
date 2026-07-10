@@ -220,6 +220,16 @@ func UnavailableFallbackGroupID(v int64) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldUnavailableFallbackGroupID, v))
 }
 
+// BackupPoolGroupID applies equality check predicate on the "backup_pool_group_id" field. It's identical to BackupPoolGroupIDEQ.
+func BackupPoolGroupID(v int64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldBackupPoolGroupID, v))
+}
+
+// BackupPoolRefillThresholdPoints applies equality check predicate on the "backup_pool_refill_threshold_points" field. It's identical to BackupPoolRefillThresholdPointsEQ.
+func BackupPoolRefillThresholdPoints(v float64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldBackupPoolRefillThresholdPoints, v))
+}
+
 // ModelRoutingEnabled applies equality check predicate on the "model_routing_enabled" field. It's identical to ModelRoutingEnabledEQ.
 func ModelRoutingEnabled(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldModelRoutingEnabled, v))
@@ -1633,6 +1643,96 @@ func UnavailableFallbackGroupIDIsNil() predicate.Group {
 // UnavailableFallbackGroupIDNotNil applies the NotNil predicate on the "unavailable_fallback_group_id" field.
 func UnavailableFallbackGroupIDNotNil() predicate.Group {
 	return predicate.Group(sql.FieldNotNull(FieldUnavailableFallbackGroupID))
+}
+
+// BackupPoolGroupIDEQ applies the EQ predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDEQ(v int64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldBackupPoolGroupID, v))
+}
+
+// BackupPoolGroupIDNEQ applies the NEQ predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDNEQ(v int64) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldBackupPoolGroupID, v))
+}
+
+// BackupPoolGroupIDIn applies the In predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDIn(vs ...int64) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldBackupPoolGroupID, vs...))
+}
+
+// BackupPoolGroupIDNotIn applies the NotIn predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDNotIn(vs ...int64) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldBackupPoolGroupID, vs...))
+}
+
+// BackupPoolGroupIDGT applies the GT predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDGT(v int64) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldBackupPoolGroupID, v))
+}
+
+// BackupPoolGroupIDGTE applies the GTE predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDGTE(v int64) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldBackupPoolGroupID, v))
+}
+
+// BackupPoolGroupIDLT applies the LT predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDLT(v int64) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldBackupPoolGroupID, v))
+}
+
+// BackupPoolGroupIDLTE applies the LTE predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDLTE(v int64) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldBackupPoolGroupID, v))
+}
+
+// BackupPoolGroupIDIsNil applies the IsNil predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldBackupPoolGroupID))
+}
+
+// BackupPoolGroupIDNotNil applies the NotNil predicate on the "backup_pool_group_id" field.
+func BackupPoolGroupIDNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldBackupPoolGroupID))
+}
+
+// BackupPoolRefillThresholdPointsEQ applies the EQ predicate on the "backup_pool_refill_threshold_points" field.
+func BackupPoolRefillThresholdPointsEQ(v float64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldBackupPoolRefillThresholdPoints, v))
+}
+
+// BackupPoolRefillThresholdPointsNEQ applies the NEQ predicate on the "backup_pool_refill_threshold_points" field.
+func BackupPoolRefillThresholdPointsNEQ(v float64) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldBackupPoolRefillThresholdPoints, v))
+}
+
+// BackupPoolRefillThresholdPointsIn applies the In predicate on the "backup_pool_refill_threshold_points" field.
+func BackupPoolRefillThresholdPointsIn(vs ...float64) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldBackupPoolRefillThresholdPoints, vs...))
+}
+
+// BackupPoolRefillThresholdPointsNotIn applies the NotIn predicate on the "backup_pool_refill_threshold_points" field.
+func BackupPoolRefillThresholdPointsNotIn(vs ...float64) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldBackupPoolRefillThresholdPoints, vs...))
+}
+
+// BackupPoolRefillThresholdPointsGT applies the GT predicate on the "backup_pool_refill_threshold_points" field.
+func BackupPoolRefillThresholdPointsGT(v float64) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldBackupPoolRefillThresholdPoints, v))
+}
+
+// BackupPoolRefillThresholdPointsGTE applies the GTE predicate on the "backup_pool_refill_threshold_points" field.
+func BackupPoolRefillThresholdPointsGTE(v float64) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldBackupPoolRefillThresholdPoints, v))
+}
+
+// BackupPoolRefillThresholdPointsLT applies the LT predicate on the "backup_pool_refill_threshold_points" field.
+func BackupPoolRefillThresholdPointsLT(v float64) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldBackupPoolRefillThresholdPoints, v))
+}
+
+// BackupPoolRefillThresholdPointsLTE applies the LTE predicate on the "backup_pool_refill_threshold_points" field.
+func BackupPoolRefillThresholdPointsLTE(v float64) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldBackupPoolRefillThresholdPoints, v))
 }
 
 // ModelRoutingIsNil applies the IsNil predicate on the "model_routing" field.

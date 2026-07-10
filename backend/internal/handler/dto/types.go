@@ -186,6 +186,10 @@ type SubscriptionPlan struct {
 type AdminGroup struct {
 	Group
 
+	// OpenAI Codex 备用号池自动补充配置。
+	BackupPoolGroupID               *int64  `json:"backup_pool_group_id"`
+	BackupPoolRefillThresholdPoints float64 `json:"backup_pool_refill_threshold_points"`
+
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64 `json:"model_routing"`
 	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
