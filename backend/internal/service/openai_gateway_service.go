@@ -456,9 +456,6 @@ func NewOpenAIGatewayService(
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
 	}
-	if openAITokenProvider != nil {
-		openAITokenProvider.SetAccountRuntimeBlocker(svc)
-	}
 	svc.logOpenAIWSModeBootstrap()
 	return svc
 }

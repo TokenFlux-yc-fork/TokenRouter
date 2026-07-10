@@ -720,10 +720,8 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if resp.StatusCode == http.StatusTooManyRequests && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
-		// 401 Unauthorized: 标记账号为永久错误
 		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
-			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
+			s.setOpenAIAccountTest401ErrorIfNeeded(ctx, account, credentialAccount, body, "Authentication failed (401)")
 		}
 		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 	}
@@ -869,8 +867,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
 		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
-			errMsg := fmt.Sprintf("Chat Completions authentication failed (401): %s", string(body))
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
+			s.setOpenAIAccountTest401ErrorIfNeeded(ctx, account, account, body, "Chat Completions authentication failed (401)")
 		}
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Chat Completions API (/v1/chat/completions) returned %d: %s", resp.StatusCode, string(body)))
 	}
@@ -985,8 +982,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil && !shouldDeferPoolModeAccountTestState(account, resp.StatusCode) {
-			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
-			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
+			s.setOpenAIAccountTest401ErrorIfNeeded(ctx, account, account, body, "Authentication failed (401)")
 		}
 		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 	}
@@ -994,6 +990,36 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	s.sendEvent(c, TestEvent{Type: "content", Text: "Compact probe succeeded"})
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
+}
+
+func (s *AccountTestService) setOpenAIAccountTest401ErrorIfNeeded(ctx context.Context, account *Account, credentialAccount *Account, body []byte, prefix string) {
+	if s == nil || s.accountRepo == nil || account == nil {
+		return
+	}
+	if s.shouldSkipOpenAIAccountTest401State(ctx, credentialAccount, body) {
+		return
+	}
+	_ = s.accountRepo.SetError(ctx, account.ID, fmt.Sprintf("%s: %s", prefix, string(body)))
+}
+
+func (s *AccountTestService) shouldSkipOpenAIAccountTest401State(ctx context.Context, account *Account, body []byte) bool {
+	if s == nil || account == nil {
+		return false
+	}
+	account = resolveOpenAIOAuthAccountForTokenState(ctx, s.accountRepo, account)
+	code := extractUpstreamErrorCode(body)
+	if code == "token_invalidated" || code == "token_revoked" {
+		return false
+	}
+	if account.IsOpenAIOAuth() && isOpenAITransientAccessEnforcement401(body) {
+		log.Printf("OpenAI account test 401 skipped state update for access-enforcement response: account=%d code=%s", account.ID, code)
+		return true
+	}
+	if !isOpenAIOAuthAccessTokenOnly(account) {
+		return false
+	}
+	log.Printf("OpenAI account test 401 skipped state update for no-refresh-token account: account=%d code=%s", account.ID, code)
+	return true
 }
 
 func (s *AccountTestService) reconcileOpenAI429State(ctx context.Context, account *Account, headers http.Header, body []byte) {

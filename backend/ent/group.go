@@ -249,7 +249,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case group.FieldRateMultiplier, group.FieldPeakRateMultiplier, group.FieldImageRateMultiplier, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k, group.FieldBatchImageDiscountMultiplier, group.FieldBatchImageHoldMultiplier, group.FieldVideoRateMultiplier, group.FieldVideoPrice480p, group.FieldVideoPrice720p, group.FieldVideoPrice1080p, group.FieldBackupPoolRefillThresholdPoints:
 			values[i] = new(sql.NullFloat64)
-		case group.FieldID, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldUnavailableFallbackGroupID, group.FieldSortOrder, group.FieldHealthCheckIntervalSec, group.FieldHealthCheckTimeoutSec, group.FieldHealthCheckFailureThreshold, group.FieldHealthCheckSuccessThreshold, group.FieldHealthConsecutiveFailures, group.FieldHealthConsecutiveSuccesses, group.FieldRpmLimit:
+		case group.FieldID, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldUnavailableFallbackGroupID, group.FieldBackupPoolGroupID, group.FieldSortOrder, group.FieldHealthCheckIntervalSec, group.FieldHealthCheckTimeoutSec, group.FieldHealthCheckFailureThreshold, group.FieldHealthCheckSuccessThreshold, group.FieldHealthConsecutiveFailures, group.FieldHealthConsecutiveSuccesses, group.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
 		case group.FieldName, group.FieldDescription, group.FieldPeakStart, group.FieldPeakEnd, group.FieldStatus, group.FieldPlatform, group.FieldDisplayBrand, group.FieldDefaultMappedModel, group.FieldHealthStatus:
 			values[i] = new(sql.NullString)

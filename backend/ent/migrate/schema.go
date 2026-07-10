@@ -875,22 +875,22 @@ var (
 			{
 				Name:    "group_data_sharing_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[56]},
+				Columns: []*schema.Column{GroupsColumns[58]},
 			},
 			{
 				Name:    "group_session_isolation_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[57]},
+				Columns: []*schema.Column{GroupsColumns[59]},
 			},
 			{
 				Name:    "group_health_check_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[46]},
+				Columns: []*schema.Column{GroupsColumns[48]},
 			},
 			{
 				Name:    "group_health_status",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[54]},
+				Columns: []*schema.Column{GroupsColumns[56]},
 			},
 		},
 	}
