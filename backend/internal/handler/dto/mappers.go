@@ -190,7 +190,11 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 		return nil
 	}
 	out := &AdminGroup{
-		Group:                       groupFromServiceBase(g),
+		Group:             groupFromServiceBase(g),
+		BackupPoolGroupID: g.BackupPoolGroupID,
+		BackupPoolRefillThresholdPoints: service.NormalizeBackupPoolRefillThresholdPoints(
+			g.BackupPoolRefillThresholdPoints,
+		),
 		ModelRouting:                g.ModelRouting,
 		ModelRoutingEnabled:         g.ModelRoutingEnabled,
 		MCPXMLInject:                g.MCPXMLInject,

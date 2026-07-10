@@ -642,6 +642,40 @@
           </p>
         </div>
 
+        <div
+          v-if="createForm.platform === 'openai'"
+          class="grid gap-4 md:grid-cols-2"
+        >
+          <div>
+            <label class="input-label">{{
+              t("admin.groups.backupPool.title")
+            }}</label>
+            <Select
+              v-model="createForm.backup_pool_group_id"
+              :options="backupPoolGroupOptions"
+              :placeholder="t('admin.groups.backupPool.noPool')"
+            />
+            <p class="input-hint">
+              {{ t("admin.groups.backupPool.poolHint") }}
+            </p>
+          </div>
+          <div>
+            <label class="input-label">{{
+              t("admin.groups.backupPool.threshold")
+            }}</label>
+            <input
+              v-model.number="createForm.backup_pool_refill_threshold_points"
+              type="number"
+              min="0"
+              step="1"
+              class="input"
+            />
+            <p class="input-hint">
+              {{ t("admin.groups.backupPool.thresholdHint") }}
+            </p>
+          </div>
+        </div>
+
         <div>
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -2326,6 +2360,40 @@
           <p class="input-hint">
             {{ t("admin.groups.unavailableFallback.hint") }}
           </p>
+        </div>
+
+        <div
+          v-if="editForm.platform === 'openai'"
+          class="grid gap-4 md:grid-cols-2"
+        >
+          <div>
+            <label class="input-label">{{
+              t("admin.groups.backupPool.title")
+            }}</label>
+            <Select
+              v-model="editForm.backup_pool_group_id"
+              :options="backupPoolGroupOptionsForEdit"
+              :placeholder="t('admin.groups.backupPool.noPool')"
+            />
+            <p class="input-hint">
+              {{ t("admin.groups.backupPool.poolHint") }}
+            </p>
+          </div>
+          <div>
+            <label class="input-label">{{
+              t("admin.groups.backupPool.threshold")
+            }}</label>
+            <input
+              v-model.number="editForm.backup_pool_refill_threshold_points"
+              type="number"
+              min="0"
+              step="1"
+              class="input"
+            />
+            <p class="input-hint">
+              {{ t("admin.groups.backupPool.thresholdHint") }}
+            </p>
+          </div>
         </div>
 
         <div>
@@ -4191,6 +4259,55 @@ const unavailableFallbackGroupOptionsForEdit = computed(() => {
   return options;
 });
 
+// OpenAI Codex 备用号池选项（创建时）：仅允许同平台启用中的分组。
+const backupPoolGroupOptions = computed(() => {
+  const options: { value: number | null; label: string }[] = [
+    { value: null, label: t("admin.groups.backupPool.noPool") },
+  ];
+  const eligibleGroups = unavailableFallbackGroups.value.filter(
+    (g) => g.platform === "openai" && g.status === "active",
+  );
+  eligibleGroups.forEach((g) => {
+    options.push({ value: g.id, label: g.name });
+  });
+  return options;
+});
+
+// OpenAI Codex 备用号池选项（编辑时）：排除当前分组。
+const backupPoolGroupOptionsForEdit = computed(() => {
+  const options: { value: number | null; label: string }[] = [
+    { value: null, label: t("admin.groups.backupPool.noPool") },
+  ];
+  const currentId = editingGroup.value?.id;
+  const eligibleGroups = unavailableFallbackGroups.value.filter(
+    (g) =>
+      g.platform === "openai" &&
+      g.status === "active" &&
+      g.id !== currentId,
+  );
+  eligibleGroups.forEach((g) => {
+    options.push({ value: g.id, label: g.name });
+  });
+  return options;
+});
+
+const isBackupPoolGroupSelectableForEdit = (
+  backupPoolGroupID: number | null,
+  currentGroupID: number,
+  sourceGroups: AdminGroup[],
+): boolean => {
+  if (backupPoolGroupID === null || backupPoolGroupID <= 0) {
+    return false;
+  }
+  return sourceGroups.some(
+    (group) =>
+      group.id === backupPoolGroupID &&
+      group.platform === "openai" &&
+      group.status === "active" &&
+      group.id !== currentGroupID,
+  );
+};
+
 // 无效请求兜底分组选项（创建时）- 仅包含 anthropic 平台且未配置兜底的分组
 const invalidRequestFallbackOptions = computed(() => {
   const options: { value: number | null; label: string }[] = [
@@ -4420,6 +4537,9 @@ const createForm = reactive({
   fallback_group_id_on_invalid_request: null as number | null,
   // 分组不可用时优先使用的指定回退分组。
   unavailable_fallback_group_id: null as number | null,
+  // OpenAI Codex 备用号池自动补充配置。
+  backup_pool_group_id: null as number | null,
+  backup_pool_refill_threshold_points: 0,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
   opus_mapped_model: createMessagesDispatchDefaults.opus_mapped_model,
@@ -4854,6 +4974,9 @@ const editForm = reactive({
   fallback_group_id_on_invalid_request: null as number | null,
   // 分组不可用时优先使用的指定回退分组。
   unavailable_fallback_group_id: null as number | null,
+  // OpenAI Codex 备用号池自动补充配置。
+  backup_pool_group_id: null as number | null,
+  backup_pool_refill_threshold_points: 0,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
   default_mapped_model: '',
@@ -5090,11 +5213,14 @@ const loadGroups = async () => {
   }
 };
 
-const loadUnavailableFallbackGroups = async () => {
+const loadUnavailableFallbackGroups = async (): Promise<AdminGroup[] | null> => {
   try {
-    unavailableFallbackGroups.value = await adminAPI.groups.getAll();
+    const activeGroups = await adminAPI.groups.getAll();
+    unavailableFallbackGroups.value = activeGroups;
+    return activeGroups;
   } catch (error) {
     console.error("Error loading unavailable fallback groups:", error);
+    return null;
   }
 };
 
@@ -5242,6 +5368,8 @@ const closeCreateModal = () => {
   createForm.fallback_group_id = null;
   createForm.fallback_group_id_on_invalid_request = null;
   createForm.unavailable_fallback_group_id = null;
+  createForm.backup_pool_group_id = null;
+  createForm.backup_pool_refill_threshold_points = 0;
   resetMessagesDispatchFormState(createForm);
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
@@ -5265,6 +5393,36 @@ const normalizeImageRateMultiplier = (
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
 };
 
+const normalizeBackupPoolThreshold = (
+  backupPoolGroupID: number | null,
+  value: number | string | null | undefined,
+): number => {
+  if (backupPoolGroupID === null || backupPoolGroupID <= 0) {
+    return 0;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const validateBackupPoolSettings = (
+  platform: GroupPlatform,
+  backupPoolGroupID: number | null,
+  threshold: number | string | null | undefined,
+): boolean => {
+  if (
+    platform !== "openai" ||
+    backupPoolGroupID === null ||
+    backupPoolGroupID <= 0
+  ) {
+    return true;
+  }
+  if (normalizeBackupPoolThreshold(backupPoolGroupID, threshold) <= 0) {
+    appStore.showError(t("admin.groups.backupPool.thresholdRequired"));
+    return false;
+  }
+  return true;
+};
+
 // 创建请求中空字符串表示未配置，转换为后端可解析的 null。
 const emptyToNull = <T>(value: T | ""): T | null =>
   value === "" ? null : value;
@@ -5274,13 +5432,32 @@ const handleCreateGroup = async () => {
     appStore.showError(t("admin.groups.nameRequired"));
     return;
   }
+  if (
+    !validateBackupPoolSettings(
+      createForm.platform,
+      createForm.backup_pool_group_id,
+      createForm.backup_pool_refill_threshold_points,
+    )
+  ) {
+    return;
+  }
   submitting.value = true;
   try {
     const availabilityProbeConfig = buildAvailabilityProbeConfig(createForm);
+    const backupPoolThreshold = normalizeBackupPoolThreshold(
+      createForm.backup_pool_group_id,
+      createForm.backup_pool_refill_threshold_points,
+    );
     // 构建请求数据，包含模型路由配置
     const requestData = {
       ...createForm,
       display_brand: normalizeDisplayBrand(createForm.display_brand),
+      backup_pool_group_id:
+        createForm.platform === "openai"
+          ? createForm.backup_pool_group_id
+          : null,
+      backup_pool_refill_threshold_points:
+        createForm.platform === "openai" ? backupPoolThreshold : 0,
       model_routing: convertRoutingRulesToApiFormat(
         createModelRoutingRules.value,
       ),
@@ -5355,6 +5532,8 @@ const handleCreateGroup = async () => {
 };
 
 const handleEdit = async (group: AdminGroup) => {
+  const refreshedActiveGroups = await loadUnavailableFallbackGroups();
+  const activeGroups = refreshedActiveGroups ?? unavailableFallbackGroups.value;
   editingGroup.value = group;
   editForm.name = group.name;
   editForm.description = group.description || "";
@@ -5394,6 +5573,23 @@ const handleEdit = async (group: AdminGroup) => {
     group.fallback_group_id_on_invalid_request;
   editForm.unavailable_fallback_group_id =
     group.unavailable_fallback_group_id;
+  if (
+    group.platform === "openai" &&
+    group.backup_pool_refill_threshold_points > 0 &&
+    (refreshedActiveGroups === null ||
+      isBackupPoolGroupSelectableForEdit(
+        group.backup_pool_group_id,
+        group.id,
+        activeGroups,
+      ))
+  ) {
+    editForm.backup_pool_group_id = group.backup_pool_group_id;
+    editForm.backup_pool_refill_threshold_points =
+      group.backup_pool_refill_threshold_points ?? 0;
+  } else {
+    editForm.backup_pool_group_id = null;
+    editForm.backup_pool_refill_threshold_points = 0;
+  }
   const messagesDispatchFormState = messagesDispatchConfigToFormState(
     group.messages_dispatch_model_config,
   );
@@ -5439,6 +5635,8 @@ const closeEditModal = () => {
   editForm.data_sharing_enabled = false;
   editForm.session_isolation_enabled = false;
   editForm.unavailable_fallback_group_id = null;
+  editForm.backup_pool_group_id = null;
+  editForm.backup_pool_refill_threshold_points = 0;
   editForm.copy_accounts_from_group_ids = [];
   resetAvailabilityProbeFormState(editForm);
   resetHealthCheckFormState(editForm);
@@ -5461,10 +5659,23 @@ const handleUpdateGroup = async () => {
     appStore.showError(t("admin.groups.nameRequired"));
     return;
   }
+  if (
+    !validateBackupPoolSettings(
+      editForm.platform,
+      editForm.backup_pool_group_id,
+      editForm.backup_pool_refill_threshold_points,
+    )
+  ) {
+    return;
+  }
 
   submitting.value = true;
   try {
     const availabilityProbeConfig = buildAvailabilityProbeConfig(editForm);
+    const backupPoolThreshold = normalizeBackupPoolThreshold(
+      editForm.backup_pool_group_id,
+      editForm.backup_pool_refill_threshold_points,
+    );
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,
@@ -5479,6 +5690,12 @@ const handleUpdateGroup = async () => {
         editForm.unavailable_fallback_group_id === null
           ? 0
           : editForm.unavailable_fallback_group_id,
+      backup_pool_group_id:
+        editForm.platform === "openai" && editForm.backup_pool_group_id !== null
+          ? editForm.backup_pool_group_id
+          : 0,
+      backup_pool_refill_threshold_points:
+        editForm.platform === "openai" ? backupPoolThreshold : 0,
       model_routing: convertRoutingRulesToApiFormat(
         editModelRoutingRules.value,
       ),
@@ -5642,6 +5859,8 @@ watch(
     }
     if (newVal !== "openai") {
       resetMessagesDispatchFormState(createForm);
+      createForm.backup_pool_group_id = null;
+      createForm.backup_pool_refill_threshold_points = 0;
     }
     if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
       createForm.require_oauth_only = false;
@@ -5714,6 +5933,20 @@ watch(
     }
     if (newVal !== "openai") {
       resetMessagesDispatchFormState(editForm);
+      editForm.backup_pool_group_id = null;
+      editForm.backup_pool_refill_threshold_points = 0;
+    } else if (
+      editForm.backup_pool_group_id &&
+      !unavailableFallbackGroups.value.some(
+        (group) =>
+          group.id === editForm.backup_pool_group_id &&
+          group.platform === "openai" &&
+          group.status === "active" &&
+          group.id !== editingGroup.value?.id,
+      )
+    ) {
+      editForm.backup_pool_group_id = null;
+      editForm.backup_pool_refill_threshold_points = 0;
     }
     if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
       editForm.require_oauth_only = false;

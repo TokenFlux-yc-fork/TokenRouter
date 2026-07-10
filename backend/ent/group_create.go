@@ -481,6 +481,34 @@ func (_c *GroupCreate) SetNillableUnavailableFallbackGroupID(v *int64) *GroupCre
 	return _c
 }
 
+// SetBackupPoolGroupID sets the "backup_pool_group_id" field.
+func (_c *GroupCreate) SetBackupPoolGroupID(v int64) *GroupCreate {
+	_c.mutation.SetBackupPoolGroupID(v)
+	return _c
+}
+
+// SetNillableBackupPoolGroupID sets the "backup_pool_group_id" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableBackupPoolGroupID(v *int64) *GroupCreate {
+	if v != nil {
+		_c.SetBackupPoolGroupID(*v)
+	}
+	return _c
+}
+
+// SetBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field.
+func (_c *GroupCreate) SetBackupPoolRefillThresholdPoints(v float64) *GroupCreate {
+	_c.mutation.SetBackupPoolRefillThresholdPoints(v)
+	return _c
+}
+
+// SetNillableBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableBackupPoolRefillThresholdPoints(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetBackupPoolRefillThresholdPoints(*v)
+	}
+	return _c
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (_c *GroupCreate) SetModelRouting(v map[string][]int64) *GroupCreate {
 	_c.mutation.SetModelRouting(v)
@@ -1003,6 +1031,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultClaudeCodeOnly
 		_c.mutation.SetClaudeCodeOnly(v)
 	}
+	if _, ok := _c.mutation.BackupPoolRefillThresholdPoints(); !ok {
+		v := group.DefaultBackupPoolRefillThresholdPoints
+		_c.mutation.SetBackupPoolRefillThresholdPoints(v)
+	}
 	if _, ok := _c.mutation.ModelRoutingEnabled(); !ok {
 		v := group.DefaultModelRoutingEnabled
 		_c.mutation.SetModelRoutingEnabled(v)
@@ -1191,6 +1223,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.ClaudeCodeOnly(); !ok {
 		return &ValidationError{Name: "claude_code_only", err: errors.New(`ent: missing required field "Group.claude_code_only"`)}
+	}
+	if _, ok := _c.mutation.BackupPoolRefillThresholdPoints(); !ok {
+		return &ValidationError{Name: "backup_pool_refill_threshold_points", err: errors.New(`ent: missing required field "Group.backup_pool_refill_threshold_points"`)}
 	}
 	if _, ok := _c.mutation.ModelRoutingEnabled(); !ok {
 		return &ValidationError{Name: "model_routing_enabled", err: errors.New(`ent: missing required field "Group.model_routing_enabled"`)}
@@ -1426,6 +1461,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.UnavailableFallbackGroupID(); ok {
 		_spec.SetField(group.FieldUnavailableFallbackGroupID, field.TypeInt64, value)
 		_node.UnavailableFallbackGroupID = &value
+	}
+	if value, ok := _c.mutation.BackupPoolGroupID(); ok {
+		_spec.SetField(group.FieldBackupPoolGroupID, field.TypeInt64, value)
+		_node.BackupPoolGroupID = &value
+	}
+	if value, ok := _c.mutation.BackupPoolRefillThresholdPoints(); ok {
+		_spec.SetField(group.FieldBackupPoolRefillThresholdPoints, field.TypeFloat64, value)
+		_node.BackupPoolRefillThresholdPoints = value
 	}
 	if value, ok := _c.mutation.ModelRouting(); ok {
 		_spec.SetField(group.FieldModelRouting, field.TypeJSON, value)
@@ -2204,6 +2247,48 @@ func (u *GroupUpsert) AddUnavailableFallbackGroupID(v int64) *GroupUpsert {
 // ClearUnavailableFallbackGroupID clears the value of the "unavailable_fallback_group_id" field.
 func (u *GroupUpsert) ClearUnavailableFallbackGroupID() *GroupUpsert {
 	u.SetNull(group.FieldUnavailableFallbackGroupID)
+	return u
+}
+
+// SetBackupPoolGroupID sets the "backup_pool_group_id" field.
+func (u *GroupUpsert) SetBackupPoolGroupID(v int64) *GroupUpsert {
+	u.Set(group.FieldBackupPoolGroupID, v)
+	return u
+}
+
+// UpdateBackupPoolGroupID sets the "backup_pool_group_id" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateBackupPoolGroupID() *GroupUpsert {
+	u.SetExcluded(group.FieldBackupPoolGroupID)
+	return u
+}
+
+// AddBackupPoolGroupID adds v to the "backup_pool_group_id" field.
+func (u *GroupUpsert) AddBackupPoolGroupID(v int64) *GroupUpsert {
+	u.Add(group.FieldBackupPoolGroupID, v)
+	return u
+}
+
+// ClearBackupPoolGroupID clears the value of the "backup_pool_group_id" field.
+func (u *GroupUpsert) ClearBackupPoolGroupID() *GroupUpsert {
+	u.SetNull(group.FieldBackupPoolGroupID)
+	return u
+}
+
+// SetBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field.
+func (u *GroupUpsert) SetBackupPoolRefillThresholdPoints(v float64) *GroupUpsert {
+	u.Set(group.FieldBackupPoolRefillThresholdPoints, v)
+	return u
+}
+
+// UpdateBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateBackupPoolRefillThresholdPoints() *GroupUpsert {
+	u.SetExcluded(group.FieldBackupPoolRefillThresholdPoints)
+	return u
+}
+
+// AddBackupPoolRefillThresholdPoints adds v to the "backup_pool_refill_threshold_points" field.
+func (u *GroupUpsert) AddBackupPoolRefillThresholdPoints(v float64) *GroupUpsert {
+	u.Add(group.FieldBackupPoolRefillThresholdPoints, v)
 	return u
 }
 
@@ -3227,6 +3312,55 @@ func (u *GroupUpsertOne) UpdateUnavailableFallbackGroupID() *GroupUpsertOne {
 func (u *GroupUpsertOne) ClearUnavailableFallbackGroupID() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearUnavailableFallbackGroupID()
+	})
+}
+
+// SetBackupPoolGroupID sets the "backup_pool_group_id" field.
+func (u *GroupUpsertOne) SetBackupPoolGroupID(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetBackupPoolGroupID(v)
+	})
+}
+
+// AddBackupPoolGroupID adds v to the "backup_pool_group_id" field.
+func (u *GroupUpsertOne) AddBackupPoolGroupID(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddBackupPoolGroupID(v)
+	})
+}
+
+// UpdateBackupPoolGroupID sets the "backup_pool_group_id" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateBackupPoolGroupID() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateBackupPoolGroupID()
+	})
+}
+
+// ClearBackupPoolGroupID clears the value of the "backup_pool_group_id" field.
+func (u *GroupUpsertOne) ClearBackupPoolGroupID() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearBackupPoolGroupID()
+	})
+}
+
+// SetBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field.
+func (u *GroupUpsertOne) SetBackupPoolRefillThresholdPoints(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetBackupPoolRefillThresholdPoints(v)
+	})
+}
+
+// AddBackupPoolRefillThresholdPoints adds v to the "backup_pool_refill_threshold_points" field.
+func (u *GroupUpsertOne) AddBackupPoolRefillThresholdPoints(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddBackupPoolRefillThresholdPoints(v)
+	})
+}
+
+// UpdateBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateBackupPoolRefillThresholdPoints() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateBackupPoolRefillThresholdPoints()
 	})
 }
 
@@ -4474,6 +4608,55 @@ func (u *GroupUpsertBulk) UpdateUnavailableFallbackGroupID() *GroupUpsertBulk {
 func (u *GroupUpsertBulk) ClearUnavailableFallbackGroupID() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearUnavailableFallbackGroupID()
+	})
+}
+
+// SetBackupPoolGroupID sets the "backup_pool_group_id" field.
+func (u *GroupUpsertBulk) SetBackupPoolGroupID(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetBackupPoolGroupID(v)
+	})
+}
+
+// AddBackupPoolGroupID adds v to the "backup_pool_group_id" field.
+func (u *GroupUpsertBulk) AddBackupPoolGroupID(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddBackupPoolGroupID(v)
+	})
+}
+
+// UpdateBackupPoolGroupID sets the "backup_pool_group_id" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateBackupPoolGroupID() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateBackupPoolGroupID()
+	})
+}
+
+// ClearBackupPoolGroupID clears the value of the "backup_pool_group_id" field.
+func (u *GroupUpsertBulk) ClearBackupPoolGroupID() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearBackupPoolGroupID()
+	})
+}
+
+// SetBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field.
+func (u *GroupUpsertBulk) SetBackupPoolRefillThresholdPoints(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetBackupPoolRefillThresholdPoints(v)
+	})
+}
+
+// AddBackupPoolRefillThresholdPoints adds v to the "backup_pool_refill_threshold_points" field.
+func (u *GroupUpsertBulk) AddBackupPoolRefillThresholdPoints(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddBackupPoolRefillThresholdPoints(v)
+	})
+}
+
+// UpdateBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateBackupPoolRefillThresholdPoints() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateBackupPoolRefillThresholdPoints()
 	})
 }
 
