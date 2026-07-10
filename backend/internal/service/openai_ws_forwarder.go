@@ -414,9 +414,37 @@ func (s *OpenAIGatewayService) persistOpenAIWSErrorSignal(ctx context.Context, a
 		s.persistOpenAIWSRateLimitSignal(ctx, account, headers, responseBody, codeRaw, errTypeRaw, msgRaw)
 		return
 	}
-	if openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw) == http.StatusForbidden {
+	statusCode := openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	if statusCode == http.StatusForbidden {
 		s.persistOpenAIWSForbiddenSignal(ctx, account, headers, responseBody)
 	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.rateLimitService == nil || account == nil {
+		return
+	}
+	s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSDialPassiveAccountFailure(ctx context.Context, account *Account, err error) {
+	if err == nil {
+		return
+	}
+	var dialErr *openAIWSDialError
+	if !errors.As(err, &dialErr) || dialErr == nil {
+		return
+	}
+	switch dialErr.StatusCode {
+	case http.StatusTooManyRequests:
+		return
+	case http.StatusForbidden:
+		if account != nil && account.IsOpenAIOAuth() {
+			return
+		}
+	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, dialErr.StatusCode, []byte(strings.TrimSpace(err.Error())))
 }
 
 func (s *OpenAIGatewayService) persistOpenAIWSForbiddenSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {

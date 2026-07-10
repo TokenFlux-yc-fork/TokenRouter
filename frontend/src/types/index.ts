@@ -2243,6 +2243,11 @@ export interface ScheduledTestPlan {
   enabled: boolean
   max_results: number
   auto_recover: boolean
+  account_circuit_breaker_enabled: boolean
+  failure_threshold: number
+  success_threshold: number
+  failure_cooldown_minutes: number
+  timeout_seconds: number
   last_run_at: string | null
   next_run_at: string | null
   created_at: string
@@ -2261,6 +2266,12 @@ export interface ScheduledTestResult {
   created_at: string
 }
 
+export interface ScheduledTestAccountResult extends ScheduledTestResult {
+  account_id: number
+  model_id: string
+  cron_expression: string
+}
+
 export interface CreateScheduledTestPlanRequest {
   account_id: number
   model_id: string
@@ -2268,6 +2279,11 @@ export interface CreateScheduledTestPlanRequest {
   enabled?: boolean
   max_results?: number
   auto_recover?: boolean
+  account_circuit_breaker_enabled?: boolean
+  failure_threshold?: number
+  success_threshold?: number
+  failure_cooldown_minutes?: number
+  timeout_seconds?: number
 }
 
 export interface UpdateScheduledTestPlanRequest {
@@ -2276,6 +2292,11 @@ export interface UpdateScheduledTestPlanRequest {
   enabled?: boolean
   max_results?: number
   auto_recover?: boolean
+  account_circuit_breaker_enabled?: boolean
+  failure_threshold?: number
+  success_threshold?: number
+  failure_cooldown_minutes?: number
+  timeout_seconds?: number
 }
 
 // Payment types

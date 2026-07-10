@@ -326,6 +326,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 		if err != nil {
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+			}
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}

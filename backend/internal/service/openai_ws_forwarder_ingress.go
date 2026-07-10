@@ -673,6 +673,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(acquireErr.Error())))
 				}
 			}
+			s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, acquireErr)
 			if errors.Is(acquireErr, errOpenAIWSPreferredConnUnavailable) {
 				return nil, NewOpenAIWSClientCloseError(
 					coderws.StatusPolicyViolation,

@@ -210,6 +210,9 @@ func (s *AntigravityGatewayService) checkErrorPolicy(ctx context.Context, accoun
 func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParams, statusCode int, headers http.Header, respBody []byte) (handled bool, outStatus int, retErr error) {
 	switch s.checkErrorPolicy(p.ctx, p.account, statusCode, respBody) {
 	case ErrorPolicySkipped:
+		if s.rateLimitService != nil {
+			s.rateLimitService.recordPassiveAccountFailure(p.ctx, p.account, statusCode, respBody)
+		}
 		if s.handleAntigravityModelRateLimitBeforePolicy(p, statusCode, headers, respBody) {
 			return true, statusCode, nil
 		}
@@ -222,6 +225,9 @@ func (s *AntigravityGatewayService) applyErrorPolicy(p antigravityRetryLoopParam
 			p.requestedModel, p.groupID, p.sessionHash, p.isStickySession)
 		return true, statusCode, nil
 	case ErrorPolicyTempUnscheduled:
+		if s.rateLimitService != nil {
+			s.rateLimitService.recordPassiveAccountFailure(p.ctx, p.account, statusCode, respBody)
+		}
 		slog.Info("temp_unschedulable_matched",
 			"prefix", p.prefix, "status_code", statusCode, "account_id", p.account.ID)
 		return true, statusCode, &AntigravityAccountSwitchError{OriginalAccountID: p.account.ID, RateLimitedModel: p.requestedModel, IsStickySession: p.isStickySession}

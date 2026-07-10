@@ -80,6 +80,9 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	// 发送请求
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
+		if s.rateLimitService != nil {
+			s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+		}
 		logger.LegacyPrintf("service.antigravity_gateway", "%s upstream request failed: %v", prefix, err)
 		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
@@ -89,9 +92,11 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
 
-		// 429 错误时标记账号限流
+		// 429 错误时标记账号限流；其他错误仍参与被动 account breaker。
 		if resp.StatusCode == http.StatusTooManyRequests {
 			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, originalModel, 0, "", false)
+		} else if s.rateLimitService != nil {
+			s.rateLimitService.recordPassiveAccountFailure(ctx, account, resp.StatusCode, respBody)
 		}
 
 		// 透传上游错误

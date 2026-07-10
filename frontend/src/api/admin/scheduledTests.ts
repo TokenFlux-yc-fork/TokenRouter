@@ -7,6 +7,7 @@ import { apiClient } from '../client'
 import type {
   ScheduledTestPlan,
   ScheduledTestResult,
+  ScheduledTestAccountResult,
   CreateScheduledTestPlanRequest,
   UpdateScheduledTestPlanRequest
 } from '@/types'
@@ -74,12 +75,29 @@ export async function listResults(planId: number, limit?: number): Promise<Sched
   return data ?? []
 }
 
+/**
+ * List recent test results for all plans of an account
+ * @param accountId - Account ID
+ * @param limit - Optional max number of results to return
+ * @returns List of test results with plan context
+ */
+export async function listAccountResults(accountId: number, limit?: number): Promise<ScheduledTestAccountResult[]> {
+  const { data } = await apiClient.get<ScheduledTestAccountResult[]>(
+    `/admin/accounts/${accountId}/scheduled-test-results`,
+    {
+      params: limit ? { limit } : undefined
+    }
+  )
+  return data ?? []
+}
+
 export const scheduledTestsAPI = {
   listByAccount,
   create,
   update,
   delete: deletePlan,
-  listResults
+  listResults,
+  listAccountResults
 }
 
 export default scheduledTestsAPI
