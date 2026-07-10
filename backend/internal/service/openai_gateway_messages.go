@@ -838,7 +838,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				return true
 			}
 			message := extractOpenAISSEErrorMessage(payloadBytes)
-			if openAIStreamFailedEventShouldFailover(payloadBytes, message) {
+			if !openAIStreamClientOutputStarted(c, clientOutputStarted) && openAIStreamFailedEventShouldFailover(payloadBytes, message) {
 				streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
 				return true
 			}
@@ -856,7 +856,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				MarkResponseCommitted(c)
 			}
 			if !clientDisconnected {
-				if !clientOutputStarted {
+				if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
 					writeAnthropicError(c, errStatus, errType, errMsg)
 					clientOutputStarted = true
 				} else {
