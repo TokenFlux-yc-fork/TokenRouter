@@ -120,12 +120,12 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 	if upstreamStatusCode != http.StatusBadRequest && upstreamStatusCode != http.StatusServiceUnavailable {
 		return false
 	}
+	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
+		return false
+	}
 
 	hasOpenAIServerOverloadedCode := func(payload []byte) bool {
-		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
-		if code == "" {
-			code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
-		}
+		code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(payload)))
 		return code == "server_is_overloaded" || code == "slow_down"
 	}
 
@@ -133,7 +133,7 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 		return true
 	}
 
-	if upstreamStatusCode != http.StatusBadRequest {
+	if isOpenAIKnownCyberWarningError(upstreamMsg, upstreamBody) {
 		return false
 	}
 
@@ -148,6 +148,18 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 		if strings.Contains(lower, "selected model is at capacity") {
 			return true
 		}
+		if strings.Contains(lower, "experiencing high demand") {
+			return true
+		}
+		if strings.Contains(lower, "server is overloaded") ||
+			strings.Contains(lower, "model is overloaded") ||
+			strings.Contains(lower, "temporarily overloaded") ||
+			strings.Contains(lower, "currently overloaded") {
+			return true
+		}
+		if strings.Contains(lower, "temporarily unavailable") {
+			return true
+		}
 		return strings.Contains(lower, "you can retry your request") &&
 			strings.Contains(lower, "help.openai.com") &&
 			strings.Contains(lower, "request id")
@@ -159,10 +171,48 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 	if len(upstreamBody) == 0 {
 		return false
 	}
-	if match(gjson.GetBytes(upstreamBody, "error.message").String()) {
+	for _, text := range []string{
+		extractUpstreamErrorMessage(upstreamBody),
+		gjson.GetBytes(upstreamBody, "error.message").String(),
+		gjson.GetBytes(upstreamBody, "response.error.message").String(),
+		gjson.GetBytes(upstreamBody, "response.status_details.error.message").String(),
+		gjson.GetBytes(upstreamBody, "message").String(),
+		gjson.GetBytes(upstreamBody, "detail").String(),
+	} {
+		if match(text) {
+			return true
+		}
+	}
+	if errorValue := gjson.GetBytes(upstreamBody, "error"); errorValue.Type == gjson.String && match(errorValue.String()) {
 		return true
 	}
+	if gjson.ValidBytes(upstreamBody) {
+		return false
+	}
 	return match(string(upstreamBody))
+}
+
+func isOpenAIKnownCyberWarningError(upstreamMsg string, payload []byte) bool {
+	if IsOpenAICyberWarningText(upstreamMsg) {
+		return true
+	}
+	if len(payload) == 0 {
+		return false
+	}
+	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
+		return true
+	}
+	for _, path := range []string{
+		"error.message",
+		"response.error.message",
+		"response.status_details.error.message",
+		"message",
+	} {
+		if IsOpenAICyberWarningText(gjson.GetBytes(payload, path).String()) {
+			return true
+		}
+	}
+	return false
 }
 
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {

@@ -47,6 +47,7 @@ const (
 	openAIWSStoreDisabledConnModeOff      = "off"
 
 	openAIWSIngressStagePreviousResponseNotFound = "previous_response_not_found"
+	openAIWSIngressStageResponseFailedRetryable  = "response_failed_retryable"
 	openAIWSMaxPrevResponseIDDeletePasses        = 8
 )
 
@@ -139,7 +140,7 @@ func isOpenAIWSIngressTurnRetryable(err error) bool {
 		return false
 	}
 	switch turnErr.stage {
-	case "write_upstream", "read_upstream":
+	case "write_upstream", "read_upstream", openAIWSIngressStageResponseFailedRetryable:
 		return true
 	default:
 		return false
@@ -175,6 +176,18 @@ func NewOpenAIWSClientCloseError(statusCode coderws.StatusCode, reason string, e
 		reason:     strings.TrimSpace(reason),
 		err:        err,
 	}
+}
+
+func newOpenAIWSRetryableCloseError(detail string) error {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		detail = "upstream retryable failure"
+	}
+	return NewOpenAIWSClientCloseError(
+		coderws.StatusTryAgainLater,
+		"upstream service temporarily unavailable",
+		errors.New(detail),
+	)
 }
 
 func (e *OpenAIWSClientCloseError) Error() string {

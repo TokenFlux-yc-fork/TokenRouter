@@ -335,7 +335,7 @@ func TestHandlePassthroughSSEToJSON_CompactRawOutputItemDoneRepairsEmptyTerminal
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}
 
-	result, err := svc.handleNonStreamingResponsePassthrough(context.Background(), resp, c, "gpt-5.5", "")
+	result, err := svc.handleNonStreamingResponsePassthrough(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, "gpt-5.5", "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -529,7 +529,7 @@ func TestHandleNonStreamingResponsePassthrough_CompactClientStreamBridgesToSSE(t
 		}`)),
 	}
 
-	result, err := svc.handleNonStreamingResponsePassthrough(context.Background(), resp, c, "gpt-5.5", "")
+	result, err := svc.handleNonStreamingResponsePassthrough(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, "gpt-5.5", "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
