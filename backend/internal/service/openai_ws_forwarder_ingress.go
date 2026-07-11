@@ -484,21 +484,57 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					openAIWSRawPayloadHasToolCallOutput(currentBridgePayload.payloadRaw),
 				)
 			}
-			result, bridgeErr := s.proxyOpenAIWSHTTPBridgeTurn(
-				ctx,
-				c,
-				account,
-				token,
-				bridgePayloadRaw,
-				bridgePayloadBytes,
-				currentBridgePayload.originalModel,
-				currentBridgePayload.imageBillingModel,
-				currentBridgePayload.imageSizeTier,
-				currentBridgePayload.imageInputSize,
-				turn,
-				writeClientMessage,
-				tlsRouterMatch,
-			)
+			var result *OpenAIForwardResult
+			var bridgeErr error
+			for bridgeRetry := 0; ; bridgeRetry++ {
+				result, bridgeErr = s.proxyOpenAIWSHTTPBridgeTurn(
+					ctx,
+					c,
+					account,
+					token,
+					bridgePayloadRaw,
+					bridgePayloadBytes,
+					currentBridgePayload.originalModel,
+					currentBridgePayload.imageBillingModel,
+					currentBridgePayload.imageSizeTier,
+					currentBridgePayload.imageInputSize,
+					turn,
+					writeClientMessage,
+					tlsRouterMatch,
+				)
+				var failoverErr *UpstreamFailoverError
+				if bridgeErr == nil || bridgeRetry >= openAIWSHTTPBridgeTurnRetryLimit ||
+					!errors.As(bridgeErr, &failoverErr) || ctx.Err() != nil {
+					break
+				}
+				retry := bridgeRetry + 1
+				backoff := s.openAIWSRetryBackoff(retry)
+				s.recordOpenAIWSRetryAttempt(backoff)
+				logOpenAIWSModeInfo(
+					"ingress_ws_http_bridge_turn_retry account_id=%d turn=%d retry=%d reason=pre_output_failover backoff_ms=%d",
+					account.ID,
+					turn,
+					retry,
+					backoff.Milliseconds(),
+				)
+				if backoff > 0 {
+					timer := time.NewTimer(backoff)
+					select {
+					case <-ctx.Done():
+						if !timer.Stop() {
+							select {
+							case <-timer.C:
+							default:
+							}
+						}
+						bridgeErr = ctx.Err()
+					case <-timer.C:
+					}
+					if ctx.Err() != nil {
+						break
+					}
+				}
+			}
 			if hooks != nil && hooks.AfterTurn != nil {
 				hooks.AfterTurn(OpenAIWSTurnCapture{
 					Turn:               turn,
@@ -511,6 +547,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				})
 			}
 			if bridgeErr != nil {
+				if turn > 1 {
+					var failoverErr *UpstreamFailoverError
+					if errors.As(bridgeErr, &failoverErr) {
+						return newOpenAIWSRetryableCloseError("upstream retryable failure after the first turn")
+					}
+				}
 				return bridgeErr
 			}
 			if result == nil {
@@ -756,6 +798,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		replayCollector := &openAIWSToolCallReplayCollector{}
 		// Delay protocol-only preamble so a pre-output failure can be retried without committing the downstream turn.
 		pendingPreamble := make([][]byte, 0, 2)
+		pendingTerminalTail := make([][]byte, 0, 4)
+		holdingTerminalTail := false
 		firstEventType := ""
 		lastEventType := ""
 		var pendingErrorBody []byte
@@ -893,6 +937,23 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						ResponseHeaders: cloneHeader(lease.HandshakeHeaders()),
 					}
 				}
+				if openAIStreamEventShouldFailover(upstreamMessage, eventType, errMsgRaw) {
+					lease.MarkBroken()
+					if !wroteDownstream && !clientDisconnected {
+						failoverErr := &UpstreamFailoverError{
+							StatusCode:             http.StatusBadGateway,
+							ResponseBody:           append([]byte(nil), upstreamMessage...),
+							ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+							RetryableOnSameAccount: account.IsPoolMode(),
+						}
+						return nil, wrapOpenAIWSIngressTurnError(
+							openAIWSIngressStageResponseFailedRetryable,
+							failoverErr,
+							false,
+						)
+					}
+					return nil, newOpenAIWSRetryableCloseError("upstream retryable failure after downstream output")
+				}
 				pendingErrorBody = append(pendingErrorBody[:0], upstreamMessage...)
 				pendingErrorCode = errCodeRaw
 				pendingErrorType = errTypeRaw
@@ -928,17 +989,37 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					})
 				}
 				failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
-				if openAIStreamFailedEventShouldFailover(upstreamMessage, failedMessage) {
+				if openAIStreamEventShouldFailover(upstreamMessage, eventType, failedMessage) {
 					failoverErr := &UpstreamFailoverError{
-						StatusCode:      http.StatusBadGateway,
-						ResponseBody:    append([]byte(nil), upstreamMessage...),
-						ResponseHeaders: cloneHeader(lease.HandshakeHeaders()),
+						StatusCode:             http.StatusBadGateway,
+						ResponseBody:           append([]byte(nil), upstreamMessage...),
+						ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+						RetryableOnSameAccount: account.IsPoolMode(),
 					}
 					lease.MarkBroken()
 					if !wroteDownstream && !clientDisconnected {
 						return nil, wrapOpenAIWSIngressTurnError(
 							openAIWSIngressStageResponseFailedRetryable,
 							failoverErr,
+							false,
+						)
+					}
+					return nil, newOpenAIWSRetryableCloseError("upstream retryable failure after downstream output")
+				}
+			}
+			if eventType != "error" && eventType != "response.failed" {
+				capacityMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+				if isOpenAITransientProcessingError(http.StatusBadRequest, capacityMessage, upstreamMessage) {
+					lease.MarkBroken()
+					if !wroteDownstream && !clientDisconnected {
+						return nil, wrapOpenAIWSIngressTurnError(
+							openAIWSIngressStageResponseFailedRetryable,
+							&UpstreamFailoverError{
+								StatusCode:             http.StatusBadGateway,
+								ResponseBody:           append([]byte(nil), upstreamMessage...),
+								ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+								RetryableOnSameAccount: account.IsPoolMode(),
+							},
 							false,
 						)
 					}
@@ -956,6 +1037,25 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						upstreamMessage = corrected
 					}
 				}
+				replayCollector.AddEvent(eventType, upstreamMessage)
+				if openAIStreamEventDefersUntilSuccessfulTerminal(eventType) {
+					holdingTerminalTail = true
+					pendingTerminalTail = append(pendingTerminalTail, append([]byte(nil), upstreamMessage...))
+				} else if holdingTerminalTail {
+					switch {
+					case openAIStreamEventIsSuccessfulTerminal(upstreamMessage, eventType):
+						holdingTerminalTail = false
+					case openAIStreamEventDropsDeferredTail(upstreamMessage, eventType):
+						pendingTerminalTail = nil
+						holdingTerminalTail = false
+					default:
+						pendingTerminalTail = append(pendingTerminalTail, append([]byte(nil), upstreamMessage...))
+						continue
+					}
+				}
+				if holdingTerminalTail {
+					continue
+				}
 				if !wroteDownstream && openAIStreamEventIsPreamble(eventType) {
 					pendingPreamble = append(pendingPreamble, append([]byte(nil), upstreamMessage...))
 				} else {
@@ -968,8 +1068,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						}
 					}
 					pendingPreamble = nil
+					for _, pendingMessage := range pendingTerminalTail {
+						if err := emitClientMessage(pendingMessage); err != nil {
+							return nil, err
+						}
+						if clientDisconnected {
+							break
+						}
+					}
+					pendingTerminalTail = nil
 					if !clientDisconnected {
-						replayCollector.AddEvent(eventType, upstreamMessage)
 						if err := emitClientMessage(upstreamMessage); err != nil {
 							return nil, err
 						}

@@ -171,9 +171,6 @@ func openAIStreamEventIsTerminal(data string) bool {
 	if trimmed == "" {
 		return false
 	}
-	if trimmed == "[DONE]" {
-		return true
-	}
 	switch gjson.Get(trimmed, "type").String() {
 	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 		return true

@@ -111,6 +111,22 @@ func TestOpenAIWSV2PassthroughPoolCapacityRetriesSameAccount(t *testing.T) {
 	require.True(t, failoverErr.RetryableOnSameAccount)
 }
 
+func TestOpenAIWSV2PassthroughFailedCompletedCapacityRetriesSameAccount(t *testing.T) {
+	upstream := newOpenAIWSV2FinalStatusConn([][]byte{
+		[]byte(`{"type":"response.output_item.done","item":{"id":"fc_capacity","type":"function_call","call_id":"call_must_not_execute","name":"exec_command","arguments":"{}"}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_capacity","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`),
+	}, nil)
+	svc := newOpenAIWSV2FinalStatusService(&openAIWSV2FinalStatusDialer{conn: upstream}, nil)
+	account := newOpenAIWSV2FinalStatusAccount(1313, true)
+
+	proxyErr := runOpenAIWSV2FinalStatusProxy(t, svc, account)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, proxyErr, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+}
+
 func TestOpenAIWSV2PassthroughCapacityAfterOutputReturnsCloseErrorWithoutFailover(t *testing.T) {
 	upstream := newOpenAIWSV2FinalStatusConn([][]byte{
 		[]byte(`{"type":"response.output_text.delta","response_id":"resp_capacity_after_output","delta":"partial"}`),

@@ -20,6 +20,7 @@ const (
 	openAIWSClientReadLimitBytesDefault     int64 = 64 * 1024 * 1024
 	openAIWSHTTPBridgeThresholdBytesDefault int64 = 15 * 1024 * 1024
 	openAIWSHTTPBridgeErrorBodyLimitBytes         = 64 * 1024
+	openAIWSHTTPBridgeTurnRetryLimit              = 1
 )
 
 // ResolveOpenAIWSClientReadLimitBytes 返回入站客户端 WS 单帧读取上限。
@@ -227,9 +228,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if s.rateLimitService != nil {
 			s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
 		}
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		_ = writeClientMessage(buildOpenAIWSHTTPBridgeErrorEvent(http.StatusBadGateway, "Upstream request failed"))
-		return nil, fmt.Errorf("upstream http bridge request failed: %s", safeErr)
+		return nil, s.newOpenAIStreamFailoverError(
+			c,
+			account,
+			true,
+			"",
+			nil,
+			"Upstream request failed",
+		)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -243,6 +249,16 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if upstreamMsg == "" {
 			upstreamMsg = http.StatusText(resp.StatusCode)
+		}
+		if isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody) {
+			return nil, s.newOpenAIStreamFailoverError(
+				c,
+				account,
+				true,
+				strings.TrimSpace(resp.Header.Get("x-request-id")),
+				respBody,
+				upstreamMsg,
+			)
 		}
 		_ = writeClientMessage(buildOpenAIWSHTTPBridgeErrorEvent(resp.StatusCode, upstreamMsg))
 		return nil, fmt.Errorf("upstream http bridge error: status=%d message=%s", resp.StatusCode, upstreamMsg)
@@ -259,9 +275,37 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	replayCollector := &openAIWSToolCallReplayCollector{}
 	firstEventType := ""
 	lastEventType := ""
-	sawDone := false
 	wroteDownstream := false
 	clientDisconnected := false
+	pendingPreamble := make([][]byte, 0, 4)
+	pendingTerminalTail := make([][]byte, 0, 4)
+	holdingTerminalTail := false
+	emitClientMessage := func(message []byte) error {
+		if clientDisconnected {
+			return nil
+		}
+		if err := writeClientMessage(message); err != nil {
+			if isOpenAIWSClientDisconnectError(err) {
+				clientDisconnected = true
+				closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)
+				logOpenAIWSModeInfo(
+					"ingress_ws_http_bridge_client_disconnected_drain account_id=%d turn=%d close_status=%s close_reason=%s",
+					account.ID,
+					turn,
+					closeStatus,
+					truncateOpenAIWSLogValue(closeReason, openAIWSHeaderValueMaxLen),
+				)
+				return nil
+			}
+			return wrapOpenAIWSIngressTurnError(
+				"write_client",
+				fmt.Errorf("write client websocket event: %w", err),
+				wroteDownstream,
+			)
+		}
+		wroteDownstream = true
+		return nil
+	}
 	mappedModel := ""
 	needModelReplace := false
 	var mappedModelBytes []byte
@@ -311,11 +355,17 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
 	defer putSSEScannerBuf64K(scanBuf)
+	pendingSSEEventType := ""
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		data, ok := extractOpenAISSEDataLine(line)
 		if !ok {
+			if eventName, eventOK := extractOpenAISSEEventLine(line); eventOK {
+				pendingSSEEventType = eventName
+			} else if strings.TrimSpace(line) == "" {
+				pendingSSEEventType = ""
+			}
 			continue
 		}
 		trimmedData := strings.TrimSpace(data)
@@ -323,12 +373,18 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			continue
 		}
 		if trimmedData == "[DONE]" {
-			sawDone = true
+			pendingSSEEventType = ""
 			continue
 		}
 
 		upstreamMessage := []byte(trimmedData)
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+		if eventType == "" && pendingSSEEventType != "" {
+			trimmedData = openAICompatPayloadWithEventType(trimmedData, pendingSSEEventType)
+			upstreamMessage = []byte(trimmedData)
+			eventType = pendingSSEEventType
+		}
+		pendingSSEEventType = ""
 		if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
 		}
@@ -360,35 +416,125 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			}
 		}
 		replayCollector.AddEvent(eventType, upstreamMessage)
-
-		if !clientDisconnected {
-			if err := writeClientMessage(upstreamMessage); err != nil {
-				if isOpenAIWSClientDisconnectError(err) {
-					clientDisconnected = true
-					closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)
-					logOpenAIWSModeInfo(
-						"ingress_ws_http_bridge_client_disconnected_drain account_id=%d turn=%d close_status=%s close_reason=%s",
-						account.ID,
-						turn,
-						closeStatus,
-						truncateOpenAIWSLogValue(closeReason, openAIWSHeaderValueMaxLen),
-					)
-				} else {
-					return nil, wrapOpenAIWSIngressTurnError(
-						"write_client",
-						fmt.Errorf("write client websocket event: %w", err),
-						wroteDownstream,
-					)
-				}
-			} else {
-				wroteDownstream = true
+		retryableFailureAfterOutput := false
+		capacityMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+		if isOpenAITransientProcessingError(http.StatusBadRequest, capacityMessage, upstreamMessage) {
+			if !wroteDownstream && !clientDisconnected {
+				return resultWithUsage(), s.newOpenAIStreamFailoverError(
+					c,
+					account,
+					true,
+					strings.TrimSpace(resp.Header.Get("x-request-id")),
+					upstreamMessage,
+					capacityMessage,
+				)
 			}
+			if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(upstreamMessage, eventType, true); changed {
+				upstreamMessage = sanitized
+				eventType, _, _ = parseOpenAIWSEventEnvelope(upstreamMessage)
+			}
+			retryableFailureAfterOutput = true
 		}
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
 			s.persistOpenAIWSErrorSignal(ctx, account, resp.Header, upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
-			s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
+			if openAIStreamEventShouldFailover(upstreamMessage, eventType, errMsgRaw) {
+				if !wroteDownstream && !clientDisconnected {
+					return resultWithUsage(), s.newOpenAIStreamFailoverError(
+						c,
+						account,
+						true,
+						strings.TrimSpace(resp.Header.Get("x-request-id")),
+						upstreamMessage,
+						errMsgRaw,
+					)
+				}
+				if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(upstreamMessage, eventType, true); changed {
+					upstreamMessage = sanitized
+				}
+				s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
+				retryableFailureAfterOutput = true
+			} else {
+				s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
+			}
+		}
+		if eventType == "response.failed" {
+			failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+			if openAIStreamEventShouldFailover(upstreamMessage, eventType, failedMessage) {
+				if !wroteDownstream && !clientDisconnected {
+					return resultWithUsage(), s.newOpenAIStreamFailoverError(
+						c,
+						account,
+						true,
+						strings.TrimSpace(resp.Header.Get("x-request-id")),
+						upstreamMessage,
+						failedMessage,
+					)
+				}
+				if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(upstreamMessage, eventType, true); changed {
+					upstreamMessage = sanitized
+				}
+				retryableFailureAfterOutput = true
+			}
+		}
+
+		if !clientDisconnected {
+			if openAIStreamEventDefersUntilSuccessfulTerminal(eventType) {
+				holdingTerminalTail = true
+				pendingTerminalTail = append(pendingTerminalTail, append([]byte(nil), upstreamMessage...))
+				continue
+			}
+			flushTerminalTail := false
+			if holdingTerminalTail {
+				switch {
+				case openAIStreamEventIsSuccessfulTerminal(upstreamMessage, eventType):
+					flushTerminalTail = true
+					holdingTerminalTail = false
+				case openAIStreamEventDropsDeferredTail(upstreamMessage, eventType):
+					pendingTerminalTail = nil
+					holdingTerminalTail = false
+				default:
+					pendingTerminalTail = append(pendingTerminalTail, append([]byte(nil), upstreamMessage...))
+					continue
+				}
+			}
+			if !wroteDownstream && openAIStreamEventIsPreamble(eventType) {
+				pendingPreamble = append(pendingPreamble, append([]byte(nil), upstreamMessage...))
+				continue
+			}
+			for _, pendingMessage := range pendingPreamble {
+				if err := emitClientMessage(pendingMessage); err != nil {
+					return nil, err
+				}
+				if clientDisconnected {
+					break
+				}
+			}
+			pendingPreamble = nil
+			if flushTerminalTail {
+				for _, pendingMessage := range pendingTerminalTail {
+					if err := emitClientMessage(pendingMessage); err != nil {
+						return nil, err
+					}
+					if clientDisconnected {
+						break
+					}
+				}
+				pendingTerminalTail = nil
+			}
+			if !clientDisconnected {
+				if err := emitClientMessage(upstreamMessage); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if retryableFailureAfterOutput {
+			return resultWithUsage(), newOpenAIWSRetryableCloseError("upstream retryable failure after downstream output")
+		}
+		if eventType == "error" {
+			_, _, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
 			errMessage := strings.TrimSpace(errMsgRaw)
 			if errMessage == "" {
 				errMessage = "upstream error event"
@@ -420,10 +566,33 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		if !wroteDownstream && !clientDisconnected {
+			return resultWithUsage(), s.newOpenAIStreamFailoverError(
+				c,
+				account,
+				true,
+				strings.TrimSpace(resp.Header.Get("x-request-id")),
+				nil,
+				"OpenAI stream disconnected before completion",
+			)
+		}
+		if wroteDownstream && !clientDisconnected {
+			return resultWithUsage(), newOpenAIWSRetryableCloseError("upstream stream interrupted after downstream output")
+		}
 		return resultWithUsage(), fmt.Errorf("read upstream http bridge stream: %w", err)
 	}
-	if sawDone && eventCount > 0 {
-		return resultWithUsage(), nil
+	if !wroteDownstream && !clientDisconnected {
+		return resultWithUsage(), s.newOpenAIStreamFailoverError(
+			c,
+			account,
+			true,
+			strings.TrimSpace(resp.Header.Get("x-request-id")),
+			nil,
+			"OpenAI stream ended before a terminal event",
+		)
+	}
+	if wroteDownstream && !clientDisconnected {
+		return resultWithUsage(), newOpenAIWSRetryableCloseError("upstream stream ended before terminal event")
 	}
 	return resultWithUsage(), errors.New("upstream http bridge stream ended before terminal event")
 }
