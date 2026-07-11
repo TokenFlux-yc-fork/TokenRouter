@@ -759,6 +759,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						clearObservedErrorSignal()
 					}
 				}
+				capacityMessage := extractOpenAISSEErrorMessage(payload)
+				if transientCapacity := isOpenAITransientProcessingError(http.StatusBadRequest, capacityMessage, payload); transientCapacity {
+					return retryableFailure(http.StatusBadGateway, account.IsPoolMode())
+				}
 				return nil
 			},
 			OnTrace: func(event openaiwsv2.RelayTraceEvent) {

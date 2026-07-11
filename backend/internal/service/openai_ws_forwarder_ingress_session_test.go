@@ -4046,7 +4046,7 @@ func (c *openAIWSWriteFailAfterFirstTurnConn) Close() error {
 	return nil
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CapacityAfterPreambleRetriesWithoutLeakingAttempt(t *testing.T) {
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CapacityErrorAfterPreambleRetriesWithoutLeakingAttempt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -4068,7 +4068,13 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CapacityAfterPre
 		events: [][]byte{
 			[]byte(`{"type":"response.created","response":{"id":"resp_capacity_attempt_1","model":"gpt-5.1"}}`),
 			[]byte(`{"type":"response.in_progress","response":{"id":"resp_capacity_attempt_1","model":"gpt-5.1"}}`),
-			[]byte(`{"type":"response.failed","response":{"id":"resp_capacity_attempt_1","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`),
+			[]byte(`{"type":"response.metadata","response_id":"resp_capacity_attempt_1","headers":{"x-codex-turn-state":"turn-state"}}`),
+			[]byte(`{"type":"codex.response.metadata","headers":{"openai-model":"gpt-5.1"}}`),
+			[]byte(`{"type":"codex.rate_limits","rate_limits":[]}`),
+			[]byte(`{"type":"response.output_item.added","item":{"id":"rs_capacity_attempt_1","type":"reasoning","summary":[]}}`),
+			[]byte(`{"type":"response.content_part.added","item_id":"msg_capacity_attempt_1","part":{"type":"output_text","text":""}}`),
+			[]byte(`{"type":"response.output_item.done","item":{"id":"fc_capacity_attempt_1","type":"function_call","call_id":"call_must_not_execute","name":"exec_command","arguments":"{\"cmd\":\"true\"}"}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_capacity_attempt_1","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`),
 		},
 	}
 	secondConn := &openAIWSCaptureConn{

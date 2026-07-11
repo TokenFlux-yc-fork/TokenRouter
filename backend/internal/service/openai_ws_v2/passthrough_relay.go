@@ -445,6 +445,8 @@ func runUpstreamToClient(
 ) {
 	wroteDownstream := false
 	pendingPreamble := make([]bufferedRelayFrame, 0, 2)
+	pendingTerminalTail := make([]bufferedRelayFrame, 0, 4)
+	holdingTerminalTail := false
 	forwardClientFrame := func(msgType coderws.MessageType, payload []byte) bool {
 		if err := writeClient(msgType, payload); err != nil {
 			emitRelayTrace(onTrace, RelayTraceEvent{
@@ -512,15 +514,17 @@ func runUpstreamToClient(
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
 		}
-		if observedEvent.eventType != "response.failed" {
+		if !observedEvent.terminal || isSuccessfulTerminalEvent(payload, observedEvent.eventType) {
 			emitTurnComplete(onTurnComplete, state, observedEvent)
 		}
 		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
 			if droppedFrames != nil {
 				droppedFrames.Add(int64(len(pendingPreamble)))
+				droppedFrames.Add(int64(len(pendingTerminalTail)))
 				droppedFrames.Add(1)
 			}
 			pendingPreamble = nil
+			pendingTerminalTail = nil
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:           "drop_downstream_frame",
 				Direction:       "upstream_to_client",
@@ -538,6 +542,45 @@ func runUpstreamToClient(
 			}
 			markActivity()
 			continue
+		}
+		if msgType == coderws.MessageText && isDeferredUntilSuccessfulTerminalEvent(observedEvent.eventType) {
+			holdingTerminalTail = true
+			pendingTerminalTail = append(pendingTerminalTail, bufferedRelayFrame{
+				msgType: msgType,
+				payload: append([]byte(nil), payload...),
+			})
+			emitRelayTrace(onTrace, RelayTraceEvent{
+				Stage:           "buffer_downstream_terminal_tail",
+				Direction:       "upstream_to_client",
+				MessageType:     relayMessageTypeString(msgType),
+				PayloadBytes:    len(payload),
+				WroteDownstream: wroteDownstream,
+			})
+			continue
+		}
+		flushTerminalTail := false
+		if holdingTerminalTail {
+			switch {
+			case isSuccessfulTerminalEvent(payload, observedEvent.eventType):
+				flushTerminalTail = true
+				holdingTerminalTail = false
+			case dropsDeferredTerminalTail(payload, observedEvent.eventType):
+				pendingTerminalTail = nil
+				holdingTerminalTail = false
+			default:
+				pendingTerminalTail = append(pendingTerminalTail, bufferedRelayFrame{
+					msgType: msgType,
+					payload: append([]byte(nil), payload...),
+				})
+				emitRelayTrace(onTrace, RelayTraceEvent{
+					Stage:           "buffer_downstream_terminal_tail",
+					Direction:       "upstream_to_client",
+					MessageType:     relayMessageTypeString(msgType),
+					PayloadBytes:    len(payload),
+					WroteDownstream: wroteDownstream,
+				})
+				continue
+			}
 		}
 		if !wroteDownstream && msgType == coderws.MessageText && isPreambleEvent(observedEvent.eventType) {
 			pendingPreamble = append(pendingPreamble, bufferedRelayFrame{
@@ -559,6 +602,14 @@ func runUpstreamToClient(
 			}
 		}
 		pendingPreamble = nil
+		if flushTerminalTail {
+			for _, pendingFrame := range pendingTerminalTail {
+				if !forwardClientFrame(pendingFrame.msgType, pendingFrame.payload) {
+					return
+				}
+			}
+			pendingTerminalTail = nil
+		}
 		if !forwardClientFrame(msgType, payload) {
 			return
 		}
@@ -970,9 +1021,59 @@ func isTerminalEvent(eventType string) bool {
 	}
 }
 
+func isDeferredUntilSuccessfulTerminalEvent(eventType string) bool {
+	return strings.TrimSpace(eventType) == "response.output_item.done"
+}
+
+func isSuccessfulTerminalEvent(payload []byte, eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "response.completed", "response.done":
+		status := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.status").String()))
+		if status != "" && status != "completed" {
+			return false
+		}
+		for _, path := range []string{"response.error", "response.status_details.error", "error"} {
+			errorValue := gjson.GetBytes(payload, path)
+			if !errorValue.Exists() || errorValue.Type == gjson.Null || strings.TrimSpace(errorValue.Raw) == "null" {
+				continue
+			}
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func dropsDeferredTerminalTail(payload []byte, eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "error",
+		"response.failed",
+		"response.incomplete",
+		"response.cancelled",
+		"response.canceled":
+		return true
+	case "response.completed", "response.done":
+		return !isSuccessfulTerminalEvent(payload, eventType)
+	default:
+		return false
+	}
+}
+
 func isPreambleEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "response.created", "response.in_progress":
+	case "response.created",
+		"response.in_progress",
+		"response.metadata",
+		"codex.response.metadata",
+		"codex.rate_limits",
+		"response.output_item.added",
+		"response.content_part.added",
+		"response.content_part.done",
+		"response.function_call_arguments.done",
+		"response.custom_tool_call_input.done",
+		"response.reasoning_summary_part.added",
+		"response.reasoning_summary_part.done":
 		return true
 	default:
 		return false
@@ -993,7 +1094,16 @@ func isTokenEvent(eventType string) bool {
 		return false
 	}
 	switch eventType {
-	case "response.created", "response.in_progress", "response.output_item.added", "response.output_item.done":
+	case "response.created",
+		"response.in_progress",
+		"response.output_item.added",
+		"response.output_item.done",
+		"response.content_part.added",
+		"response.content_part.done",
+		"response.function_call_arguments.done",
+		"response.custom_tool_call_input.done",
+		"response.reasoning_summary_part.added",
+		"response.reasoning_summary_part.done":
 		return false
 	}
 	if strings.Contains(eventType, ".delta") {

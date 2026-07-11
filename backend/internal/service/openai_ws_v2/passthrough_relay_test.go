@@ -208,6 +208,11 @@ func TestRelay_BuffersPreambleBeforeRejectedFailure(t *testing.T) {
 	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{
 		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.created","response":{"id":"resp_capacity"}}`)},
 		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.in_progress","response":{"id":"resp_capacity"}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.metadata","response_id":"resp_capacity","headers":{"x-codex-turn-state":"turn-state"}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"codex.response.metadata","headers":{"openai-model":"gpt-5.1"}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"codex.rate_limits","rate_limits":[]}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.output_item.added","item":{"id":"rs_capacity","type":"reasoning","summary":[]}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.content_part.added","item_id":"msg_capacity","part":{"type":"output_text","text":""}}`)},
 		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.failed","response":{"id":"resp_capacity","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`)},
 	}, true)
 
@@ -245,6 +250,8 @@ func TestRelay_FlushesBufferedPreambleInOrder(t *testing.T) {
 		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.created","response":{"id":"resp_ok"}}`)},
 		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.in_progress","response":{"id":"resp_ok"}}`)},
 		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.output_text.delta","response_id":"resp_ok","delta":"hello"}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.output_item.done","item":{"id":"fc_ok","type":"function_call","call_id":"call_ok","name":"exec_command","arguments":"{\"cmd\":\"true\"}"}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.metadata","marker":"held_after_tool"}`)},
 		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.completed","response":{"id":"resp_ok","usage":{"input_tokens":1,"output_tokens":1}}}`)},
 	}
 	clientConn := newPassthroughTestFrameConn(nil, false)
@@ -267,6 +274,86 @@ func TestRelay_FlushesBufferedPreambleInOrder(t *testing.T) {
 	for i := range frames {
 		require.Equal(t, frames[i].payload, clientWrites[i].payload)
 	}
+}
+
+func TestRelay_DropsToolDoneTailBeforeRejectedFailureAfterDelta(t *testing.T) {
+	t.Parallel()
+
+	frames := []passthroughTestFrame{
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.created","response":{"id":"resp_tool_capacity"}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.function_call_arguments.delta","item_id":"fc_capacity","delta":"{\"cmd\":\"true\"}"}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.output_item.done","item":{"id":"fc_capacity","type":"function_call","call_id":"call_must_not_execute","name":"exec_command","arguments":"{\"cmd\":\"true\"}"}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.metadata","marker":"must_stay_deferred"}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.failed","response":{"id":"resp_tool_capacity","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`)},
+	}
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn(frames, true)
+	rejectedErr := errors.New("retryable upstream failure")
+	failedWroteDownstream := false
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result, relayExit := Relay(
+		ctx,
+		clientConn,
+		upstreamConn,
+		[]byte(`{"type":"response.create","model":"gpt-5.1","input":[]}`),
+		RelayOptions{BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error {
+			if msgType == coderws.MessageText && gjson.GetBytes(payload, "type").String() == "response.failed" {
+				failedWroteDownstream = wroteDownstream
+				return rejectedErr
+			}
+			return nil
+		}},
+	)
+
+	require.NotNil(t, relayExit)
+	require.ErrorIs(t, relayExit.Err, rejectedErr)
+	require.True(t, relayExit.WroteDownstream)
+	require.True(t, failedWroteDownstream)
+	clientWrites := clientConn.Writes()
+	require.Len(t, clientWrites, 2)
+	require.Equal(t, "response.created", gjson.GetBytes(clientWrites[0].payload, "type").String())
+	require.Equal(t, "response.function_call_arguments.delta", gjson.GetBytes(clientWrites[1].payload, "type").String())
+	require.Equal(t, int64(2), result.UpstreamToClientFrames)
+	for _, write := range clientWrites {
+		require.NotContains(t, string(write.payload), "call_must_not_execute")
+		require.NotContains(t, string(write.payload), "must_stay_deferred")
+	}
+}
+
+func TestRelay_DropsToolDoneTailBeforeRejectedFailedCompleted(t *testing.T) {
+	t.Parallel()
+
+	frames := []passthroughTestFrame{
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.created","response":{"id":"resp_tool_capacity"}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.output_item.done","item":{"id":"fc_capacity","type":"function_call","call_id":"call_must_not_execute","name":"exec_command","arguments":"{}"}}`)},
+		{msgType: coderws.MessageText, payload: []byte(`{"type":"response.completed","response":{"id":"resp_tool_capacity","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`)},
+	}
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn(frames, true)
+	rejectedErr := errors.New("retryable upstream failure")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result, relayExit := Relay(
+		ctx,
+		clientConn,
+		upstreamConn,
+		[]byte(`{"type":"response.create","model":"gpt-5.1","input":[]}`),
+		RelayOptions{BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, _ bool) error {
+			if msgType == coderws.MessageText && gjson.GetBytes(payload, "response.status").String() == "failed" {
+				return rejectedErr
+			}
+			return nil
+		}},
+	)
+
+	require.NotNil(t, relayExit)
+	require.ErrorIs(t, relayExit.Err, rejectedErr)
+	require.False(t, relayExit.WroteDownstream)
+	require.Zero(t, result.UpstreamToClientFrames)
+	require.Empty(t, clientConn.Writes())
 }
 
 func TestRelay_FunctionCallOutputBytesPreserved(t *testing.T) {
