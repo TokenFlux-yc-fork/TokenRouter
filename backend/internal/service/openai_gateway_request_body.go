@@ -862,7 +862,9 @@ func writeOpenAIFastPolicyBlockedResponse(c *gin.Context, err *OpenAIFastBlocked
 	// Forward），此时以 response.failed 终止事件回传；未提交时先停拍再写
 	// JSON，保持原状态码语义（#3887）。
 	if StopOpenAICompactSSEKeepaliveCommitted(c) {
-		writeOpenAICompactSSEFailureMessage(c, http.StatusForbidden, "permission_error", err.Message)
+		if writeErr := writeOpenAICompactSSEFailureMessage(c, http.StatusForbidden, "permission_error", err.Message); writeErr != nil {
+			_ = c.Error(writeErr)
+		}
 		return
 	}
 	c.JSON(http.StatusForbidden, gin.H{
