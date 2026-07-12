@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -51,31 +52,30 @@ func openAICompactClientWantsStream(c *gin.Context) bool {
 // compact v2 的消费协议合成为最小 Responses SSE 流写回客户端。仅当请求被标记
 // 为 body-signal 客户端流式、状态码为 2xx 且 body 是合法 JSON 对象时生效；
 // 返回 false 表示未写出任何内容，调用方应按原路径写回。
+// 返回非 nil error 表示已接管响应，但下游 SSE 写入或刷新失败。
 //
 // 若下游心跳已把响应头提交为 200（见 openAICompactSSEKeepalive），则本函数
 // 必须接管一切写回：非 2xx 或不可合成的响应降级为 response.failed 终止事件，
 // 不能再返回 false（否则调用方的 JSON 写回会与已提交的 SSE 流交错）。
-func writeOpenAICompactSSEBridge(c *gin.Context, statusCode int, finalResponse []byte) bool {
+func writeOpenAICompactSSEBridge(c *gin.Context, statusCode int, finalResponse []byte) (bool, error) {
 	if c == nil || !openAICompactClientWantsStream(c) {
-		return false
+		return false, nil
 	}
 	// 先停心跳再写回，避免注释行与最终事件交错；停止后经互斥锁与心跳
 	// goroutine 建立 happens-before，可安全接管 ResponseWriter。
 	committed := StopOpenAICompactSSEKeepaliveCommitted(c)
 	if statusCode < 200 || statusCode >= 300 {
 		if committed {
-			writeOpenAICompactSSEFailure(c, statusCode, finalResponse)
-			return true
+			return true, writeOpenAICompactSSEFailure(c, statusCode, finalResponse)
 		}
-		return false
+		return false, nil
 	}
 	payload, ok := buildOpenAICompactSSEPayload(finalResponse)
 	if !ok {
 		if committed {
-			writeOpenAICompactSSEFailure(c, http.StatusBadGateway, finalResponse)
-			return true
+			return true, writeOpenAICompactSSEFailure(c, http.StatusBadGateway, finalResponse)
 		}
-		return false
+		return false, nil
 	}
 	if !committed {
 		header := c.Writer.Header()
@@ -85,15 +85,21 @@ func writeOpenAICompactSSEBridge(c *gin.Context, statusCode int, finalResponse [
 		header.Set("X-Accel-Buffering", "no")
 		c.Writer.WriteHeader(statusCode)
 	}
-	_, _ = c.Writer.Write(payload)
-	c.Writer.Flush()
-	return true
+	if _, err := c.Writer.Write(payload); err != nil {
+		MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
+		return true, fmt.Errorf("write compact SSE response: %w", err)
+	}
+	if err := flushOpenAIResponseWriter(c.Writer); err != nil {
+		MarkOpsStreamError(c, "downstream_flush_error", err.Error(), 0)
+		return true, fmt.Errorf("flush compact SSE response: %w", err)
+	}
+	return true, nil
 }
 
 // writeOpenAICompactSSEFailure 从上游错误 body 提取错误消息后，以
 // response.failed 终止事件回传。仅用于心跳已提交 200、无法再按 HTTP 状态码
 // 回传错误的场景。
-func writeOpenAICompactSSEFailure(c *gin.Context, statusCode int, errorBody []byte) {
+func writeOpenAICompactSSEFailure(c *gin.Context, statusCode int, errorBody []byte) error {
 	message := ""
 	if len(errorBody) > 0 {
 		message = sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(errorBody)))
@@ -101,16 +107,16 @@ func writeOpenAICompactSSEFailure(c *gin.Context, statusCode int, errorBody []by
 	if message == "" {
 		message = "Upstream compact request failed with HTTP " + strconv.Itoa(statusCode)
 	}
-	writeOpenAICompactSSEFailureMessage(c, statusCode, "upstream_error", message)
+	return writeOpenAICompactSSEFailureMessage(c, statusCode, "upstream_error", message)
 }
 
 // writeOpenAICompactSSEFailureMessage 写出 response.failed 终止事件。Codex 对
 // 流式 Responses 请求把 response.failed 作为合法终止事件处理（普通 error 帧
 // 不被识别，会退化为 "stream closed before response.completed" 盲重连）。
 // 同时标记流内错误，保证挂在 200 流上的失败仍进入 ops 错误看板。
-func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType, message string) {
+func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType, message string) error {
 	if c == nil {
-		return
+		return nil
 	}
 	MarkOpsStreamError(c, errType, message, statusCode)
 	payload, err := json.Marshal(map[string]any{
@@ -127,12 +133,21 @@ func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType
 		},
 	})
 	if err != nil {
-		return
+		return err
 	}
-	_, _ = c.Writer.Write([]byte("event: response.failed\ndata: "))
-	_, _ = c.Writer.Write(payload)
-	_, _ = c.Writer.Write([]byte("\n\n"))
-	c.Writer.Flush()
+	frame := make([]byte, 0, len(payload)+len("event: response.failed\ndata: \n\n"))
+	frame = append(frame, "event: response.failed\ndata: "...)
+	frame = append(frame, payload...)
+	frame = append(frame, '\n', '\n')
+	if _, err := c.Writer.Write(frame); err != nil {
+		MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
+		return fmt.Errorf("write compact SSE failure: %w", err)
+	}
+	if err := flushOpenAIResponseWriter(c.Writer); err != nil {
+		MarkOpsStreamError(c, "downstream_flush_error", err.Error(), 0)
+		return fmt.Errorf("flush compact SSE failure: %w", err)
+	}
+	return nil
 }
 
 // buildOpenAICompactSSEPayload 把 compact 的 Response JSON 转成 SSE 事件序列：

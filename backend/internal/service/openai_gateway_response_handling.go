@@ -57,16 +57,20 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	}
 
 	w := c.Writer
-	flusher, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		return nil, errors.New("streaming not supported")
 	}
 	bufferedWriter := bufio.NewWriterSize(w, 4*1024)
 	flushBuffered := func() error {
 		if err := bufferedWriter.Flush(); err != nil {
+			MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
 			return err
 		}
-		flusher.Flush()
+		if err := flushOpenAIResponseWriter(w); err != nil {
+			MarkOpsStreamError(c, "downstream_flush_error", err.Error(), 0)
+			return err
+		}
 		return nil
 	}
 
@@ -139,6 +143,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			return
 		}
 		if _, err := bufferedWriter.WriteString("data: " + payload + "\n\n"); err != nil {
+			MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
 			clientDisconnected = true
 			return
 		}
@@ -479,6 +484,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				continue
 			}
 			if _, err := bufferedWriter.WriteString(":\n\n"); err != nil {
+				MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
 				clientDisconnected = true
 				logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
 				continue
@@ -885,7 +891,11 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+	compactHandled, compactWriteErr := writeOpenAICompactSSEBridge(c, resp.StatusCode, body)
+	if compactWriteErr != nil {
+		return nil, compactWriteErr
+	}
+	if !compactHandled {
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
@@ -968,7 +978,11 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			contentType = "text/event-stream"
 		}
 	}
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+	compactHandled, compactWriteErr := writeOpenAICompactSSEBridge(c, resp.StatusCode, body)
+	if compactWriteErr != nil {
+		return nil, compactWriteErr
+	}
+	if !compactHandled {
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
@@ -1077,7 +1091,9 @@ func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.R
 	// body-signal compact 心跳可能已把响应头提交为 200，此时只能以
 	// response.failed 终止事件回传错误，不能再写 JSON+状态码。
 	if openAICompactClientWantsStream(c) && StopOpenAICompactSSEKeepaliveCommitted(c) {
-		writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", message)
+		if writeErr := writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", message); writeErr != nil {
+			return fmt.Errorf("non-streaming openai protocol error: %s; %w", message, writeErr)
+		}
 		return fmt.Errorf("non-streaming openai protocol error: %s", message)
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

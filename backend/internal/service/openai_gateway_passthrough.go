@@ -853,7 +853,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	}
 
 	w := c.Writer
-	flusher, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		return nil, errors.New("streaming not supported")
 	}
@@ -874,6 +874,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	writePendingLines := func() bool {
 		for _, pending := range pendingLines {
 			if _, err := fmt.Fprintln(w, pending); err != nil {
+				MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
 				clientDisconnected = true
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
 				return false
@@ -1032,11 +1033,15 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				}
 			}
 			if _, err := fmt.Fprintln(w, line); err != nil {
+				MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
 				clientDisconnected = true
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+			} else if err := flushOpenAIResponseWriter(w); err != nil {
+				MarkOpsStreamError(c, "downstream_flush_error", err.Error(), 0)
+				clientDisconnected = true
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Client disconnected during streaming flush, continue draining upstream for usage: account=%d", account.ID)
 			} else {
 				clientOutputStarted = true
-				flusher.Flush()
 			}
 		}
 	}
@@ -1132,7 +1137,11 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+	compactHandled, compactWriteErr := writeOpenAICompactSSEBridge(c, resp.StatusCode, body)
+	if compactWriteErr != nil {
+		return nil, compactWriteErr
+	}
+	if !compactHandled {
 		c.Data(resp.StatusCode, contentType, body)
 	}
 	return &openaiNonStreamingResultPassthrough{
@@ -1199,7 +1208,11 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 			contentType = "text/event-stream"
 		}
 	}
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+	compactHandled, compactWriteErr := writeOpenAICompactSSEBridge(c, resp.StatusCode, body)
+	if compactWriteErr != nil {
+		return nil, compactWriteErr
+	}
+	if !compactHandled {
 		c.Data(resp.StatusCode, contentType, body)
 	}
 
