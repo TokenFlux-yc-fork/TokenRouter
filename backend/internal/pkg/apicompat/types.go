@@ -652,6 +652,48 @@ type ChatDelta struct {
 	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`
 }
 
+// MarshalJSON omits absent function fields from streaming deltas. Emitting an
+// empty name on an arguments-only chunk can make downstream clients discard a
+// name received in an earlier chunk. Non-streaming ChatToolCall encoding keeps
+// its required name and arguments fields unchanged.
+func (d ChatDelta) MarshalJSON() ([]byte, error) {
+	type streamFunctionCall struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	}
+	type streamToolCall struct {
+		Index    *int               `json:"index,omitempty"`
+		ID       string             `json:"id,omitempty"`
+		Type     string             `json:"type,omitempty"`
+		Function streamFunctionCall `json:"function"`
+	}
+
+	toolCalls := make([]streamToolCall, len(d.ToolCalls))
+	for i, tc := range d.ToolCalls {
+		toolCalls[i] = streamToolCall{
+			Index: tc.Index,
+			ID:    tc.ID,
+			Type:  tc.Type,
+			Function: streamFunctionCall{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		}
+	}
+
+	return json.Marshal(struct {
+		Role             string           `json:"role,omitempty"`
+		Content          *string          `json:"content,omitempty"`
+		ReasoningContent *string          `json:"reasoning_content,omitempty"`
+		ToolCalls        []streamToolCall `json:"tool_calls,omitempty"`
+	}{
+		Role:             d.Role,
+		Content:          d.Content,
+		ReasoningContent: d.ReasoningContent,
+		ToolCalls:        toolCalls,
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Shared constants
 // ---------------------------------------------------------------------------
