@@ -41,6 +41,7 @@ type openaiNonStreamingResult struct {
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string) (*openaiStreamingResult, error) {
+	outputBaseline := captureOpenAIStreamOutputBaseline(c)
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
@@ -119,6 +120,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	// can buffer response.created / response.in_progress, so keepalive must be
 	// based on downstream idle time.
 	lastDownstreamWriteAt := time.Now()
+	nativeRemoteCompactionV2 := IsOpenAINativeRemoteCompactionV2(c)
 
 	// 仅发送一次错误事件，避免多次写入导致协议混乱。
 	// 注意：OpenAI `/v1/responses` streaming 事件必须符合 OpenAI Responses schema；
@@ -132,27 +134,53 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	clientOutputStarted := false
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	var streamEarlyErr error
-	sendErrorEvent := func(reason string) {
+	upstreamFrameComplete := true
+	pendingNativePreamble := make([]string, 0, 8)
+	writeBufferedLine := func(line string) bool {
+		if _, err := bufferedWriter.WriteString(line); err != nil {
+			MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
+			clientDisconnected = true
+			return false
+		}
+		if _, err := bufferedWriter.WriteString("\n"); err != nil {
+			MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
+			clientDisconnected = true
+			return false
+		}
+		return true
+	}
+	sendErrorEvent := func(reason string) error {
 		if errorEventSent || clientDisconnected {
-			return
+			return nil
 		}
 		errorEventSent = true
-		payload := `{"type":"error","sequence_number":0,"error":{"type":"upstream_error","message":` + strconv.Quote(reason) + `,"code":` + strconv.Quote(reason) + `}}`
 		if err := flushBuffered(); err != nil {
 			clientDisconnected = true
-			return
+			return err
 		}
+		if nativeRemoteCompactionV2 {
+			MarkResponseCommitted(c)
+			if err := writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", reason); err != nil {
+				clientDisconnected = true
+				return err
+			}
+			clientOutputStarted = true
+			lastDownstreamWriteAt = time.Now()
+			return nil
+		}
+		payload := `{"type":"error","sequence_number":0,"error":{"type":"upstream_error","message":` + strconv.Quote(reason) + `,"code":` + strconv.Quote(reason) + `}}`
 		if _, err := bufferedWriter.WriteString("data: " + payload + "\n\n"); err != nil {
 			MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
 			clientDisconnected = true
-			return
+			return err
 		}
 		if err := flushBuffered(); err != nil {
 			clientDisconnected = true
-			return
+			return err
 		}
 		clientOutputStarted = true
 		lastDownstreamWriteAt = time.Now()
+		return nil
 	}
 
 	needModelReplace := originalModel != mappedModel
@@ -172,7 +200,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
 		if !sawTerminalEvent {
-			if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+			if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 				return resultWithUsage(), s.newOpenAIStreamFailoverError(
 					c,
 					account,
@@ -219,10 +247,12 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		}
 		if errors.Is(scanErr, bufio.ErrTooLong) {
 			logger.LegacyPrintf("service.openai_gateway", "SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, scanErr)
-			sendErrorEvent("response_too_large")
+			if writeErr := sendErrorEvent("response_too_large"); writeErr != nil {
+				return resultWithUsage(), fmt.Errorf("SSE line too long: %v; write terminal failure: %w", scanErr, writeErr), true
+			}
 			return resultWithUsage(), scanErr, true
 		}
-		if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+		if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 			msg := "OpenAI stream disconnected before completion"
 			if errText := strings.TrimSpace(scanErr.Error()); errText != "" {
 				msg += ": " + errText
@@ -233,10 +263,15 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		if clientDisconnected {
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", scanErr), true
 		}
-		sendErrorEvent("stream_read_error")
+		if writeErr := sendErrorEvent("stream_read_error"); writeErr != nil {
+			return resultWithUsage(), fmt.Errorf("stream read error: %v; write terminal failure: %w", scanErr, writeErr), true
+		}
 		return resultWithUsage(), fmt.Errorf("stream read error: %w", scanErr), true
 	}
 	processSSELine := func(line string, queueDrained bool) {
+		defer func() {
+			upstreamFrameComplete = strings.TrimSpace(line) == ""
+		}()
 		if streamEarlyErr != nil {
 			return
 		}
@@ -272,20 +307,32 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 						UpstreamOutTok: usage.OutputTokens,
 					})
 				}
-				if !openAIStreamClientOutputStarted(c, clientOutputStarted) {
+				if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
+					if isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, dataBytes) {
+						sawFailedEvent = true
+						streamEarlyErr = s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, dataBytes, failedMessage)
+						return
+					}
 					if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, dataBytes, failedMessage); matched {
 						sawFailedEvent = true
 						// 命中透传规则也要记录 ops 上游错误事件（对齐 CC/Messages 与
 						// antigravity 先例），否则透传命中的 failed 在监控中不可见。
 						s.recordOpenAIStreamUpstreamError(c, account, false, upstreamRequestID, "http_error", dataBytes, failedMessage)
-						MarkResponseCommitted(c)
-						c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-						c.JSON(status, gin.H{
-							"error": gin.H{
-								"type":    errType,
-								"message": errMsg,
-							},
-						})
+						handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, status, errType, errMsg)
+						if writeErr != nil {
+							streamEarlyErr = fmt.Errorf("write committed Responses failure: %w", writeErr)
+							return
+						}
+						if !handled {
+							MarkResponseCommitted(c)
+							c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+							c.JSON(status, gin.H{
+								"error": gin.H{
+									"type":    errType,
+									"message": errMsg,
+								},
+							})
+						}
 						streamEarlyErr = fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
 						return
 					}
@@ -336,7 +383,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if sanitizedData, sanitized := sanitizeOpenAIResponseFailedEventForClient(
 				dataBytes,
 				eventType,
-				openAIStreamClientOutputStarted(c, clientOutputStarted),
+				openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline),
 			); sanitized {
 				dataBytes = sanitizedData
 				data = string(sanitizedData)
@@ -346,6 +393,21 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 			// 写入客户端（客户端断开后继续 drain 上游）
 			if !clientDisconnected {
+				if nativeRemoteCompactionV2 && !clientOutputStarted && !startsClientOutput {
+					pendingNativePreamble = append(pendingNativePreamble, line)
+					return
+				}
+				if nativeRemoteCompactionV2 && !clientOutputStarted {
+					for _, pending := range pendingNativePreamble {
+						if !writeBufferedLine(pending) {
+							break
+						}
+					}
+					pendingNativePreamble = pendingNativePreamble[:0]
+					if clientDisconnected {
+						return
+					}
+				}
 				shouldFlush := queueDrained && (clientOutputStarted || startsClientOutput)
 				if firstTokenMs == nil && startsClientOutput {
 					// 保证首个 token 事件尽快出站，避免影响 TTFT。
@@ -381,6 +443,10 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 		// Forward non-data lines as-is
 		if !clientDisconnected {
+			if nativeRemoteCompactionV2 && !clientOutputStarted {
+				pendingNativePreamble = append(pendingNativePreamble, line)
+				return
+			}
 			if _, err := bufferedWriter.WriteString(line); err != nil {
 				clientDisconnected = true
 				logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
@@ -473,17 +539,38 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 			}
-			sendErrorEvent("stream_timeout")
+			if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
+				return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, nil, "OpenAI stream data interval timeout")
+			}
+			if writeErr := sendErrorEvent("stream_timeout"); writeErr != nil {
+				return resultWithUsage(), fmt.Errorf("stream data interval timeout; write terminal failure: %w", writeErr)
+			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-keepaliveCh:
 			if clientDisconnected {
 				continue
 			}
+			if !nativeRemoteCompactionV2 && !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
+				continue
+			}
+			// Once semantic output is visible, wait for the upstream event's blank
+			// line before inserting a standalone ping event.
+			if clientOutputStarted && !upstreamFrameComplete {
+				continue
+			}
 			if time.Since(lastDownstreamWriteAt) < keepaliveInterval {
 				continue
 			}
-			if _, err := bufferedWriter.WriteString(":\n\n"); err != nil {
+			if nativeRemoteCompactionV2 {
+				_, err := writeOpenAINativeRemoteCompactionPing(c, bufferedWriter)
+				if err != nil {
+					MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
+					clientDisconnected = true
+					logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
+					continue
+				}
+			} else if _, err := bufferedWriter.WriteString(":\n\n"); err != nil {
 				MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
 				clientDisconnected = true
 				logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
@@ -1088,10 +1175,10 @@ func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.R
 		message = "Upstream returned an invalid non-streaming response"
 	}
 	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
-	// body-signal compact 心跳可能已把响应头提交为 200，此时只能以
-	// response.failed 终止事件回传错误，不能再写 JSON+状态码。
-	if openAICompactClientWantsStream(c) && StopOpenAICompactSSEKeepaliveCommitted(c) {
-		if writeErr := writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", message); writeErr != nil {
+	// A compact keepalive may already have committed HTTP 200. In that case the
+	// only valid error response is a terminal response.failed event.
+	if handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, http.StatusBadGateway, "upstream_error", message); handled {
+		if writeErr != nil {
 			return fmt.Errorf("non-streaming openai protocol error: %s; %w", message, writeErr)
 		}
 		return fmt.Errorf("non-streaming openai protocol error: %s", message)

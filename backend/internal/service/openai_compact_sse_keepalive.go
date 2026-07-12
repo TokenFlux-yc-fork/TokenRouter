@@ -6,13 +6,17 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 // openAICompactSSEKeepaliveKey 存放 body-signal compact 请求的下游 SSE 心跳器。
-const openAICompactSSEKeepaliveKey = "openai_compact_sse_keepalive"
+const (
+	openAICompactSSEKeepaliveKey = "openai_compact_sse_keepalive"
+	openAIProtocolKeepaliveKey   = "openai_protocol_keepalive_bytes"
+)
 
 // openAICompactSSEKeepalive 在 compact 上游 unary 等待期间向下游写 SSE 注释行
 // 心跳。上游 /responses/compact 在模型处理期间不发送任何字节（大上下文可长达
@@ -184,6 +188,43 @@ func OpenAICompactKeepaliveAdjustedWrittenSize(c *gin.Context) int {
 	}
 	if real := size - k.bytes; real > 0 {
 		return real
+	}
+	return -1
+}
+
+func recordOpenAIProtocolKeepaliveBytes(c *gin.Context, n int) {
+	if c == nil || n <= 0 {
+		return
+	}
+	value, ok := c.Get(openAIProtocolKeepaliveKey)
+	if !ok {
+		counter := &atomic.Int64{}
+		c.Set(openAIProtocolKeepaliveKey, counter)
+		value = counter
+	}
+	counter, _ := value.(*atomic.Int64)
+	if counter != nil {
+		counter.Add(int64(n))
+	}
+}
+
+// OpenAISemanticWrittenSize excludes keepalive frames ignored by downstream
+// parsers so retry guards only observe model or terminal output.
+func OpenAISemanticWrittenSize(c *gin.Context) int {
+	size := OpenAICompactKeepaliveAdjustedWrittenSize(c)
+	if size < 0 || c == nil {
+		return size
+	}
+	value, ok := c.Get(openAIProtocolKeepaliveKey)
+	if !ok {
+		return size
+	}
+	counter, _ := value.(*atomic.Int64)
+	if counter == nil {
+		return size
+	}
+	if semantic := size - int(counter.Load()); semantic > 0 {
+		return semantic
 	}
 	return -1
 }

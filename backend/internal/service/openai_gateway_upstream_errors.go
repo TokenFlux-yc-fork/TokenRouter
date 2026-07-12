@@ -293,13 +293,23 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			UpstreamStatus: resp.StatusCode,
 		})
 		setOpsUpstreamError(c, resp.StatusCode, cyberMsg, truncateString(string(body), 2048))
-		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-		contentType := resp.Header.Get("Content-Type")
-		if contentType == "" {
-			contentType = "application/json"
+		clientMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(cyberMsg))
+		if clientMsg == "" {
+			clientMsg = "Upstream request failed"
 		}
-		MarkResponseCommitted(c)
-		c.Data(resp.StatusCode, contentType, body)
+		handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, resp.StatusCode, "upstream_error", clientMsg)
+		if writeErr != nil {
+			return nil, fmt.Errorf("write committed Responses failure: %w", writeErr)
+		}
+		if !handled {
+			writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+			contentType := resp.Header.Get("Content-Type")
+			if contentType == "" {
+				contentType = "application/json"
+			}
+			MarkResponseCommitted(c)
+			c.Data(resp.StatusCode, contentType, body)
+		}
 		if cyberMsg == "" {
 			return nil, fmt.Errorf("openai cyber_policy: %d", resp.StatusCode)
 		}
@@ -342,12 +352,18 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			Message:            errMsg,
 			Detail:             upstreamDetail,
 		})
-		c.JSON(resp.StatusCode, gin.H{
-			"error": gin.H{
-				"type":    "invalid_request_error",
-				"message": errMsg,
-			},
-		})
+		handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, resp.StatusCode, "invalid_request_error", errMsg)
+		if writeErr != nil {
+			return nil, fmt.Errorf("write committed Responses failure: %w", writeErr)
+		}
+		if !handled {
+			c.JSON(resp.StatusCode, gin.H{
+				"error": gin.H{
+					"type":    "invalid_request_error",
+					"message": errMsg,
+				},
+			})
+		}
 		return nil, wrapOpenAIUpstreamWarningIfCyber(resp.StatusCode, body, errMsg, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, errMsg))
 	}
 
@@ -360,13 +376,19 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
-		MarkResponseCommitted(c)
-		c.JSON(status, gin.H{
-			"error": gin.H{
-				"type":    errType,
-				"message": errMsg,
-			},
-		})
+		handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, status, errType, errMsg)
+		if writeErr != nil {
+			return nil, fmt.Errorf("write committed Responses failure: %w", writeErr)
+		}
+		if !handled {
+			MarkResponseCommitted(c)
+			c.JSON(status, gin.H{
+				"error": gin.H{
+					"type":    errType,
+					"message": errMsg,
+				},
+			})
+		}
 		if upstreamMsg == "" {
 			upstreamMsg = errMsg
 		}
@@ -388,13 +410,19 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
 		})
-		MarkResponseCommitted(c)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"type":    "upstream_error",
-				"message": "Upstream gateway error",
-			},
-		})
+		handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, http.StatusInternalServerError, "upstream_error", "Upstream gateway error")
+		if writeErr != nil {
+			return nil, fmt.Errorf("write committed Responses failure: %w", writeErr)
+		}
+		if !handled {
+			MarkResponseCommitted(c)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": gin.H{
+					"type":    "upstream_error",
+					"message": "Upstream gateway error",
+				},
+			})
+		}
 		if upstreamMsg == "" {
 			return nil, fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
 		}
@@ -432,8 +460,6 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		}
 	}
 
-	MarkResponseCommitted(c)
-
 	// Return appropriate error response
 	var errType, errMsg string
 	var statusCode int
@@ -464,12 +490,19 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		errMsg = upstreamMsg
 	}
 
-	c.JSON(statusCode, gin.H{
-		"error": gin.H{
-			"type":    errType,
-			"message": errMsg,
-		},
-	})
+	handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, statusCode, errType, errMsg)
+	if writeErr != nil {
+		return nil, fmt.Errorf("write committed Responses failure: %w", writeErr)
+	}
+	if !handled {
+		MarkResponseCommitted(c)
+		c.JSON(statusCode, gin.H{
+			"error": gin.H{
+				"type":    errType,
+				"message": errMsg,
+			},
+		})
+	}
 
 	if upstreamMsg == "" {
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
