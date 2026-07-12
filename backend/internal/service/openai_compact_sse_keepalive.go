@@ -26,10 +26,11 @@ const (
 // 原 JSON+状态码链路（Codex 按 HTTP 状态码重试）；首拍之后状态码固化为 200，
 // 后续错误由写回方降级为 response.failed 流内终止事件。
 type openAICompactSSEKeepalive struct {
-	mu      sync.Mutex
-	writer  gin.ResponseWriter
-	started bool
-	stopped bool
+	mu         sync.Mutex
+	ginContext *gin.Context
+	writer     gin.ResponseWriter
+	started    bool
+	stopped    bool
 	// bytes 是心跳已写出的注释字节数。心跳不构成语义响应，handler 的
 	// "Forward 期间是否已写响应"判定（failover 放弃换号的依据）必须扣除
 	// 这部分字节，见 OpenAICompactKeepaliveAdjustedWrittenSize。
@@ -48,8 +49,9 @@ func StartOpenAICompactSSEKeepalive(c *gin.Context, interval time.Duration) func
 		return func() {}
 	}
 	k := &openAICompactSSEKeepalive{
-		writer: c.Writer,
-		stop:   make(chan struct{}),
+		ginContext: c,
+		writer:     c.Writer,
+		stop:       make(chan struct{}),
 	}
 	c.Set(openAICompactSSEKeepaliveKey, k)
 	c.Writer = &openAICompactKeepaliveWriter{ResponseWriter: c.Writer, k: k}
@@ -98,10 +100,15 @@ func (k *openAICompactSSEKeepalive) beat() bool {
 	n, err := k.writer.Write([]byte(": keepalive\n\n"))
 	k.bytes += n
 	if err != nil {
-		k.stopped = true
+		MarkOpsStreamError(k.ginContext, "downstream_write_error", err.Error(), 0)
+		k.markStoppedLocked()
 		return false
 	}
-	k.writer.Flush()
+	if err := flushOpenAIResponseWriter(k.writer); err != nil {
+		MarkOpsStreamError(k.ginContext, "downstream_flush_error", err.Error(), 0)
+		k.markStoppedLocked()
+		return false
+	}
 	return true
 }
 
@@ -254,6 +261,10 @@ func (w *openAICompactKeepaliveWriter) WriteHeaderNow() {
 func (w *openAICompactKeepaliveWriter) Flush() {
 	w.suspend()
 	w.ResponseWriter.Flush()
+}
+
+func (w *openAICompactKeepaliveWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (w *openAICompactKeepaliveWriter) Status() int {
