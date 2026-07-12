@@ -161,6 +161,18 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			return err
 		}
 		if nativeRemoteCompactionV2 {
+			if clientOutputStarted && !upstreamFrameComplete {
+				if _, err := bufferedWriter.WriteString("\n"); err != nil {
+					MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
+					clientDisconnected = true
+					return err
+				}
+				if err := flushBuffered(); err != nil {
+					clientDisconnected = true
+					return err
+				}
+				upstreamFrameComplete = true
+			}
 			MarkResponseCommitted(c)
 			if err := writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", reason); err != nil {
 				clientDisconnected = true

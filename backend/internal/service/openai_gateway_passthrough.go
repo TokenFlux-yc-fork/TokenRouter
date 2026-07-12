@@ -957,8 +957,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		}
 	}
 
+	nativeRemoteCompactionV2 := IsOpenAINativeRemoteCompactionV2(c)
 	nativePingInterval := time.Duration(0)
-	if IsOpenAINativeRemoteCompactionV2(c) && s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+	if nativeRemoteCompactionV2 && s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
 		nativePingInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
 	}
 	var nativePingWriterMu sync.Mutex
@@ -1036,6 +1037,26 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			}
 			nativePingWriterMu.Unlock()
 		}
+	}
+	writeNativeTerminalFailure := func(message string) error {
+		lockNativePingWriter()
+		nativePingFinished = true
+		if !nativePingFrameComplete {
+			if _, err := fmt.Fprintln(w); err != nil {
+				MarkOpsStreamError(c, "downstream_write_error", err.Error(), 0)
+				clientDisconnected = true
+				unlockNativePingWriter()
+				return err
+			}
+			nativePingFrameComplete = true
+		}
+		MarkResponseCommitted(c)
+		err := writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", message)
+		if err != nil {
+			clientDisconnected = true
+		}
+		unlockNativePingWriter()
+		return err
 	}
 
 	for scanner.Scan() {
@@ -1190,9 +1211,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Client disconnected during streaming flush, continue draining upstream for usage: account=%d", account.ID)
 			} else {
 				clientOutputStarted = true
+				nativePingFrameComplete = strings.TrimSpace(line) == ""
 				if nativePingInterval > 0 {
 					nativePingLastWriteAt = time.Now()
-					nativePingFrameComplete = strings.TrimSpace(line) == ""
 					nativePingFinished = sawTerminalEvent
 				}
 			}
@@ -1212,6 +1233,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		}
 		if errors.Is(err, bufio.ErrTooLong) {
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] SSE line too long: account=%d max_size=%d error=%v", account.ID, maxLineSize, err)
+			if nativeRemoteCompactionV2 && streamOutputStarted() && !clientDisconnected {
+				if writeErr := writeNativeTerminalFailure("response_too_large"); writeErr != nil {
+					return resultWithUsage(), fmt.Errorf("SSE line too long: %v; write terminal failure: %w", err, writeErr)
+				}
+			}
 			return resultWithUsage(), err
 		}
 		if !streamOutputStarted() {
@@ -1224,6 +1250,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		}
 		if clientDisconnected {
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", err)
+		}
+		if nativeRemoteCompactionV2 {
+			if writeErr := writeNativeTerminalFailure("OpenAI stream disconnected before completion"); writeErr != nil {
+				return resultWithUsage(), fmt.Errorf("stream read error: %v; write terminal failure: %w", err, writeErr)
+			}
 		}
 		logger.LegacyPrintf("service.openai_gateway",
 			"[OpenAI passthrough] 流读取异常中断: account=%d request_id=%s err=%v",
@@ -1246,6 +1277,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		if !streamOutputStarted() {
 			return resultWithUsage(),
 				s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI stream ended before a terminal event")
+		}
+		if nativeRemoteCompactionV2 {
+			if writeErr := writeNativeTerminalFailure("OpenAI stream ended before a terminal event"); writeErr != nil {
+				return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event; write terminal failure: %w", writeErr)
+			}
 		}
 		return resultWithUsage(), errors.New("stream usage incomplete: missing terminal event")
 	}
