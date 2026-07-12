@@ -110,6 +110,24 @@ func writeOpenAICompactSSEFailure(c *gin.Context, statusCode int, errorBody []by
 	return writeOpenAICompactSSEFailureMessage(c, statusCode, "upstream_error", message)
 }
 
+// writeOpenAIResponsesFailureIfCommitted converts an error into a terminal
+// Responses event after a keepalive has committed HTTP 200. Returning false
+// means the caller can still preserve the original HTTP status and JSON body.
+func writeOpenAIResponsesFailureIfCommitted(c *gin.Context, statusCode int, errType, message string) (bool, error) {
+	if c == nil || c.Writer == nil {
+		return false, nil
+	}
+	committed := StopOpenAICompactSSEKeepaliveCommitted(c)
+	if !committed && IsOpenAINativeRemoteCompactionV2(c) && c.Writer.Written() {
+		committed = true
+	}
+	if !committed {
+		return false, nil
+	}
+	MarkResponseCommitted(c)
+	return true, writeOpenAICompactSSEFailureMessage(c, statusCode, errType, message)
+}
+
 // writeOpenAICompactSSEFailureMessage 写出 response.failed 终止事件。Codex 对
 // 流式 Responses 请求把 response.failed 作为合法终止事件处理（普通 error 帧
 // 不被识别，会退化为 "stream closed before response.completed" 盲重连）。
