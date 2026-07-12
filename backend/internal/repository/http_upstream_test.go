@@ -323,7 +323,6 @@ func (s *HTTPUpstreamSuite) TestOpenAIHTTP2NonCompatibilityErrorsDoNotActivateFa
 		"stream_refused":         http2.StreamError{StreamID: 1, Code: http2.ErrCodeRefusedStream},
 		"stream_closed":          http2.StreamError{StreamID: 1, Code: http2.ErrCodeStreamClosed},
 		"stream_enhance_calm":    http2.StreamError{StreamID: 1, Code: http2.ErrCodeEnhanceYourCalm},
-		"connection_internal":    http2.ConnectionError(http2.ErrCodeInternal),
 		"connection_connect":     http2.ConnectionError(http2.ErrCodeConnect),
 		"connection_timeout":     http2.ConnectionError(http2.ErrCodeSettingsTimeout),
 		"client_connection_lost": errors.New("http2: client connection lost"),
@@ -357,6 +356,7 @@ func (s *HTTPUpstreamSuite) TestOpenAIHTTP2CompatibilityErrorClassification() {
 		"unexpected_alpn":     errors.New(`http2: unexpected ALPN protocol "http/1.1"; want "h2"`),
 		"no_application":      errors.New("remote error: tls: no application protocol"),
 		"frame_too_large":     http2.ErrFrameTooLarge,
+		"stream_internal":     http2.StreamError{StreamID: 57, Code: http2.ErrCodeInternal},
 		"stream_protocol":     http2.StreamError{StreamID: 1, Code: http2.ErrCodeProtocol},
 		"goaway_flow_control": http2.GoAwayError{ErrCode: http2.ErrCodeFlowControl},
 		"connection_frame":    http2.ConnectionError(http2.ErrCodeFrameSize),
@@ -411,6 +411,10 @@ func (s *HTTPUpstreamSuite) TestOpenAIHTTP2DirectBodyFailureActivatesFallbackImm
 
 	for name, readErr := range map[string]error{
 		"unexpected_eof": io.ErrUnexpectedEOF,
+		"stream_internal": http2.StreamError{
+			StreamID: 57,
+			Code:     http2.ErrCodeInternal,
+		},
 		"goaway": http2.GoAwayError{
 			ErrCode: http2.ErrCodeProtocol,
 		},
