@@ -199,6 +199,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	var usage *OpenAIUsage
 	var firstTokenMs *int
 	responseID := ""
+	clientDisconnect := false
 	imageCount := 0
 	var imageOutputSizes []string
 	var responseBody []byte
@@ -210,6 +211,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		usage = result.usage
 		firstTokenMs = result.firstTokenMs
 		responseID = strings.TrimSpace(result.responseID)
+		clientDisconnect = result.clientDisconnect
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
 		responseBody = result.responseBody
@@ -220,6 +222,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		usage = result.usage
 		responseID = strings.TrimSpace(result.responseID)
+		clientDisconnect = result.clientDisconnect
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
 		responseBody = result.responseBody
@@ -237,18 +240,19 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	forwardResult := &OpenAIForwardResult{
-		RequestID:       resp.Header.Get("x-request-id"),
-		ResponseID:      responseID,
-		Usage:           *usage,
-		Model:           reqModel,
-		UpstreamModel:   upstreamPassthroughModel,
-		ServiceTier:     serviceTier,
-		ReasoningEffort: reasoningEffort,
-		Stream:          reqStream,
-		OpenAIWSMode:    false,
-		ResponseBody:    cloneDataSharingRequestBody(responseBody),
-		Duration:        time.Since(startTime),
-		FirstTokenMs:    firstTokenMs,
+		RequestID:        resp.Header.Get("x-request-id"),
+		ResponseID:       responseID,
+		Usage:            *usage,
+		Model:            reqModel,
+		UpstreamModel:    upstreamPassthroughModel,
+		ServiceTier:      serviceTier,
+		ReasoningEffort:  reasoningEffort,
+		Stream:           reqStream,
+		OpenAIWSMode:     false,
+		ResponseBody:     cloneDataSharingRequestBody(responseBody),
+		Duration:         time.Since(startTime),
+		FirstTokenMs:     firstTokenMs,
+		ClientDisconnect: clientDisconnect,
 	}
 	if imageCount > 0 {
 		forwardResult.ImageCount = imageCount
@@ -577,6 +581,7 @@ type openaiStreamingResultPassthrough struct {
 	usage            *OpenAIUsage
 	firstTokenMs     *int
 	responseID       string
+	clientDisconnect bool
 	imageCount       int
 	imageOutputSizes []string
 	responseBody     []byte
@@ -586,6 +591,7 @@ type openaiNonStreamingResultPassthrough struct {
 	*OpenAIUsage
 	usage            *OpenAIUsage
 	responseID       string
+	clientDisconnect bool
 	imageCount       int
 	imageOutputSizes []string
 	responseBody     []byte
@@ -998,6 +1004,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			usage:            usage,
 			firstTokenMs:     firstTokenMs,
 			responseID:       responseID,
+			clientDisconnect: clientDisconnected,
 			imageCount:       imageCounter.Count(),
 			imageOutputSizes: imageCounter.Sizes(),
 			responseBody:     cloneDataSharingRequestBody(finalResponseBody),
@@ -1324,9 +1331,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
 	compactHandled, compactWriteErr := writeOpenAICompactSSEBridge(c, resp.StatusCode, body)
-	if compactWriteErr != nil {
-		return nil, compactWriteErr
-	}
 	if !compactHandled {
 		c.Data(resp.StatusCode, contentType, body)
 	}
@@ -1334,6 +1338,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		clientDisconnect: compactWriteErr != nil,
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
 		responseBody:     cloneDataSharingRequestBody(body),
@@ -1407,9 +1412,6 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		}
 	}
 	compactHandled, compactWriteErr := writeOpenAICompactSSEBridge(c, resp.StatusCode, body)
-	if compactWriteErr != nil {
-		return nil, compactWriteErr
-	}
 	if !compactHandled {
 		c.Data(resp.StatusCode, contentType, body)
 	}
@@ -1418,6 +1420,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		clientDisconnect: compactWriteErr != nil,
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
 		responseBody:     cloneDataSharingRequestBody(body),

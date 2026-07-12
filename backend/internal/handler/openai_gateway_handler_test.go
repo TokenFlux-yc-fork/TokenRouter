@@ -28,6 +28,32 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+func TestCompleteOpenAIResponsesSuccess_ClientDisconnectReportsSuccessAndSubmitsUsage(t *testing.T) {
+	ttft := 321
+	result := &service.OpenAIForwardResult{
+		ClientDisconnect: true,
+		FirstTokenMs:     &ttft,
+		Usage:            service.OpenAIUsage{InputTokens: 13, OutputTokens: 5},
+	}
+
+	var reported bool
+	var reportedSuccess bool
+	var reportedTTFT *int
+	usageSubmits := 0
+	completeOpenAIResponsesSuccess(result, func(success bool, firstTokenMs *int) {
+		reported = true
+		reportedSuccess = success
+		reportedTTFT = firstTokenMs
+	}, func() {
+		usageSubmits++
+	})
+
+	require.True(t, reported)
+	require.True(t, reportedSuccess)
+	require.Same(t, result.FirstTokenMs, reportedTTFT)
+	require.Equal(t, 1, usageSubmits)
+}
+
 func TestOpenAIHandleStreamingAwareError_JSONEscaping(t *testing.T) {
 	tests := []struct {
 		name    string

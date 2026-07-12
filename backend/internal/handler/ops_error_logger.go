@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net/http"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -471,6 +472,10 @@ type opsCaptureWriter struct {
 	gin.ResponseWriter
 	limit int
 	buf   bytes.Buffer
+}
+
+func (w *opsCaptureWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 const opsCaptureWriterLimit = 64 * 1024
