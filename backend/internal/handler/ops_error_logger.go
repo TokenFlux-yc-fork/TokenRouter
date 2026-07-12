@@ -476,6 +476,10 @@ type opsCaptureWriter struct {
 	buf   bytes.Buffer
 }
 
+func (w *opsCaptureWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 const opsCaptureWriterLimit = 64 * 1024
 
 var opsCaptureWriterPool = sync.Pool{

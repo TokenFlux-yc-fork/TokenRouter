@@ -26,6 +26,7 @@ type openaiStreamingResult struct {
 	usage            *OpenAIUsage
 	firstTokenMs     *int
 	responseID       string
+	clientDisconnect bool
 	imageCount       int
 	imageOutputSizes []string
 	responseBody     []byte
@@ -35,6 +36,7 @@ type openaiNonStreamingResult struct {
 	*OpenAIUsage
 	usage            *OpenAIUsage
 	responseID       string
+	clientDisconnect bool
 	imageCount       int
 	imageOutputSizes []string
 	responseBody     []byte
@@ -193,6 +195,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			usage:            usage,
 			firstTokenMs:     firstTokenMs,
 			responseID:       responseID,
+			clientDisconnect: clientDisconnected,
 			imageCount:       imageCounter.Count(),
 			imageOutputSizes: imageCounter.Sizes(),
 			responseBody:     cloneDataSharingRequestBody(finalResponseBody),
@@ -979,9 +982,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	}
 
 	compactHandled, compactWriteErr := writeOpenAICompactSSEBridge(c, resp.StatusCode, body)
-	if compactWriteErr != nil {
-		return nil, compactWriteErr
-	}
 	if !compactHandled {
 		c.Data(resp.StatusCode, contentType, body)
 	}
@@ -990,6 +990,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		clientDisconnect: compactWriteErr != nil,
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
 		responseBody:     cloneDataSharingRequestBody(body),
@@ -1066,9 +1067,6 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		}
 	}
 	compactHandled, compactWriteErr := writeOpenAICompactSSEBridge(c, resp.StatusCode, body)
-	if compactWriteErr != nil {
-		return nil, compactWriteErr
-	}
 	if !compactHandled {
 		c.Data(resp.StatusCode, contentType, body)
 	}
@@ -1077,6 +1075,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		clientDisconnect: compactWriteErr != nil,
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
 		responseBody:     cloneDataSharingRequestBody(body),
