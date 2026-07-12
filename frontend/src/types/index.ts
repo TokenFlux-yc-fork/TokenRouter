@@ -628,6 +628,8 @@ export interface GroupAvailabilityProbeConfig {
   user_agent?: string
 }
 
+export type GroupHealthStatus = 'unknown' | 'healthy' | 'unhealthy'
+
 export interface Group {
   id: number
   name: string
@@ -672,6 +674,15 @@ export interface Group {
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   availability_probe_config?: GroupAvailabilityProbeConfig
+  health_check_enabled?: boolean
+  health_status?: GroupHealthStatus | string
+  health_last_check_at?: string | null
+  health_consecutive_failures?: number
+  health_consecutive_successes?: number
+  health_check_interval_sec?: number
+  health_check_timeout_sec?: number
+  health_check_failure_threshold?: number
+  health_check_success_threshold?: number
   require_oauth_only: boolean
   require_privacy_set: boolean
   created_at: string
@@ -679,6 +690,10 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  // OpenAI Codex 备用号池配置（仅管理员可见）
+  backup_pool_group_id: number | null
+  backup_pool_refill_threshold_points: number
+
   // 模型路由配置（仅管理员可见，内部信息）
   model_routing: Record<string, number[]> | null
   model_routing_enabled: boolean
@@ -811,10 +826,17 @@ export interface CreateGroupRequest {
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
   unavailable_fallback_group_id?: number | null
+  backup_pool_group_id?: number | null
+  backup_pool_refill_threshold_points?: number
   mcp_xml_inject?: boolean
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   availability_probe_config?: GroupAvailabilityProbeConfig
+  health_check_enabled?: boolean
+  health_check_interval_sec?: number
+  health_check_timeout_sec?: number
+  health_check_failure_threshold?: number
+  health_check_success_threshold?: number
   allow_messages_dispatch?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
@@ -861,10 +883,17 @@ export interface UpdateGroupRequest {
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
   unavailable_fallback_group_id?: number | null
+  backup_pool_group_id?: number | null
+  backup_pool_refill_threshold_points?: number
   mcp_xml_inject?: boolean
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   availability_probe_config?: GroupAvailabilityProbeConfig
+  health_check_enabled?: boolean
+  health_check_interval_sec?: number
+  health_check_timeout_sec?: number
+  health_check_failure_threshold?: number
+  health_check_success_threshold?: number
   allow_messages_dispatch?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
@@ -2243,6 +2272,11 @@ export interface ScheduledTestPlan {
   enabled: boolean
   max_results: number
   auto_recover: boolean
+  account_circuit_breaker_enabled: boolean
+  failure_threshold: number
+  success_threshold: number
+  failure_cooldown_minutes: number
+  timeout_seconds: number
   last_run_at: string | null
   next_run_at: string | null
   created_at: string
@@ -2261,6 +2295,12 @@ export interface ScheduledTestResult {
   created_at: string
 }
 
+export interface ScheduledTestAccountResult extends ScheduledTestResult {
+  account_id: number
+  model_id: string
+  cron_expression: string
+}
+
 export interface CreateScheduledTestPlanRequest {
   account_id: number
   model_id: string
@@ -2268,6 +2308,11 @@ export interface CreateScheduledTestPlanRequest {
   enabled?: boolean
   max_results?: number
   auto_recover?: boolean
+  account_circuit_breaker_enabled?: boolean
+  failure_threshold?: number
+  success_threshold?: number
+  failure_cooldown_minutes?: number
+  timeout_seconds?: number
 }
 
 export interface UpdateScheduledTestPlanRequest {
@@ -2276,6 +2321,11 @@ export interface UpdateScheduledTestPlanRequest {
   enabled?: boolean
   max_results?: number
   auto_recover?: boolean
+  account_circuit_breaker_enabled?: boolean
+  failure_threshold?: number
+  success_threshold?: number
+  failure_cooldown_minutes?: number
+  timeout_seconds?: number
 }
 
 // Payment types

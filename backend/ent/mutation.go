@@ -18924,6 +18924,10 @@ type GroupMutation struct {
 	addfallback_group_id_on_invalid_request *int64
 	unavailable_fallback_group_id           *int64
 	addunavailable_fallback_group_id        *int64
+	backup_pool_group_id                    *int64
+	addbackup_pool_group_id                 *int64
+	backup_pool_refill_threshold_points     *float64
+	addbackup_pool_refill_threshold_points  *float64
 	model_routing                           *map[string][]int64
 	model_routing_enabled                   *bool
 	mcp_xml_inject                          *bool
@@ -18938,6 +18942,21 @@ type GroupMutation struct {
 	messages_dispatch_model_config          *domain.OpenAIMessagesDispatchModelConfig
 	models_list_config                      *domain.GroupModelsListConfig
 	availability_probe_config               *domain.GroupAvailabilityProbeConfig
+	health_check_enabled                    *bool
+	health_check_interval_sec               *int
+	addhealth_check_interval_sec            *int
+	health_check_timeout_sec                *int
+	addhealth_check_timeout_sec             *int
+	health_check_failure_threshold          *int
+	addhealth_check_failure_threshold       *int
+	health_check_success_threshold          *int
+	addhealth_check_success_threshold       *int
+	health_last_check_at                    *time.Time
+	health_consecutive_failures             *int
+	addhealth_consecutive_failures          *int
+	health_consecutive_successes            *int
+	addhealth_consecutive_successes         *int
+	health_status                           *string
 	rpm_limit                               *int
 	addrpm_limit                            *int
 	data_sharing_enabled                    *bool
@@ -20701,6 +20720,132 @@ func (m *GroupMutation) ResetUnavailableFallbackGroupID() {
 	delete(m.clearedFields, group.FieldUnavailableFallbackGroupID)
 }
 
+// SetBackupPoolGroupID sets the "backup_pool_group_id" field.
+func (m *GroupMutation) SetBackupPoolGroupID(i int64) {
+	m.backup_pool_group_id = &i
+	m.addbackup_pool_group_id = nil
+}
+
+// BackupPoolGroupID returns the value of the "backup_pool_group_id" field in the mutation.
+func (m *GroupMutation) BackupPoolGroupID() (r int64, exists bool) {
+	v := m.backup_pool_group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBackupPoolGroupID returns the old "backup_pool_group_id" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldBackupPoolGroupID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBackupPoolGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBackupPoolGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBackupPoolGroupID: %w", err)
+	}
+	return oldValue.BackupPoolGroupID, nil
+}
+
+// AddBackupPoolGroupID adds i to the "backup_pool_group_id" field.
+func (m *GroupMutation) AddBackupPoolGroupID(i int64) {
+	if m.addbackup_pool_group_id != nil {
+		*m.addbackup_pool_group_id += i
+	} else {
+		m.addbackup_pool_group_id = &i
+	}
+}
+
+// AddedBackupPoolGroupID returns the value that was added to the "backup_pool_group_id" field in this mutation.
+func (m *GroupMutation) AddedBackupPoolGroupID() (r int64, exists bool) {
+	v := m.addbackup_pool_group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearBackupPoolGroupID clears the value of the "backup_pool_group_id" field.
+func (m *GroupMutation) ClearBackupPoolGroupID() {
+	m.backup_pool_group_id = nil
+	m.addbackup_pool_group_id = nil
+	m.clearedFields[group.FieldBackupPoolGroupID] = struct{}{}
+}
+
+// BackupPoolGroupIDCleared returns if the "backup_pool_group_id" field was cleared in this mutation.
+func (m *GroupMutation) BackupPoolGroupIDCleared() bool {
+	_, ok := m.clearedFields[group.FieldBackupPoolGroupID]
+	return ok
+}
+
+// ResetBackupPoolGroupID resets all changes to the "backup_pool_group_id" field.
+func (m *GroupMutation) ResetBackupPoolGroupID() {
+	m.backup_pool_group_id = nil
+	m.addbackup_pool_group_id = nil
+	delete(m.clearedFields, group.FieldBackupPoolGroupID)
+}
+
+// SetBackupPoolRefillThresholdPoints sets the "backup_pool_refill_threshold_points" field.
+func (m *GroupMutation) SetBackupPoolRefillThresholdPoints(f float64) {
+	m.backup_pool_refill_threshold_points = &f
+	m.addbackup_pool_refill_threshold_points = nil
+}
+
+// BackupPoolRefillThresholdPoints returns the value of the "backup_pool_refill_threshold_points" field in the mutation.
+func (m *GroupMutation) BackupPoolRefillThresholdPoints() (r float64, exists bool) {
+	v := m.backup_pool_refill_threshold_points
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBackupPoolRefillThresholdPoints returns the old "backup_pool_refill_threshold_points" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldBackupPoolRefillThresholdPoints(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBackupPoolRefillThresholdPoints is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBackupPoolRefillThresholdPoints requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBackupPoolRefillThresholdPoints: %w", err)
+	}
+	return oldValue.BackupPoolRefillThresholdPoints, nil
+}
+
+// AddBackupPoolRefillThresholdPoints adds f to the "backup_pool_refill_threshold_points" field.
+func (m *GroupMutation) AddBackupPoolRefillThresholdPoints(f float64) {
+	if m.addbackup_pool_refill_threshold_points != nil {
+		*m.addbackup_pool_refill_threshold_points += f
+	} else {
+		m.addbackup_pool_refill_threshold_points = &f
+	}
+}
+
+// AddedBackupPoolRefillThresholdPoints returns the value that was added to the "backup_pool_refill_threshold_points" field in this mutation.
+func (m *GroupMutation) AddedBackupPoolRefillThresholdPoints() (r float64, exists bool) {
+	v := m.addbackup_pool_refill_threshold_points
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBackupPoolRefillThresholdPoints resets all changes to the "backup_pool_refill_threshold_points" field.
+func (m *GroupMutation) ResetBackupPoolRefillThresholdPoints() {
+	m.backup_pool_refill_threshold_points = nil
+	m.addbackup_pool_refill_threshold_points = nil
+}
+
 // SetModelRouting sets the "model_routing" field.
 func (m *GroupMutation) SetModelRouting(value map[string][]int64) {
 	m.model_routing = &value
@@ -21181,6 +21326,463 @@ func (m *GroupMutation) ResetAvailabilityProbeConfig() {
 	m.availability_probe_config = nil
 }
 
+// SetHealthCheckEnabled sets the "health_check_enabled" field.
+func (m *GroupMutation) SetHealthCheckEnabled(b bool) {
+	m.health_check_enabled = &b
+}
+
+// HealthCheckEnabled returns the value of the "health_check_enabled" field in the mutation.
+func (m *GroupMutation) HealthCheckEnabled() (r bool, exists bool) {
+	v := m.health_check_enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthCheckEnabled returns the old "health_check_enabled" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthCheckEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthCheckEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthCheckEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthCheckEnabled: %w", err)
+	}
+	return oldValue.HealthCheckEnabled, nil
+}
+
+// ResetHealthCheckEnabled resets all changes to the "health_check_enabled" field.
+func (m *GroupMutation) ResetHealthCheckEnabled() {
+	m.health_check_enabled = nil
+}
+
+// SetHealthCheckIntervalSec sets the "health_check_interval_sec" field.
+func (m *GroupMutation) SetHealthCheckIntervalSec(i int) {
+	m.health_check_interval_sec = &i
+	m.addhealth_check_interval_sec = nil
+}
+
+// HealthCheckIntervalSec returns the value of the "health_check_interval_sec" field in the mutation.
+func (m *GroupMutation) HealthCheckIntervalSec() (r int, exists bool) {
+	v := m.health_check_interval_sec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthCheckIntervalSec returns the old "health_check_interval_sec" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthCheckIntervalSec(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthCheckIntervalSec is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthCheckIntervalSec requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthCheckIntervalSec: %w", err)
+	}
+	return oldValue.HealthCheckIntervalSec, nil
+}
+
+// AddHealthCheckIntervalSec adds i to the "health_check_interval_sec" field.
+func (m *GroupMutation) AddHealthCheckIntervalSec(i int) {
+	if m.addhealth_check_interval_sec != nil {
+		*m.addhealth_check_interval_sec += i
+	} else {
+		m.addhealth_check_interval_sec = &i
+	}
+}
+
+// AddedHealthCheckIntervalSec returns the value that was added to the "health_check_interval_sec" field in this mutation.
+func (m *GroupMutation) AddedHealthCheckIntervalSec() (r int, exists bool) {
+	v := m.addhealth_check_interval_sec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetHealthCheckIntervalSec resets all changes to the "health_check_interval_sec" field.
+func (m *GroupMutation) ResetHealthCheckIntervalSec() {
+	m.health_check_interval_sec = nil
+	m.addhealth_check_interval_sec = nil
+}
+
+// SetHealthCheckTimeoutSec sets the "health_check_timeout_sec" field.
+func (m *GroupMutation) SetHealthCheckTimeoutSec(i int) {
+	m.health_check_timeout_sec = &i
+	m.addhealth_check_timeout_sec = nil
+}
+
+// HealthCheckTimeoutSec returns the value of the "health_check_timeout_sec" field in the mutation.
+func (m *GroupMutation) HealthCheckTimeoutSec() (r int, exists bool) {
+	v := m.health_check_timeout_sec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthCheckTimeoutSec returns the old "health_check_timeout_sec" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthCheckTimeoutSec(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthCheckTimeoutSec is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthCheckTimeoutSec requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthCheckTimeoutSec: %w", err)
+	}
+	return oldValue.HealthCheckTimeoutSec, nil
+}
+
+// AddHealthCheckTimeoutSec adds i to the "health_check_timeout_sec" field.
+func (m *GroupMutation) AddHealthCheckTimeoutSec(i int) {
+	if m.addhealth_check_timeout_sec != nil {
+		*m.addhealth_check_timeout_sec += i
+	} else {
+		m.addhealth_check_timeout_sec = &i
+	}
+}
+
+// AddedHealthCheckTimeoutSec returns the value that was added to the "health_check_timeout_sec" field in this mutation.
+func (m *GroupMutation) AddedHealthCheckTimeoutSec() (r int, exists bool) {
+	v := m.addhealth_check_timeout_sec
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetHealthCheckTimeoutSec resets all changes to the "health_check_timeout_sec" field.
+func (m *GroupMutation) ResetHealthCheckTimeoutSec() {
+	m.health_check_timeout_sec = nil
+	m.addhealth_check_timeout_sec = nil
+}
+
+// SetHealthCheckFailureThreshold sets the "health_check_failure_threshold" field.
+func (m *GroupMutation) SetHealthCheckFailureThreshold(i int) {
+	m.health_check_failure_threshold = &i
+	m.addhealth_check_failure_threshold = nil
+}
+
+// HealthCheckFailureThreshold returns the value of the "health_check_failure_threshold" field in the mutation.
+func (m *GroupMutation) HealthCheckFailureThreshold() (r int, exists bool) {
+	v := m.health_check_failure_threshold
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthCheckFailureThreshold returns the old "health_check_failure_threshold" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthCheckFailureThreshold(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthCheckFailureThreshold is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthCheckFailureThreshold requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthCheckFailureThreshold: %w", err)
+	}
+	return oldValue.HealthCheckFailureThreshold, nil
+}
+
+// AddHealthCheckFailureThreshold adds i to the "health_check_failure_threshold" field.
+func (m *GroupMutation) AddHealthCheckFailureThreshold(i int) {
+	if m.addhealth_check_failure_threshold != nil {
+		*m.addhealth_check_failure_threshold += i
+	} else {
+		m.addhealth_check_failure_threshold = &i
+	}
+}
+
+// AddedHealthCheckFailureThreshold returns the value that was added to the "health_check_failure_threshold" field in this mutation.
+func (m *GroupMutation) AddedHealthCheckFailureThreshold() (r int, exists bool) {
+	v := m.addhealth_check_failure_threshold
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetHealthCheckFailureThreshold resets all changes to the "health_check_failure_threshold" field.
+func (m *GroupMutation) ResetHealthCheckFailureThreshold() {
+	m.health_check_failure_threshold = nil
+	m.addhealth_check_failure_threshold = nil
+}
+
+// SetHealthCheckSuccessThreshold sets the "health_check_success_threshold" field.
+func (m *GroupMutation) SetHealthCheckSuccessThreshold(i int) {
+	m.health_check_success_threshold = &i
+	m.addhealth_check_success_threshold = nil
+}
+
+// HealthCheckSuccessThreshold returns the value of the "health_check_success_threshold" field in the mutation.
+func (m *GroupMutation) HealthCheckSuccessThreshold() (r int, exists bool) {
+	v := m.health_check_success_threshold
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthCheckSuccessThreshold returns the old "health_check_success_threshold" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthCheckSuccessThreshold(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthCheckSuccessThreshold is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthCheckSuccessThreshold requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthCheckSuccessThreshold: %w", err)
+	}
+	return oldValue.HealthCheckSuccessThreshold, nil
+}
+
+// AddHealthCheckSuccessThreshold adds i to the "health_check_success_threshold" field.
+func (m *GroupMutation) AddHealthCheckSuccessThreshold(i int) {
+	if m.addhealth_check_success_threshold != nil {
+		*m.addhealth_check_success_threshold += i
+	} else {
+		m.addhealth_check_success_threshold = &i
+	}
+}
+
+// AddedHealthCheckSuccessThreshold returns the value that was added to the "health_check_success_threshold" field in this mutation.
+func (m *GroupMutation) AddedHealthCheckSuccessThreshold() (r int, exists bool) {
+	v := m.addhealth_check_success_threshold
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetHealthCheckSuccessThreshold resets all changes to the "health_check_success_threshold" field.
+func (m *GroupMutation) ResetHealthCheckSuccessThreshold() {
+	m.health_check_success_threshold = nil
+	m.addhealth_check_success_threshold = nil
+}
+
+// SetHealthLastCheckAt sets the "health_last_check_at" field.
+func (m *GroupMutation) SetHealthLastCheckAt(t time.Time) {
+	m.health_last_check_at = &t
+}
+
+// HealthLastCheckAt returns the value of the "health_last_check_at" field in the mutation.
+func (m *GroupMutation) HealthLastCheckAt() (r time.Time, exists bool) {
+	v := m.health_last_check_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthLastCheckAt returns the old "health_last_check_at" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthLastCheckAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthLastCheckAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthLastCheckAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthLastCheckAt: %w", err)
+	}
+	return oldValue.HealthLastCheckAt, nil
+}
+
+// ClearHealthLastCheckAt clears the value of the "health_last_check_at" field.
+func (m *GroupMutation) ClearHealthLastCheckAt() {
+	m.health_last_check_at = nil
+	m.clearedFields[group.FieldHealthLastCheckAt] = struct{}{}
+}
+
+// HealthLastCheckAtCleared returns if the "health_last_check_at" field was cleared in this mutation.
+func (m *GroupMutation) HealthLastCheckAtCleared() bool {
+	_, ok := m.clearedFields[group.FieldHealthLastCheckAt]
+	return ok
+}
+
+// ResetHealthLastCheckAt resets all changes to the "health_last_check_at" field.
+func (m *GroupMutation) ResetHealthLastCheckAt() {
+	m.health_last_check_at = nil
+	delete(m.clearedFields, group.FieldHealthLastCheckAt)
+}
+
+// SetHealthConsecutiveFailures sets the "health_consecutive_failures" field.
+func (m *GroupMutation) SetHealthConsecutiveFailures(i int) {
+	m.health_consecutive_failures = &i
+	m.addhealth_consecutive_failures = nil
+}
+
+// HealthConsecutiveFailures returns the value of the "health_consecutive_failures" field in the mutation.
+func (m *GroupMutation) HealthConsecutiveFailures() (r int, exists bool) {
+	v := m.health_consecutive_failures
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthConsecutiveFailures returns the old "health_consecutive_failures" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthConsecutiveFailures(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthConsecutiveFailures is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthConsecutiveFailures requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthConsecutiveFailures: %w", err)
+	}
+	return oldValue.HealthConsecutiveFailures, nil
+}
+
+// AddHealthConsecutiveFailures adds i to the "health_consecutive_failures" field.
+func (m *GroupMutation) AddHealthConsecutiveFailures(i int) {
+	if m.addhealth_consecutive_failures != nil {
+		*m.addhealth_consecutive_failures += i
+	} else {
+		m.addhealth_consecutive_failures = &i
+	}
+}
+
+// AddedHealthConsecutiveFailures returns the value that was added to the "health_consecutive_failures" field in this mutation.
+func (m *GroupMutation) AddedHealthConsecutiveFailures() (r int, exists bool) {
+	v := m.addhealth_consecutive_failures
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetHealthConsecutiveFailures resets all changes to the "health_consecutive_failures" field.
+func (m *GroupMutation) ResetHealthConsecutiveFailures() {
+	m.health_consecutive_failures = nil
+	m.addhealth_consecutive_failures = nil
+}
+
+// SetHealthConsecutiveSuccesses sets the "health_consecutive_successes" field.
+func (m *GroupMutation) SetHealthConsecutiveSuccesses(i int) {
+	m.health_consecutive_successes = &i
+	m.addhealth_consecutive_successes = nil
+}
+
+// HealthConsecutiveSuccesses returns the value of the "health_consecutive_successes" field in the mutation.
+func (m *GroupMutation) HealthConsecutiveSuccesses() (r int, exists bool) {
+	v := m.health_consecutive_successes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthConsecutiveSuccesses returns the old "health_consecutive_successes" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthConsecutiveSuccesses(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthConsecutiveSuccesses is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthConsecutiveSuccesses requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthConsecutiveSuccesses: %w", err)
+	}
+	return oldValue.HealthConsecutiveSuccesses, nil
+}
+
+// AddHealthConsecutiveSuccesses adds i to the "health_consecutive_successes" field.
+func (m *GroupMutation) AddHealthConsecutiveSuccesses(i int) {
+	if m.addhealth_consecutive_successes != nil {
+		*m.addhealth_consecutive_successes += i
+	} else {
+		m.addhealth_consecutive_successes = &i
+	}
+}
+
+// AddedHealthConsecutiveSuccesses returns the value that was added to the "health_consecutive_successes" field in this mutation.
+func (m *GroupMutation) AddedHealthConsecutiveSuccesses() (r int, exists bool) {
+	v := m.addhealth_consecutive_successes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetHealthConsecutiveSuccesses resets all changes to the "health_consecutive_successes" field.
+func (m *GroupMutation) ResetHealthConsecutiveSuccesses() {
+	m.health_consecutive_successes = nil
+	m.addhealth_consecutive_successes = nil
+}
+
+// SetHealthStatus sets the "health_status" field.
+func (m *GroupMutation) SetHealthStatus(s string) {
+	m.health_status = &s
+}
+
+// HealthStatus returns the value of the "health_status" field in the mutation.
+func (m *GroupMutation) HealthStatus() (r string, exists bool) {
+	v := m.health_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthStatus returns the old "health_status" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldHealthStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthStatus: %w", err)
+	}
+	return oldValue.HealthStatus, nil
+}
+
+// ResetHealthStatus resets all changes to the "health_status" field.
+func (m *GroupMutation) ResetHealthStatus() {
+	m.health_status = nil
+}
+
 // SetRpmLimit sets the "rpm_limit" field.
 func (m *GroupMutation) SetRpmLimit(i int) {
 	m.rpm_limit = &i
@@ -21613,7 +22215,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 48)
+	fields := make([]string, 0, 59)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -21713,6 +22315,12 @@ func (m *GroupMutation) Fields() []string {
 	if m.unavailable_fallback_group_id != nil {
 		fields = append(fields, group.FieldUnavailableFallbackGroupID)
 	}
+	if m.backup_pool_group_id != nil {
+		fields = append(fields, group.FieldBackupPoolGroupID)
+	}
+	if m.backup_pool_refill_threshold_points != nil {
+		fields = append(fields, group.FieldBackupPoolRefillThresholdPoints)
+	}
 	if m.model_routing != nil {
 		fields = append(fields, group.FieldModelRouting)
 	}
@@ -21748,6 +22356,33 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.availability_probe_config != nil {
 		fields = append(fields, group.FieldAvailabilityProbeConfig)
+	}
+	if m.health_check_enabled != nil {
+		fields = append(fields, group.FieldHealthCheckEnabled)
+	}
+	if m.health_check_interval_sec != nil {
+		fields = append(fields, group.FieldHealthCheckIntervalSec)
+	}
+	if m.health_check_timeout_sec != nil {
+		fields = append(fields, group.FieldHealthCheckTimeoutSec)
+	}
+	if m.health_check_failure_threshold != nil {
+		fields = append(fields, group.FieldHealthCheckFailureThreshold)
+	}
+	if m.health_check_success_threshold != nil {
+		fields = append(fields, group.FieldHealthCheckSuccessThreshold)
+	}
+	if m.health_last_check_at != nil {
+		fields = append(fields, group.FieldHealthLastCheckAt)
+	}
+	if m.health_consecutive_failures != nil {
+		fields = append(fields, group.FieldHealthConsecutiveFailures)
+	}
+	if m.health_consecutive_successes != nil {
+		fields = append(fields, group.FieldHealthConsecutiveSuccesses)
+	}
+	if m.health_status != nil {
+		fields = append(fields, group.FieldHealthStatus)
 	}
 	if m.rpm_limit != nil {
 		fields = append(fields, group.FieldRpmLimit)
@@ -21832,6 +22467,10 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.FallbackGroupIDOnInvalidRequest()
 	case group.FieldUnavailableFallbackGroupID:
 		return m.UnavailableFallbackGroupID()
+	case group.FieldBackupPoolGroupID:
+		return m.BackupPoolGroupID()
+	case group.FieldBackupPoolRefillThresholdPoints:
+		return m.BackupPoolRefillThresholdPoints()
 	case group.FieldModelRouting:
 		return m.ModelRouting()
 	case group.FieldModelRoutingEnabled:
@@ -21856,6 +22495,24 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.ModelsListConfig()
 	case group.FieldAvailabilityProbeConfig:
 		return m.AvailabilityProbeConfig()
+	case group.FieldHealthCheckEnabled:
+		return m.HealthCheckEnabled()
+	case group.FieldHealthCheckIntervalSec:
+		return m.HealthCheckIntervalSec()
+	case group.FieldHealthCheckTimeoutSec:
+		return m.HealthCheckTimeoutSec()
+	case group.FieldHealthCheckFailureThreshold:
+		return m.HealthCheckFailureThreshold()
+	case group.FieldHealthCheckSuccessThreshold:
+		return m.HealthCheckSuccessThreshold()
+	case group.FieldHealthLastCheckAt:
+		return m.HealthLastCheckAt()
+	case group.FieldHealthConsecutiveFailures:
+		return m.HealthConsecutiveFailures()
+	case group.FieldHealthConsecutiveSuccesses:
+		return m.HealthConsecutiveSuccesses()
+	case group.FieldHealthStatus:
+		return m.HealthStatus()
 	case group.FieldRpmLimit:
 		return m.RpmLimit()
 	case group.FieldDataSharingEnabled:
@@ -21937,6 +22594,10 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldFallbackGroupIDOnInvalidRequest(ctx)
 	case group.FieldUnavailableFallbackGroupID:
 		return m.OldUnavailableFallbackGroupID(ctx)
+	case group.FieldBackupPoolGroupID:
+		return m.OldBackupPoolGroupID(ctx)
+	case group.FieldBackupPoolRefillThresholdPoints:
+		return m.OldBackupPoolRefillThresholdPoints(ctx)
 	case group.FieldModelRouting:
 		return m.OldModelRouting(ctx)
 	case group.FieldModelRoutingEnabled:
@@ -21961,6 +22622,24 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldModelsListConfig(ctx)
 	case group.FieldAvailabilityProbeConfig:
 		return m.OldAvailabilityProbeConfig(ctx)
+	case group.FieldHealthCheckEnabled:
+		return m.OldHealthCheckEnabled(ctx)
+	case group.FieldHealthCheckIntervalSec:
+		return m.OldHealthCheckIntervalSec(ctx)
+	case group.FieldHealthCheckTimeoutSec:
+		return m.OldHealthCheckTimeoutSec(ctx)
+	case group.FieldHealthCheckFailureThreshold:
+		return m.OldHealthCheckFailureThreshold(ctx)
+	case group.FieldHealthCheckSuccessThreshold:
+		return m.OldHealthCheckSuccessThreshold(ctx)
+	case group.FieldHealthLastCheckAt:
+		return m.OldHealthLastCheckAt(ctx)
+	case group.FieldHealthConsecutiveFailures:
+		return m.OldHealthConsecutiveFailures(ctx)
+	case group.FieldHealthConsecutiveSuccesses:
+		return m.OldHealthConsecutiveSuccesses(ctx)
+	case group.FieldHealthStatus:
+		return m.OldHealthStatus(ctx)
 	case group.FieldRpmLimit:
 		return m.OldRpmLimit(ctx)
 	case group.FieldDataSharingEnabled:
@@ -22207,6 +22886,20 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetUnavailableFallbackGroupID(v)
 		return nil
+	case group.FieldBackupPoolGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBackupPoolGroupID(v)
+		return nil
+	case group.FieldBackupPoolRefillThresholdPoints:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBackupPoolRefillThresholdPoints(v)
+		return nil
 	case group.FieldModelRouting:
 		v, ok := value.(map[string][]int64)
 		if !ok {
@@ -22291,6 +22984,69 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetAvailabilityProbeConfig(v)
 		return nil
+	case group.FieldHealthCheckEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthCheckEnabled(v)
+		return nil
+	case group.FieldHealthCheckIntervalSec:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthCheckIntervalSec(v)
+		return nil
+	case group.FieldHealthCheckTimeoutSec:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthCheckTimeoutSec(v)
+		return nil
+	case group.FieldHealthCheckFailureThreshold:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthCheckFailureThreshold(v)
+		return nil
+	case group.FieldHealthCheckSuccessThreshold:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthCheckSuccessThreshold(v)
+		return nil
+	case group.FieldHealthLastCheckAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthLastCheckAt(v)
+		return nil
+	case group.FieldHealthConsecutiveFailures:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthConsecutiveFailures(v)
+		return nil
+	case group.FieldHealthConsecutiveSuccesses:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthConsecutiveSuccesses(v)
+		return nil
+	case group.FieldHealthStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthStatus(v)
+		return nil
 	case group.FieldRpmLimit:
 		v, ok := value.(int)
 		if !ok {
@@ -22365,8 +23121,32 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addunavailable_fallback_group_id != nil {
 		fields = append(fields, group.FieldUnavailableFallbackGroupID)
 	}
+	if m.addbackup_pool_group_id != nil {
+		fields = append(fields, group.FieldBackupPoolGroupID)
+	}
+	if m.addbackup_pool_refill_threshold_points != nil {
+		fields = append(fields, group.FieldBackupPoolRefillThresholdPoints)
+	}
 	if m.addsort_order != nil {
 		fields = append(fields, group.FieldSortOrder)
+	}
+	if m.addhealth_check_interval_sec != nil {
+		fields = append(fields, group.FieldHealthCheckIntervalSec)
+	}
+	if m.addhealth_check_timeout_sec != nil {
+		fields = append(fields, group.FieldHealthCheckTimeoutSec)
+	}
+	if m.addhealth_check_failure_threshold != nil {
+		fields = append(fields, group.FieldHealthCheckFailureThreshold)
+	}
+	if m.addhealth_check_success_threshold != nil {
+		fields = append(fields, group.FieldHealthCheckSuccessThreshold)
+	}
+	if m.addhealth_consecutive_failures != nil {
+		fields = append(fields, group.FieldHealthConsecutiveFailures)
+	}
+	if m.addhealth_consecutive_successes != nil {
+		fields = append(fields, group.FieldHealthConsecutiveSuccesses)
 	}
 	if m.addrpm_limit != nil {
 		fields = append(fields, group.FieldRpmLimit)
@@ -22409,8 +23189,24 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedFallbackGroupIDOnInvalidRequest()
 	case group.FieldUnavailableFallbackGroupID:
 		return m.AddedUnavailableFallbackGroupID()
+	case group.FieldBackupPoolGroupID:
+		return m.AddedBackupPoolGroupID()
+	case group.FieldBackupPoolRefillThresholdPoints:
+		return m.AddedBackupPoolRefillThresholdPoints()
 	case group.FieldSortOrder:
 		return m.AddedSortOrder()
+	case group.FieldHealthCheckIntervalSec:
+		return m.AddedHealthCheckIntervalSec()
+	case group.FieldHealthCheckTimeoutSec:
+		return m.AddedHealthCheckTimeoutSec()
+	case group.FieldHealthCheckFailureThreshold:
+		return m.AddedHealthCheckFailureThreshold()
+	case group.FieldHealthCheckSuccessThreshold:
+		return m.AddedHealthCheckSuccessThreshold()
+	case group.FieldHealthConsecutiveFailures:
+		return m.AddedHealthConsecutiveFailures()
+	case group.FieldHealthConsecutiveSuccesses:
+		return m.AddedHealthConsecutiveSuccesses()
 	case group.FieldRpmLimit:
 		return m.AddedRpmLimit()
 	}
@@ -22527,12 +23323,68 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddUnavailableFallbackGroupID(v)
 		return nil
+	case group.FieldBackupPoolGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBackupPoolGroupID(v)
+		return nil
+	case group.FieldBackupPoolRefillThresholdPoints:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBackupPoolRefillThresholdPoints(v)
+		return nil
 	case group.FieldSortOrder:
 		v, ok := value.(int)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddSortOrder(v)
+		return nil
+	case group.FieldHealthCheckIntervalSec:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHealthCheckIntervalSec(v)
+		return nil
+	case group.FieldHealthCheckTimeoutSec:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHealthCheckTimeoutSec(v)
+		return nil
+	case group.FieldHealthCheckFailureThreshold:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHealthCheckFailureThreshold(v)
+		return nil
+	case group.FieldHealthCheckSuccessThreshold:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHealthCheckSuccessThreshold(v)
+		return nil
+	case group.FieldHealthConsecutiveFailures:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHealthConsecutiveFailures(v)
+		return nil
+	case group.FieldHealthConsecutiveSuccesses:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddHealthConsecutiveSuccesses(v)
 		return nil
 	case group.FieldRpmLimit:
 		v, ok := value.(int)
@@ -22582,8 +23434,14 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldUnavailableFallbackGroupID) {
 		fields = append(fields, group.FieldUnavailableFallbackGroupID)
 	}
+	if m.FieldCleared(group.FieldBackupPoolGroupID) {
+		fields = append(fields, group.FieldBackupPoolGroupID)
+	}
 	if m.FieldCleared(group.FieldModelRouting) {
 		fields = append(fields, group.FieldModelRouting)
+	}
+	if m.FieldCleared(group.FieldHealthLastCheckAt) {
+		fields = append(fields, group.FieldHealthLastCheckAt)
 	}
 	return fields
 }
@@ -22632,8 +23490,14 @@ func (m *GroupMutation) ClearField(name string) error {
 	case group.FieldUnavailableFallbackGroupID:
 		m.ClearUnavailableFallbackGroupID()
 		return nil
+	case group.FieldBackupPoolGroupID:
+		m.ClearBackupPoolGroupID()
+		return nil
 	case group.FieldModelRouting:
 		m.ClearModelRouting()
+		return nil
+	case group.FieldHealthLastCheckAt:
+		m.ClearHealthLastCheckAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Group nullable field %s", name)
@@ -22742,6 +23606,12 @@ func (m *GroupMutation) ResetField(name string) error {
 	case group.FieldUnavailableFallbackGroupID:
 		m.ResetUnavailableFallbackGroupID()
 		return nil
+	case group.FieldBackupPoolGroupID:
+		m.ResetBackupPoolGroupID()
+		return nil
+	case group.FieldBackupPoolRefillThresholdPoints:
+		m.ResetBackupPoolRefillThresholdPoints()
+		return nil
 	case group.FieldModelRouting:
 		m.ResetModelRouting()
 		return nil
@@ -22777,6 +23647,33 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldAvailabilityProbeConfig:
 		m.ResetAvailabilityProbeConfig()
+		return nil
+	case group.FieldHealthCheckEnabled:
+		m.ResetHealthCheckEnabled()
+		return nil
+	case group.FieldHealthCheckIntervalSec:
+		m.ResetHealthCheckIntervalSec()
+		return nil
+	case group.FieldHealthCheckTimeoutSec:
+		m.ResetHealthCheckTimeoutSec()
+		return nil
+	case group.FieldHealthCheckFailureThreshold:
+		m.ResetHealthCheckFailureThreshold()
+		return nil
+	case group.FieldHealthCheckSuccessThreshold:
+		m.ResetHealthCheckSuccessThreshold()
+		return nil
+	case group.FieldHealthLastCheckAt:
+		m.ResetHealthLastCheckAt()
+		return nil
+	case group.FieldHealthConsecutiveFailures:
+		m.ResetHealthConsecutiveFailures()
+		return nil
+	case group.FieldHealthConsecutiveSuccesses:
+		m.ResetHealthConsecutiveSuccesses()
+		return nil
+	case group.FieldHealthStatus:
+		m.ResetHealthStatus()
 		return nil
 	case group.FieldRpmLimit:
 		m.ResetRpmLimit()

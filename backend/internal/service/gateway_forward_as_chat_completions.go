@@ -128,6 +128,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 11. Send request
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 	if err != nil {
+		if s.rateLimitService != nil {
+			s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+		}
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}

@@ -57,6 +57,15 @@ func (groupRepoNoop) BindAccountsToGroup(context.Context, int64, []int64) error 
 func (groupRepoNoop) UpdateSortOrders(context.Context, []GroupSortOrderUpdate) error {
 	panic("unexpected UpdateSortOrders call")
 }
+func (groupRepoNoop) UpdateHealthStatus(context.Context, int64, *HealthStatusUpdate) error {
+	panic("unexpected UpdateHealthStatus call")
+}
+func (groupRepoNoop) UpdateHealthCheckConfig(context.Context, int64, *HealthCheckConfigUpdate) error {
+	panic("unexpected UpdateHealthCheckConfig call")
+}
+func (groupRepoNoop) ForceHealthCheck(context.Context, int64) error {
+	panic("unexpected ForceHealthCheck call")
+}
 
 type userSubRepoNoop struct{}
 

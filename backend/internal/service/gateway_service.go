@@ -171,9 +171,6 @@ func openAIStreamEventIsTerminal(data string) bool {
 	if trimmed == "" {
 		return false
 	}
-	if trimmed == "[DONE]" {
-		return true
-	}
 	switch gjson.Get(trimmed, "type").String() {
 	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 		return true
@@ -590,16 +587,27 @@ func (e *sseStreamErrorEventError) Error() string { return "have error in stream
 // TempUnscheduleRetryableError 对 RetryableOnSameAccount 类型的 failover 错误触发临时封禁。
 // 由 handler 层在同账号重试全部用尽、切换账号时调用。
 func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
-	if failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+	if s == nil || s.accountRepo == nil || failoverErr == nil || !failoverErr.RetryableOnSameAccount {
 		return
 	}
 	// 根据状态码选择封禁策略
 	switch failoverErr.StatusCode {
 	case http.StatusBadRequest:
 		tempUnscheduleGoogleConfigError(ctx, s.accountRepo, accountID, "[handler]")
+		return
 	case http.StatusBadGateway:
 		tempUnscheduleEmptyResponse(ctx, s.accountRepo, accountID, "[handler]")
+		return
 	}
+	if s.rateLimitService == nil {
+		return
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		slog.Warn("retryable_error_passive_account_lookup_failed", "account_id", accountID, "status_code", failoverErr.StatusCode, "error", err)
+		return
+	}
+	s.rateLimitService.recordPassiveAccountFailure(ctx, account, failoverErr.StatusCode, failoverErr.ResponseBody)
 }
 
 // GatewayService handles API gateway operations

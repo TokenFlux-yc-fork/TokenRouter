@@ -1,8 +1,10 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
+	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,4 +74,25 @@ func TestIsOpenAIWSTokenEvent_DisjointWithTerminal(t *testing.T) {
 			require.False(t, isOpenAIWSTokenEvent(ev), "terminal event %q must NOT be classified as token event (issue #2651)", ev)
 		})
 	}
+}
+
+func TestOpenAIWSIngressTurnRetryable_ResponseFailedRetryable(t *testing.T) {
+	err := wrapOpenAIWSIngressTurnError(openAIWSIngressStageResponseFailedRetryable, errors.New("capacity"), false)
+
+	require.True(t, isOpenAIWSIngressTurnRetryable(err))
+	require.Equal(t, openAIWSIngressStageResponseFailedRetryable, openAIWSIngressTurnRetryReason(err))
+	require.False(t, isOpenAIWSIngressTurnRetryable(
+		wrapOpenAIWSIngressTurnError(openAIWSIngressStageResponseFailedRetryable, errors.New("capacity"), true),
+	))
+}
+
+func TestNewOpenAIWSRetryableCloseError_DoesNotExposeFailover(t *testing.T) {
+	err := newOpenAIWSRetryableCloseError("capacity retry exhausted")
+
+	var closeErr *OpenAIWSClientCloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, coderws.StatusTryAgainLater, closeErr.StatusCode())
+	require.Equal(t, "upstream service temporarily unavailable", closeErr.Reason())
+	var failoverErr *UpstreamFailoverError
+	require.NotErrorAs(t, err, &failoverErr, "handler must not replay the first turn after downstream output or a later-turn failure")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	dbent "github.com/TokenFlux/TokenRouter/ent"
@@ -194,6 +195,16 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 			return nil, err
 		}
 	}
+	backupPoolGroupID := input.BackupPoolGroupID
+	backupPoolThreshold := input.BackupPoolRefillThresholdPoints
+	if backupPoolGroupID != nil && *backupPoolGroupID <= 0 {
+		backupPoolGroupID = nil
+	}
+	if backupPoolGroupID == nil {
+		backupPoolThreshold = 0
+	} else if err := s.validateBackupPoolGroup(ctx, 0, platform, *backupPoolGroupID, backupPoolThreshold); err != nil {
+		return nil, err
+	}
 	fallbackOnInvalidRequest := input.FallbackGroupIDOnInvalidRequest
 	if fallbackOnInvalidRequest != nil && *fallbackOnInvalidRequest <= 0 {
 		fallbackOnInvalidRequest = nil
@@ -249,6 +260,15 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if err != nil {
 		return nil, err
 	}
+	healthIntervalSec, healthTimeoutSec, healthFailureThreshold, healthSuccessThreshold, err := normalizeGroupHealthCheckSettings(
+		input.HealthCheckIntervalSec,
+		input.HealthCheckTimeoutSec,
+		input.HealthCheckFailureThreshold,
+		input.HealthCheckSuccessThreshold,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	group := &Group{
 		Name:                            input.Name,
@@ -284,6 +304,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		FallbackGroupID:                 input.FallbackGroupID,
 		FallbackGroupIDOnInvalidRequest: fallbackOnInvalidRequest,
 		UnavailableFallbackGroupID:      unavailableFallbackGroupID,
+		BackupPoolGroupID:               backupPoolGroupID,
+		BackupPoolRefillThresholdPoints: backupPoolThreshold,
 		ModelRouting:                    input.ModelRouting,
 		MCPXMLInject:                    mcpXMLInject,
 		SupportedModelScopes:            input.SupportedModelScopes,
@@ -294,6 +316,12 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
 		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
 		AvailabilityProbeConfig:         availabilityProbeConfig,
+		HealthCheckEnabled:              input.HealthCheckEnabled,
+		HealthCheckIntervalSec:          healthIntervalSec,
+		HealthCheckTimeoutSec:           healthTimeoutSec,
+		HealthCheckFailureThreshold:     healthFailureThreshold,
+		HealthCheckSuccessThreshold:     healthSuccessThreshold,
+		HealthStatus:                    HealthStatusUnknown,
 		RPMLimit:                        input.RPMLimit,
 	}
 	sanitizeGroupMessagesDispatchFields(group)
@@ -414,6 +442,54 @@ func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Con
 		return fmt.Errorf("fallback group cannot have invalid request fallback configured")
 	}
 	return nil
+}
+
+// validateBackupPoolGroup 校验 OpenAI Codex 备用号池自动补充配置。
+func (s *adminServiceImpl) validateBackupPoolGroup(ctx context.Context, currentGroupID int64, platform string, backupGroupID int64, thresholdPoints float64) error {
+	if platform != PlatformOpenAI {
+		return backupPoolConfigError("backup pool auto refill only supports openai groups")
+	}
+	if currentGroupID > 0 && currentGroupID == backupGroupID {
+		return backupPoolConfigError("cannot set self as backup pool group")
+	}
+	if thresholdPoints <= 0 || math.IsNaN(thresholdPoints) || math.IsInf(thresholdPoints, 0) {
+		return backupPoolConfigError("backup pool refill threshold points must be > 0")
+	}
+	backupGroup, err := s.groupRepo.GetByIDLite(ctx, backupGroupID)
+	if err != nil {
+		return backupPoolConfigError("backup pool group not found").WithCause(err)
+	}
+	if backupGroup.Platform != platform {
+		return backupPoolConfigError("backup pool group must use the same platform")
+	}
+	if !backupGroup.IsActive() {
+		return backupPoolConfigError("backup pool group must be active")
+	}
+	return nil
+}
+
+func backupPoolConfigError(message string) *infraerrors.ApplicationError {
+	return infraerrors.BadRequest("BACKUP_POOL_INVALID_CONFIG", message)
+}
+
+func backupPoolConfigErrorCanSelfHeal(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrGroupNotFound) {
+		return true
+	}
+	var appErr *infraerrors.ApplicationError
+	if !errors.As(err, &appErr) || appErr.Reason != "BACKUP_POOL_INVALID_CONFIG" {
+		return false
+	}
+	switch appErr.Message {
+	case "backup pool group must use the same platform",
+		"backup pool group must be active":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error) {
@@ -586,6 +662,40 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 	}
 	group.UnavailableFallbackGroupID = unavailableFallbackGroupID
+	backupPoolGroupID := group.BackupPoolGroupID
+	if input.BackupPoolGroupID != nil {
+		if *input.BackupPoolGroupID > 0 {
+			backupPoolGroupID = input.BackupPoolGroupID
+		} else {
+			backupPoolGroupID = nil
+		}
+	}
+	backupPoolThreshold := group.BackupPoolRefillThresholdPoints
+	if input.BackupPoolRefillThresholdPoints != nil {
+		backupPoolThreshold = *input.BackupPoolRefillThresholdPoints
+	}
+	backupPoolConfigTouched := input.BackupPoolGroupID != nil || input.BackupPoolRefillThresholdPoints != nil
+	if group.Platform != PlatformOpenAI {
+		if input.BackupPoolGroupID != nil && *input.BackupPoolGroupID > 0 {
+			return nil, backupPoolConfigError("backup pool auto refill only supports openai groups")
+		}
+		backupPoolGroupID = nil
+		backupPoolThreshold = 0
+	} else if backupPoolGroupID == nil {
+		backupPoolThreshold = 0
+	} else if !backupPoolRefillThresholdEnabled(backupPoolThreshold) && !backupPoolConfigTouched {
+		backupPoolGroupID = nil
+		backupPoolThreshold = 0
+	} else if err := s.validateBackupPoolGroup(ctx, id, group.Platform, *backupPoolGroupID, backupPoolThreshold); err != nil {
+		if !backupPoolConfigTouched && backupPoolConfigErrorCanSelfHeal(err) {
+			backupPoolGroupID = nil
+			backupPoolThreshold = 0
+		} else {
+			return nil, err
+		}
+	}
+	group.BackupPoolGroupID = backupPoolGroupID
+	group.BackupPoolRefillThresholdPoints = backupPoolThreshold
 
 	// 模型路由配置
 	if input.ModelRouting != nil {
@@ -628,6 +738,41 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, err
 		}
 		group.AvailabilityProbeConfig = config
+	}
+	healthConfigTouched := input.HealthCheckEnabled != nil ||
+		input.HealthCheckIntervalSec != nil ||
+		input.HealthCheckTimeoutSec != nil ||
+		input.HealthCheckFailureThreshold != nil ||
+		input.HealthCheckSuccessThreshold != nil
+	if input.HealthCheckEnabled != nil {
+		group.HealthCheckEnabled = *input.HealthCheckEnabled
+	}
+	if input.HealthCheckIntervalSec != nil {
+		group.HealthCheckIntervalSec = *input.HealthCheckIntervalSec
+	}
+	if input.HealthCheckTimeoutSec != nil {
+		group.HealthCheckTimeoutSec = *input.HealthCheckTimeoutSec
+	}
+	if input.HealthCheckFailureThreshold != nil {
+		group.HealthCheckFailureThreshold = *input.HealthCheckFailureThreshold
+	}
+	if input.HealthCheckSuccessThreshold != nil {
+		group.HealthCheckSuccessThreshold = *input.HealthCheckSuccessThreshold
+	}
+	if healthConfigTouched {
+		intervalSec, timeoutSec, failureThreshold, successThreshold, err := normalizeGroupHealthCheckSettings(
+			group.HealthCheckIntervalSec,
+			group.HealthCheckTimeoutSec,
+			group.HealthCheckFailureThreshold,
+			group.HealthCheckSuccessThreshold,
+		)
+		if err != nil {
+			return nil, err
+		}
+		group.HealthCheckIntervalSec = intervalSec
+		group.HealthCheckTimeoutSec = timeoutSec
+		group.HealthCheckFailureThreshold = failureThreshold
+		group.HealthCheckSuccessThreshold = successThreshold
 	}
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit
@@ -815,6 +960,77 @@ func (s *adminServiceImpl) BatchSetGroupRPMOverrides(ctx context.Context, groupI
 
 func (s *adminServiceImpl) UpdateGroupSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error {
 	return s.groupRepo.UpdateSortOrders(ctx, updates)
+}
+
+func (s *adminServiceImpl) UpdateGroupHealthCheckConfig(ctx context.Context, groupID int64, config *HealthCheckConfigUpdate) error {
+	if config == nil {
+		return infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health check config is required")
+	}
+	if _, err := s.GetGroup(ctx, groupID); err != nil {
+		return err
+	}
+	intervalSec, timeoutSec, failureThreshold, successThreshold, err := normalizeGroupHealthCheckSettings(
+		config.IntervalSec,
+		config.TimeoutSec,
+		config.FailureThreshold,
+		config.SuccessThreshold,
+	)
+	if err != nil {
+		return err
+	}
+	config.IntervalSec = intervalSec
+	config.TimeoutSec = timeoutSec
+	config.FailureThreshold = failureThreshold
+	config.SuccessThreshold = successThreshold
+	if err := s.groupRepo.UpdateHealthCheckConfig(ctx, groupID, config); err != nil {
+		return err
+	}
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) ForceGroupHealthCheck(ctx context.Context, groupID int64) error {
+	group, err := s.GetGroup(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	if !group.HealthCheckEnabled {
+		return ErrGroupHealthCheckNotEnabled
+	}
+	if !group.IsActive() {
+		return infraerrors.BadRequest("GROUP_NOT_ACTIVE", "health check can only be triggered for active groups")
+	}
+	return s.groupRepo.ForceHealthCheck(ctx, groupID)
+}
+
+func normalizeGroupHealthCheckSettings(intervalSec, timeoutSec, failureThreshold, successThreshold int) (int, int, int, int, error) {
+	if intervalSec == 0 {
+		intervalSec = defaultGroupHealthIntervalSec
+	}
+	if timeoutSec == 0 {
+		timeoutSec = defaultGroupHealthTimeoutSec
+	}
+	if failureThreshold == 0 {
+		failureThreshold = defaultGroupHealthFailureThreshold
+	}
+	if successThreshold == 0 {
+		successThreshold = defaultGroupHealthSuccessThreshold
+	}
+	if intervalSec < minGroupHealthIntervalSec || intervalSec > maxGroupHealthIntervalSec {
+		return 0, 0, 0, 0, infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health_check_interval_sec must be between 10 and 3600")
+	}
+	if timeoutSec < minGroupHealthTimeoutSec || timeoutSec > maxGroupHealthTimeoutSec {
+		return 0, 0, 0, 0, infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health_check_timeout_sec must be between 5 and 60")
+	}
+	if failureThreshold < minGroupHealthThreshold || failureThreshold > maxGroupHealthThreshold {
+		return 0, 0, 0, 0, infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health_check_failure_threshold must be between 1 and 10")
+	}
+	if successThreshold < minGroupHealthThreshold || successThreshold > maxGroupHealthThreshold {
+		return 0, 0, 0, 0, infraerrors.BadRequest("INVALID_GROUP_HEALTH_CHECK_CONFIG", "health_check_success_threshold must be between 1 and 10")
+	}
+	return intervalSec, timeoutSec, failureThreshold, successThreshold, nil
 }
 
 // AdminUpdateAPIKeyGroupID 管理员修改 API Key 分组绑定

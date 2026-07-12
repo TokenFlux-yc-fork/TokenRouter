@@ -866,6 +866,14 @@ affiliates: {
         noFallback: '不指定（使用默认分组）',
         hint: '当该分组被停用时，绑定到该分组的 API Key 会优先回退到这里选择的分组；留空则继续回退到同平台默认分组。'
       },
+      backupPool: {
+        title: '备用号池',
+        noPool: '不启用备用号池',
+        poolHint: '仅 OpenAI 分组可用；当本分组 Codex 剩余容量点低于阈值时，会从该分组复制可用账号绑定进来。',
+        threshold: '补充阈值（容量点）',
+        thresholdHint: '容量点按每个账号 min(5h 剩余%, 7d 剩余%) 求和；无新鲜用量快照的可调度账号按 100 计算。',
+        thresholdRequired: '启用备用号池时，补充阈值必须大于 0。'
+      },
       dataSharing: {
         title: '数据共享分组',
         enabled: '已启用',
@@ -1022,6 +1030,26 @@ affiliates: {
         modelRequired: '启用分组可用性探测时必须选择探测模型',
         promptRequired: '启用分组可用性探测时必须填写探测提示词'
       },
+    health: {
+      title: '健康检查',
+      hint: '根据主动探测结果记录分组健康状态，并在连续成功后恢复。',
+      status: '健康状态',
+      disabled: '未监控',
+      interval: '检查间隔（秒）',
+      timeout: '超时时间（秒）',
+      failureThreshold: '失败阈值',
+      successThreshold: '恢复阈值',
+      manualCheck: '立即检查',
+      manualCheckTriggered: '已安排手动健康检查',
+      manualCheckFailed: '触发手动健康检查失败',
+      lastCheck: '上次检查',
+      counters: '连续失败 {failures} / 连续成功 {successes}',
+      statuses: {
+        unknown: '未知',
+        healthy: '健康',
+        unhealthy: '异常'
+      }
+    },
       claudeCode: {
         title: 'Claude Code 客户端限制',
         tooltip:

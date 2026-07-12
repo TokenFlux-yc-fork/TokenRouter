@@ -2,10 +2,12 @@ package service
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -78,7 +80,9 @@ func TestWriteOpenAICompactSSEBridge_AfterKeepaliveCommitAppendsEvents(t *testin
 	waitForKeepaliveBeats()
 
 	finalResponse := []byte(`{"id":"resp_ka_1","output":[{"id":"cmp_ka","type":"compaction","encrypted_content":"x"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
-	require.True(t, writeOpenAICompactSSEBridge(c, http.StatusOK, finalResponse))
+	handled, err := writeOpenAICompactSSEBridge(c, http.StatusOK, finalResponse)
+	require.NoError(t, err)
+	require.True(t, handled)
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	events := parseCompactBridgeSSE(t, stripKeepaliveComments(rec.Body.String()))
@@ -97,7 +101,9 @@ func TestWriteOpenAICompactSSEBridge_AfterKeepaliveCommitFailureEmitsFailedEvent
 	defer stop()
 	waitForKeepaliveBeats()
 
-	require.True(t, writeOpenAICompactSSEBridge(c, http.StatusBadGateway, []byte(`{"error":{"message":"upstream exploded"}}`)))
+	handled, err := writeOpenAICompactSSEBridge(c, http.StatusBadGateway, []byte(`{"error":{"message":"upstream exploded"}}`))
+	require.NoError(t, err)
+	require.True(t, handled)
 
 	events := parseCompactBridgeSSE(t, stripKeepaliveComments(rec.Body.String()))
 	require.Len(t, events, 1)
@@ -117,7 +123,9 @@ func TestWriteOpenAICompactSSEBridge_BeforeKeepaliveCommitFailureKeepsJSONPath(t
 	stop := StartOpenAICompactSSEKeepalive(c, time.Hour)
 	stop()
 
-	require.False(t, writeOpenAICompactSSEBridge(c, http.StatusBadGateway, []byte(`{"error":{"message":"fast fail"}}`)))
+	handled, err := writeOpenAICompactSSEBridge(c, http.StatusBadGateway, []byte(`{"error":{"message":"fast fail"}}`))
+	require.NoError(t, err)
+	require.False(t, handled)
 	require.Zero(t, rec.Body.Len())
 }
 
@@ -177,6 +185,21 @@ func TestOpenAICompactKeepaliveAdjustedWrittenSize_ExcludesHeartbeatBytes(t *tes
 	require.NoError(t, err)
 	require.Equal(t, len("real-bytes"), OpenAICompactKeepaliveAdjustedWrittenSize(c))
 	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+}
+
+func TestOpenAISemanticWrittenSize_ExcludesProtocolKeepaliveBytes(t *testing.T) {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	before := OpenAISemanticWrittenSize(c)
+	n, err := c.Writer.WriteString("event: ping\ndata: {\"type\":\"ping\"}\n\n")
+	require.NoError(t, err)
+	recordOpenAIProtocolKeepaliveBytes(c, n)
+	require.Equal(t, before, OpenAISemanticWrittenSize(c))
+
+	_, err = c.Writer.WriteString("semantic-output")
+	require.NoError(t, err)
+	require.NotEqual(t, before, OpenAISemanticWrittenSize(c))
 }
 
 // fast policy block 在心跳未提交时保持 403 JSON 原语义。

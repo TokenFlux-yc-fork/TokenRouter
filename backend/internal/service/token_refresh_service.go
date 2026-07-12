@@ -356,8 +356,18 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			return nil
 		}
 
-		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
+		// 不可重试错误（invalid_grant/invalid_client 等）通常直接标记 error 状态并返回。
+		// 但 OpenAI 导入态 OAuth 在没有可靠 expires_at 时，后台刷新失败不能证明当前
+		// access_token 不可用；生产已确认 invalid_client 可发生在仍能正常处理请求的账号上。
+		// 这种情况只记录本轮刷新失败，不改变调度状态，交给真实请求路径按上游 401/403 判断。
 		if isNonRetryableRefreshError(err) {
+			if shouldSkipOpenAIBackgroundRefreshState(account, err) {
+				slog.Warn("token_refresh.openai_invalid_client_state_skipped",
+					"account_id", account.ID,
+					"error", err,
+				)
+				return err
+			}
 			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
 			s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			s.clearAntigravityForceTokenRefresh(ctx, account, "non_retryable")
@@ -545,6 +555,19 @@ func isNonRetryableRefreshError(err error) bool {
 		}
 	}
 	return false
+}
+
+func shouldSkipOpenAIBackgroundRefreshState(account *Account, err error) bool {
+	if account == nil || err == nil || !account.IsOpenAIOAuth() {
+		return false
+	}
+	if account.GetCredentialAsTime("expires_at") != nil {
+		return false
+	}
+	if strings.TrimSpace(account.GetOpenAIAccessToken()) == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "invalid_client")
 }
 
 // ensureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，

@@ -281,13 +281,76 @@ func ExtractUpstreamErrorMessage(body []byte) string {
 	return extractUpstreamErrorMessage(body)
 }
 
+func isGenericEmbeddedUpstreamMessageEnvelope(value string) bool {
+	if isGenericUpstreamEnvelopeCode(value) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "error", "response.failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func canUnwrapEmbeddedUpstreamErrorMessage(body []byte, codePath string) bool {
+	typePath := strings.TrimSuffix(codePath, "code") + "type"
+	for _, path := range []string{codePath, typePath, "code"} {
+		code := strings.TrimSpace(gjson.GetBytes(body, path).String())
+		if code != "" && !isGenericEmbeddedUpstreamMessageEnvelope(code) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasAuthoritativeEmbeddedUpstreamErrorMessage(body []byte) bool {
+	if !gjson.ValidBytes(body) {
+		return false
+	}
+	for _, candidate := range []struct {
+		messagePath string
+		codePath    string
+	}{
+		{messagePath: "error.message", codePath: "error.code"},
+		{messagePath: "response.error.message", codePath: "response.error.code"},
+		{messagePath: "response.status_details.error.message", codePath: "response.status_details.error.code"},
+		{messagePath: "message", codePath: "code"},
+	} {
+		message := gjson.GetBytes(body, candidate.messagePath).String()
+		if len(embeddedJSONCandidates(message)) > 0 && !canUnwrapEmbeddedUpstreamErrorMessage(body, candidate.codePath) {
+			return true
+		}
+	}
+	return false
+}
+
 func extractUpstreamErrorMessage(body []byte) string {
 	// Claude 风格：{"type":"error","error":{"type":"...","message":"..."}}
 	if m := gjson.GetBytes(body, "error.message").String(); strings.TrimSpace(m) != "" {
-		inner := strings.TrimSpace(m)
 		// 有些上游会把完整 JSON 作为字符串塞进 message
-		if strings.HasPrefix(inner, "{") {
-			if innerMsg := gjson.Get(inner, "error.message").String(); strings.TrimSpace(innerMsg) != "" {
+		if canUnwrapEmbeddedUpstreamErrorMessage(body, "error.code") {
+			if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+				return innerMsg
+			}
+		}
+		return m
+	}
+
+	// OpenAI Responses 风格：{"response":{"error":{"message":"..."}}}
+	if m := gjson.GetBytes(body, "response.error.message").String(); strings.TrimSpace(m) != "" {
+		if canUnwrapEmbeddedUpstreamErrorMessage(body, "response.error.code") {
+			if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+				return innerMsg
+			}
+		}
+		return m
+	}
+
+	// OpenAI Responses status_details 风格：{"response":{"status_details":{"error":{"message":"..."}}}}
+	if m := gjson.GetBytes(body, "response.status_details.error.message").String(); strings.TrimSpace(m) != "" {
+		if canUnwrapEmbeddedUpstreamErrorMessage(body, "response.status_details.error.code") {
+			if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
 				return innerMsg
 			}
 		}
@@ -300,30 +363,111 @@ func extractUpstreamErrorMessage(body []byte) string {
 	}
 
 	// 兜底：尝试顶层 message
-	return gjson.GetBytes(body, "message").String()
+	if m := gjson.GetBytes(body, "message").String(); strings.TrimSpace(m) != "" {
+		if canUnwrapEmbeddedUpstreamErrorMessage(body, "code") {
+			if innerMsg := extractUpstreamErrorMessageFromEmbeddedJSON(m); innerMsg != "" {
+				return innerMsg
+			}
+		}
+		return m
+	}
+	return ""
 }
 
 func extractUpstreamErrorCode(body []byte) string {
-	if code := strings.TrimSpace(gjson.GetBytes(body, "error.code").String()); code != "" {
-		return code
-	}
-
-	inner := strings.TrimSpace(gjson.GetBytes(body, "error.message").String())
-	if !strings.HasPrefix(inner, "{") {
-		return ""
-	}
-
-	if code := strings.TrimSpace(gjson.Get(inner, "error.code").String()); code != "" {
-		return code
-	}
-
-	if lastBrace := strings.LastIndex(inner, "}"); lastBrace >= 0 {
-		if code := strings.TrimSpace(gjson.Get(inner[:lastBrace+1], "error.code").String()); code != "" {
-			return code
+	directCode := ""
+	for _, path := range []string{"error.code", "response.error.code", "response.status_details.error.code"} {
+		if code := strings.TrimSpace(gjson.GetBytes(body, path).String()); code != "" {
+			if !isGenericUpstreamEnvelopeCode(code) {
+				return code
+			}
+			if directCode == "" {
+				directCode = code
+			}
 		}
 	}
 
+	topLevelCode := strings.TrimSpace(gjson.GetBytes(body, "code").String())
+	for _, path := range []string{"error.message", "response.error.message", "response.status_details.error.message", "message"} {
+		if code := extractUpstreamErrorCodeFromEmbeddedJSON(gjson.GetBytes(body, path).String()); code != "" {
+			if (directCode == "" || isGenericUpstreamEnvelopeCode(directCode)) &&
+				(topLevelCode == "" || isGenericUpstreamEnvelopeCode(topLevelCode)) {
+				return code
+			}
+		}
+	}
+	if topLevelCode != "" && !isGenericUpstreamEnvelopeCode(topLevelCode) {
+		return topLevelCode
+	}
+	if directCode != "" {
+		return directCode
+	}
+	if topLevelCode != "" {
+		return topLevelCode
+	}
+
 	return ""
+}
+
+func extractUpstreamErrorMessageFromEmbeddedJSON(text string) string {
+	for _, candidate := range embeddedJSONCandidates(text) {
+		for _, path := range []string{"error.message", "response.error.message", "response.status_details.error.message", "message"} {
+			msg := strings.TrimSpace(gjson.Get(candidate, path).String())
+			if msg == "" {
+				continue
+			}
+			if nested := extractUpstreamErrorMessageFromEmbeddedJSON(msg); nested != "" {
+				return nested
+			}
+			return msg
+		}
+	}
+	return ""
+}
+
+func extractUpstreamErrorCodeFromEmbeddedJSON(text string) string {
+	for _, candidate := range embeddedJSONCandidates(text) {
+		genericCode := ""
+		for _, path := range []string{"error.code", "response.error.code", "response.status_details.error.code", "code"} {
+			if code := strings.TrimSpace(gjson.Get(candidate, path).String()); code != "" {
+				if !isGenericUpstreamEnvelopeCode(code) {
+					return code
+				}
+				if genericCode == "" {
+					genericCode = code
+				}
+			}
+		}
+		if genericCode != "" {
+			return genericCode
+		}
+	}
+	return ""
+}
+
+func embeddedJSONCandidates(text string) []string {
+	inner := strings.TrimSpace(text)
+	firstBrace := strings.Index(inner, "{")
+	if firstBrace < 0 {
+		return nil
+	}
+	if firstBrace > 0 {
+		inner = inner[firstBrace:]
+	}
+	out := []string{inner}
+	if lastBrace := strings.LastIndex(inner, "}"); lastBrace >= 0 && lastBrace+1 < len(inner) {
+		out = append(out, inner[:lastBrace+1])
+	}
+	return out
+}
+
+func isGenericUpstreamEnvelopeCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "upstream_error", "api_error":
+		return true
+	default:
+		return false
+	}
 }
 
 func isCountTokensUnsupported404(statusCode int, body []byte) bool {
@@ -515,14 +659,21 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, resp *http.Response, account *Account) {
 	body, _ := s.readUpstreamErrorBody(resp)
 	statusCode := resp.StatusCode
+	if s.rateLimitService == nil {
+		return
+	}
+	if account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
+		logger.LegacyPrintf("service.gateway", "Account %d: deferring passive account circuit breaker until same-account retries are exhausted for status %d", account.ID, statusCode)
+		return
+	}
 
 	// OAuth/Setup Token 账号的 403：按上游错误策略处理账号状态。
 	if account.IsOAuth() && statusCode == 403 {
 		s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
 		logger.LegacyPrintf("service.gateway", "Account %d: applied upstream error policy after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
 	} else {
-		// API Key 未配置错误码：不标记账号状态
-		logger.LegacyPrintf("service.gateway", "Account %d: upstream error %d after %d retries (not marking account)", account.ID, statusCode, maxRetryAttempts)
+		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
+		logger.LegacyPrintf("service.gateway", "Account %d: evaluated passive account circuit breaker after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
 	}
 }
 

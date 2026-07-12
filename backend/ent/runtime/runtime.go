@@ -955,62 +955,100 @@ func init() {
 	groupDescClaudeCodeOnly := groupFields[26].Descriptor()
 	// group.DefaultClaudeCodeOnly holds the default value on creation for the claude_code_only field.
 	group.DefaultClaudeCodeOnly = groupDescClaudeCodeOnly.Default.(bool)
+	// groupDescBackupPoolRefillThresholdPoints is the schema descriptor for backup_pool_refill_threshold_points field.
+	groupDescBackupPoolRefillThresholdPoints := groupFields[31].Descriptor()
+	// group.DefaultBackupPoolRefillThresholdPoints holds the default value on creation for the backup_pool_refill_threshold_points field.
+	group.DefaultBackupPoolRefillThresholdPoints = groupDescBackupPoolRefillThresholdPoints.Default.(float64)
 	// groupDescModelRoutingEnabled is the schema descriptor for model_routing_enabled field.
-	groupDescModelRoutingEnabled := groupFields[31].Descriptor()
+	groupDescModelRoutingEnabled := groupFields[33].Descriptor()
 	// group.DefaultModelRoutingEnabled holds the default value on creation for the model_routing_enabled field.
 	group.DefaultModelRoutingEnabled = groupDescModelRoutingEnabled.Default.(bool)
 	// groupDescMcpXMLInject is the schema descriptor for mcp_xml_inject field.
-	groupDescMcpXMLInject := groupFields[32].Descriptor()
+	groupDescMcpXMLInject := groupFields[34].Descriptor()
 	// group.DefaultMcpXMLInject holds the default value on creation for the mcp_xml_inject field.
 	group.DefaultMcpXMLInject = groupDescMcpXMLInject.Default.(bool)
 	// groupDescSupportedModelScopes is the schema descriptor for supported_model_scopes field.
-	groupDescSupportedModelScopes := groupFields[33].Descriptor()
+	groupDescSupportedModelScopes := groupFields[35].Descriptor()
 	// group.DefaultSupportedModelScopes holds the default value on creation for the supported_model_scopes field.
 	group.DefaultSupportedModelScopes = groupDescSupportedModelScopes.Default.([]string)
 	// groupDescSortOrder is the schema descriptor for sort_order field.
-	groupDescSortOrder := groupFields[34].Descriptor()
+	groupDescSortOrder := groupFields[36].Descriptor()
 	// group.DefaultSortOrder holds the default value on creation for the sort_order field.
 	group.DefaultSortOrder = groupDescSortOrder.Default.(int)
 	// groupDescAllowMessagesDispatch is the schema descriptor for allow_messages_dispatch field.
-	groupDescAllowMessagesDispatch := groupFields[35].Descriptor()
+	groupDescAllowMessagesDispatch := groupFields[37].Descriptor()
 	// group.DefaultAllowMessagesDispatch holds the default value on creation for the allow_messages_dispatch field.
 	group.DefaultAllowMessagesDispatch = groupDescAllowMessagesDispatch.Default.(bool)
 	// groupDescRequireOauthOnly is the schema descriptor for require_oauth_only field.
-	groupDescRequireOauthOnly := groupFields[36].Descriptor()
+	groupDescRequireOauthOnly := groupFields[38].Descriptor()
 	// group.DefaultRequireOauthOnly holds the default value on creation for the require_oauth_only field.
 	group.DefaultRequireOauthOnly = groupDescRequireOauthOnly.Default.(bool)
 	// groupDescRequirePrivacySet is the schema descriptor for require_privacy_set field.
-	groupDescRequirePrivacySet := groupFields[37].Descriptor()
+	groupDescRequirePrivacySet := groupFields[39].Descriptor()
 	// group.DefaultRequirePrivacySet holds the default value on creation for the require_privacy_set field.
 	group.DefaultRequirePrivacySet = groupDescRequirePrivacySet.Default.(bool)
 	// groupDescDefaultMappedModel is the schema descriptor for default_mapped_model field.
-	groupDescDefaultMappedModel := groupFields[38].Descriptor()
+	groupDescDefaultMappedModel := groupFields[40].Descriptor()
 	// group.DefaultDefaultMappedModel holds the default value on creation for the default_mapped_model field.
 	group.DefaultDefaultMappedModel = groupDescDefaultMappedModel.Default.(string)
 	// group.DefaultMappedModelValidator is a validator for the "default_mapped_model" field. It is called by the builders before save.
 	group.DefaultMappedModelValidator = groupDescDefaultMappedModel.Validators[0].(func(string) error)
 	// groupDescMessagesDispatchModelConfig is the schema descriptor for messages_dispatch_model_config field.
-	groupDescMessagesDispatchModelConfig := groupFields[39].Descriptor()
+	groupDescMessagesDispatchModelConfig := groupFields[41].Descriptor()
 	// group.DefaultMessagesDispatchModelConfig holds the default value on creation for the messages_dispatch_model_config field.
 	group.DefaultMessagesDispatchModelConfig = groupDescMessagesDispatchModelConfig.Default.(domain.OpenAIMessagesDispatchModelConfig)
 	// groupDescModelsListConfig is the schema descriptor for models_list_config field.
-	groupDescModelsListConfig := groupFields[40].Descriptor()
+	groupDescModelsListConfig := groupFields[42].Descriptor()
 	// group.DefaultModelsListConfig holds the default value on creation for the models_list_config field.
 	group.DefaultModelsListConfig = groupDescModelsListConfig.Default.(domain.GroupModelsListConfig)
 	// groupDescAvailabilityProbeConfig is the schema descriptor for availability_probe_config field.
-	groupDescAvailabilityProbeConfig := groupFields[41].Descriptor()
+	groupDescAvailabilityProbeConfig := groupFields[43].Descriptor()
 	// group.DefaultAvailabilityProbeConfig holds the default value on creation for the availability_probe_config field.
 	group.DefaultAvailabilityProbeConfig = groupDescAvailabilityProbeConfig.Default.(domain.GroupAvailabilityProbeConfig)
+	// groupDescHealthCheckEnabled is the schema descriptor for health_check_enabled field.
+	groupDescHealthCheckEnabled := groupFields[44].Descriptor()
+	// group.DefaultHealthCheckEnabled holds the default value on creation for the health_check_enabled field.
+	group.DefaultHealthCheckEnabled = groupDescHealthCheckEnabled.Default.(bool)
+	// groupDescHealthCheckIntervalSec is the schema descriptor for health_check_interval_sec field.
+	groupDescHealthCheckIntervalSec := groupFields[45].Descriptor()
+	// group.DefaultHealthCheckIntervalSec holds the default value on creation for the health_check_interval_sec field.
+	group.DefaultHealthCheckIntervalSec = groupDescHealthCheckIntervalSec.Default.(int)
+	// groupDescHealthCheckTimeoutSec is the schema descriptor for health_check_timeout_sec field.
+	groupDescHealthCheckTimeoutSec := groupFields[46].Descriptor()
+	// group.DefaultHealthCheckTimeoutSec holds the default value on creation for the health_check_timeout_sec field.
+	group.DefaultHealthCheckTimeoutSec = groupDescHealthCheckTimeoutSec.Default.(int)
+	// groupDescHealthCheckFailureThreshold is the schema descriptor for health_check_failure_threshold field.
+	groupDescHealthCheckFailureThreshold := groupFields[47].Descriptor()
+	// group.DefaultHealthCheckFailureThreshold holds the default value on creation for the health_check_failure_threshold field.
+	group.DefaultHealthCheckFailureThreshold = groupDescHealthCheckFailureThreshold.Default.(int)
+	// groupDescHealthCheckSuccessThreshold is the schema descriptor for health_check_success_threshold field.
+	groupDescHealthCheckSuccessThreshold := groupFields[48].Descriptor()
+	// group.DefaultHealthCheckSuccessThreshold holds the default value on creation for the health_check_success_threshold field.
+	group.DefaultHealthCheckSuccessThreshold = groupDescHealthCheckSuccessThreshold.Default.(int)
+	// groupDescHealthConsecutiveFailures is the schema descriptor for health_consecutive_failures field.
+	groupDescHealthConsecutiveFailures := groupFields[50].Descriptor()
+	// group.DefaultHealthConsecutiveFailures holds the default value on creation for the health_consecutive_failures field.
+	group.DefaultHealthConsecutiveFailures = groupDescHealthConsecutiveFailures.Default.(int)
+	// groupDescHealthConsecutiveSuccesses is the schema descriptor for health_consecutive_successes field.
+	groupDescHealthConsecutiveSuccesses := groupFields[51].Descriptor()
+	// group.DefaultHealthConsecutiveSuccesses holds the default value on creation for the health_consecutive_successes field.
+	group.DefaultHealthConsecutiveSuccesses = groupDescHealthConsecutiveSuccesses.Default.(int)
+	// groupDescHealthStatus is the schema descriptor for health_status field.
+	groupDescHealthStatus := groupFields[52].Descriptor()
+	// group.DefaultHealthStatus holds the default value on creation for the health_status field.
+	group.DefaultHealthStatus = groupDescHealthStatus.Default.(string)
+	// group.HealthStatusValidator is a validator for the "health_status" field. It is called by the builders before save.
+	group.HealthStatusValidator = groupDescHealthStatus.Validators[0].(func(string) error)
 	// groupDescRpmLimit is the schema descriptor for rpm_limit field.
-	groupDescRpmLimit := groupFields[42].Descriptor()
+	groupDescRpmLimit := groupFields[53].Descriptor()
 	// group.DefaultRpmLimit holds the default value on creation for the rpm_limit field.
 	group.DefaultRpmLimit = groupDescRpmLimit.Default.(int)
 	// groupDescDataSharingEnabled is the schema descriptor for data_sharing_enabled field.
-	groupDescDataSharingEnabled := groupFields[43].Descriptor()
+	groupDescDataSharingEnabled := groupFields[54].Descriptor()
 	// group.DefaultDataSharingEnabled holds the default value on creation for the data_sharing_enabled field.
 	group.DefaultDataSharingEnabled = groupDescDataSharingEnabled.Default.(bool)
 	// groupDescSessionIsolationEnabled is the schema descriptor for session_isolation_enabled field.
-	groupDescSessionIsolationEnabled := groupFields[44].Descriptor()
+	groupDescSessionIsolationEnabled := groupFields[55].Descriptor()
 	// group.DefaultSessionIsolationEnabled holds the default value on creation for the session_isolation_enabled field.
 	group.DefaultSessionIsolationEnabled = groupDescSessionIsolationEnabled.Default.(bool)
 	idempotencyrecordMixin := schema.IdempotencyRecord{}.Mixin()

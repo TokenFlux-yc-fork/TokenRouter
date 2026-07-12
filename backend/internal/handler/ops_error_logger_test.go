@@ -1,16 +1,30 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	middleware2 "github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type opsFlushErrorRecorder struct {
+	*httptest.ResponseRecorder
+	err        error
+	flushCalls atomic.Int32
+}
+
+func (w *opsFlushErrorRecorder) FlushError() error {
+	w.flushCalls.Add(1)
+	return w.err
+}
 
 func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	t.Helper()
@@ -117,6 +131,68 @@ func TestOpsCaptureWriterPool_ResetOnRelease(t *testing.T) {
 	defer releaseOpsCaptureWriter(reused)
 
 	require.Zero(t, reused.buf.Len(), "writer should be reset before reuse")
+}
+
+func TestOpsCaptureWriterExposesWrappedResponseWriter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	writer := acquireOpsCaptureWriter(c.Writer)
+	defer releaseOpsCaptureWriter(writer)
+
+	require.Same(t, c.Writer, writer.Unwrap())
+}
+
+func TestOpsCaptureWriterAllowsCompactFlushErrorDetection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	flushErr := errors.New("client connection lost")
+	raw := &opsFlushErrorRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		err:              flushErr,
+	}
+	var streamErr service.OpsStreamError
+	var streamErrOK bool
+	r := gin.New()
+	r.POST("/v1/responses/compact", OpsErrorLoggerMiddleware(nil), func(c *gin.Context) {
+		service.MarkOpenAICompactClientStream(c)
+		stop := service.StartOpenAICompactSSEKeepalive(c, time.Millisecond)
+		defer stop()
+		require.Eventually(t, func() bool {
+			return raw.flushCalls.Load() > 0
+		}, time.Second, time.Millisecond)
+		streamErr, streamErrOK = service.GetOpsStreamError(c)
+	})
+
+	r.ServeHTTP(raw, httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil))
+
+	require.Equal(t, int32(1), raw.flushCalls.Load())
+	require.True(t, streamErrOK)
+	require.Equal(t, "downstream_flush_error", streamErr.ErrType)
+	require.Equal(t, flushErr.Error(), streamErr.Message)
+}
+
+func TestOpsErrorLoggerMiddleware_RestoresWriterOutsideCompactKeepalive(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var observedStatus int
+	r := gin.New()
+	r.Use(middleware2.Logger())
+	r.Use(func(c *gin.Context) {
+		c.Next()
+		observedStatus = c.Writer.Status()
+	})
+	r.POST("/v1/responses/compact", OpsErrorLoggerMiddleware(nil), func(c *gin.Context) {
+		service.MarkOpenAICompactClientStream(c)
+		stop := service.StartOpenAICompactSSEKeepalive(c, time.Hour)
+		defer stop()
+		c.Status(http.StatusNoContent)
+	})
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil))
+
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	require.Equal(t, http.StatusNoContent, observedStatus)
 }
 
 func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {

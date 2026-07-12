@@ -286,6 +286,54 @@ func TestAccountTestService_RunTestBackgroundWithPromptAndUserAgentOverridesHead
 	require.Equal(t, "codex-tui", upstream.requests[0].Header.Get("Originator"))
 }
 
+func TestAccountTestService_RunTestBackgroundUsesPoolModeActiveRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	success := newJSONResponse(http.StatusOK, "")
+	success.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	account := &Account{
+		ID:          902,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":                       "sk-test",
+			"base_url":                      "https://compat-upstream.example",
+			"pool_mode":                     true,
+			"pool_mode_retry_count":         2,
+			"pool_mode_retry_status_codes":  []any{float64(http.StatusTooManyRequests)},
+			"custom_error_codes_enabled":    true,
+			"custom_error_codes":            []any{float64(http.StatusTooManyRequests)},
+			"custom_error_retry_after_secs": 60,
+			"custom_error_cooldown_minutes": 5,
+		},
+	}
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusTooManyRequests, `{"error":{"message":"temporarily busy"}}`),
+		success,
+	}}
+	svc := &AccountTestService{
+		accountRepo:         repo,
+		httpUpstream:        upstream,
+		cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		tlsFPProfileService: nil,
+	}
+
+	result, err := svc.RunTestBackground(context.Background(), account.ID, "gpt-5.4")
+
+	require.NoError(t, err)
+	require.Equal(t, "success", result.Status)
+	require.Len(t, upstream.requests, 2)
+	require.Zero(t, repo.rateLimitedID, "retryable pool-mode probe failures should not mark account rate-limited before retry is exhausted")
+}
+
 func TestAccountTestService_OpenAI429PersistsSnapshotAndRateLimitState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
@@ -450,7 +498,10 @@ func TestAccountTestService_OpenAI401SetsPermanentErrorOnly(t *testing.T) {
 		Type:        AccountTypeOAuth,
 		Status:      StatusActive,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "test-token"},
+		Credentials: map[string]any{
+			"access_token":  "test-token",
+			"refresh_token": "refresh-token",
+		},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
@@ -460,6 +511,94 @@ func TestAccountTestService_OpenAI401SetsPermanentErrorOnly(t *testing.T) {
 	require.Zero(t, repo.rateLimitedID)
 	require.Zero(t, repo.clearedErrorID)
 	require.Nil(t, account.RateLimitResetAt)
+}
+
+func TestAccountTestService_OpenAI401NoRefreshTokenKeepsSchedulable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusUnauthorized, `{"error":{"message":"Unauthorized"},"status":401}`)
+	repo := &openAIAccountTestRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+	account := &Account{
+		ID:          180,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+
+	require.Error(t, err)
+	require.Zero(t, repo.setErrorID, "no-refresh OpenAI OAuth account test 401 must not mark account error")
+	require.Empty(t, repo.setErrorMsg)
+	require.Equal(t, StatusActive, account.Status)
+	require.True(t, account.Schedulable)
+}
+
+func TestAccountTestService_OpenAI401NoMatchingRuleKeepsSchedulable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusUnauthorized, `{
+		"error":{"message":"Unauthorized","type":"rejected_by_access_enforcement","code":"no_matching_rule"},
+		"status":401
+	}`)
+	repo := &openAIAccountTestRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+	account := &Account{
+		ID:          181,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":  "test-token",
+			"refresh_token": "refresh-token",
+		},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+
+	require.Error(t, err)
+	require.Zero(t, repo.setErrorID, "access-enforcement 401 must not mark an OAuth account error")
+	require.Empty(t, repo.setErrorMsg)
+	require.Equal(t, StatusActive, account.Status)
+	require.True(t, account.Schedulable)
+}
+
+func TestAccountTestService_OpenAI401NoRefreshTokenInvalidatedStillSetsError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusUnauthorized, `{
+		"error":{"message":"Your authentication token has been invalidated.","type":"invalid_request_error","code":"token_invalidated"},
+		"status":401
+	}`)
+	repo := &openAIAccountTestRepo{}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+	account := &Account{
+		ID:          182,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+
+	require.Error(t, err)
+	require.Equal(t, account.ID, repo.setErrorID)
+	require.Contains(t, repo.setErrorMsg, "Authentication failed (401)")
 }
 
 func TestAccountTestService_OpenAIAPIKeyResponsesUnsupportedUsesChatCompletionsPath(t *testing.T) {

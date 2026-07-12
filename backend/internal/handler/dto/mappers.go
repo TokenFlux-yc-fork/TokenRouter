@@ -203,7 +203,11 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 		return nil
 	}
 	out := &AdminGroup{
-		Group:                       groupFromServiceBase(g),
+		Group:             groupFromServiceBase(g),
+		BackupPoolGroupID: g.BackupPoolGroupID,
+		BackupPoolRefillThresholdPoints: service.NormalizeBackupPoolRefillThresholdPoints(
+			g.BackupPoolRefillThresholdPoints,
+		),
 		ModelRouting:                g.ModelRouting,
 		ModelRoutingEnabled:         g.ModelRoutingEnabled,
 		MCPXMLInject:                g.MCPXMLInject,
@@ -263,6 +267,15 @@ func groupFromServiceBase(g *service.Group) Group {
 		FallbackGroupIDOnInvalidRequest: g.FallbackGroupIDOnInvalidRequest,
 		UnavailableFallbackGroupID:      g.UnavailableFallbackGroupID,
 		AllowMessagesDispatch:           g.AllowMessagesDispatch,
+		HealthCheckEnabled:              g.HealthCheckEnabled,
+		HealthStatus:                    g.HealthStatus,
+		HealthLastCheckAt:               g.HealthLastCheckAt,
+		HealthConsecutiveFailures:       g.HealthConsecutiveFailures,
+		HealthConsecutiveSuccesses:      g.HealthConsecutiveSuccesses,
+		HealthCheckIntervalSec:          g.HealthCheckIntervalSec,
+		HealthCheckTimeoutSec:           g.HealthCheckTimeoutSec,
+		HealthCheckFailureThreshold:     g.HealthCheckFailureThreshold,
+		HealthCheckSuccessThreshold:     g.HealthCheckSuccessThreshold,
 		RequireOAuthOnly:                g.RequireOAuthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
 		RPMLimit:                        g.RPMLimit,

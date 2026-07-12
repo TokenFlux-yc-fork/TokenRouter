@@ -43,9 +43,37 @@ func (r *groupRepository) sqlExecutorFromContext(ctx context.Context) sqlExecuto
 	return r.sql
 }
 
+func normalizedGroupHealthPersistenceFields(groupIn *service.Group) (intervalSec, timeoutSec, failureThreshold, successThreshold int, status string) {
+	intervalSec = 60
+	timeoutSec = 10
+	failureThreshold = 3
+	successThreshold = 2
+	status = service.HealthStatusUnknown
+	if groupIn == nil {
+		return
+	}
+	if groupIn.HealthCheckIntervalSec > 0 {
+		intervalSec = groupIn.HealthCheckIntervalSec
+	}
+	if groupIn.HealthCheckTimeoutSec > 0 {
+		timeoutSec = groupIn.HealthCheckTimeoutSec
+	}
+	if groupIn.HealthCheckFailureThreshold > 0 {
+		failureThreshold = groupIn.HealthCheckFailureThreshold
+	}
+	if groupIn.HealthCheckSuccessThreshold > 0 {
+		successThreshold = groupIn.HealthCheckSuccessThreshold
+	}
+	if groupIn.HealthStatus != "" {
+		status = groupIn.HealthStatus
+	}
+	return
+}
+
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
 	client := clientFromContext(ctx, r.client)
 	sqlq := r.sqlExecutorFromContext(ctx)
+	healthIntervalSec, healthTimeoutSec, healthFailureThreshold, healthSuccessThreshold, healthStatus := normalizedGroupHealthPersistenceFields(groupIn)
 
 	builder := client.Group.Create().
 		SetName(groupIn.Name).
@@ -77,6 +105,8 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetNillableFallbackGroupID(groupIn.FallbackGroupID).
 		SetNillableFallbackGroupIDOnInvalidRequest(groupIn.FallbackGroupIDOnInvalidRequest).
 		SetNillableUnavailableFallbackGroupID(groupIn.UnavailableFallbackGroupID).
+		SetNillableBackupPoolGroupID(groupIn.BackupPoolGroupID).
+		SetBackupPoolRefillThresholdPoints(groupIn.BackupPoolRefillThresholdPoints).
 		SetModelRoutingEnabled(groupIn.ModelRoutingEnabled).
 		SetMcpXMLInject(groupIn.MCPXMLInject).
 		SetAllowMessagesDispatch(groupIn.AllowMessagesDispatch).
@@ -86,6 +116,15 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
 		SetAvailabilityProbeConfig(groupIn.AvailabilityProbeConfig).
+		SetHealthCheckEnabled(groupIn.HealthCheckEnabled).
+		SetHealthCheckIntervalSec(healthIntervalSec).
+		SetHealthCheckTimeoutSec(healthTimeoutSec).
+		SetHealthCheckFailureThreshold(healthFailureThreshold).
+		SetHealthCheckSuccessThreshold(healthSuccessThreshold).
+		SetNillableHealthLastCheckAt(groupIn.HealthLastCheckAt).
+		SetHealthConsecutiveFailures(groupIn.HealthConsecutiveFailures).
+		SetHealthConsecutiveSuccesses(groupIn.HealthConsecutiveSuccesses).
+		SetHealthStatus(healthStatus).
 		SetRpmLimit(groupIn.RPMLimit).
 		SetPeakRateEnabled(groupIn.PeakRateEnabled).
 		SetPeakStart(groupIn.PeakStart).
@@ -143,6 +182,7 @@ func (r *groupRepository) GetByIDLite(ctx context.Context, id int64) (*service.G
 func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) error {
 	client := clientFromContext(ctx, r.client)
 	sqlq := r.sqlExecutorFromContext(ctx)
+	healthIntervalSec, healthTimeoutSec, healthFailureThreshold, healthSuccessThreshold, healthStatus := normalizedGroupHealthPersistenceFields(groupIn)
 
 	builder := client.Group.UpdateOneID(groupIn.ID).
 		SetName(groupIn.Name).
@@ -171,6 +211,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetNillableVideoPrice720p(groupIn.VideoPrice720P).
 		SetNillableVideoPrice1080p(groupIn.VideoPrice1080P).
 		SetClaudeCodeOnly(groupIn.ClaudeCodeOnly).
+		SetBackupPoolRefillThresholdPoints(groupIn.BackupPoolRefillThresholdPoints).
 		SetModelRoutingEnabled(groupIn.ModelRoutingEnabled).
 		SetMcpXMLInject(groupIn.MCPXMLInject).
 		SetAllowMessagesDispatch(groupIn.AllowMessagesDispatch).
@@ -180,11 +221,24 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetModelsListConfig(groupIn.ModelsListConfig).
 		SetAvailabilityProbeConfig(groupIn.AvailabilityProbeConfig).
+		SetHealthCheckEnabled(groupIn.HealthCheckEnabled).
+		SetHealthCheckIntervalSec(healthIntervalSec).
+		SetHealthCheckTimeoutSec(healthTimeoutSec).
+		SetHealthCheckFailureThreshold(healthFailureThreshold).
+		SetHealthCheckSuccessThreshold(healthSuccessThreshold).
+		SetHealthConsecutiveFailures(groupIn.HealthConsecutiveFailures).
+		SetHealthConsecutiveSuccesses(groupIn.HealthConsecutiveSuccesses).
+		SetHealthStatus(healthStatus).
 		SetRpmLimit(groupIn.RPMLimit).
 		SetPeakRateEnabled(groupIn.PeakRateEnabled).
 		SetPeakStart(groupIn.PeakStart).
 		SetPeakEnd(groupIn.PeakEnd).
 		SetPeakRateMultiplier(groupIn.PeakRateMultiplier)
+	if groupIn.HealthLastCheckAt != nil {
+		builder = builder.SetHealthLastCheckAt(*groupIn.HealthLastCheckAt)
+	} else {
+		builder = builder.ClearHealthLastCheckAt()
+	}
 
 	if groupIn.ImagePrice1K != nil {
 		builder = builder.SetImagePrice1k(*groupIn.ImagePrice1K)
@@ -234,6 +288,12 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		builder = builder.SetUnavailableFallbackGroupID(*groupIn.UnavailableFallbackGroupID)
 	} else {
 		builder = builder.ClearUnavailableFallbackGroupID()
+	}
+	// 处理 BackupPoolGroupID：nil 时清除，否则设置。
+	if groupIn.BackupPoolGroupID != nil {
+		builder = builder.SetBackupPoolGroupID(*groupIn.BackupPoolGroupID)
+	} else {
+		builder = builder.ClearBackupPoolGroupID()
 	}
 
 	// 处理 ModelRouting：nil 时清除，否则设置
@@ -751,7 +811,19 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 		return nil, err
 	}
 
-	// 5. 软删除分组自身。
+	// 5. 软删除不会触发 backup_pool_group_id 的 ON DELETE SET NULL；
+	// 主动清理仍指向该分组的备用号池配置，避免活跃目标分组长期保留失效 pool。
+	if _, err := exec.ExecContext(ctx, `
+		UPDATE groups
+		SET backup_pool_group_id = NULL,
+			backup_pool_refill_threshold_points = 0
+		WHERE backup_pool_group_id = $1
+		  AND deleted_at IS NULL
+	`, id); err != nil {
+		return nil, err
+	}
+
+	// 6. 软删除分组自身。
 	if _, err := txClient.Group.Delete().Where(group.IDEQ(id)).Exec(ctx); err != nil {
 		return nil, err
 	}
@@ -975,4 +1047,106 @@ func (r *groupRepository) UpdateSortOrders(ctx context.Context, updates []servic
 		}
 	}
 	return nil
+}
+
+func (r *groupRepository) UpdateHealthStatus(ctx context.Context, groupID int64, update *service.HealthStatusUpdate) error {
+	sqlq := r.sqlExecutorFromContext(ctx)
+	result, err := sqlq.ExecContext(ctx, `
+		UPDATE groups
+		SET health_status = $1,
+		    health_last_check_at = $2,
+		    health_consecutive_failures = $3,
+		    health_consecutive_successes = $4,
+		    updated_at = NOW()
+		WHERE id = $5 AND deleted_at IS NULL
+		  AND (health_last_check_at IS NULL OR health_last_check_at < $2)
+	`, update.HealthStatus, update.HealthLastCheckAt, update.HealthConsecutiveFailures, update.HealthConsecutiveSuccesses, groupID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		var exists bool
+		rows, err := sqlq.QueryContext(ctx, `SELECT EXISTS(SELECT 1 FROM groups WHERE id = $1 AND deleted_at IS NULL)`, groupID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		if rows.Next() {
+			if err := rows.Scan(&exists); err != nil {
+				return err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if !exists {
+			return service.ErrGroupNotFound
+		}
+		return nil
+	}
+	if err := enqueueSchedulerOutbox(ctx, sqlq, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group health status update failed: group=%d err=%v", groupID, err)
+	}
+	return nil
+}
+
+func (r *groupRepository) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *service.HealthCheckConfigUpdate) error {
+	sqlq := r.sqlExecutorFromContext(ctx)
+	result, err := sqlq.ExecContext(ctx, `
+		UPDATE groups
+		SET health_check_enabled = $1,
+		    health_check_interval_sec = $2,
+		    health_check_timeout_sec = $3,
+		    health_check_failure_threshold = $4,
+		    health_check_success_threshold = $5,
+		    updated_at = NOW()
+		WHERE id = $6 AND deleted_at IS NULL
+	`, config.Enabled, config.IntervalSec, config.TimeoutSec, config.FailureThreshold, config.SuccessThreshold, groupID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrGroupNotFound
+	}
+	if err := enqueueSchedulerOutbox(ctx, sqlq, service.SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+		logger.LegacyPrintf("repository.group", "[SchedulerOutbox] enqueue group health config update failed: group=%d err=%v", groupID, err)
+	}
+	return nil
+}
+
+func (r *groupRepository) ForceHealthCheck(ctx context.Context, groupID int64) error {
+	sqlq := r.sqlExecutorFromContext(ctx)
+	result, err := sqlq.ExecContext(ctx, `
+		UPDATE groups
+		SET updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL AND health_check_enabled = true
+	`, groupID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrGroupNotFound
+	}
+	_, err = sqlq.ExecContext(ctx, `
+		INSERT INTO group_availability_probe_states (group_id, next_run_at, locked_until, locked_by, created_at, updated_at)
+		VALUES ($1, NOW(), NULL, NULL, NOW(), NOW())
+		ON CONFLICT (group_id) DO UPDATE SET
+			next_run_at = NOW(),
+			locked_until = NULL,
+			locked_by = NULL,
+			updated_at = NOW()
+	`, groupID)
+	return err
 }
