@@ -124,6 +124,47 @@ export async function update(id: number, updates: UpdateGroupRequest): Promise<A
   return data
 }
 
+export interface GroupHealthResponse {
+  health_check_enabled: boolean
+  health_status: string
+  health_last_check_at?: string | null
+  health_consecutive_failures: number
+  health_consecutive_successes: number
+  health_check_interval_sec: number
+  health_check_timeout_sec: number
+  health_check_failure_threshold: number
+  health_check_success_threshold: number
+}
+
+export interface UpdateGroupHealthCheckRequest {
+  enabled: boolean
+  interval_sec?: number
+  timeout_sec?: number
+  failure_threshold?: number
+  success_threshold?: number
+}
+
+export async function getHealth(id: number): Promise<GroupHealthResponse> {
+  const { data } = await apiClient.get<GroupHealthResponse>(`/admin/groups/${id}/health`)
+  return data
+}
+
+export async function updateHealthCheck(
+  id: number,
+  payload: UpdateGroupHealthCheckRequest
+): Promise<{ message: string }> {
+  const { data } = await apiClient.put<{ message: string }>(
+    `/admin/groups/${id}/health-check`,
+    payload
+  )
+  return data
+}
+
+export async function triggerManualCheck(id: number): Promise<{ message: string }> {
+  const { data } = await apiClient.post<{ message: string }>(`/admin/groups/${id}/manual-check`)
+  return data
+}
+
 /**
  * Delete group
  * @param id - Group ID
@@ -337,6 +378,9 @@ export const groupsAPI = {
   getModelsListCandidates,
   create,
   update,
+  getHealth,
+  updateHealthCheck,
+  triggerManualCheck,
   delete: deleteGroup,
   toggleStatus,
   getStats,

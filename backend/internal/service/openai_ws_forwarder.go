@@ -47,6 +47,7 @@ const (
 	openAIWSStoreDisabledConnModeOff      = "off"
 
 	openAIWSIngressStagePreviousResponseNotFound = "previous_response_not_found"
+	openAIWSIngressStageResponseFailedRetryable  = "response_failed_retryable"
 	openAIWSMaxPrevResponseIDDeletePasses        = 8
 )
 
@@ -139,7 +140,7 @@ func isOpenAIWSIngressTurnRetryable(err error) bool {
 		return false
 	}
 	switch turnErr.stage {
-	case "write_upstream", "read_upstream":
+	case "write_upstream", "read_upstream", openAIWSIngressStageResponseFailedRetryable:
 		return true
 	default:
 		return false
@@ -175,6 +176,18 @@ func NewOpenAIWSClientCloseError(statusCode coderws.StatusCode, reason string, e
 		reason:     strings.TrimSpace(reason),
 		err:        err,
 	}
+}
+
+func newOpenAIWSRetryableCloseError(detail string) error {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		detail = "upstream retryable failure"
+	}
+	return NewOpenAIWSClientCloseError(
+		coderws.StatusTryAgainLater,
+		"upstream service temporarily unavailable",
+		errors.New(detail),
+	)
 }
 
 func (e *OpenAIWSClientCloseError) Error() string {
@@ -414,9 +427,57 @@ func (s *OpenAIGatewayService) persistOpenAIWSErrorSignal(ctx context.Context, a
 		s.persistOpenAIWSRateLimitSignal(ctx, account, headers, responseBody, codeRaw, errTypeRaw, msgRaw)
 		return
 	}
-	if openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw) == http.StatusForbidden {
+	statusCode := openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	if statusCode == http.StatusForbidden {
 		s.persistOpenAIWSForbiddenSignal(ctx, account, headers, responseBody)
 	}
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.rateLimitService == nil || account == nil {
+		return
+	}
+	if IsOpenAICyberWarningPayload(responseBody, extractOpenAIWSUpstreamWarningMessage(responseBody)) {
+		return
+	}
+	s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSFinalErrorEventPassiveAccountFailure(
+	ctx context.Context,
+	account *Account,
+	responseBody []byte,
+	codeRaw string,
+	errTypeRaw string,
+	msgRaw string,
+) {
+	if isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
+		return
+	}
+	statusCode := openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	if statusCode == http.StatusForbidden {
+		return
+	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSDialPassiveAccountFailure(ctx context.Context, account *Account, err error) {
+	if err == nil {
+		return
+	}
+	var dialErr *openAIWSDialError
+	if !errors.As(err, &dialErr) || dialErr == nil {
+		return
+	}
+	switch dialErr.StatusCode {
+	case http.StatusTooManyRequests:
+		return
+	case http.StatusForbidden:
+		if account != nil && account.IsOpenAIOAuth() {
+			return
+		}
+	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, dialErr.StatusCode, []byte(strings.TrimSpace(err.Error())))
 }
 
 func (s *OpenAIGatewayService) persistOpenAIWSForbiddenSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {

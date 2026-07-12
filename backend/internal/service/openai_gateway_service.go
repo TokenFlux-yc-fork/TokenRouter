@@ -69,6 +69,7 @@ var openaiAllowedHeaders = map[string]bool{
 	"user-agent":            true,
 	"originator":            true,
 	"session_id":            true,
+	"x-codex-beta-features": true,
 	"x-codex-turn-state":    true,
 	"x-codex-turn-metadata": true,
 }
@@ -84,6 +85,7 @@ var openaiPassthroughAllowedHeaders = map[string]bool{
 	"user-agent":            true,
 	"originator":            true,
 	"session_id":            true,
+	"x-codex-beta-features": true,
 	"x-codex-turn-state":    true,
 	"x-codex-turn-metadata": true,
 }
@@ -383,6 +385,20 @@ type OpenAIGatewayService struct {
 	openaiCompatAnthropicDigestSessions sync.Map
 }
 
+// TempUnscheduleRetryableError records a pool-mode failure only after the
+// handler has exhausted retries on the selected OpenAI account.
+func (s *OpenAIGatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
+	if s == nil || s.accountRepo == nil || s.rateLimitService == nil || failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+		return
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		slog.Warn("openai_retryable_error_passive_account_lookup_failed", "account_id", accountID, "status_code", failoverErr.StatusCode, "error", err)
+		return
+	}
+	s.rateLimitService.recordPassiveAccountFailure(ctx, account, failoverErr.StatusCode, failoverErr.ResponseBody)
+}
+
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
 func NewOpenAIGatewayService(
 	accountRepo AccountRepository,
@@ -455,9 +471,6 @@ func NewOpenAIGatewayService(
 	}
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
-	}
-	if openAITokenProvider != nil {
-		openAITokenProvider.SetAccountRuntimeBlocker(svc)
 	}
 	svc.logOpenAIWSModeBootstrap()
 	return svc
@@ -1305,17 +1318,32 @@ func ExtractOpenAIUpstreamWarning(err error) (*OpenAIUpstreamWarning, bool) {
 
 // IsOpenAICyberWarningPayload 判断上游响应体或错误文本是否属于 OpenAI cyber 风控拒绝。
 func IsOpenAICyberWarningPayload(responseBody []byte, warningText string) bool {
+	if len(responseBody) > 0 {
+		if hit, _, _ := detectOpenAICyberPolicy(responseBody); hit {
+			return true
+		}
+		if hasAuthoritativeEmbeddedUpstreamErrorMessage(responseBody) {
+			return false
+		}
+	}
 	if IsOpenAICyberWarningText(warningText) {
 		return true
 	}
-	if len(responseBody) == 0 {
-		return false
+	for _, path := range []string{
+		"error.message",
+		"response.error.message",
+		"response.status_details.error.message",
+		"message",
+		"detail",
+	} {
+		if IsOpenAICyberWarningText(gjson.GetBytes(responseBody, path).String()) {
+			return true
+		}
 	}
-	if hit, _, _ := detectOpenAICyberPolicy(responseBody); hit {
-		return true
+	if errorValue := gjson.GetBytes(responseBody, "error"); errorValue.Type == gjson.String {
+		return IsOpenAICyberWarningText(errorValue.String())
 	}
-	return IsOpenAICyberWarningText(extractCyberWarningText(responseBody)) ||
-		IsOpenAICyberWarningText(string(responseBody))
+	return len(responseBody) > 0 && !gjson.ValidBytes(responseBody) && IsOpenAICyberWarningText(string(responseBody))
 }
 
 func cloneOpenAIUpstreamWarning(warning *OpenAIUpstreamWarning) *OpenAIUpstreamWarning {

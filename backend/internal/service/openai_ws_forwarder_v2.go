@@ -225,6 +225,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(err.Error())))
 			}
 		}
+		s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, err)
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
 	// cleanExit 标记正常终端事件退出，此时上游不会再发送帧，连接可安全归还复用。
@@ -345,6 +346,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		mappedModelBytes = []byte(mappedModel)
 	}
 	bufferedStreamEvents := make([][]byte, 0, 4)
+	pendingTerminalTail := make([][]byte, 0, 4)
+	holdingTerminalTail := false
 	eventCount := 0
 	tokenEventCount := 0
 	terminalEventCount := 0
@@ -537,6 +540,52 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if warning := buildOpenAIWSUpstreamWarning(eventType, message); warning != nil {
 			upstreamWarning = warning
 		}
+		if eventType != "error" && eventType != "response.failed" {
+			capacityMessage := extractOpenAISSEErrorMessage(message)
+			if isOpenAITransientProcessingError(http.StatusBadRequest, capacityMessage, message) {
+				lease.MarkBroken()
+				if !wroteDownstream {
+					failoverErr := &UpstreamFailoverError{
+						StatusCode:             http.StatusBadGateway,
+						ResponseBody:           append([]byte(nil), message...),
+						ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+						RetryableOnSameAccount: account.IsPoolMode(),
+					}
+					return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", capacityMessage, failoverErr))
+				}
+				if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(message, eventType, true); changed {
+					message = sanitized
+					eventType, _, responseField = parseOpenAIWSEventEnvelope(message)
+					lastEventType = eventType
+					if !isTerminalEvent && isOpenAIWSTerminalEvent(eventType) {
+						isTerminalEvent = true
+						terminalEventCount++
+					}
+				}
+			}
+		}
+
+		if eventType == "response.failed" && !wroteDownstream {
+			failedMessage := extractOpenAISSEErrorMessage(message)
+			if openAIStreamEventShouldFailover(message, eventType, failedMessage) {
+				if strings.TrimSpace(failedMessage) == "" {
+					failedMessage = "upstream response failed"
+				}
+				lease.MarkBroken()
+				failoverErr := &UpstreamFailoverError{
+					StatusCode:             http.StatusBadGateway,
+					ResponseBody:           append([]byte(nil), message...),
+					ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+					RetryableOnSameAccount: account.IsPoolMode() && isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, message),
+				}
+				return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", failedMessage, failoverErr))
+			}
+		}
+		if eventType == "response.failed" && wroteDownstream {
+			if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(message, eventType, true); changed {
+				message = sanitized
+			}
+		}
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
@@ -544,6 +593,21 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			errMsg := strings.TrimSpace(errMsgRaw)
 			if errMsg == "" {
 				errMsg = "Upstream websocket error"
+			}
+			if openAIStreamEventShouldFailover(message, eventType, errMsgRaw) && !wroteDownstream {
+				lease.MarkBroken()
+				failoverErr := &UpstreamFailoverError{
+					StatusCode:             http.StatusBadGateway,
+					ResponseBody:           append([]byte(nil), message...),
+					ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+					RetryableOnSameAccount: account.IsPoolMode() && isOpenAITransientProcessingError(http.StatusBadRequest, errMsgRaw, message),
+				}
+				return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", errMsg, failoverErr))
+			}
+			clientErrMsg := errMsg
+			if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(message, eventType, wroteDownstream); changed {
+				message = sanitized
+				clientErrMsg = "Upstream service temporarily unavailable"
 			}
 			fallbackReason, canFallback := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 			errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
@@ -602,6 +666,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			setOpsUpstreamError(c, statusCode, errMsg, "")
 			if reqStream && !clientDisconnected {
+				pendingTerminalTail = nil
+				holdingTerminalTail = false
 				flushBufferedStreamEvents("error_event")
 				emitStreamMessage(message, true)
 			}
@@ -609,7 +675,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				c.JSON(statusCode, gin.H{
 					"error": gin.H{
 						"type":    "upstream_error",
-						"message": errMsg,
+						"message": clientErrMsg,
 					},
 				})
 			}
@@ -626,6 +692,25 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 							finalResponse = patched
 						}
 					}
+				}
+			}
+			if openAIStreamEventDefersUntilSuccessfulTerminal(eventType) {
+				holdingTerminalTail = true
+				pendingTerminalTail = append(pendingTerminalTail, append([]byte(nil), message...))
+				continue
+			}
+			flushTerminalTail := false
+			if holdingTerminalTail {
+				switch {
+				case openAIStreamEventIsSuccessfulTerminal(message, eventType):
+					flushTerminalTail = true
+					holdingTerminalTail = false
+				case openAIStreamEventDropsDeferredTail(message, eventType):
+					pendingTerminalTail = nil
+					holdingTerminalTail = false
+				default:
+					pendingTerminalTail = append(pendingTerminalTail, append([]byte(nil), message...))
+					continue
 				}
 			}
 			// 在首个 token 前先缓冲事件（如 response.created），
@@ -649,6 +734,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			} else {
 				flushBufferedStreamEvents(eventType)
+				if flushTerminalTail {
+					for _, pendingMessage := range pendingTerminalTail {
+						emitStreamMessage(pendingMessage, false)
+					}
+					pendingTerminalTail = nil
+				}
 				emitStreamMessage(message, isTerminalEvent)
 			}
 		} else {

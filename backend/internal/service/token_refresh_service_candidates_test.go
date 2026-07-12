@@ -213,3 +213,101 @@ func TestTokenRefreshService_RefreshFailureDoesNotCallPrivacy(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldSkipOpenAIBackgroundRefreshState(t *testing.T) {
+	expiresAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	baseAccount := func() *Account {
+		return &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"access_token":  "current-access-token",
+				"refresh_token": "refresh-token",
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		account func() *Account
+		err     error
+		want    bool
+	}{
+		{
+			name:    "OpenAI OAuth without expires_at keeps current access token on invalid_client",
+			account: baseAccount,
+			err:     errors.New("token refresh failed: INVALID_CLIENT"),
+			want:    true,
+		},
+		{
+			name: "expires_at present",
+			account: func() *Account {
+				account := baseAccount()
+				account.Credentials["expires_at"] = expiresAt
+				return account
+			},
+			err: errors.New("invalid_client"),
+		},
+		{
+			name: "access token missing",
+			account: func() *Account {
+				account := baseAccount()
+				delete(account.Credentials, "access_token")
+				return account
+			},
+			err: errors.New("invalid_client"),
+		},
+		{
+			name: "non OpenAI account",
+			account: func() *Account {
+				account := baseAccount()
+				account.Platform = PlatformAnthropic
+				return account
+			},
+			err: errors.New("invalid_client"),
+		},
+		{
+			name:    "invalid_grant remains terminal",
+			account: baseAccount,
+			err:     errors.New("invalid_grant"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, shouldSkipOpenAIBackgroundRefreshState(tt.account(), tt.err))
+		})
+	}
+}
+
+func TestTokenRefreshService_OpenAIMissingExpiresAtInvalidClientDoesNotSetAccountError(t *testing.T) {
+	repo := &tokenRefreshCandidateRepo{}
+	svc := &TokenRefreshService{
+		accountRepo:   repo,
+		refreshPolicy: DefaultBackgroundRefreshPolicy(),
+		cfg:           &config.TokenRefreshConfig{MaxRetries: 1, RetryBackoffSeconds: 0},
+	}
+	resetAt := time.Now().Add(24 * time.Hour)
+	account := &Account{
+		ID:               4796,
+		Platform:         PlatformOpenAI,
+		Type:             AccountTypeOAuth,
+		RateLimitResetAt: &resetAt,
+		Credentials: map[string]any{
+			"access_token":  "current-access-token",
+			"refresh_token": "refresh-token",
+		},
+	}
+
+	err := svc.refreshWithRetry(
+		context.Background(),
+		account,
+		&tokenRefreshTestRefresher{err: errors.New("token refresh failed: invalid_client")},
+		nil,
+		time.Hour,
+	)
+
+	require.Error(t, err)
+	require.Zero(t, repo.setErrorCalls)
+	require.Zero(t, repo.setTempUnschedCalls)
+}

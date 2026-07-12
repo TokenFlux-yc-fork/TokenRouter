@@ -7,7 +7,8 @@ import (
 )
 
 type openAISSEDataAccumulator struct {
-	lines []string
+	eventType string
+	lines     []string
 }
 
 func (a *openAISSEDataAccumulator) AddLine(line string, fn func([]byte)) {
@@ -15,6 +16,10 @@ func (a *openAISSEDataAccumulator) AddLine(line string, fn func([]byte)) {
 		return
 	}
 	trimmedLine := strings.TrimRight(line, "\r\n")
+	if eventType, ok := extractOpenAISSEEventLine(trimmedLine); ok {
+		a.eventType = eventType
+		return
+	}
 	if data, ok := extractOpenAISSEDataLine(trimmedLine); ok {
 		a.lines = append(a.lines, data)
 		return
@@ -25,10 +30,15 @@ func (a *openAISSEDataAccumulator) AddLine(line string, fn func([]byte)) {
 }
 
 func (a *openAISSEDataAccumulator) Flush(fn func([]byte)) {
-	if fn == nil || len(a.lines) == 0 {
+	if fn == nil {
 		return
 	}
-	emitOpenAISSEDataPayloads(a.lines, fn)
+	if len(a.lines) == 0 {
+		a.eventType = ""
+		return
+	}
+	emitOpenAISSEDataPayloads(a.lines, a.eventType, fn)
+	a.eventType = ""
 	a.lines = a.lines[:0]
 }
 
@@ -43,28 +53,28 @@ func forEachOpenAISSEDataPayload(body string, fn func([]byte)) {
 	acc.Flush(fn)
 }
 
-func emitOpenAISSEDataPayloads(lines []string, fn func([]byte)) {
+func emitOpenAISSEDataPayloads(lines []string, eventType string, fn func([]byte)) {
 	if fn == nil || len(lines) == 0 {
 		return
 	}
 	if len(lines) == 1 {
-		emitOpenAISSEDataPayload(lines[0], fn)
+		emitOpenAISSEDataPayload(lines[0], eventType, fn)
 		return
 	}
 	joined := strings.Join(lines, "\n")
 	if gjson.Valid(joined) {
-		emitOpenAISSEDataPayload(joined, fn)
+		emitOpenAISSEDataPayload(joined, eventType, fn)
 		return
 	}
 	for _, line := range lines {
-		emitOpenAISSEDataPayload(line, fn)
+		emitOpenAISSEDataPayload(line, eventType, fn)
 	}
 }
 
-func emitOpenAISSEDataPayload(data string, fn func([]byte)) {
+func emitOpenAISSEDataPayload(data string, eventType string, fn func([]byte)) {
 	data = strings.TrimSpace(data)
 	if data == "" || data == "[DONE]" {
 		return
 	}
-	fn([]byte(data))
+	fn([]byte(openAICompatPayloadWithEventType(data, eventType)))
 }

@@ -142,6 +142,16 @@ type Group struct {
 	// OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
 	AllowMessagesDispatch bool `json:"allow_messages_dispatch"`
 
+	HealthCheckEnabled          bool       `json:"health_check_enabled"`
+	HealthStatus                string     `json:"health_status"`
+	HealthLastCheckAt           *time.Time `json:"health_last_check_at"`
+	HealthConsecutiveFailures   int        `json:"health_consecutive_failures"`
+	HealthConsecutiveSuccesses  int        `json:"health_consecutive_successes"`
+	HealthCheckIntervalSec      int        `json:"health_check_interval_sec"`
+	HealthCheckTimeoutSec       int        `json:"health_check_timeout_sec"`
+	HealthCheckFailureThreshold int        `json:"health_check_failure_threshold"`
+	HealthCheckSuccessThreshold int        `json:"health_check_success_threshold"`
+
 	// 账号过滤控制（仅 OpenAI/Antigravity 平台有效）
 	RequireOAuthOnly  bool `json:"require_oauth_only"`
 	RequirePrivacySet bool `json:"require_privacy_set"`
@@ -187,6 +197,10 @@ type SubscriptionPlan struct {
 // 注意：普通用户接口不得返回 model_routing/account_count/account_groups 等内部信息。
 type AdminGroup struct {
 	Group
+
+	// OpenAI Codex 备用号池自动补充配置。
+	BackupPoolGroupID               *int64  `json:"backup_pool_group_id"`
+	BackupPoolRefillThresholdPoints float64 `json:"backup_pool_refill_threshold_points"`
 
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64 `json:"model_routing"`
