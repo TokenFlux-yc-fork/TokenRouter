@@ -110,29 +110,31 @@ func responsesStatusToChatFinishReason(status string, details *ResponsesIncomple
 // ResponsesEventToChatState tracks state for converting a sequence of Responses
 // SSE events into Chat Completions SSE chunks.
 type ResponsesEventToChatState struct {
-	ID                     string
-	Model                  string
-	Created                int64
-	SentRole               bool
-	SawToolCall            bool
-	SawText                bool
-	Finalized              bool        // true after finish chunk has been emitted
-	NextToolCallIndex      int         // next sequential tool_call index to assign
-	OutputIndexToToolIndex map[int]int // Responses output_index → Chat tool_calls index
-	OutputIndexToToolName  map[int]string
-	OutputIndexSawToolArgs map[int]bool
-	IncludeUsage           bool
-	Usage                  *ChatUsage
+	ID                      string
+	Model                   string
+	Created                 int64
+	SentRole                bool
+	SawToolCall             bool
+	SawText                 bool
+	Finalized               bool        // true after finish chunk has been emitted
+	NextToolCallIndex       int         // next sequential tool_call index to assign
+	OutputIndexToToolIndex  map[int]int // Responses output_index → Chat tool_calls index
+	OutputIndexToToolCallID map[int]string
+	OutputIndexToToolName   map[int]string
+	OutputIndexSawToolArgs  map[int]bool
+	IncludeUsage            bool
+	Usage                   *ChatUsage
 }
 
 // NewResponsesEventToChatState returns an initialised stream state.
 func NewResponsesEventToChatState() *ResponsesEventToChatState {
 	return &ResponsesEventToChatState{
-		ID:                     generateChatCmplID(),
-		Created:                time.Now().Unix(),
-		OutputIndexToToolIndex: make(map[int]int),
-		OutputIndexToToolName:  make(map[int]string),
-		OutputIndexSawToolArgs: make(map[int]bool),
+		ID:                      generateChatCmplID(),
+		Created:                 time.Now().Unix(),
+		OutputIndexToToolIndex:  make(map[int]int),
+		OutputIndexToToolCallID: make(map[int]string),
+		OutputIndexToToolName:   make(map[int]string),
+		OutputIndexSawToolArgs:  make(map[int]bool),
 	}
 }
 
@@ -252,6 +254,7 @@ func resToChatHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 	state.SawToolCall = true
 	idx := state.NextToolCallIndex
 	state.OutputIndexToToolIndex[evt.OutputIndex] = idx
+	state.OutputIndexToToolCallID[evt.OutputIndex] = evt.Item.CallID
 	state.OutputIndexToToolName[evt.OutputIndex] = evt.Item.Name
 	state.NextToolCallIndex++
 
@@ -289,23 +292,32 @@ func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 }
 
 func resToChatHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
-	return resToChatHandleToolFinal(evt, state, evt.Name, evt.Arguments)
+	return resToChatHandleToolFinal(evt, state, evt.CallID, evt.Name, evt.Arguments)
 }
 
 func resToChatHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
 	if evt.Item == nil || (evt.Item.Type != "function_call" && evt.Item.Type != "custom_tool_call") {
 		return nil
 	}
-	return resToChatHandleToolFinal(evt, state, evt.Item.Name, evt.Item.Arguments)
+	return resToChatHandleToolFinal(evt, state, evt.Item.CallID, evt.Item.Name, evt.Item.Arguments)
 }
 
-func resToChatHandleToolFinal(evt *ResponsesStreamEvent, state *ResponsesEventToChatState, name, arguments string) []ChatCompletionsChunk {
+func resToChatHandleToolFinal(evt *ResponsesStreamEvent, state *ResponsesEventToChatState, callID, name, arguments string) []ChatCompletionsChunk {
 	idx, ok := state.OutputIndexToToolIndex[evt.OutputIndex]
 	if !ok {
 		return nil
 	}
 
 	var chunks []ChatCompletionsChunk
+	if callID != "" && state.OutputIndexToToolCallID[evt.OutputIndex] == "" {
+		state.OutputIndexToToolCallID[evt.OutputIndex] = callID
+		chunks = append(chunks, makeChatDeltaChunk(state, ChatDelta{
+			ToolCalls: []ChatToolCall{{
+				Index: &idx,
+				ID:    callID,
+			}},
+		}))
+	}
 	if name != "" && state.OutputIndexToToolName[evt.OutputIndex] != name {
 		state.OutputIndexToToolName[evt.OutputIndex] = name
 		chunks = append(chunks, makeChatDeltaChunk(state, ChatDelta{
@@ -554,7 +566,7 @@ func (a *BufferedResponseAccumulator) processToolDone(event *ResponsesStreamEven
 		a.outputIndexToFuncIdx[event.OutputIndex] = idx
 		a.funcCalls = append(a.funcCalls, bufferedFuncCall{})
 	}
-	if callID != "" {
+	if callID != "" && a.funcCalls[idx].CallID == "" {
 		a.funcCalls[idx].CallID = callID
 	}
 	if name != "" {

@@ -81,8 +81,7 @@ func TestResponsesEventToChatChunks_UsesDoneEventToolFieldsWhenAddedWasIncomplet
 		Type:        "response.output_item.added",
 		OutputIndex: 0,
 		Item: &ResponsesOutput{
-			Type:   "function_call",
-			CallID: "call_getskill",
+			Type: "function_call",
 		},
 	}, state)
 	require.Len(t, added, 1)
@@ -102,9 +101,10 @@ func TestResponsesEventToChatChunks_UsesDoneEventToolFieldsWhenAddedWasIncomplet
 			Arguments: `{"skill_name":"subagent-prompting"}`,
 		},
 	}, state)
-	require.Len(t, done, 2)
-	assert.Equal(t, "getskill", done[0].Choices[0].Delta.ToolCalls[0].Function.Name)
-	assert.Equal(t, `{"skill_name":"subagent-prompting"}`, done[1].Choices[0].Delta.ToolCalls[0].Function.Arguments)
+	require.Len(t, done, 3)
+	assert.Equal(t, "call_getskill", done[0].Choices[0].Delta.ToolCalls[0].ID)
+	assert.Equal(t, "getskill", done[1].Choices[0].Delta.ToolCalls[0].Function.Name)
+	assert.Equal(t, `{"skill_name":"subagent-prompting"}`, done[2].Choices[0].Delta.ToolCalls[0].Function.Arguments)
 
 	// A later duplicate terminal event must not append the full arguments again.
 	duplicate := ResponsesEventToChatChunks(&ResponsesStreamEvent{
@@ -114,6 +114,24 @@ func TestResponsesEventToChatChunks_UsesDoneEventToolFieldsWhenAddedWasIncomplet
 		Arguments:   `{"skill_name":"subagent-prompting"}`,
 	}, state)
 	assert.Empty(t, duplicate)
+}
+
+func TestResponsesEventToChatChunks_DoneEventDoesNotOverwriteToolCallID(t *testing.T) {
+	state := NewResponsesEventToChatState()
+	state.SentRole = true
+	_ = ResponsesEventToChatChunks(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 0,
+		Item:        &ResponsesOutput{Type: "function_call", CallID: "call_original", Name: "exec"},
+	}, state)
+
+	chunks := ResponsesEventToChatChunks(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 0,
+		Item:        &ResponsesOutput{Type: "function_call", CallID: "call_replacement", Name: "exec"},
+	}, state)
+	assert.Empty(t, chunks)
+	assert.Equal(t, "call_original", state.OutputIndexToToolCallID[0])
 }
 
 func TestResponsesEventToChatChunks_DoneEventDoesNotRepeatArgumentDeltas(t *testing.T) {
@@ -144,7 +162,7 @@ func TestBufferedResponseAccumulator_UsesDoneEventToolFields(t *testing.T) {
 	acc.ProcessEvent(&ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 0,
-		Item:        &ResponsesOutput{Type: "function_call", CallID: "call_getskill"},
+		Item:        &ResponsesOutput{Type: "function_call"},
 	})
 	acc.ProcessEvent(&ResponsesStreamEvent{
 		Type:        "response.output_item.done",
@@ -159,6 +177,7 @@ func TestBufferedResponseAccumulator_UsesDoneEventToolFields(t *testing.T) {
 
 	output := acc.BuildOutput()
 	require.Len(t, output, 1)
+	assert.Equal(t, "call_getskill", output[0].CallID)
 	assert.Equal(t, "getskill", output[0].Name)
 	assert.Equal(t, `{"skill_name":"subagent-prompting"}`, output[0].Arguments)
 }
