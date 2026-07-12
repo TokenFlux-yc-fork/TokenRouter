@@ -24,6 +24,47 @@ type CodexModelsManifest struct {
 	NotModified bool
 }
 
+// SelectCodexModelsAccount 选择凭据可用于 ChatGPT Codex 后端的可调度账号。
+// OAuth 类型约束在账号完成快照补全和数据库复查后执行，避免轻量快照状态滞后；
+// 账号选中后再通过 TokenProvider 验证实际凭据。
+func (s *OpenAIGatewayService) SelectCodexModelsAccount(ctx context.Context, groupID *int64) (*Account, error) {
+	excludedIDs := make(map[int64]struct{})
+	selectionCtx := s.withOpenAIQuotaAutoPauseContext(ctx)
+	for {
+		account, selectErr := s.selectAccountForModelWithExclusionsMatching(
+			selectionCtx,
+			groupID,
+			PlatformOpenAI,
+			"",
+			"",
+			excludedIDs,
+			false,
+			0,
+			"",
+			func(account *Account) bool { return account != nil && account.IsOpenAIOAuth() },
+		)
+		if selectErr != nil {
+			return nil, selectErr
+		}
+
+		credentialAccount, resolveErr := resolveCredentialAccount(ctx, s.accountRepo, account)
+		if resolveErr == nil && credentialAccount != nil && credentialAccount.IsOpenAIOAuth() {
+			accessToken, _, tokenErr := s.GetAccessToken(ctx, credentialAccount)
+			if tokenErr == nil && strings.TrimSpace(accessToken) != "" {
+				return account, nil
+			}
+			if isContextDoneError(ctx, tokenErr) {
+				return nil, contextDoneError(ctx, tokenErr)
+			}
+		} else if isContextDoneError(ctx, resolveErr) {
+			return nil, contextDoneError(ctx, resolveErr)
+		}
+
+		// 账号可能在调度与凭据校验之间发生变更；按最终补全后的凭据判定并继续调度。
+		excludedIDs[account.ID] = struct{}{}
+	}
+}
+
 // FetchCodexModelsManifest 使用账号的 OAuth 凭据获取实时 Codex 模型清单。
 // 清单正文保持原样透传，以兼容 Codex 客户端持续演进的字段结构。
 func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, account *Account, clientVersion, ifNoneMatch string) (*CodexModelsManifest, error) {
