@@ -962,6 +962,7 @@ func isOpenAIHTTP2CompatibilityError(err error) bool {
 func isOpenAIHTTP2CompatibilityErrCode(code http2.ErrCode) bool {
 	switch code {
 	case http2.ErrCodeProtocol,
+		http2.ErrCodeInternal,
 		http2.ErrCodeFlowControl,
 		http2.ErrCodeFrameSize,
 		http2.ErrCodeCompression,
