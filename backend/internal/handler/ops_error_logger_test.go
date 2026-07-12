@@ -172,6 +172,29 @@ func TestOpsCaptureWriterAllowsCompactFlushErrorDetection(t *testing.T) {
 	require.Equal(t, flushErr.Error(), streamErr.Message)
 }
 
+func TestOpsErrorLoggerMiddleware_RestoresWriterOutsideCompactKeepalive(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var observedStatus int
+	r := gin.New()
+	r.Use(middleware2.Logger())
+	r.Use(func(c *gin.Context) {
+		c.Next()
+		observedStatus = c.Writer.Status()
+	})
+	r.POST("/v1/responses/compact", OpsErrorLoggerMiddleware(nil), func(c *gin.Context) {
+		service.MarkOpenAICompactClientStream(c)
+		stop := service.StartOpenAICompactSSEKeepalive(c, time.Hour)
+		defer stop()
+		c.Status(http.StatusNoContent)
+	})
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil))
+
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	require.Equal(t, http.StatusNoContent, observedStatus)
+}
+
 func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
