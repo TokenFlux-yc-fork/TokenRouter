@@ -621,16 +621,33 @@ func isBareOpenAIResponsesPath(c *gin.Context) bool {
 	return strings.HasSuffix(normalizedPath, "/responses")
 }
 
-// normalizeOpenAIResponsesCompactRequest 统一处理两种入站 compact 形态：
-// path-based（POST /v1/responses/compact）与 Codex remote compact v2 的
-// body-signal（普通 POST /v1/responses 的 input 中携带 type=compaction_trigger，
-// 见 #3777）。body-signal 命中时在 stream 解析、compact body 归一化与
-// requireCompact 调度判定之前改写 URL path，使后续全部链路（含 passthrough
-// 分支与上游 URL 构建）与 path-based 完全一致。
+func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte) bool {
+	stream, valid := parseOpenAICompatibleStream(body)
+	if !valid || !stream || c == nil || c.Request == nil {
+		return false
+	}
+	for _, header := range c.Request.Header.Values("x-codex-beta-features") {
+		for _, feature := range strings.Split(header, ",") {
+			if strings.TrimSpace(feature) == "remote_compaction_v2" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// normalizeOpenAIResponsesCompactRequest keeps Codex remote compaction v2 on
+// its native streaming /responses wire and preserves the legacy body-signal
+// promotion for clients that do not explicitly advertise that protocol.
 // 返回归一化后的 body；ok=false 表示错误响应已写出，调用方应直接 return。
 func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Context, reqLog *zap.Logger, body []byte) ([]byte, bool) {
 	isCompactRequest := service.IsOpenAIResponsesCompactPathForTest(c)
 	if !isCompactRequest && isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
+		if isOpenAIRemoteCompactionV2Request(c, body) {
+			service.MarkOpenAINativeRemoteCompactionV2(c)
+			reqLog.Info("codex.remote_compact.detected_native_v2")
+			return body, true
+		}
 		c.Request.URL.Path = strings.TrimRight(c.Request.URL.Path, "/") + "/compact"
 		isCompactRequest = true
 		// Codex remote compact v2 的原始请求是流式 /responses：白名单归一化会删除
@@ -660,7 +677,8 @@ func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Con
 }
 
 func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, startedAt time.Time) {
-	if !isOpenAIRemoteCompactPath(c) {
+	nativeV2 := service.IsOpenAINativeRemoteCompactionV2(c)
+	if !isOpenAIRemoteCompactPath(c) && !nativeV2 {
 		return
 	}
 
@@ -700,6 +718,7 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 	fields := []zap.Field{
 		zap.String("component", "handler.openai_gateway.responses"),
 		zap.Bool("remote_compact", true),
+		zap.Bool("native_remote_compaction_v2", nativeV2),
 		zap.String("compact_outcome", outcome),
 		zap.Int("status_code", status),
 		zap.Int64("latency_ms", latencyMs),
