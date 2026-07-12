@@ -236,6 +236,11 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 					"OpenAI stream ended before a terminal event",
 				)
 			}
+			if nativeRemoteCompactionV2 && !clientDisconnected {
+				if writeErr := sendErrorEvent("OpenAI stream ended before a terminal event"); writeErr != nil {
+					return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event; write terminal failure: %w", writeErr)
+				}
+			}
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 		}
 		if sawFailedEvent {

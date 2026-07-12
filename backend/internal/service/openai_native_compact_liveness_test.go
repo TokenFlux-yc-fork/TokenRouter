@@ -307,6 +307,47 @@ func TestOpenAINativeRemoteCompactionHalfFrameReadErrorClosesFrameBeforeFailure(
 	}
 }
 
+func TestOpenAINativeRemoteCompactionCleanEOFAfterOutputEmitsFailedEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamBody := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
+
+	for _, passthrough := range []bool{false, true} {
+		name := "main"
+		if passthrough {
+			name = "passthrough"
+		}
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			MarkOpenAINativeRemoteCompactionV2(c)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+				Header:     http.Header{},
+			}
+			svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+			var err error
+			if passthrough {
+				_, err = svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+			} else {
+				_, err = svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+			}
+			require.ErrorContains(t, err, "missing terminal event")
+			var failoverErr *UpstreamFailoverError
+			require.NotErrorAs(t, err, &failoverErr)
+
+			events := parseNativeRemoteCompactionEventSource(rec.Body.String())
+			require.Len(t, events, 2)
+			require.Equal(t, "response.output_text.delta", events[0][0])
+			require.Equal(t, "partial", gjson.Get(events[0][1], "delta").String())
+			require.Equal(t, "response.failed", events[1][0])
+			require.Equal(t, "response.failed", gjson.Get(events[1][1], "type").String())
+		})
+	}
+}
+
 func TestOpenAINativeRemoteCompactionFailureWriterErrorIsReturned(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
