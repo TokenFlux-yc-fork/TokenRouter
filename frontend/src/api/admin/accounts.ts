@@ -108,6 +108,52 @@ export interface OpenAIQuotaUsage {
   fetched_at: number
 }
 
+export interface OpenAIOAuthPoolCapacityWindowSummary {
+  estimated_limit_usd: number
+  estimated_used_usd: number
+  estimated_remaining_usd: number
+  observed_remaining_usd: number
+  unobserved_limit_usd: number
+  observed_account_count: number
+  missing_snapshot_count: number
+  stale_snapshot_count: number
+}
+
+export interface OpenAIOAuthPoolCapacityPlanSummary {
+  plan_type: string
+  period: 'weekly' | 'monthly'
+  account_count: number
+  limit_per_account_usd: number
+  five_hour_limit_per_account_usd: number
+  parent: OpenAIOAuthPoolCapacityWindowSummary
+  five_hour: OpenAIOAuthPoolCapacityWindowSummary
+}
+
+export interface OpenAIOAuthPoolCapacityTotals {
+  parent: OpenAIOAuthPoolCapacityWindowSummary
+  five_hour: OpenAIOAuthPoolCapacityWindowSummary
+  weekly: OpenAIOAuthPoolCapacityWindowSummary
+  monthly: OpenAIOAuthPoolCapacityWindowSummary
+}
+
+export interface OpenAIOAuthPoolCapacityUnknownPlanType {
+  plan_type: string
+  account_count: number
+}
+
+export interface OpenAIOAuthPoolCapacitySummary {
+  generated_at: string
+  five_hour_ratio: number
+  managed_account_count: number
+  included_account_count: number
+  excluded_account_count: number
+  shadow_account_count: number
+  unknown_plan_account_count: number
+  unknown_plan_types: OpenAIOAuthPoolCapacityUnknownPlanType[]
+  totals: OpenAIOAuthPoolCapacityTotals
+  plans: OpenAIOAuthPoolCapacityPlanSummary[]
+}
+
 /**
  * List all accounts with pagination
  * @param page - Page number (default: 1)
@@ -865,6 +911,16 @@ export async function queryOpenAIQuota(id: number): Promise<OpenAIQuotaUsage> {
 }
 
 /**
+ * 获取 OpenAI OAuth 账号池的估算额度汇总。
+ */
+export async function getOpenAIOAuthPoolCapacity(): Promise<OpenAIOAuthPoolCapacitySummary> {
+  const { data } = await apiClient.get<OpenAIOAuthPoolCapacitySummary>(
+    '/admin/accounts/openai-oauth-capacity'
+  )
+  return data
+}
+
+/**
  * 重置 OpenAI OAuth 账号的上游额度。
  * @param id - 账号 ID
  * @returns OpenAI 上游限流状态
@@ -932,6 +988,7 @@ export const accountsAPI = {
   sendCodexInviteResetInvite,
   consumeCodexInviteReset,
   queryOpenAIQuota,
+  getOpenAIOAuthPoolCapacity,
   revertProxyFallback,
   resetOpenAIQuota,
   createSparkShadow
