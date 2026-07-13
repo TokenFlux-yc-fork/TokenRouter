@@ -116,24 +116,30 @@ func isOpenAIInstructionsRequiredError(upstreamStatusCode int, upstreamMsg strin
 	return false
 }
 
+func hasOpenAITransientOverloadCode(payload []byte) bool {
+	code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(payload)))
+	return code == "server_is_overloaded" || code == "slow_down"
+}
+
 func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	if upstreamStatusCode != http.StatusBadRequest && upstreamStatusCode != http.StatusServiceUnavailable {
 		return false
+	}
+	if len(upstreamBody) > 0 && hasOpenAITransientOverloadCode(upstreamBody) {
+		authoritativeMsg := strings.TrimSpace(extractUpstreamErrorMessage(upstreamBody))
+		if authoritativeMsg == "" {
+			authoritativeMsg = upstreamMsg
+		}
+		if isOpenAIContextWindowError(authoritativeMsg, nil) || isOpenAIKnownCyberWarningError(authoritativeMsg, nil) {
+			return false
+		}
+		return true
 	}
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
 	}
 	if isOpenAIKnownCyberWarningError(upstreamMsg, upstreamBody) {
 		return false
-	}
-
-	hasOpenAIServerOverloadedCode := func(payload []byte) bool {
-		code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(payload)))
-		return code == "server_is_overloaded" || code == "slow_down"
-	}
-
-	if len(upstreamBody) > 0 && hasOpenAIServerOverloadedCode(upstreamBody) {
-		return true
 	}
 	if hasAuthoritativeEmbeddedUpstreamErrorMessage(upstreamBody) {
 		return false
@@ -301,6 +307,9 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 }
 
 func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
 	}
@@ -311,7 +320,7 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 	if s.shouldFailoverUpstreamError(statusCode) {
 		return true
 	}
-	return isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
+	return false
 }
 
 func marshalOpenAIUpstreamJSON(v any) ([]byte, error) {

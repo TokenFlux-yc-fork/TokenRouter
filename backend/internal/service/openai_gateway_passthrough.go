@@ -769,6 +769,8 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	}
 	nonRetryableMarkers := []string{
 		"invalid_request",
+		"bad_request",
+		"bad request",
 		"content_policy",
 		"policy",
 		"safety",
