@@ -7,17 +7,22 @@ import (
 
 // ScheduledTestPlan represents a scheduled test plan domain model.
 type ScheduledTestPlan struct {
-	ID             int64      `json:"id"`
-	AccountID      int64      `json:"account_id"`
-	ModelID        string     `json:"model_id"`
-	CronExpression string     `json:"cron_expression"`
-	Enabled        bool       `json:"enabled"`
-	MaxResults     int        `json:"max_results"`
-	AutoRecover    bool       `json:"auto_recover"`
-	LastRunAt      *time.Time `json:"last_run_at"`
-	NextRunAt      *time.Time `json:"next_run_at"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID                           int64      `json:"id"`
+	AccountID                    int64      `json:"account_id"`
+	ModelID                      string     `json:"model_id"`
+	CronExpression               string     `json:"cron_expression"`
+	Enabled                      bool       `json:"enabled"`
+	MaxResults                   int        `json:"max_results"`
+	AutoRecover                  bool       `json:"auto_recover"`
+	AccountCircuitBreakerEnabled bool       `json:"account_circuit_breaker_enabled"`
+	FailureThreshold             int        `json:"failure_threshold"`
+	SuccessThreshold             int        `json:"success_threshold"`
+	FailureCooldownMinutes       int        `json:"failure_cooldown_minutes"`
+	TimeoutSeconds               int        `json:"timeout_seconds"`
+	LastRunAt                    *time.Time `json:"last_run_at"`
+	NextRunAt                    *time.Time `json:"next_run_at"`
+	CreatedAt                    time.Time  `json:"created_at"`
+	UpdatedAt                    time.Time  `json:"updated_at"`
 }
 
 // ScheduledTestResult represents a single test execution result.
@@ -31,6 +36,14 @@ type ScheduledTestResult struct {
 	StartedAt    time.Time `json:"started_at"`
 	FinishedAt   time.Time `json:"finished_at"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// ScheduledTestAccountResult represents a recent test result with its plan context.
+type ScheduledTestAccountResult struct {
+	ScheduledTestResult
+	AccountID      int64  `json:"account_id"`
+	ModelID        string `json:"model_id"`
+	CronExpression string `json:"cron_expression"`
 }
 
 // ScheduledTestPlanRepository defines the data access interface for test plans.
@@ -48,5 +61,6 @@ type ScheduledTestPlanRepository interface {
 type ScheduledTestResultRepository interface {
 	Create(ctx context.Context, result *ScheduledTestResult) (*ScheduledTestResult, error)
 	ListByPlanID(ctx context.Context, planID int64, limit int) ([]*ScheduledTestResult, error)
+	ListByAccountID(ctx context.Context, accountID int64, limit int) ([]*ScheduledTestAccountResult, error)
 	PruneOldResults(ctx context.Context, planID int64, keepCount int) error
 }
