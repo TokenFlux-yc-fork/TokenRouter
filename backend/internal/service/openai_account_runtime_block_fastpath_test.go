@@ -105,6 +105,99 @@ func TestOpenAIModelNotFound_DoesNotRuntimeBlockWholeAccount(t *testing.T) {
 	require.Len(t, repo.modelRateLimitCalls, 1)
 }
 
+func TestOpenAIRuntimeBlock_SkipsNoRefreshOAuth401(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := &Account{
+		ID:       48,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "access-token-only",
+		},
+	}
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusUnauthorized, http.Header{}, []byte("unauthorized"))
+
+	require.True(t, shouldDisable, "当前请求仍应 failover")
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "no-refresh 401 不能触发 2 分钟运行时冷却")
+}
+
+func TestOpenAIRuntimeBlock_SkipsAccessEnforcementOAuth401(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := &Account{
+		ID:       49,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "at",
+			"refresh_token": "rt",
+		},
+	}
+	body := []byte(`{"error":{"message":"Unauthorized","type":"rejected_by_access_enforcement","code":"no_matching_rule"}}`)
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusUnauthorized, http.Header{}, body)
+
+	require.True(t, shouldDisable, "当前请求仍应 failover")
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "access-enforcement 401 不能触发 2 分钟运行时冷却")
+}
+
+func TestOpenAIRuntimeBlock_SkipsOAuthHTML403(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := &Account{
+		ID:       50,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "at",
+			"refresh_token": "rt",
+		},
+	}
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusForbidden,
+		http.Header{},
+		[]byte("<!doctype html><html><body>access enforcement</body></html>"),
+	)
+
+	require.True(t, shouldDisable, "当前请求仍应 failover")
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, 0, repo.tempCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "OAuth HTML 403 不能触发 2 分钟运行时冷却")
+}
+
+func TestOpenAIRuntimeBlock_InvalidatedNoRefreshOAuth401RemainsBlocked(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{rateLimitService: rateLimitService}
+	account := &Account{
+		ID:       51,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "at",
+		},
+	}
+	body := []byte(`{"error":{"message":"token revoked","code":"token_revoked"}}`)
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusUnauthorized, http.Header{}, body)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account), "永久撤销仍应阻断调度")
+}
+
 func TestOpenAIRuntimeBlock_DoesNotShortenExistingBlock(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 46, Platform: PlatformOpenAI, Type: AccountTypeOAuth}

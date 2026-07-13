@@ -202,7 +202,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 
 	// 先尝试临时不可调度规则（401除外）
 	// 如果匹配成功，直接返回，不执行后续禁用逻辑
-	if statusCode != 401 {
+	if statusCode != 401 && !(statusCode == http.StatusForbidden && account.IsOpenAIOAuth() && isOpenAIHTMLResponseBody(responseBody)) {
 		if s.tryTempUnschedulable(ctx, account, statusCode, responseBody) {
 			return true
 		}
@@ -243,6 +243,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		if resolved, rerr := resolveCredentialAccount(ctx, s.accountRepo, account); rerr == nil && resolved != nil {
 			authAccount = resolved
 		}
+		authAccount = resolveOpenAIOAuthAccountForTokenState(ctx, s.accountRepo, authAccount)
 		// OpenAI: token_invalidated / token_revoked 表示 token 被永久作废（非过期），直接标记 error
 		openai401Code := extractUpstreamErrorCode(responseBody)
 		if authAccount.Platform == PlatformOpenAI && (openai401Code == "token_invalidated" || openai401Code == "token_revoked") {
@@ -251,6 +252,31 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 				msg = "Token revoked (401): " + upstreamMsg
 			}
 			s.handleAuthError(ctx, authAccount, msg)
+			shouldDisable = true
+			break
+		}
+		// Access enforcement can reject a specific endpoint while the same
+		// OAuth account remains valid for normal Responses requests.
+		if authAccount.IsOpenAIOAuth() && isOpenAITransientAccessEnforcement401(responseBody) {
+			slog.Info(
+				"openai_oauth_401_access_enforcement_state_skipped",
+				"account_id", authAccount.ID,
+				"code", openai401Code,
+				"error_type", extractUpstreamErrorType(responseBody),
+			)
+			shouldDisable = true
+			break
+		}
+		// Access-token-only OAuth credentials are maintained externally. A
+		// generic 401 fails over this request and invalidates only the cache;
+		// it does not prove that the account should leave the scheduling pool.
+		if isOpenAIOAuthAccessTokenOnly(authAccount) {
+			if s.tokenCacheInvalidator != nil {
+				if err := s.tokenCacheInvalidator.InvalidateToken(ctx, authAccount); err != nil {
+					slog.Warn("oauth_401_invalidate_cache_failed", "account_id", authAccount.ID, "error", err)
+				}
+			}
+			slog.Info("openai_oauth_401_no_refresh_token_state_skipped", "account_id", authAccount.ID)
 			shouldDisable = true
 			break
 		}
@@ -380,6 +406,64 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	}
 
 	return shouldDisable
+}
+
+func isOpenAIOAuthAccessTokenOnly(account *Account) bool {
+	if account == nil || !account.IsOpenAIOAuth() {
+		return false
+	}
+	return strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" &&
+		strings.TrimSpace(account.GetOpenAIAccessToken()) != ""
+}
+
+func resolveOpenAIOAuthAccountForTokenState(ctx context.Context, repo AccountRepository, account *Account) *Account {
+	if account == nil || repo == nil || !account.IsOpenAIOAuth() || account.ID <= 0 {
+		return account
+	}
+	if strings.TrimSpace(account.GetOpenAIAccessToken()) != "" ||
+		strings.TrimSpace(account.GetOpenAIRefreshToken()) != "" {
+		return account
+	}
+	latest, err := repo.GetByID(ctx, account.ID)
+	if err != nil || latest == nil {
+		return account
+	}
+	return latest
+}
+
+func isOpenAITransientAccessEnforcement401(body []byte) bool {
+	if strings.TrimSpace(extractUpstreamErrorCode(body)) == "no_matching_rule" {
+		return true
+	}
+	if extractUpstreamErrorType(body) != "rejected_by_access_enforcement" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(extractUpstreamErrorMessage(body)), "Unauthorized")
+}
+
+func extractUpstreamErrorType(body []byte) string {
+	for _, path := range []string{
+		"error.type",
+		"response.error.type",
+		"response.status_details.error.type",
+		"type",
+	} {
+		if typ := strings.TrimSpace(gjson.GetBytes(body, path).String()); typ != "" {
+			return typ
+		}
+	}
+	return ""
+}
+
+func isOpenAIHTMLResponseBody(body []byte) bool {
+	raw := strings.TrimSpace(string(body))
+	if raw == "" {
+		return false
+	}
+	lower := strings.ToLower(raw)
+	return strings.HasPrefix(lower, "<!doctype html") ||
+		strings.HasPrefix(lower, "<html") ||
+		strings.Contains(lower, "<html")
 }
 
 // PreCheckUsage proactively checks local quota before dispatching a request.
@@ -809,12 +893,18 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 }
 
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	account = resolveOpenAIOAuthAccountForTokenState(ctx, s.accountRepo, account)
 	msg := buildForbiddenErrorMessage(
 		"Access forbidden (403):",
 		upstreamMsg,
 		responseBody,
 		"account may be suspended or lack permissions",
 	)
+	if account.IsOpenAIOAuth() && isOpenAIHTMLResponseBody(responseBody) {
+		s.ResetOpenAI403Counter(ctx, account.ID)
+		slog.Info("openai_oauth_403_html_state_skipped", "account_id", account.ID)
+		return true
+	}
 	settings := s.getOpenAI403CooldownSettings(ctx, account.ID)
 	if !settings.Enabled {
 		s.handleAuthError(ctx, account, msg)
