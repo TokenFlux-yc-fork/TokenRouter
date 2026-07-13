@@ -81,7 +81,9 @@ func TestWriteOpenAICompactSSEBridge_AfterKeepaliveCommitAppendsEvents(t *testin
 	waitForKeepaliveBeats()
 
 	finalResponse := []byte(`{"id":"resp_ka_1","output":[{"id":"cmp_ka","type":"compaction","encrypted_content":"x"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
-	require.True(t, writeOpenAICompactSSEBridge(c, http.StatusOK, finalResponse))
+	handled, err := writeOpenAICompactSSEBridge(c, http.StatusOK, finalResponse)
+	require.NoError(t, err)
+	require.True(t, handled)
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	events := parseCompactBridgeSSE(t, stripKeepaliveComments(rec.Body.String()))
@@ -100,7 +102,9 @@ func TestWriteOpenAICompactSSEBridge_AfterKeepaliveCommitFailureEmitsFailedEvent
 	defer stop()
 	waitForKeepaliveBeats()
 
-	require.True(t, writeOpenAICompactSSEBridge(c, http.StatusBadGateway, []byte(`{"error":{"message":"upstream exploded"}}`)))
+	handled, err := writeOpenAICompactSSEBridge(c, http.StatusBadGateway, []byte(`{"error":{"message":"upstream exploded"}}`))
+	require.NoError(t, err)
+	require.True(t, handled)
 
 	events := parseCompactBridgeSSE(t, stripKeepaliveComments(rec.Body.String()))
 	require.Len(t, events, 1)
@@ -120,7 +124,9 @@ func TestWriteOpenAICompactSSEBridge_BeforeKeepaliveCommitFailureKeepsJSONPath(t
 	stop := StartOpenAICompactSSEKeepalive(c, time.Hour)
 	stop()
 
-	require.False(t, writeOpenAICompactSSEBridge(c, http.StatusBadGateway, []byte(`{"error":{"message":"fast fail"}}`)))
+	handled, err := writeOpenAICompactSSEBridge(c, http.StatusBadGateway, []byte(`{"error":{"message":"fast fail"}}`))
+	require.NoError(t, err)
+	require.False(t, handled)
 	require.Zero(t, rec.Body.Len())
 }
 

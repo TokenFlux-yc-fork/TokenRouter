@@ -168,17 +168,23 @@ func TestWriteOpenAICompactSSEBridge_RequiresMarkAndSuccessStatus(t *testing.T) 
 
 	// 未标记 client stream：不写出，走原 JSON 路径。
 	c, rec := newCompactBridgeTestContext(t, false)
-	require.False(t, writeOpenAICompactSSEBridge(c, http.StatusOK, finalResponse))
+	handled, err := writeOpenAICompactSSEBridge(c, http.StatusOK, finalResponse)
+	require.NoError(t, err)
+	require.False(t, handled)
 	require.Zero(t, rec.Body.Len())
 
 	// 标记但上游非 2xx：错误响应保持 JSON 原样（Codex 依赖 HTTP 状态码走重试）。
 	c, rec = newCompactBridgeTestContext(t, true)
-	require.False(t, writeOpenAICompactSSEBridge(c, http.StatusBadGateway, finalResponse))
+	handled, err = writeOpenAICompactSSEBridge(c, http.StatusBadGateway, finalResponse)
+	require.NoError(t, err)
+	require.False(t, handled)
 	require.Zero(t, rec.Body.Len())
 
 	// 标记且 2xx：合成 SSE。
 	c, rec = newCompactBridgeTestContext(t, true)
-	require.True(t, writeOpenAICompactSSEBridge(c, http.StatusOK, finalResponse))
+	handled, err = writeOpenAICompactSSEBridge(c, http.StatusOK, finalResponse)
+	require.NoError(t, err)
+	require.True(t, handled)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
 	require.Contains(t, rec.Body.String(), "event: response.completed")
