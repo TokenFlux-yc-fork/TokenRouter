@@ -577,6 +577,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 	}
 
+	var observedErrorSignal struct {
+		sync.Mutex
+		body    []byte
+		code    string
+		errType string
+		message string
+	}
 	relayResult, relayExit := openaiwsv2.RunEntry(openaiwsv2.EntryInput{
 		Ctx:                ctx,
 		ClientConn:         policyClientConn,
@@ -653,7 +660,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			},
 			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error {
-				if msgType != coderws.MessageText || wroteDownstream {
+				if msgType != coderws.MessageText {
 					return nil
 				}
 				if eventType, _, _ := parseOpenAIWSEventEnvelope(payload); eventType != "error" {
@@ -661,7 +668,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
 				s.persistOpenAIWSErrorSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
-				if !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+				observedErrorSignal.Lock()
+				observedErrorSignal.body = append(observedErrorSignal.body[:0], payload...)
+				observedErrorSignal.code = errCodeRaw
+				observedErrorSignal.errType = errTypeRaw
+				observedErrorSignal.message = errMsgRaw
+				observedErrorSignal.Unlock()
+				if wroteDownstream || !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
 					return nil
 				}
 				logOpenAIWSV2Passthrough(
@@ -753,7 +766,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		turnCount,
 	)
 	if shouldRecordOpenAIWSRelayPassiveAccountFailure(relayExit.Stage) {
-		s.recordOpenAIWSPassiveAccountFailure(ctx, account, 0, []byte(relayErrorText(relayExit.Err)))
+		observedErrorSignal.Lock()
+		errorBody := append([]byte(nil), observedErrorSignal.body...)
+		errorCode := observedErrorSignal.code
+		errorType := observedErrorSignal.errType
+		errorMessage := observedErrorSignal.message
+		observedErrorSignal.Unlock()
+		if len(errorBody) > 0 {
+			s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, errorBody, errorCode, errorType, errorMessage)
+		} else {
+			s.recordOpenAIWSPassiveAccountFailure(ctx, account, 0, []byte(relayErrorText(relayExit.Err)))
+		}
 	}
 
 	relayErr := relayExit.Err
