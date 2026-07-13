@@ -538,6 +538,23 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			upstreamWarning = warning
 		}
 
+		if eventType == "response.failed" && !wroteDownstream {
+			failedMessage := extractOpenAISSEErrorMessage(message)
+			if openAIStreamFailedEventShouldFailover(message, failedMessage) {
+				if strings.TrimSpace(failedMessage) == "" {
+					failedMessage = "upstream response failed"
+				}
+				lease.MarkBroken()
+				failoverErr := &UpstreamFailoverError{
+					StatusCode:             http.StatusBadGateway,
+					ResponseBody:           append([]byte(nil), message...),
+					ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+					RetryableOnSameAccount: account.IsPoolMode() && isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, message),
+				}
+				return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", failedMessage, failoverErr))
+			}
+		}
+
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
 			s.persistOpenAIWSErrorSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)

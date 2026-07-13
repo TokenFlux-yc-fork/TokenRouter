@@ -764,10 +764,39 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		terminalEventCount := 0
 		var terminalResponseBody []byte
 		replayCollector := &openAIWSToolCallReplayCollector{}
+		// Delay protocol-only preamble so a pre-output failure can be retried without committing the downstream turn.
+		pendingPreamble := make([][]byte, 0, 2)
 		firstEventType := ""
 		lastEventType := ""
 		needModelReplace := false
 		clientDisconnected := false
+		emitClientMessage := func(message []byte) error {
+			if clientDisconnected {
+				return nil
+			}
+			if err := writeClientMessage(message); err != nil {
+				if isOpenAIWSClientDisconnectError(err) {
+					clientDisconnected = true
+					closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)
+					logOpenAIWSModeInfo(
+						"ingress_ws_client_disconnected_drain account_id=%d turn=%d conn_id=%s close_status=%s close_reason=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(lease.ConnID(), openAIWSIDValueMaxLen),
+						closeStatus,
+						truncateOpenAIWSLogValue(closeReason, openAIWSHeaderValueMaxLen),
+					)
+					return nil
+				}
+				return wrapOpenAIWSIngressTurnError(
+					"write_client",
+					fmt.Errorf("write client websocket event: %w", err),
+					wroteDownstream,
+				)
+			}
+			wroteDownstream = true
+			return nil
+		}
 		mappedModel := ""
 		var mappedModelBytes []byte
 		if originalModel != "" {
@@ -897,6 +926,23 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						UpstreamOutTok: usage.OutputTokens,
 					})
 				}
+				failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+				if openAIStreamFailedEventShouldFailover(upstreamMessage, failedMessage) {
+					failoverErr := &UpstreamFailoverError{
+						StatusCode:      http.StatusBadGateway,
+						ResponseBody:    append([]byte(nil), upstreamMessage...),
+						ResponseHeaders: cloneHeader(lease.HandshakeHeaders()),
+					}
+					lease.MarkBroken()
+					if !wroteDownstream && !clientDisconnected {
+						return nil, wrapOpenAIWSIngressTurnError(
+							openAIWSIngressStageResponseFailedRetryable,
+							failoverErr,
+							false,
+						)
+					}
+					return nil, newOpenAIWSRetryableCloseError("upstream retryable failure after downstream output")
+				}
 			}
 			imageCounter.AddSSEData(upstreamMessage)
 
@@ -909,29 +955,37 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						upstreamMessage = corrected
 					}
 				}
-				replayCollector.AddEvent(eventType, upstreamMessage)
-				if err := writeClientMessage(upstreamMessage); err != nil {
-					if isOpenAIWSClientDisconnectError(err) {
-						clientDisconnected = true
-						closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)
-						logOpenAIWSModeInfo(
-							"ingress_ws_client_disconnected_drain account_id=%d turn=%d conn_id=%s close_status=%s close_reason=%s",
-							account.ID,
-							turn,
-							truncateOpenAIWSLogValue(lease.ConnID(), openAIWSIDValueMaxLen),
-							closeStatus,
-							truncateOpenAIWSLogValue(closeReason, openAIWSHeaderValueMaxLen),
-						)
-					} else {
-						return nil, wrapOpenAIWSIngressTurnError(
-							"write_client",
-							fmt.Errorf("write client websocket event: %w", err),
-							wroteDownstream,
-						)
-					}
+				if !wroteDownstream && openAIStreamEventIsPreamble(eventType) {
+					pendingPreamble = append(pendingPreamble, append([]byte(nil), upstreamMessage...))
 				} else {
-					wroteDownstream = true
+					for _, pendingMessage := range pendingPreamble {
+						if err := emitClientMessage(pendingMessage); err != nil {
+							return nil, err
+						}
+						if clientDisconnected {
+							break
+						}
+					}
+					pendingPreamble = nil
+					if !clientDisconnected {
+						replayCollector.AddEvent(eventType, upstreamMessage)
+						if err := emitClientMessage(upstreamMessage); err != nil {
+							return nil, err
+						}
+					}
 				}
+			}
+			if eventType == "response.failed" {
+				lease.MarkBroken()
+				failedMessage := strings.TrimSpace(extractOpenAISSEErrorMessage(upstreamMessage))
+				if failedMessage == "" {
+					failedMessage = "upstream response failed"
+				}
+				return nil, wrapOpenAIWSIngressTurnError(
+					"response_failed",
+					errors.New(failedMessage),
+					wroteDownstream,
+				)
 			}
 			if isTerminalEvent {
 				terminalResponseBody = openAIWSTerminalEventResponseBody(upstreamMessage)
@@ -1500,8 +1554,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				continue
 			}
 			finalErr := relayErr
-			if unwrapped := errors.Unwrap(relayErr); unwrapped != nil {
-				finalErr = unwrapped
+			var turnErr *openAIWSIngressTurnError
+			if errors.As(relayErr, &turnErr) && turnErr != nil && turnErr.cause != nil {
+				var failoverErr *UpstreamFailoverError
+				if errors.As(turnErr.cause, &failoverErr) && failoverErr != nil {
+					if turn == 1 {
+						finalErr = failoverErr
+					} else {
+						finalErr = newOpenAIWSRetryableCloseError("upstream retryable failure exhausted after the first turn")
+					}
+				} else {
+					finalErr = turnErr.cause
+				}
 			}
 			if hooks != nil && hooks.AfterTurn != nil {
 				hooks.AfterTurn(OpenAIWSTurnCapture{
