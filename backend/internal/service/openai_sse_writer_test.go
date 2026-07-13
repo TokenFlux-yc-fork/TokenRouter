@@ -105,7 +105,7 @@ func TestOpenAICompactFlushErrorPreservesUsageAndMarksClientDisconnect(t *testin
 			var usage *OpenAIUsage
 			var clientDisconnect bool
 			if passthrough {
-				result, err := svc.handleNonStreamingResponsePassthrough(c.Request.Context(), resp, c, &Account{ID: 1}, "model", "model")
+				result, err := svc.handleNonStreamingResponsePassthrough(c.Request.Context(), resp, c, "model", "model")
 				require.NoError(t, err)
 				require.NotNil(t, result)
 				usage = result.usage

@@ -559,7 +559,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 			}
-			if !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
+			if nativeRemoteCompactionV2 && !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 				return resultWithUsage(), s.newOpenAIStreamFailoverError(c, account, false, upstreamRequestID, nil, "OpenAI stream data interval timeout")
 			}
 			if writeErr := sendErrorEvent("stream_timeout"); writeErr != nil {
@@ -569,9 +569,6 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 		case <-keepaliveCh:
 			if clientDisconnected {
-				continue
-			}
-			if !nativeRemoteCompactionV2 && !openAIStreamClientOutputStarted(c, clientOutputStarted, outputBaseline) {
 				continue
 			}
 			// Once semantic output is visible, wait for the upstream event's blank
