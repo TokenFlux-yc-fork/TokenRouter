@@ -19,6 +19,7 @@ const (
 	groupAvailabilityProbeLockDuration       = 5 * time.Minute
 	groupAvailabilityProbeCleanupRetention   = 90 * 24 * time.Hour
 	groupAvailabilityProbeCleanupMinInterval = 12 * time.Hour
+	groupAvailabilityProbeTickSeconds        = 10
 )
 
 // GroupAvailabilityProbeRunnerService 定期执行分组主动可用性探测。
@@ -28,6 +29,7 @@ type GroupAvailabilityProbeRunnerService struct {
 	gatewaySvc      *GatewayService
 	openAIGateway   *OpenAIGatewayService
 	geminiCompatSvc *GeminiMessagesCompatService
+	healthMonitor   *GroupHealthMonitor
 	cfg             *config.Config
 
 	instanceID    string
@@ -35,6 +37,12 @@ type GroupAvailabilityProbeRunnerService struct {
 	lastCleanupAt time.Time
 	startOnce     sync.Once
 	stopOnce      sync.Once
+}
+
+func (s *GroupAvailabilityProbeRunnerService) SetHealthMonitor(monitor *GroupHealthMonitor) {
+	if s != nil {
+		s.healthMonitor = monitor
+	}
 }
 
 func NewGroupAvailabilityProbeRunnerService(
@@ -73,14 +81,15 @@ func (s *GroupAvailabilityProbeRunnerService) Start() {
 			}
 		}
 
-		c := cron.New(cron.WithParser(scheduledTestCronParser), cron.WithLocation(loc))
-		if _, err := c.AddFunc("* * * * *", func() { s.runDue() }); err != nil {
+		parser := cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+		c := cron.New(cron.WithParser(parser), cron.WithLocation(loc))
+		if _, err := c.AddFunc(fmt.Sprintf("*/%d * * * * *", groupAvailabilityProbeTickSeconds), func() { s.runDue() }); err != nil {
 			logger.LegacyPrintf("service.group_availability_probe", "[GroupAvailabilityProbe] not started (invalid schedule): %v", err)
 			return
 		}
 		s.cron = c
 		s.cron.Start()
-		logger.LegacyPrintf("service.group_availability_probe", "[GroupAvailabilityProbe] started (tick=every minute)")
+		logger.LegacyPrintf("service.group_availability_probe", "[GroupAvailabilityProbe] started (tick=every %d seconds)", groupAvailabilityProbeTickSeconds)
 	})
 }
 
@@ -143,7 +152,7 @@ func (s *GroupAvailabilityProbeRunnerService) cleanupIfNeeded(ctx context.Contex
 }
 
 func (s *GroupAvailabilityProbeRunnerService) runOne(ctx context.Context, due GroupAvailabilityProbeDueGroup) {
-	config, err := normalizeGroupAvailabilityProbeConfig(due.Config)
+	config, err := effectiveGroupProbeConfig(due)
 	if err != nil {
 		s.saveFailure(ctx, due, config, fmt.Sprintf("invalid probe config: %v", err), nil)
 		return
@@ -231,13 +240,69 @@ func (s *GroupAvailabilityProbeRunnerService) saveFailure(ctx context.Context, d
 }
 
 func (s *GroupAvailabilityProbeRunnerService) saveResult(ctx context.Context, due GroupAvailabilityProbeDueGroup, cfg GroupAvailabilityProbeConfig, result *GroupAvailabilityProbeResult) {
-	interval := time.Duration(cfg.IntervalMinutes) * time.Minute
+	interval := nextGroupProbeInterval(due, cfg)
 	if interval <= 0 {
 		interval = time.Duration(defaultGroupAvailabilityProbeIntervalMinutes) * time.Minute
 	}
 	nextRunAt := time.Now().Add(interval)
 	if err := s.repo.SaveResultAndScheduleNext(ctx, result, nextRunAt); err != nil {
 		logger.LegacyPrintf("service.group_availability_probe", "[GroupAvailabilityProbe] group=%d save result error: %v", due.GroupID, err)
+	}
+	if s.healthMonitor != nil && due.HealthCheckEnabled {
+		group := groupFromAvailabilityProbeDue(due)
+		if err := s.healthMonitor.RecordProbeResult(ctx, group, result.Success, result.FinishedAt, result.ErrorMessage); err != nil {
+			logger.LegacyPrintf("service.group_availability_probe", "[GroupAvailabilityProbe] group=%d update health error: %v", due.GroupID, err)
+		}
+	}
+}
+
+func effectiveGroupProbeConfig(due GroupAvailabilityProbeDueGroup) (GroupAvailabilityProbeConfig, error) {
+	if due.Config.Enabled {
+		return normalizeGroupAvailabilityProbeConfig(due.Config)
+	}
+	if !due.HealthCheckEnabled {
+		return GroupAvailabilityProbeConfig{}, nil
+	}
+	timeoutSeconds := due.HealthCheckTimeoutSec
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = defaultGroupHealthTimeoutSec
+	}
+	return GroupAvailabilityProbeConfig{
+		Enabled:        true,
+		Prompt:         "hi",
+		TimeoutSeconds: timeoutSeconds,
+	}, nil
+}
+
+func nextGroupProbeInterval(due GroupAvailabilityProbeDueGroup, cfg GroupAvailabilityProbeConfig) time.Duration {
+	var interval time.Duration
+	if cfg.IntervalMinutes > 0 {
+		interval = time.Duration(cfg.IntervalMinutes) * time.Minute
+	}
+	if due.HealthCheckEnabled && due.HealthCheckIntervalSec > 0 {
+		healthInterval := time.Duration(due.HealthCheckIntervalSec) * time.Second
+		if interval <= 0 || healthInterval < interval {
+			interval = healthInterval
+		}
+	}
+	return interval
+}
+
+func groupFromAvailabilityProbeDue(due GroupAvailabilityProbeDueGroup) *Group {
+	return &Group{
+		ID:                          due.GroupID,
+		Name:                        due.Name,
+		Platform:                    due.Platform,
+		Status:                      StatusActive,
+		HealthCheckEnabled:          due.HealthCheckEnabled,
+		HealthCheckIntervalSec:      due.HealthCheckIntervalSec,
+		HealthCheckTimeoutSec:       due.HealthCheckTimeoutSec,
+		HealthCheckFailureThreshold: due.HealthCheckFailureThreshold,
+		HealthCheckSuccessThreshold: due.HealthCheckSuccessThreshold,
+		HealthConsecutiveFailures:   due.HealthConsecutiveFailures,
+		HealthConsecutiveSuccesses:  due.HealthConsecutiveSuccesses,
+		HealthStatus:                due.HealthStatus,
+		HealthLastCheckAt:           due.HealthLastCheckAt,
 	}
 }
 
