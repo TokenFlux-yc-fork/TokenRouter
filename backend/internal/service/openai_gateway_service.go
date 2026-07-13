@@ -1385,17 +1385,32 @@ func ExtractOpenAIUpstreamWarning(err error) (*OpenAIUpstreamWarning, bool) {
 
 // IsOpenAICyberWarningPayload 判断上游响应体或错误文本是否属于 OpenAI cyber 风控拒绝。
 func IsOpenAICyberWarningPayload(responseBody []byte, warningText string) bool {
+	if len(responseBody) > 0 {
+		if hit, _, _ := detectOpenAICyberPolicy(responseBody); hit {
+			return true
+		}
+		if hasAuthoritativeEmbeddedUpstreamErrorMessage(responseBody) {
+			return false
+		}
+	}
 	if IsOpenAICyberWarningText(warningText) {
 		return true
 	}
-	if len(responseBody) == 0 {
-		return false
+	for _, path := range []string{
+		"error.message",
+		"response.error.message",
+		"response.status_details.error.message",
+		"message",
+		"detail",
+	} {
+		if IsOpenAICyberWarningText(gjson.GetBytes(responseBody, path).String()) {
+			return true
+		}
 	}
-	if hit, _, _ := detectOpenAICyberPolicy(responseBody); hit {
-		return true
+	if errorValue := gjson.GetBytes(responseBody, "error"); errorValue.Type == gjson.String {
+		return IsOpenAICyberWarningText(errorValue.String())
 	}
-	return IsOpenAICyberWarningText(extractCyberWarningText(responseBody)) ||
-		IsOpenAICyberWarningText(string(responseBody))
+	return len(responseBody) > 0 && !gjson.ValidBytes(responseBody) && IsOpenAICyberWarningText(string(responseBody))
 }
 
 func cloneOpenAIUpstreamWarning(warning *OpenAIUpstreamWarning) *OpenAIUpstreamWarning {

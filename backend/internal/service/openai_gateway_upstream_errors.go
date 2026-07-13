@@ -116,24 +116,32 @@ func isOpenAIInstructionsRequiredError(upstreamStatusCode int, upstreamMsg strin
 	return false
 }
 
+func hasOpenAITransientOverloadCode(payload []byte) bool {
+	code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(payload)))
+	return code == "server_is_overloaded" || code == "slow_down"
+}
+
 func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
-	if upstreamStatusCode != http.StatusBadRequest && upstreamStatusCode != http.StatusServiceUnavailable {
-		return false
-	}
-
-	hasOpenAIServerOverloadedCode := func(payload []byte) bool {
-		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
-		if code == "" {
-			code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
+	if len(upstreamBody) > 0 && hasOpenAITransientOverloadCode(upstreamBody) {
+		authoritativeMsg := strings.TrimSpace(extractUpstreamErrorMessage(upstreamBody))
+		if authoritativeMsg == "" {
+			authoritativeMsg = upstreamMsg
 		}
-		return code == "server_is_overloaded" || code == "slow_down"
-	}
-
-	if len(upstreamBody) > 0 && hasOpenAIServerOverloadedCode(upstreamBody) {
+		if isOpenAIContextWindowError(authoritativeMsg, nil) || isOpenAIKnownCyberWarningError(authoritativeMsg, nil) {
+			return false
+		}
 		return true
 	}
-
-	if upstreamStatusCode != http.StatusBadRequest {
+	if upstreamStatusCode != http.StatusBadRequest && (upstreamStatusCode < 500 || upstreamStatusCode > 599) {
+		return false
+	}
+	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
+		return false
+	}
+	if isOpenAIKnownCyberWarningError(upstreamMsg, upstreamBody) {
+		return false
+	}
+	if hasAuthoritativeEmbeddedUpstreamErrorMessage(upstreamBody) {
 		return false
 	}
 
@@ -148,6 +156,20 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 		if strings.Contains(lower, "selected model is at capacity") {
 			return true
 		}
+		if strings.Contains(lower, "experiencing high demand") {
+			return true
+		}
+		if strings.Contains(lower, "server is overloaded") ||
+			strings.Contains(lower, "model is overloaded") ||
+			strings.Contains(lower, "temporarily overloaded") ||
+			strings.Contains(lower, "currently overloaded") {
+			return true
+		}
+		if strings.Contains(lower, "temporarily unavailable") {
+			return strings.Contains(lower, "model") ||
+				strings.Contains(lower, "service") ||
+				strings.Contains(lower, "server")
+		}
 		return strings.Contains(lower, "you can retry your request") &&
 			strings.Contains(lower, "help.openai.com") &&
 			strings.Contains(lower, "request id")
@@ -159,10 +181,60 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 	if len(upstreamBody) == 0 {
 		return false
 	}
-	if match(gjson.GetBytes(upstreamBody, "error.message").String()) {
+	for _, text := range []string{
+		extractUpstreamErrorMessage(upstreamBody),
+		gjson.GetBytes(upstreamBody, "error.message").String(),
+		gjson.GetBytes(upstreamBody, "response.error.message").String(),
+		gjson.GetBytes(upstreamBody, "response.status_details.error.message").String(),
+		gjson.GetBytes(upstreamBody, "message").String(),
+		gjson.GetBytes(upstreamBody, "detail").String(),
+	} {
+		if match(text) {
+			return true
+		}
+	}
+	if errorValue := gjson.GetBytes(upstreamBody, "error"); errorValue.Type == gjson.String && match(errorValue.String()) {
 		return true
 	}
+	if gjson.ValidBytes(upstreamBody) {
+		return false
+	}
 	return match(string(upstreamBody))
+}
+
+// IsOpenAITransientCapacityErrorBody reports capacity/overload failures while
+// preserving authoritative invalid-request and policy classifications.
+func IsOpenAITransientCapacityErrorBody(body []byte) bool {
+	return isOpenAITransientProcessingError(http.StatusBadRequest, extractUpstreamErrorMessage(body), body)
+}
+
+func isOpenAIKnownCyberWarningError(upstreamMsg string, payload []byte) bool {
+	if len(payload) > 0 {
+		if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
+			return true
+		}
+		if hasAuthoritativeEmbeddedUpstreamErrorMessage(payload) {
+			return false
+		}
+	}
+	if IsOpenAICyberWarningText(upstreamMsg) {
+		return true
+	}
+	for _, path := range []string{
+		"error.message",
+		"response.error.message",
+		"response.status_details.error.message",
+		"message",
+		"detail",
+	} {
+		if IsOpenAICyberWarningText(gjson.GetBytes(payload, path).String()) {
+			return true
+		}
+	}
+	if errorValue := gjson.GetBytes(payload, "error"); errorValue.Type == gjson.String {
+		return IsOpenAICyberWarningText(errorValue.String())
+	}
+	return false
 }
 
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
@@ -189,23 +261,44 @@ func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 			hasExceeded
 	}
 
+	if len(upstreamBody) == 0 {
+		return match(upstreamMsg)
+	}
+	validJSON := gjson.ValidBytes(upstreamBody)
+	if validJSON {
+		for _, path := range []string{
+			"error.code",
+			"response.error.code",
+			"response.status_details.error.code",
+			"code",
+		} {
+			if match(gjson.GetBytes(upstreamBody, path).String()) {
+				return true
+			}
+		}
+		if hasAuthoritativeEmbeddedUpstreamErrorMessage(upstreamBody) {
+			return false
+		}
+	}
 	if match(upstreamMsg) {
 		return true
-	}
-	if len(upstreamBody) == 0 {
-		return false
 	}
 	for _, path := range []string{
 		"error.message",
 		"response.error.message",
+		"response.status_details.error.message",
 		"message",
-		"error.code",
-		"response.error.code",
-		"code",
+		"detail",
 	} {
 		if match(gjson.GetBytes(upstreamBody, path).String()) {
 			return true
 		}
+	}
+	if errorValue := gjson.GetBytes(upstreamBody, "error"); errorValue.Type == gjson.String && match(errorValue.String()) {
+		return true
+	}
+	if validJSON {
+		return false
 	}
 	return match(string(upstreamBody))
 }
@@ -229,10 +322,13 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, upstreamBody) {
 		return true
 	}
+	if isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
 	if s.shouldFailoverUpstreamError(statusCode) {
 		return true
 	}
-	return isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
+	return false
 }
 
 // OpenAIRequestBodyTooLargeClientMessage 是账号级请求体限制切号耗尽后使用的固定下游文案。

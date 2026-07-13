@@ -15,7 +15,7 @@ func TestOpenAIForwardMayFailoverOnlyAfterNonSemanticWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	before := service.OpenAICompactKeepaliveAdjustedWrittenSize(c)
+	before := service.OpenAISemanticWrittenSize(c)
 
 	_, err := fmt.Fprint(c.Writer, ":\n\n")
 	require.NoError(t, err)

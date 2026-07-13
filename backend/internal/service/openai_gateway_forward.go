@@ -730,6 +730,23 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return wsResult, nil
 		}
+		var failoverErr *UpstreamFailoverError
+		if errors.As(wsErr, &failoverErr) && failoverErr != nil {
+			requestID := ""
+			if failoverErr.ResponseHeaders != nil {
+				requestID = failoverErr.ResponseHeaders.Get("x-request-id")
+			}
+			s.recordOpenAIStreamUpstreamError(
+				c,
+				account,
+				false,
+				requestID,
+				"failover",
+				failoverErr.ResponseBody,
+				extractOpenAISSEErrorMessage(failoverErr.ResponseBody),
+			)
+			return nil, failoverErr
+		}
 		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
 		return nil, wsErr
 	}

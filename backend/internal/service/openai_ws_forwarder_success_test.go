@@ -590,6 +590,256 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedTopLevelServerErrorStil
 	require.JSONEq(t, `{"id":"resp_retry_ok","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":1}}`, rec.Body.String())
 }
 
+func TestOpenAIGatewayService_Forward_WSv2_CapacityErrorResponseRetries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var attempts atomic.Int32
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket failed: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read ws request failed: %v", err)
+			return
+		}
+		if attempt == 1 {
+			addedEvent := []byte(`{"type":"response.output_item.added","item":{"id":"rs_capacity_failed","type":"reasoning","summary":[]}}`)
+			if err := conn.WriteMessage(websocket.TextMessage, addedEvent); err != nil {
+				t.Errorf("write response.output_item.added failed: %v", err)
+				return
+			}
+			failedEvent := []byte(`{"type":"response.completed","response":{"id":"resp_capacity_failed","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`)
+			if err := conn.WriteMessage(websocket.TextMessage, failedEvent); err != nil {
+				t.Errorf("write capacity error failed: %v", err)
+			}
+			return
+		}
+		completedEvent := []byte(`{"type":"response.completed","response":{"id":"resp_capacity_retry_ok","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":1}}}`)
+		if err := conn.WriteMessage(websocket.TextMessage, completedEvent); err != nil {
+			t.Errorf("write response.completed failed: %v", err)
+		}
+	}))
+	defer wsServer.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 5
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.RetryBackoffInitialMS = 1
+	cfg.Gateway.OpenAIWS.RetryBackoffMaxMS = 1
+	cfg.Gateway.OpenAIWS.RetryJitterRatio = 0
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          22,
+		Name:        "openai-ws-capacity-retry",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": wsServer.URL,
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, int32(2), attempts.Load())
+	require.Equal(t, "resp_capacity_retry_ok", result.RequestID)
+	require.JSONEq(t, `{"id":"resp_capacity_retry_ok","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":1}}`, rec.Body.String())
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_CapacityAfterToolDoneDropsDeferredTail(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+
+	cfg := newOpenAIWSV2TestConfig()
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+	captureConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.created","response":{"id":"resp_tool_capacity"}}`),
+		[]byte(`{"type":"response.function_call_arguments.delta","item_id":"fc_tool_capacity","delta":"{\"cmd\":\"true\"}"}`),
+		[]byte(`{"type":"response.output_item.done","item":{"id":"fc_tool_capacity","type":"function_call","call_id":"call_must_not_execute","name":"exec_command","arguments":"{\"cmd\":\"true\"}"}}`),
+		[]byte(`{"type":"response.metadata","marker":"must_stay_deferred"}`),
+		[]byte(`{"type":"response.failed","response":{"id":"resp_tool_capacity","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`),
+	}}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
+	svc := &OpenAIGatewayService{
+		cfg:           cfg,
+		toolCorrector: NewCodexToolCorrector(),
+		openaiWSPool:  pool,
+	}
+	account := &Account{
+		ID:          2201,
+		Name:        "openai-ws-tool-capacity",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-test"},
+	}
+
+	agentTaskRecoveryTried := false
+	result, err := svc.forwardOpenAIWSV2(
+		context.Background(),
+		c,
+		account,
+		map[string]any{"model": "gpt-5.1", "stream": true, "input": []any{}},
+		"sk-test",
+		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+		true,
+		true,
+		"gpt-5.1",
+		"gpt-5.1",
+		time.Now(),
+		0,
+		"",
+		TLSFingerprintRouterMatchResult{},
+		&agentTaskRecoveryTried,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	body := rec.Body.String()
+	require.Contains(t, body, "response.function_call_arguments.delta")
+	require.Contains(t, body, "Upstream service temporarily unavailable")
+	require.NotContains(t, body, "response.output_item.done")
+	require.NotContains(t, body, "call_must_not_execute")
+	require.NotContains(t, body, "must_stay_deferred")
+	require.NotContains(t, body, "server_is_overloaded")
+	require.NotContains(t, body, "Selected model is at capacity")
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedCapacityExhaustionReturnsFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var attempts atomic.Int32
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket failed: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read ws request failed: %v", err)
+			return
+		}
+		failedEvent := []byte(`{"type":"response.failed","response":{"id":"resp_capacity_failed","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`)
+		if err := conn.WriteMessage(websocket.TextMessage, failedEvent); err != nil {
+			t.Errorf("write response.failed failed: %v", err)
+		}
+	}))
+	defer wsServer.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 5
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.RetryBackoffInitialMS = 1
+	cfg.Gateway.OpenAIWS.RetryBackoffMaxMS = 1
+	cfg.Gateway.OpenAIWS.RetryJitterRatio = 0
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          23,
+		Name:        "openai-ws-capacity-exhausted",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": wsServer.URL,
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`))
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
+	require.Equal(t, int32(openAIWSReconnectRetryLimit+1), attempts.Load())
+	require.False(t, c.Writer.Written())
+	require.Empty(t, rec.Body.String())
+}
+
 func TestOpenAIGatewayService_Forward_WSv2_ImageGenerationCountsOutputs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

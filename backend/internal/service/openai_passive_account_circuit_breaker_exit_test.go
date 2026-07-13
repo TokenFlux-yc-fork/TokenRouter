@@ -184,8 +184,10 @@ func TestOpenAIPassthroughTransportErrorRecordsPassiveAccountCircuitBreaker(t *t
 	)
 
 	require.Nil(t, result)
-	require.ErrorContains(t, err, "upstream request failed")
-	require.Equal(t, http.StatusBadGateway, rec.Code)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Zero(t, rec.Body.Len(), "transport failure must remain uncommitted for account failover")
 	requireOpenAIExitBreakerCall(t, repo, account, 0)
 }
 
