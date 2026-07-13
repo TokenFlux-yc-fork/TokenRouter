@@ -122,9 +122,6 @@ func hasOpenAITransientOverloadCode(payload []byte) bool {
 }
 
 func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
-	if upstreamStatusCode != http.StatusBadRequest && upstreamStatusCode != http.StatusServiceUnavailable {
-		return false
-	}
 	if len(upstreamBody) > 0 && hasOpenAITransientOverloadCode(upstreamBody) {
 		authoritativeMsg := strings.TrimSpace(extractUpstreamErrorMessage(upstreamBody))
 		if authoritativeMsg == "" {
@@ -134,6 +131,9 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 			return false
 		}
 		return true
+	}
+	if upstreamStatusCode != http.StatusBadRequest && (upstreamStatusCode < 500 || upstreamStatusCode > 599) {
+		return false
 	}
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
@@ -200,6 +200,12 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 		return false
 	}
 	return match(string(upstreamBody))
+}
+
+// IsOpenAITransientCapacityErrorBody reports capacity/overload failures while
+// preserving authoritative invalid-request and policy classifications.
+func IsOpenAITransientCapacityErrorBody(body []byte) bool {
+	return isOpenAITransientProcessingError(http.StatusBadRequest, extractUpstreamErrorMessage(body), body)
 }
 
 func isOpenAIKnownCyberWarningError(upstreamMsg string, payload []byte) bool {

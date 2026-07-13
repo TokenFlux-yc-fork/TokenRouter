@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/model"
 	pkghttputil "github.com/TokenFlux/TokenRouter/internal/pkg/httputil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/tlsfingerprint"
@@ -308,6 +309,38 @@ func TestOpenAIHandleFailoverExhausted_CyberWarningPassesThroughMessage(t *testi
 	require.Equal(t, http.StatusForbidden, w.Code)
 	assert.Contains(t, w.Body.String(), message)
 	assert.NotContains(t, w.Body.String(), "All available accounts exhausted")
+}
+
+func TestOpenAIHandleFailoverExhausted_CapacityReturnsGenericUpstreamError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	passthroughSvc := service.NewErrorPassthroughService(&qoderErrorPassthroughRepoStub{
+		rules: []*model.ErrorPassthroughRule{
+			{
+				Name:            "capacity passthrough must be ignored",
+				Enabled:         true,
+				Priority:        1,
+				Keywords:        []string{"selected model is at capacity"},
+				MatchMode:       model.MatchModeAny,
+				Platforms:       []string{service.PlatformOpenAI},
+				PassthroughCode: true,
+				PassthroughBody: true,
+			},
+		},
+	}, nil)
+	h := &OpenAIGatewayHandler{errorPassthroughService: passthroughSvc}
+
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusServiceUnavailable,
+		ResponseBody: []byte(`{"error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}`),
+	}, false)
+
+	require.Equal(t, http.StatusBadGateway, w.Code)
+	require.Contains(t, w.Body.String(), "Upstream service temporarily unavailable")
+	require.NotContains(t, w.Body.String(), "server_is_overloaded")
+	require.NotContains(t, w.Body.String(), "Selected model is at capacity")
 }
 
 func TestShouldLogOpenAIForwardFailureAsWarn(t *testing.T) {
@@ -1799,6 +1832,18 @@ func (s *openAIWSFailoverHandlerAccountRepoStub) SetRateLimited(ctx context.Cont
 	return nil
 }
 
+func (s *openAIWSFailoverHandlerAccountRepoStub) SetTempUnschedulable(_ context.Context, id int64, until time.Time, reason string) error {
+	for i := range s.accounts {
+		if s.accounts[i].ID == id {
+			blockedUntil := until
+			s.accounts[i].TempUnschedulableUntil = &blockedUntil
+			s.accounts[i].TempUnschedulableReason = reason
+			break
+		}
+	}
+	return nil
+}
+
 func TestOpenAIResponses_CanceledContextDoesNotSwitchAccount(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1865,6 +1910,72 @@ func TestOpenAIResponses_CanceledContextDoesNotSwitchAccount(t *testing.T) {
 			require.Equal(t, []int64{9910}, upstream.AccountIDs(), "canceled request must not start a detached request on the second account")
 		})
 	}
+}
+
+func TestOpenAIResponses_PoolRetriesStructuralCapacityThenSwitchesAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := newOpenAIHTTPFailoverTestConfig()
+	groupID := int64(4206)
+	repo := &openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{
+		{
+			ID: 9914, Name: "capacity-after-structure", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+			Concurrency: 1, Priority: 1,
+			Credentials: map[string]any{"api_key": "sk-first", "pool_mode": true, "pool_mode_retry_count": 3},
+		},
+		{
+			ID: 9915, Name: "healthy-after-structure", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true,
+			Concurrency: 1, Priority: 2,
+			Credentials: map[string]any{"access_token": "oauth-second", "chatgpt_account_id": "chatgpt-second"},
+		},
+	}}
+	upstream := &openAIHandlerHTTPUpstreamStub{do: func(_ *http.Request, accountID int64) (*http.Response, error) {
+		if accountID == 9914 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid-structural-capacity"}},
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					`data: {"type":"response.created","response":{"id":"resp_structural_capacity","status":"in_progress","output":[]}}`,
+					"",
+					`data: {"type":"response.output_item.added","item":{"id":"rs_structural_capacity","type":"reasoning","summary":[]}}`,
+					"",
+					`data: {"type":"response.content_part.added","item_id":"msg_structural_capacity","part":{"type":"output_text","text":""}}`,
+					"",
+					`data: {"type":"response.output_item.done","item":{"id":"img_structural_capacity","type":"image_generation_call","result":"deferred-image"}}`,
+					"",
+					`event: response.failed`,
+					`data: {"type":"response.failed","response":{"id":"resp_structural_capacity","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`,
+					"",
+				}, "\n"))),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid-structural-success"}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`data: {"type":"response.created","response":{"id":"resp_structural_success","status":"in_progress","output":[]}}`,
+				"",
+				`data: {"type":"response.output_text.delta","delta":"ok"}`,
+				"",
+				`data: {"type":"response.completed","response":{"id":"resp_structural_success","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+				"",
+			}, "\n"))),
+		}, nil
+	}}
+	h := newOpenAIHTTPFailoverTestHandler(cfg, repo, upstream)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.1","stream":true,"input":"hello"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	bindOpenAIHTTPFailoverTestAuth(c, groupID)
+
+	h.Responses(c)
+
+	require.Equal(t, []int64{9914, 9914, 9914, 9914, 9915}, upstream.AccountIDs(), "body=%s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), "ok")
+	require.NotContains(t, rec.Body.String(), "server_is_overloaded")
+	require.NotContains(t, rec.Body.String(), "Selected model is at capacity")
 }
 
 func TestOpenAIChatCompletions_KeepaliveThenCapacitySwitchesAccount(t *testing.T) {

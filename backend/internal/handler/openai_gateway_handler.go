@@ -456,15 +456,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
 		if err != nil {
-			if result != nil && result.ImageCount > 0 {
+			var failoverErr *service.UpstreamFailoverError
+			isFailoverErr := errors.As(err, &failoverErr)
+			if result != nil && result.ImageCount > 0 && !isFailoverErr {
 				reqLog.Warn("openai.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
 					zap.Int("image_count", result.ImageCount),
 					zap.Error(err),
 				)
 			} else {
-				var failoverErr *service.UpstreamFailoverError
-				if errors.As(err, &failoverErr) {
+				if isFailoverErr {
 					if c.Request.Context().Err() != nil {
 						return
 					}
@@ -2088,6 +2089,11 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 			responseStatus = http.StatusBadGateway
 		}
 		h.handleStreamingAwareError(c, responseStatus, "invalid_request_error", message, streamStarted)
+		return
+	}
+	if service.IsOpenAITransientCapacityErrorBody(responseBody) {
+		service.SetOpsUpstreamError(c, statusCode, service.ExtractUpstreamErrorMessage(responseBody), "")
+		h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream service temporarily unavailable", streamStarted)
 		return
 	}
 

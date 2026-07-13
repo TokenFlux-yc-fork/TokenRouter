@@ -80,12 +80,11 @@ func TestOpenAIWSV2PassthroughResponseFailedRateLimitReturns429Failover(t *testi
 	require.False(t, failoverErr.RetryableOnSameAccount)
 }
 
-func TestOpenAIWSV2PassthroughContextWindowWithoutTypeDoesNotTripPassiveBreaker(t *testing.T) {
-	rateLimitService, repo := newOpenAIExitBreakerService()
+func TestOpenAIWSV2PassthroughContextWindowWithoutTypeDoesNotFailover(t *testing.T) {
 	upstream := newOpenAIWSV2FinalStatusConn([][]byte{
 		[]byte(`{"type":"response.failed","response":{"id":"resp_context","status":"failed","error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}}`),
 	}, nil)
-	svc := newOpenAIWSV2FinalStatusService(&openAIWSV2FinalStatusDialer{conn: upstream}, rateLimitService)
+	svc := newOpenAIWSV2FinalStatusService(&openAIWSV2FinalStatusDialer{conn: upstream}, nil)
 	account := newOpenAIWSV2FinalStatusAccount(1302, true)
 
 	proxyErr := runOpenAIWSV2FinalStatusProxy(t, svc, account)
@@ -93,7 +92,6 @@ func TestOpenAIWSV2PassthroughContextWindowWithoutTypeDoesNotTripPassiveBreaker(
 	require.Error(t, proxyErr)
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(proxyErr, &failoverErr))
-	require.Empty(t, repo.snapshotCalls())
 }
 
 func TestOpenAIWSV2PassthroughPoolCapacityRetriesSameAccount(t *testing.T) {
@@ -108,6 +106,22 @@ func TestOpenAIWSV2PassthroughPoolCapacityRetriesSameAccount(t *testing.T) {
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, proxyErr, &failoverErr)
 	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+}
+
+func TestOpenAIWSV2PassthroughFailedCompletedCapacityRetriesSameAccount(t *testing.T) {
+	upstream := newOpenAIWSV2FinalStatusConn([][]byte{
+		[]byte(`{"type":"response.output_item.done","item":{"id":"fc_capacity","type":"function_call","call_id":"call_must_not_execute","name":"exec_command","arguments":"{}"}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_capacity","status":"failed","error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}}`),
+	}, nil)
+	svc := newOpenAIWSV2FinalStatusService(&openAIWSV2FinalStatusDialer{conn: upstream}, nil)
+	account := newOpenAIWSV2FinalStatusAccount(1313, true)
+
+	proxyErr := runOpenAIWSV2FinalStatusProxy(t, svc, account)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, proxyErr, &failoverErr)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.True(t, failoverErr.RetryableOnSameAccount)
 }
 
@@ -128,25 +142,6 @@ func TestOpenAIWSV2PassthroughCapacityAfterOutputReturnsCloseErrorWithoutFailove
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(proxyErr, &failoverErr))
 	require.Equal(t, 1, dialer.callCount())
-}
-
-func TestOpenAIWSV2PassthroughSuccessfulTerminalClearsObservedErrorBeforeReadFailure(t *testing.T) {
-	for _, eventType := range []string{"response.completed", "response.done"} {
-		t.Run(eventType, func(t *testing.T) {
-			rateLimitService, repo := newOpenAIExitBreakerService()
-			upstream := newOpenAIWSV2FinalStatusConn([][]byte{
-				[]byte(`{"type":"error","error":{"code":"server_error","type":"server_error","message":"temporary upstream warning"}}`),
-				[]byte(`{"type":"` + eventType + `","response":{"id":"resp_success","status":"completed","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
-			}, errors.New("upstream read failed after completed turn"))
-			svc := newOpenAIWSV2FinalStatusService(&openAIWSV2FinalStatusDialer{conn: upstream}, rateLimitService)
-			account := newOpenAIWSV2FinalStatusAccount(1305, true)
-
-			proxyErr := runOpenAIWSV2FinalStatusProxy(t, svc, account)
-
-			require.Error(t, proxyErr)
-			requireOpenAIExitBreakerCall(t, repo, account, 0)
-		})
-	}
 }
 
 func newOpenAIWSV2FinalStatusConn(events [][]byte, finalReadErr error) *openAIWSV2FinalStatusConn {
