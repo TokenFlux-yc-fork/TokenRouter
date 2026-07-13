@@ -476,6 +476,29 @@ type opsCaptureWriter struct {
 	buf   bytes.Buffer
 }
 
+func (w *opsCaptureWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func wrapsOpsCaptureWriter(writer http.ResponseWriter, target *opsCaptureWriter) bool {
+	const maxUnwrapDepth = 32
+	current := writer
+	for range maxUnwrapDepth {
+		if current == nil {
+			return false
+		}
+		if candidate, ok := current.(*opsCaptureWriter); ok && candidate == target {
+			return true
+		}
+		unwrapper, ok := current.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return false
+		}
+		current = unwrapper.Unwrap()
+	}
+	return false
+}
+
 const opsCaptureWriterLimit = 64 * 1024
 
 var opsCaptureWriterPool = sync.Pool{
@@ -617,11 +640,12 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		originalWriter := c.Writer
 		w := acquireOpsCaptureWriter(originalWriter)
 		defer func() {
-			// Restore the original writer before returning so outer middlewares
-			// don't observe a pooled wrapper that has been released.
-			if c.Writer == w {
-				c.Writer = originalWriter
+			// Downstream handlers may wrap w (for example compact keepalives).
+			// Detach the whole owned chain before clearing and pooling w.
+			if !wrapsOpsCaptureWriter(c.Writer, w) {
+				return
 			}
+			c.Writer = originalWriter
 			releaseOpsCaptureWriter(w)
 		}()
 		c.Writer = w

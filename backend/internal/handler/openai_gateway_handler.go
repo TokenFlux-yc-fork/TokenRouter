@@ -626,6 +626,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
 			}
 			h.recordOpenAIForwardResultCyberWarning(c, reqLog, apiKey, account, reqModel, result)
+			// ClientDisconnect 以 result,nil 返回，因此仍按上游终态上报并在下方提交 usage。
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), openAIForwardSucceededForScheduling(result), nil)
@@ -719,6 +720,8 @@ func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Con
 	isCompactRequest := service.IsOpenAIResponsesCompactPathForTest(c)
 	if !isCompactRequest && isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
 		if isOpenAIRemoteCompactionV2Request(c, body) {
+			service.MarkOpenAINativeRemoteCompactionV2(c)
+			reqLog.Info("codex.remote_compact.detected_native_v2")
 			return body, true
 		}
 		c.Request.URL.Path = strings.TrimRight(c.Request.URL.Path, "/") + "/compact"
@@ -747,7 +750,8 @@ func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Con
 }
 
 func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, startedAt time.Time) {
-	if !isOpenAIRemoteCompactPath(c) {
+	nativeV2 := service.IsOpenAINativeRemoteCompactionV2(c)
+	if !isOpenAIRemoteCompactPath(c) && !nativeV2 {
 		return
 	}
 
@@ -787,6 +791,7 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 	fields := []zap.Field{
 		zap.String("component", "handler.openai_gateway.responses"),
 		zap.Bool("remote_compact", true),
+		zap.Bool("native_remote_compaction_v2", nativeV2),
 		zap.String("compact_outcome", outcome),
 		zap.Int("status_code", status),
 		zap.Int64("latency_ms", latencyMs),
@@ -2429,6 +2434,9 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status 
 	// body-signal compact 心跳可能已把响应头提交为 200：先停心跳（建立
 	// happens-before，接管 ResponseWriter），并升级为流内错误处理。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
+		streamStarted = true
+	}
+	if service.IsOpenAINativeRemoteCompactionV2(c) && c.Writer.Written() {
 		streamStarted = true
 	}
 	if streamStarted {
