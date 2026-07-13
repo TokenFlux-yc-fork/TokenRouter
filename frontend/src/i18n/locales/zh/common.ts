@@ -114,6 +114,7 @@ export default {
     channels: '渠道管理',
     subscriptions: '订阅管理',
     accounts: '账号管理',
+    openaiOAuthCapacity: 'OpenAI OAuth 额度',
     proxies: 'IP管理',
     redeemCodes: '兑换码',
     ops: '运维监控',
