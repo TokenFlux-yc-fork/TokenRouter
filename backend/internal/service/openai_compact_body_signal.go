@@ -1,6 +1,31 @@
 package service
 
-import "github.com/tidwall/gjson"
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+)
+
+const openAINativeRemoteCompactionV2Key = "openai_native_remote_compaction_v2"
+
+// MarkOpenAINativeRemoteCompactionV2 records that this request uses the native
+// streaming remote-compaction wire retained by the upstream route normalizer.
+func MarkOpenAINativeRemoteCompactionV2(c *gin.Context) {
+	if c != nil {
+		c.Set(openAINativeRemoteCompactionV2Key, true)
+	}
+}
+
+func IsOpenAINativeRemoteCompactionV2(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	value, ok := c.Get(openAINativeRemoteCompactionV2Key)
+	if !ok {
+		return false
+	}
+	native, _ := value.(bool)
+	return native
+}
 
 // HasCompactionTriggerInInput 检测 input 中 type="compaction_trigger" 的条目。
 // handler 会结合请求路径、stream 字段和 Codex beta feature 请求头，区分原生
