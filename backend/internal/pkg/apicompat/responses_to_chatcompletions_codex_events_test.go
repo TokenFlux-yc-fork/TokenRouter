@@ -65,9 +65,7 @@ func TestResponsesEventToChatChunks_OmitsEmptyFunctionNameOnArgumentDelta(t *tes
 	}, state)
 	require.Len(t, chunks, 1)
 
-	var wire map[string]any
-	require.NoError(t, json.Unmarshal(mustMarshalChatChunk(t, chunks[0]), &wire))
-	fn := wire["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["function"].(map[string]any)
+	fn := firstChatChunkToolFunction(t, chunks[0])
 	assert.NotContains(t, fn, "name")
 	assert.Equal(t, `{"skill_name":"subagent-prompting"}`, fn["arguments"])
 }
@@ -85,9 +83,7 @@ func TestResponsesEventToChatChunks_UsesDoneEventToolFieldsWhenAddedWasIncomplet
 		},
 	}, state)
 	require.Len(t, added, 1)
-	var addedWire map[string]any
-	require.NoError(t, json.Unmarshal(mustMarshalChatChunk(t, added[0]), &addedWire))
-	addedFn := addedWire["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)["function"].(map[string]any)
+	addedFn := firstChatChunkToolFunction(t, added[0])
 	assert.NotContains(t, addedFn, "name")
 	assert.NotContains(t, addedFn, "arguments")
 
@@ -319,4 +315,21 @@ func mustMarshalChatChunk(t *testing.T, chunk ChatCompletionsChunk) []byte {
 	require.NoError(t, err)
 	sse = strings.TrimSpace(strings.TrimPrefix(sse, "data:"))
 	return []byte(sse)
+}
+
+func firstChatChunkToolFunction(t *testing.T, chunk ChatCompletionsChunk) map[string]any {
+	t.Helper()
+	var wire struct {
+		Choices []struct {
+			Delta struct {
+				ToolCalls []struct {
+					Function map[string]any `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	require.NoError(t, json.Unmarshal(mustMarshalChatChunk(t, chunk), &wire))
+	require.Len(t, wire.Choices, 1)
+	require.Len(t, wire.Choices[0].Delta.ToolCalls, 1)
+	return wire.Choices[0].Delta.ToolCalls[0].Function
 }
