@@ -722,8 +722,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			setOpsUpstreamError(c, statusCode, errMsg, "")
 			if reqStream && !clientDisconnected {
-				pendingTerminalTail = nil
-				holdingTerminalTail = false
 				flushBufferedStreamEvents("error_event")
 				emitStreamMessage(message, true)
 			}
