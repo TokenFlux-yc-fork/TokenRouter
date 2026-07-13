@@ -22,6 +22,10 @@ type openAIOAuthCapacityPlanRule struct {
 	Aliases  []string
 }
 
+type openAIOAuthCapacityRuntimeBlockReader interface {
+	isOpenAIAccountRuntimeBlocked(account *Account) bool
+}
+
 var openAIOAuthCapacityPlanRules = []openAIOAuthCapacityPlanRule{
 	{PlanType: "k12", Period: "weekly", LimitUSD: 100, Aliases: []string{"k12", "edu", "chatgpt_edu", "education"}},
 	{PlanType: "pro", Period: "weekly", LimitUSD: 2400, Aliases: []string{"pro"}},
@@ -82,17 +86,26 @@ type OpenAIOAuthPoolCapacitySummary struct {
 
 func (s *adminServiceImpl) GetOpenAIOAuthPoolCapacity(ctx context.Context) (*OpenAIOAuthPoolCapacitySummary, error) {
 	if s == nil || s.accountRepo == nil {
-		return buildOpenAIOAuthPoolCapacity(nil, time.Now()), nil
+		return buildOpenAIOAuthPoolCapacity(ctx, nil, time.Now(), nil), nil
 	}
 
 	accounts, err := s.accountRepo.ListAllWithFilters(ctx, PlatformOpenAI, AccountTypeOAuth, "", "", 0, "")
 	if err != nil {
 		return nil, fmt.Errorf("list OpenAI OAuth accounts for capacity: %w", err)
 	}
-	return buildOpenAIOAuthPoolCapacity(accounts, time.Now()), nil
+	if s.settingService != nil {
+		ctx = WithOpenAIQuotaAutoPauseSettings(ctx, s.settingService.GetOpenAIQuotaAutoPauseSettings(ctx))
+	}
+	runtimeBlocker, _ := s.runtimeBlocker.(openAIOAuthCapacityRuntimeBlockReader)
+	return buildOpenAIOAuthPoolCapacity(ctx, accounts, time.Now(), runtimeBlocker), nil
 }
 
-func buildOpenAIOAuthPoolCapacity(accounts []Account, now time.Time) *OpenAIOAuthPoolCapacitySummary {
+func buildOpenAIOAuthPoolCapacity(
+	ctx context.Context,
+	accounts []Account,
+	now time.Time,
+	runtimeBlocker openAIOAuthCapacityRuntimeBlockReader,
+) *OpenAIOAuthPoolCapacitySummary {
 	now = now.UTC()
 	result := &OpenAIOAuthPoolCapacitySummary{
 		GeneratedAt:      now.Format(time.RFC3339),
@@ -123,7 +136,7 @@ func buildOpenAIOAuthPoolCapacity(accounts []Account, now time.Time) *OpenAIOAut
 			continue
 		}
 
-		if !openAIOAuthCapacityAccountIncluded(account, now) {
+		if !openAIOAuthCapacityAccountIncluded(ctx, account, now, runtimeBlocker) {
 			result.ExcludedAccountCount++
 			continue
 		}
@@ -186,7 +199,12 @@ func buildOpenAIOAuthPoolCapacity(accounts []Account, now time.Time) *OpenAIOAut
 	return result
 }
 
-func openAIOAuthCapacityAccountIncluded(account *Account, now time.Time) bool {
+func openAIOAuthCapacityAccountIncluded(
+	ctx context.Context,
+	account *Account,
+	now time.Time,
+	runtimeBlocker openAIOAuthCapacityRuntimeBlockReader,
+) bool {
 	if account == nil || !account.IsActive() || !account.Schedulable {
 		return false
 	}
@@ -199,7 +217,13 @@ func openAIOAuthCapacityAccountIncluded(account *Account, now time.Time) bool {
 	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
 		return false
 	}
-	return account.OverloadUntil == nil || !now.Before(*account.OverloadUntil)
+	if account.OverloadUntil != nil && now.Before(*account.OverloadUntil) {
+		return false
+	}
+	if paused, _ := evaluateOpenAIQuotaAutoPause(ctx, account, now); paused {
+		return false
+	}
+	return runtimeBlocker == nil || !runtimeBlocker.isOpenAIAccountRuntimeBlocked(account)
 }
 
 func resolveOpenAIOAuthCapacityPlan(planType string) (openAIOAuthCapacityPlanRule, bool) {
@@ -218,9 +242,20 @@ func openAIOAuthCapacitySnapshotStale(extra map[string]any, window string, now t
 	if openAIQuotaWindowReset(extra, window, now) {
 		return true
 	}
-	updatedRaw, ok := extra["codex_usage_updated_at"]
+	updatedRaw, ok := extra["codex_"+window+"_updated_at"]
 	if !ok {
-		return true
+		if parseExtraInt(extra["codex_window_timestamps_version"]) >= 1 {
+			return true
+		}
+		_, hasFiveHourTimestamp := extra["codex_5h_updated_at"]
+		_, hasLongWindowTimestamp := extra["codex_7d_updated_at"]
+		if hasFiveHourTimestamp || hasLongWindowTimestamp {
+			return true
+		}
+		updatedRaw, ok = extra["codex_usage_updated_at"]
+		if !ok {
+			return true
+		}
 	}
 	updatedAt, err := parseTime(fmt.Sprint(updatedRaw))
 	if err != nil {

@@ -98,11 +98,42 @@ func TestBuildCodexUsageExtraUpdates_UsesSnapshotUpdatedAt(t *testing.T) {
 	if got := updates["codex_usage_updated_at"]; got != "2026-02-16T10:00:00Z" {
 		t.Fatalf("codex_usage_updated_at = %v, want %s", got, "2026-02-16T10:00:00Z")
 	}
+	if got := updates["codex_window_timestamps_version"]; got != 1 {
+		t.Fatalf("codex_window_timestamps_version = %v, want 1", got)
+	}
+	if got := updates["codex_5h_updated_at"]; got != "2026-02-16T10:00:00Z" {
+		t.Fatalf("codex_5h_updated_at = %v, want %s", got, "2026-02-16T10:00:00Z")
+	}
+	if got := updates["codex_7d_updated_at"]; got != "2026-02-16T10:00:00Z" {
+		t.Fatalf("codex_7d_updated_at = %v, want %s", got, "2026-02-16T10:00:00Z")
+	}
 	if got := updates["codex_5h_reset_at"]; got != "2026-02-16T11:00:00Z" {
 		t.Fatalf("codex_5h_reset_at = %v, want %s", got, "2026-02-16T11:00:00Z")
 	}
 	if got := updates["codex_7d_reset_at"]; got != "2026-02-17T10:00:00Z" {
 		t.Fatalf("codex_7d_reset_at = %v, want %s", got, "2026-02-17T10:00:00Z")
+	}
+}
+
+func TestBuildCodexUsageExtraUpdatesTracksOnlyPresentWindowTimestamp(t *testing.T) {
+	used := 12.0
+	window := 300
+	snapshot := &OpenAICodexUsageSnapshot{
+		SecondaryUsedPercent:   &used,
+		SecondaryWindowMinutes: &window,
+		UpdatedAt:              "2026-02-16T10:00:00Z",
+	}
+
+	updates := buildCodexUsageExtraUpdates(snapshot, time.Time{})
+
+	if got := updates["codex_5h_updated_at"]; got != "2026-02-16T10:00:00Z" {
+		t.Fatalf("codex_5h_updated_at = %v, want %s", got, "2026-02-16T10:00:00Z")
+	}
+	if got := updates["codex_window_timestamps_version"]; got != 1 {
+		t.Fatalf("codex_window_timestamps_version = %v, want 1", got)
+	}
+	if _, ok := updates["codex_7d_updated_at"]; ok {
+		t.Fatalf("did not expect codex_7d_updated_at in partial updates: %v", updates)
 	}
 }
 

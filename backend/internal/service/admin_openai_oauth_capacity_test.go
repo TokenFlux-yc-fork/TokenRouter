@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -84,7 +85,7 @@ func TestBuildOpenAIOAuthPoolCapacityAggregatesPlansAndWindows(t *testing.T) {
 	accounts[8].ParentAccountID = &parentID
 	accounts[10].RateLimitResetAt = &futureReset
 
-	result := buildOpenAIOAuthPoolCapacity(accounts, now)
+	result := buildOpenAIOAuthPoolCapacity(context.Background(), accounts, now, nil)
 
 	require.Equal(t, "2026-07-14T12:00:00Z", result.GeneratedAt)
 	require.Equal(t, 0.15, result.FiveHourRatio)
@@ -128,6 +129,98 @@ func TestBuildOpenAIOAuthPoolCapacityAggregatesPlansAndWindows(t *testing.T) {
 	})
 	require.Equal(t, "monthly", result.Plans[4].Period)
 	require.Equal(t, 0.75, result.Plans[4].FiveHourLimitPerAccountUSD)
+}
+
+func TestGetOpenAIOAuthPoolCapacityExcludesQuotaAutoPausedAccounts(t *testing.T) {
+	now := time.Now()
+	account := Account{
+		ID:          1,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"plan_type": "plus"},
+		Extra: map[string]any{
+			"codex_5h_used_percent":  96.0,
+			"codex_usage_updated_at": now.Format(time.RFC3339),
+		},
+	}
+	repo := &openAIOAuthCapacityAccountRepoStub{accounts: []Account{account}}
+	settingService := &SettingService{}
+	settingService.SetOpenAIQuotaAutoPauseSettings(OpsOpenAIAccountQuotaAutoPauseSettings{DefaultThreshold5h: 0.95})
+	svc := &adminServiceImpl{accountRepo: repo, settingService: settingService}
+
+	result, err := svc.GetOpenAIOAuthPoolCapacity(context.Background())
+
+	require.NoError(t, err)
+	require.Zero(t, result.IncludedAccountCount)
+	require.Equal(t, 1, result.ExcludedAccountCount)
+	require.Zero(t, result.Totals.Parent.EstimatedLimitUSD)
+
+	repo.accounts[0].Extra["auto_pause_5h_disabled"] = true
+	result, err = svc.GetOpenAIOAuthPoolCapacity(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.IncludedAccountCount)
+	require.Zero(t, result.ExcludedAccountCount)
+	require.Equal(t, 140.0, result.Totals.Parent.EstimatedLimitUSD)
+}
+
+func TestGetOpenAIOAuthPoolCapacityExcludesRuntimeBlockedAccounts(t *testing.T) {
+	account := Account{
+		ID:          1,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"plan_type": "plus"},
+	}
+	repo := &openAIOAuthCapacityAccountRepoStub{accounts: []Account{account}}
+	runtimeBlocker := &OpenAIGatewayService{}
+	runtimeBlocker.BlockAccountScheduling(&account, time.Now().Add(time.Minute), "test")
+	svc := &adminServiceImpl{accountRepo: repo, runtimeBlocker: runtimeBlocker}
+
+	result, err := svc.GetOpenAIOAuthPoolCapacity(context.Background())
+
+	require.NoError(t, err)
+	require.Zero(t, result.IncludedAccountCount)
+	require.Equal(t, 1, result.ExcludedAccountCount)
+
+	runtimeBlocker.ClearAccountSchedulingBlock(account.ID)
+	result, err = svc.GetOpenAIOAuthPoolCapacity(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.IncludedAccountCount)
+	require.Zero(t, result.ExcludedAccountCount)
+}
+
+func TestBuildOpenAIOAuthPoolCapacityTreatsNonFiniteUsageAsUnobserved(t *testing.T) {
+	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
+	accounts := []Account{{
+		ID:          1,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"plan_type": "plus"},
+		Extra: map[string]any{
+			"codex_5h_used_percent":  "NaN",
+			"codex_7d_used_percent":  "+Inf",
+			"codex_usage_updated_at": now.Format(time.RFC3339),
+		},
+	}}
+
+	result := buildOpenAIOAuthPoolCapacity(context.Background(), accounts, now, nil)
+
+	require.Equal(t, 140.0, result.Totals.Parent.EstimatedRemainingUSD)
+	require.Equal(t, 140.0, result.Totals.Parent.UnobservedLimitUSD)
+	require.Equal(t, 1, result.Totals.Parent.MissingSnapshotCount)
+	require.Equal(t, 21.0, result.Totals.FiveHour.EstimatedRemainingUSD)
+	require.Equal(t, 21.0, result.Totals.FiveHour.UnobservedLimitUSD)
+	require.Equal(t, 1, result.Totals.FiveHour.MissingSnapshotCount)
+	payload, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), "NaN")
 }
 
 func TestGetOpenAIOAuthPoolCapacityUsesOneFilteredAccountQuery(t *testing.T) {
@@ -174,7 +267,7 @@ func TestResolveOpenAIOAuthCapacityPlanAliases(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestOpenAIOAuthCapacityAccountIncludedRejectsCurrentRuntimeBlocks(t *testing.T) {
+func TestOpenAIOAuthCapacityAccountIncludedRejectsPersistedSchedulingBlocks(t *testing.T) {
 	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
 	future := now.Add(time.Minute)
 	past := now.Add(-time.Minute)
@@ -200,7 +293,7 @@ func TestOpenAIOAuthCapacityAccountIncludedRejectsCurrentRuntimeBlocks(t *testin
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, openAIOAuthCapacityAccountIncluded(&tt.account, now))
+			require.Equal(t, tt.want, openAIOAuthCapacityAccountIncluded(context.Background(), &tt.account, now, nil))
 		})
 	}
 }
@@ -215,5 +308,16 @@ func TestOpenAIOAuthCapacitySnapshotStaleUsesWindowAndReset(t *testing.T) {
 
 	extra["codex_usage_updated_at"] = now.Add(-time.Minute).Format(time.RFC3339)
 	extra["codex_7d_reset_at"] = now.Add(-time.Second).Format(time.RFC3339)
+	require.True(t, openAIOAuthCapacitySnapshotStale(extra, "7d", now))
+
+	extra = map[string]any{
+		"codex_usage_updated_at":          now.Add(-time.Minute).Format(time.RFC3339),
+		"codex_5h_updated_at":             now.Add(-time.Minute).Format(time.RFC3339),
+		"codex_window_timestamps_version": 1,
+	}
+	require.False(t, openAIOAuthCapacitySnapshotStale(extra, "5h", now))
+	require.True(t, openAIOAuthCapacitySnapshotStale(extra, "7d", now))
+
+	extra["codex_7d_updated_at"] = now.Add(-9 * time.Hour).Format(time.RFC3339)
 	require.True(t, openAIOAuthCapacitySnapshotStale(extra, "7d", now))
 }

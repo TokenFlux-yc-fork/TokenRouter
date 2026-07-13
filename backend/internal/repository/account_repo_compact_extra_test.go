@@ -41,3 +41,14 @@ func TestShouldEnqueueSchedulerOutboxForExtraUpdates_QoderQuotaSnapshotIsNeutral
 		t.Fatalf("expected qoder quota snapshot updates to skip scheduler outbox")
 	}
 }
+
+func TestShouldEnqueueSchedulerOutboxForExtraUpdates_CodexWindowTimestampsAreNeutral(t *testing.T) {
+	updates := map[string]any{
+		"codex_5h_updated_at":             "2026-07-14T00:00:00Z",
+		"codex_window_timestamps_version": 1,
+	}
+
+	if shouldEnqueueSchedulerOutboxForExtraUpdates(updates) {
+		t.Fatalf("expected Codex window timestamp updates to skip scheduler outbox")
+	}
+}
