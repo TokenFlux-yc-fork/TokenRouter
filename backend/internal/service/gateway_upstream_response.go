@@ -515,14 +515,21 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, resp *http.Response, account *Account) {
 	body, _ := s.readUpstreamErrorBody(resp)
 	statusCode := resp.StatusCode
+	if s.rateLimitService == nil {
+		return
+	}
+	if account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
+		logger.LegacyPrintf("service.gateway", "Account %d: deferring passive account circuit breaker until same-account retries are exhausted for status %d", account.ID, statusCode)
+		return
+	}
 
 	// OAuth/Setup Token 账号的 403：按上游错误策略处理账号状态。
 	if account.IsOAuth() && statusCode == 403 {
 		s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
 		logger.LegacyPrintf("service.gateway", "Account %d: applied upstream error policy after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
 	} else {
-		// API Key 未配置错误码：不标记账号状态
-		logger.LegacyPrintf("service.gateway", "Account %d: upstream error %d after %d retries (not marking account)", account.ID, statusCode, maxRetryAttempts)
+		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
+		logger.LegacyPrintf("service.gateway", "Account %d: evaluated passive account circuit breaker after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
 	}
 }
 
