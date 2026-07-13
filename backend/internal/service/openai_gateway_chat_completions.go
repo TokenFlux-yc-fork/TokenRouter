@@ -498,8 +498,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	var firstTokenMs *int
 	var finalResponseBody []byte
 	streamAccumulator := newOpenAIChatCompletionsStreamAccumulator(originalModel)
-	firstChunk := true
 	clientDisconnected := false
+	// Protocol preamble (for example the assistant role chunk generated from
+	// response.created) is buffered until upstream produces real model/tool
+	// output. This keeps an early capacity failure replayable.
 	clientOutputStarted := false
 	pendingSSE := make([]string, 0, 4)
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
@@ -542,12 +544,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	}
 
 	processDataLine := func(payload string) bool {
-		if firstChunk {
-			firstChunk = false
-			ms := int(time.Since(startTime).Milliseconds())
-			firstTokenMs = &ms
-		}
-
 		var event apicompat.ResponsesStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			logger.L().Warn("openai chat_completions stream: failed to parse event",
@@ -555,6 +551,11 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 			return false
+		}
+		semanticOutputEvent := isOpenAIWSTokenEvent(event.Type)
+		if firstTokenMs == nil && semanticOutputEvent {
+			ms := int(time.Since(startTime).Milliseconds())
+			firstTokenMs = &ms
 		}
 		refusalDetector.ObservePayload([]byte(payload))
 
@@ -600,7 +601,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				cyberPolicyErr = errOpenAICyberPolicyForwarded
 				return true
 			}
-			if openAIStreamFailedEventShouldFailover(payloadBytes, message) {
+			if !clientDisconnected && !clientOutputStarted && openAIStreamFailedEventShouldFailover(payloadBytes, message) {
 				streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
 				return true
 			}
@@ -624,7 +625,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				},
 			})
 			if !clientDisconnected {
-				if !clientOutputStarted {
+				if !c.Writer.Written() {
 					writeChatCompletionsError(c, defaultStatus, defaultErrType, defaultMsg)
 					clientOutputStarted = true
 				} else if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", errorPayload); err != nil {
@@ -656,7 +657,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 					)
 					continue
 				}
-				if !clientOutputStarted && !refusalDetector.ShouldReleaseClientOutput() {
+				if !clientOutputStarted && (!semanticOutputEvent || !refusalDetector.ShouldReleaseClientOutput()) {
 					pendingSSE = append(pendingSSE, sse)
 					continue
 				}
@@ -697,7 +698,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return resultWithUsage(), cyberPolicyErr
 		}
 		if streamFailoverErr != nil {
-			if c == nil || c.Writer == nil || !c.Writer.Written() {
+			if !clientOutputStarted {
 				return nil, streamFailoverErr
 			}
 			return resultWithUsage(), streamFailoverErr
@@ -931,15 +932,14 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			if clientDisconnected {
 				continue
 			}
-			if refusalDetector.Enabled() && !clientOutputStarted {
-				continue
-			}
 			if time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
 			// Send SSE comment as keepalive
 			writeStreamHeaders()
-			if _, err := fmt.Fprint(c.Writer, ":\n\n"); err != nil {
+			n, err := fmt.Fprint(c.Writer, ":\n\n")
+			recordOpenAIProtocolKeepaliveBytes(c, n)
+			if err != nil {
 				logger.L().Info("openai chat_completions stream: client disconnected during keepalive",
 					zap.String("request_id", requestID),
 				)

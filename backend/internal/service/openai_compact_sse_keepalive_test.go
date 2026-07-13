@@ -2,10 +2,12 @@ package service
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -287,6 +289,21 @@ func TestOpenAICompactKeepaliveAdjustedWrittenSize_ExcludesHeartbeatBytes(t *tes
 	require.NoError(t, err)
 	require.Equal(t, len("real-bytes"), OpenAICompactKeepaliveAdjustedWrittenSize(c))
 	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
+}
+
+func TestOpenAISemanticWrittenSize_ExcludesProtocolKeepaliveBytes(t *testing.T) {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	before := OpenAISemanticWrittenSize(c)
+	n, err := c.Writer.WriteString("event: ping\ndata: {\"type\":\"ping\"}\n\n")
+	require.NoError(t, err)
+	recordOpenAIProtocolKeepaliveBytes(c, n)
+	require.Equal(t, before, OpenAISemanticWrittenSize(c))
+
+	_, err = c.Writer.WriteString("semantic-output")
+	require.NoError(t, err)
+	require.NotEqual(t, before, OpenAISemanticWrittenSize(c))
 }
 
 // fast policy block 在心跳未提交时保持 403 JSON 原语义。

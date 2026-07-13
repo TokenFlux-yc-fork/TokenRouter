@@ -25,6 +25,8 @@ import (
 
 func f64p(v float64) *float64 { return &v }
 
+const openAITestCompletedSSE = `data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"
+
 type httpUpstreamRecorder struct {
 	lastReq      *http.Request
 	lastBody     []byte
@@ -452,6 +454,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamKeepsToolNameAndBodyNormali
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.added","item":{"type":"tool_call","tool_calls":[{"function":{"name":"apply_patch"}}]}}`,
 		"",
+		`data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		"",
 		"data: [DONE]",
 		"",
 	}, "\n")
@@ -875,7 +879,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *te
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -966,7 +970,7 @@ func TestOpenAIGatewayService_OAuthLegacy_CompositeCodexUAUsesCodexOriginator(t 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -1105,7 +1109,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamErrorIncludesPassthroughF
 	require.Equal(t, "http_error", arr[len(arr)-1].Kind)
 }
 
-func TestOpenAIGatewayService_OpenAIPassthrough_429And529TriggerFailover(t *testing.T) {
+func TestOpenAIGatewayService_OpenAIPassthrough_RetryableErrorsTriggerFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalBody := []byte(`{"model":"gpt-5.2","stream":false,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
 
@@ -1131,11 +1135,13 @@ func TestOpenAIGatewayService_OpenAIPassthrough_429And529TriggerFailover(t *test
 	}
 
 	testCases := []struct {
-		name        string
-		accountType string
-		statusCode  int
-		body        string
-		assertRepo  func(t *testing.T, repo *openAIPassthroughFailoverRepo, start time.Time)
+		name              string
+		accountType       string
+		statusCode        int
+		body              string
+		mutateAccount     func(*Account)
+		wantSameAcctRetry bool
+		assertRepo        func(t *testing.T, repo *openAIPassthroughFailoverRepo, start time.Time)
 	}{
 		{
 			name:        "oauth_429_rate_limit",
@@ -1187,6 +1193,30 @@ func TestOpenAIGatewayService_OpenAIPassthrough_429And529TriggerFailover(t *test
 				require.WithinDuration(t, start.Add(10*time.Minute), repo.overloadCalls[0], 5*time.Second)
 			},
 		},
+		{
+			name:        "oauth_400_capacity_response_error",
+			accountType: AccountTypeOAuth,
+			statusCode:  http.StatusBadRequest,
+			body:        `{"response":{"error":{"message":"Selected model is at capacity. Please try a different model.","code":"server_is_overloaded"}}}`,
+			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
+				require.Empty(t, repo.rateLimitCalls)
+				require.Empty(t, repo.overloadCalls)
+			},
+		},
+		{
+			name:        "apikey_pool_400_capacity",
+			accountType: AccountTypeAPIKey,
+			statusCode:  http.StatusBadRequest,
+			body:        `{"error":{"message":"Selected model is at capacity. Please try a different model.","code":"server_is_overloaded"}}`,
+			mutateAccount: func(account *Account) {
+				account.Credentials["pool_mode"] = true
+			},
+			wantSameAcctRetry: true,
+			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {
+				require.Empty(t, repo.rateLimitCalls)
+				require.Empty(t, repo.overloadCalls)
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1220,6 +1250,9 @@ func TestOpenAIGatewayService_OpenAIPassthrough_429And529TriggerFailover(t *test
 			}
 
 			account := newAccount(tc.accountType)
+			if tc.mutateAccount != nil {
+				tc.mutateAccount(account)
+			}
 			start := time.Now()
 			_, err := svc.Forward(context.Background(), c, account, originalBody)
 			require.Error(t, err)
@@ -1227,7 +1260,8 @@ func TestOpenAIGatewayService_OpenAIPassthrough_429And529TriggerFailover(t *test
 			var failoverErr *UpstreamFailoverError
 			require.ErrorAs(t, err, &failoverErr)
 			require.Equal(t, tc.statusCode, failoverErr.StatusCode)
-			require.False(t, c.Writer.Written(), "429/529 passthrough 应返回 failover 错误给上层换号，而不是直接向客户端写响应")
+			require.Equal(t, tc.wantSameAcctRetry, failoverErr.RetryableOnSameAccount)
+			require.False(t, c.Writer.Written(), "retryable passthrough 错误应返回 failover 错误给上层换号，而不是直接向客户端写响应")
 
 			v, ok := c.Get(OpsUpstreamErrorsKey)
 			require.True(t, ok)
@@ -1257,7 +1291,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -1298,7 +1332,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_BrowserUAUsesConfiguredCodexUA(t 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	settingSvc := NewSettingService(&openAIPassthroughSettingRepoStub{values: map[string]string{
@@ -1346,7 +1380,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexTuiIdentityPreservedAndPaire
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	svc := &OpenAIGatewayService{
@@ -1386,7 +1420,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_TLSRouterOfficialUAIsPreservedAnd
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	routerSvc := newTLSFingerprintRouterTestService(&model.TLSFingerprintRouter{
@@ -1490,7 +1524,7 @@ func TestOpenAIGatewayService_CodexCLIOnly_AllowOfficialClientFamilies(t *testin
 			resp := &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-				Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+				Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
 			}
 			upstream := &httpUpstreamRecorder{resp: resp}
 
@@ -1531,6 +1565,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamingSetsFirstTokenMs(t *test
 
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"h"}`,
+		"",
+		`data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -1691,7 +1727,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid-timeout"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
 	}
 	upstream := &httpUpstreamRecorder{resp: resp}
 	svc := &OpenAIGatewayService{
