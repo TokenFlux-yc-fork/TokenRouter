@@ -1517,6 +1517,18 @@ func (r *stubGroupRepoForAuth) UpdateSortOrders(ctx context.Context, updates []s
 	return errors.New("not implemented")
 }
 
+func (r *stubGroupRepoForAuth) UpdateHealthStatus(ctx context.Context, groupID int64, update *service.HealthStatusUpdate) error {
+	return errors.New("not implemented")
+}
+
+func (r *stubGroupRepoForAuth) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *service.HealthCheckConfigUpdate) error {
+	return errors.New("not implemented")
+}
+
+func (r *stubGroupRepoForAuth) ForceHealthCheck(ctx context.Context, groupID int64) error {
+	return errors.New("not implemented")
+}
+
 func (r *stubApiKeyRepo) Create(ctx context.Context, key *service.APIKey) error {
 	return errors.New("not implemented")
 }

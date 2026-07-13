@@ -389,6 +389,15 @@ func TestAPIContracts(t *testing.T) {
 						"fallback_group_id": null,
 						"fallback_group_id_on_invalid_request": null,
 						"unavailable_fallback_group_id": null,
+						"health_check_enabled": false,
+						"health_check_interval_sec": 0,
+						"health_check_timeout_sec": 0,
+						"health_check_failure_threshold": 0,
+						"health_check_success_threshold": 0,
+						"health_last_check_at": null,
+						"health_consecutive_failures": 0,
+						"health_consecutive_successes": 0,
+						"health_status": "",
 						"require_oauth_only": false,
 						"require_privacy_set": false,
 						"rpm_limit": 0,
@@ -1938,6 +1947,18 @@ func (stubGroupRepo) GetAccountIDsByGroupIDs(ctx context.Context, groupIDs []int
 
 func (stubGroupRepo) UpdateSortOrders(ctx context.Context, updates []service.GroupSortOrderUpdate) error {
 	return nil
+}
+
+func (stubGroupRepo) UpdateHealthStatus(ctx context.Context, groupID int64, update *service.HealthStatusUpdate) error {
+	return errors.New("not implemented")
+}
+
+func (stubGroupRepo) UpdateHealthCheckConfig(ctx context.Context, groupID int64, config *service.HealthCheckConfigUpdate) error {
+	return errors.New("not implemented")
+}
+
+func (stubGroupRepo) ForceHealthCheck(ctx context.Context, groupID int64) error {
+	return errors.New("not implemented")
 }
 
 type stubAccountRepo struct {
