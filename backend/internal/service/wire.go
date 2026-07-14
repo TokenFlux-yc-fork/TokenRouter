@@ -566,9 +566,11 @@ func ProvideGroupAvailabilityProbeRunnerService(
 	gatewaySvc *GatewayService,
 	openAIGateway *OpenAIGatewayService,
 	geminiCompatSvc *GeminiMessagesCompatService,
+	healthMonitor *GroupHealthMonitor,
 	cfg *config.Config,
 ) *GroupAvailabilityProbeRunnerService {
 	svc := NewGroupAvailabilityProbeRunnerService(repo, accountTestSvc, gatewaySvc, openAIGateway, geminiCompatSvc, cfg)
+	svc.SetHealthMonitor(healthMonitor)
 	svc.Start()
 	return svc
 }
@@ -868,6 +870,7 @@ var ProviderSet = wire.NewSet(
 	ProvideIdempotencyCleanupService,
 	ProvideScheduledTestService,
 	ProvideScheduledTestRunnerService,
+	NewGroupHealthMonitor,
 	ProvideGroupAvailabilityProbeRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
