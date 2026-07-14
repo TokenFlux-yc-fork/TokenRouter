@@ -1992,7 +1992,11 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 		return nil
 	}
 
-	progress := &UsageProgress{Utilization: parseExtraFloat64(usedRaw)}
+	utilization := parseExtraFloat64(usedRaw)
+	if math.IsNaN(utilization) || math.IsInf(utilization, 0) {
+		return nil
+	}
+	progress := &UsageProgress{Utilization: utilization}
 	if resetAtRaw, ok := extra[resetAtKey]; ok {
 		if resetAt, err := parseTime(fmt.Sprint(resetAtRaw)); err == nil {
 			progress.ResetsAt = &resetAt

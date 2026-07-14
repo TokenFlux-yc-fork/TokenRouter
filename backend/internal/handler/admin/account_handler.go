@@ -700,6 +700,17 @@ func (h *AccountHandler) List(c *gin.Context) {
 	response.Paginated(c, result, total, page, pageSize)
 }
 
+// GetOpenAIOAuthPoolCapacity returns the estimated OpenAI OAuth pool capacity.
+// GET /api/v1/admin/accounts/openai-oauth-capacity
+func (h *AccountHandler) GetOpenAIOAuthPoolCapacity(c *gin.Context) {
+	result, err := h.adminService.GetOpenAIOAuthPoolCapacity(c.Request.Context())
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Failed to get OpenAI OAuth pool capacity")
+		return
+	}
+	response.Success(c, result)
+}
+
 func buildAccountsListETag(
 	items []AccountWithConcurrency,
 	total int64,

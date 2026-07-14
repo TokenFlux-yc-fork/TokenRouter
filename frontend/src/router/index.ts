@@ -518,6 +518,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/openai-oauth-capacity',
+    name: 'AdminOpenAIOAuthCapacity',
+    component: () => import('@/views/admin/OpenAIOAuthCapacityView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'OpenAI OAuth Capacity',
+      titleKey: 'admin.openaiOAuthCapacity.title',
+      descriptionKey: 'admin.openaiOAuthCapacity.description'
+    }
+  },
+  {
     path: '/admin/announcements',
     name: 'AdminAnnouncements',
     component: () => import('@/views/admin/AnnouncementsView.vue'),

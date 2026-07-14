@@ -114,6 +114,7 @@ export default {
     channels: 'Channels',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',
+    openaiOAuthCapacity: 'OpenAI OAuth Capacity',
     proxies: 'Proxies',
     redeemCodes: 'Redeem Codes',
     ops: 'Ops',
