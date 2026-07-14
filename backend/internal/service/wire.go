@@ -20,6 +20,7 @@ import (
 // BuildInfo contains build information
 type BuildInfo struct {
 	Version   string
+	ForkID    string
 	BuildType string
 }
 
@@ -35,7 +36,9 @@ func ProvidePricingService(cfg *config.Config, remoteClient PricingRemoteClient)
 
 // ProvideUpdateService creates UpdateService with BuildInfo
 func ProvideUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, buildInfo BuildInfo) *UpdateService {
-	return NewUpdateService(cache, githubClient, buildInfo.Version, buildInfo.BuildType)
+	svc := NewUpdateService(cache, githubClient, buildInfo.Version, buildInfo.BuildType)
+	svc.forkID = buildInfo.ForkID
+	return svc
 }
 
 // ProvideEmailQueueService creates EmailQueueService with default worker count
@@ -562,8 +565,10 @@ func ProvideOpsService(
 }
 
 // ProvideSettingService wires SettingService with group reader and proxy repo.
-func ProvideSettingService(settingRepo SettingRepository, paymentConfigService *PaymentConfigService, proxyRepo ProxyRepository, cfg *config.Config) *SettingService {
+func ProvideSettingService(settingRepo SettingRepository, paymentConfigService *PaymentConfigService, proxyRepo ProxyRepository, cfg *config.Config, buildInfo BuildInfo) *SettingService {
 	svc := NewSettingService(settingRepo, cfg)
+	svc.SetVersion(buildInfo.Version)
+	svc.SetForkID(buildInfo.ForkID)
 	svc.SetDefaultSubscriptionPlanReader(paymentConfigService)
 	svc.SetProxyRepository(proxyRepo)
 	if err := svc.LoadAPIKeyACLTrustForwardedIPSetting(context.Background()); err != nil {
