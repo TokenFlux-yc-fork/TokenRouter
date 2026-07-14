@@ -244,6 +244,10 @@ type CreateGroupInput struct {
 	FallbackGroupIDOnInvalidRequest *int64
 	// UnavailableFallbackGroupID 当前分组不可用时 API Key 优先回退到的分组 ID。
 	UnavailableFallbackGroupID *int64
+	// BackupPoolGroupID OpenAI Codex 容量不足时自动复制账号的备用号池分组 ID。
+	BackupPoolGroupID *int64
+	// BackupPoolRefillThresholdPoints 触发自动补池的 Codex 容量点阈值。
+	BackupPoolRefillThresholdPoints float64
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64
 	ModelRoutingEnabled bool // 是否启用模型路由
@@ -312,6 +316,10 @@ type UpdateGroupInput struct {
 	FallbackGroupIDOnInvalidRequest *int64
 	// UnavailableFallbackGroupID 当前分组不可用时 API Key 优先回退到的分组 ID。
 	UnavailableFallbackGroupID *int64
+	// BackupPoolGroupID OpenAI Codex 容量不足时自动复制账号的备用号池分组 ID。
+	BackupPoolGroupID *int64
+	// BackupPoolRefillThresholdPoints 触发自动补池的 Codex 容量点阈值；nil 表示不改动。
+	BackupPoolRefillThresholdPoints *float64
 	// 模型路由配置（仅 anthropic 平台使用）
 	ModelRouting        map[string][]int64
 	ModelRoutingEnabled *bool // 是否启用模型路由

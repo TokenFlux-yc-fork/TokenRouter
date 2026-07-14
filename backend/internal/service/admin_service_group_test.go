@@ -1310,9 +1310,10 @@ func (s *groupRepoStubForFallbackCycle) ForceHealthCheck(context.Context, int64)
 }
 
 type groupRepoStubForInvalidRequestFallback struct {
-	groups  map[int64]*Group
-	created *Group
-	updated *Group
+	groups            map[int64]*Group
+	getByIDLiteErrors map[int64]error
+	created           *Group
+	updated           *Group
 }
 
 func (s *groupRepoStubForInvalidRequestFallback) Create(_ context.Context, g *Group) error {
@@ -1330,6 +1331,9 @@ func (s *groupRepoStubForInvalidRequestFallback) GetByID(ctx context.Context, id
 }
 
 func (s *groupRepoStubForInvalidRequestFallback) GetByIDLite(_ context.Context, id int64) (*Group, error) {
+	if err, ok := s.getByIDLiteErrors[id]; ok {
+		return nil, err
+	}
 	if g, ok := s.groups[id]; ok {
 		return g, nil
 	}
