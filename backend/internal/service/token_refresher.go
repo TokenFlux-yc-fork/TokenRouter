@@ -99,7 +99,6 @@ func (r *OpenAITokenRefresher) CanRefresh(account *Account) bool {
 }
 
 // NeedsRefresh 检查token是否需要刷新
-// expires_at 缺失且处于限流状态时需要刷新，防止限流期间 token 静默过期
 func (r *OpenAITokenRefresher) NeedsRefresh(account *Account, refreshWindow time.Duration) bool {
 	if account.IsOpenAIPersonalAccessToken() {
 		return false
@@ -109,7 +108,11 @@ func (r *OpenAITokenRefresher) NeedsRefresh(account *Account, refreshWindow time
 	}
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	if expiresAt == nil {
-		return account.IsRateLimited()
+		// 导入态 ChatGPT OAuth 经常只有可用的 access_token/refresh_token，却没有可靠
+		// expires_at。生产已确认这类账号在 429/403 冷却期间被后台刷新命中
+		// invalid_client 后会被错误 SetError；没有 expires_at 时无法证明 access_token
+		// 已过期，后台刷新不应主动改变账号状态，让真实请求路径的上游响应决定。
+		return false
 	}
 
 	return time.Until(*expiresAt) < refreshWindow

@@ -933,7 +933,7 @@ func TestOpenAITokenProvider_RuntimeMetrics_LockAcquireFailure(t *testing.T) {
 	require.GreaterOrEqual(t, metrics.RefreshRequests, int64(1))
 }
 
-func TestOpenAITokenProvider_NoRefreshTokenExpired_DisablesAccount(t *testing.T) {
+func TestOpenAITokenProvider_NoRefreshTokenExpired_UsesExistingTokenWithoutDisabling(t *testing.T) {
 	cache := newOpenAITokenCacheStub()
 	repo := &rateLimitAccountRepoStub{}
 
@@ -951,17 +951,11 @@ func TestOpenAITokenProvider_NoRefreshTokenExpired_DisablesAccount(t *testing.T)
 	cache.tokens[OpenAITokenCacheKey(account)] = "stale-cached-token"
 	cache.getErr = errors.New("simulated cache miss")
 	provider := NewOpenAITokenProvider(repo, cache, nil)
-	blocker := &runtimeBlockRecorder{}
-	provider.SetAccountRuntimeBlocker(blocker)
 
 	token, err := provider.GetAccessToken(context.Background(), account)
-	require.Error(t, err)
-	require.Empty(t, token)
-	require.Contains(t, err.Error(), "refresh_token is missing")
-	require.Equal(t, 1, repo.setErrorCalls)
-	require.Contains(t, repo.lastErrorMsg, "refresh_token is missing")
-	require.Equal(t, int32(1), atomic.LoadInt32(&cache.deleteCalled))
-	require.Len(t, blocker.accounts, 1)
-	require.Equal(t, account.ID, blocker.accounts[0].ID)
-	require.Equal(t, "missing_refresh_token", blocker.reasons[0])
+	require.NoError(t, err)
+	require.Equal(t, "expired-access-token", token)
+	require.Equal(t, 0, repo.setErrorCalls)
+	require.Equal(t, int32(0), atomic.LoadInt32(&cache.deleteCalled))
+	require.Equal(t, "expired-access-token", cache.tokens[OpenAITokenCacheKey(account)])
 }
