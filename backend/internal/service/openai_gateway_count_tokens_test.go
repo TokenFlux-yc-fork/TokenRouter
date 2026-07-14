@@ -25,6 +25,16 @@ type countTokensRuntimeStateRepo struct {
 	AccountRepository
 	tempUnschedCalls int
 	setErrorCalls    int
+	accountsByID     map[int64]*Account
+	getByIDCalls     int
+}
+
+func (r *countTokensRuntimeStateRepo) GetByID(_ context.Context, id int64) (*Account, error) {
+	r.getByIDCalls++
+	if account := r.accountsByID[id]; account != nil {
+		return account, nil
+	}
+	return nil, fmt.Errorf("account %d not found", id)
 }
 
 func (r *countTokensRuntimeStateRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, _ string) error {
@@ -34,6 +44,35 @@ func (r *countTokensRuntimeStateRepo) SetTempUnschedulable(_ context.Context, _ 
 
 func (r *countTokensRuntimeStateRepo) SetError(_ context.Context, _ int64, _ string) error {
 	r.setErrorCalls++
+	return nil
+}
+
+type countTokensAccessTokenCache struct {
+	tokens map[string]string
+}
+
+func (c *countTokensAccessTokenCache) GetAccessToken(_ context.Context, cacheKey string) (string, error) {
+	return c.tokens[cacheKey], nil
+}
+
+func (c *countTokensAccessTokenCache) SetAccessToken(_ context.Context, cacheKey string, token string, _ time.Duration) error {
+	if c.tokens == nil {
+		c.tokens = make(map[string]string)
+	}
+	c.tokens[cacheKey] = token
+	return nil
+}
+
+func (c *countTokensAccessTokenCache) DeleteAccessToken(_ context.Context, cacheKey string) error {
+	delete(c.tokens, cacheKey)
+	return nil
+}
+
+func (c *countTokensAccessTokenCache) AcquireRefreshLock(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (c *countTokensAccessTokenCache) ReleaseRefreshLock(context.Context, string) error {
 	return nil
 }
 
@@ -162,6 +201,67 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_OAuthFallsBackWhenPl
 			require.Zero(t, repo.setErrorCalls, "OAuth input_tokens unsupported errors must not mark the account error")
 		})
 	}
+}
+
+func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_NoRefresh401KeepsSchedulableFromFilteredSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"claude-opus-4-1","messages":[{"role":"user","content":"hello"}]}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{
+			"error":{"message":"Unauthorized","type":"rejected_by_access_enforcement","code":"no_matching_rule"},
+			"status":401
+		}`)),
+	}}
+	account := &Account{
+		ID:          404,
+		Name:        "openai-oauth-filtered",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+	repo := &countTokensRuntimeStateRepo{
+		accountsByID: map[int64]*Account{
+			404: {
+				ID:       404,
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"access_token": "db-access-token",
+				},
+			},
+		},
+	}
+	tokenCache := &countTokensAccessTokenCache{tokens: map[string]string{
+		OpenAITokenCacheKey(account): "cached-access-token",
+	}}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &OpenAIGatewayService{
+		cfg:                 &config.Config{},
+		httpUpstream:        upstream,
+		rateLimitService:    rateLimitService,
+		openAITokenProvider: NewOpenAITokenProvider(repo, tokenCache, nil),
+	}
+
+	err := svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5.4")
+
+	require.Error(t, err)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "Bearer cached-access-token", upstream.lastReq.Header.Get("authorization"))
+	require.Equal(t, 1, repo.getByIDCalls)
+	require.Zero(t, repo.tempUnschedCalls, "no-refresh OpenAI OAuth 401 must not temp-unschedule from count_tokens")
+	require.Zero(t, repo.setErrorCalls, "no-refresh OpenAI OAuth 401 must not mark account error from count_tokens")
 }
 
 func TestOpenAIGatewayService_OpenAIOAuthInputTokensFallbackUsesMinimumWhenEstimateFails(t *testing.T) {
