@@ -30,6 +30,13 @@ func TestAccountHandlerGetOpenAIOAuthPoolCapacity(t *testing.T) {
 			GeneratedAt:          "2026-07-14T12:00:00Z",
 			FiveHourRatio:        0.15,
 			IncludedAccountCount: 3,
+			Groups: []service.OpenAIOAuthPoolCapacityGroupSummary{{
+				GroupID:   7,
+				GroupName: "Primary",
+				OpenAIOAuthPoolCapacityBreakdown: service.OpenAIOAuthPoolCapacityBreakdown{
+					IncludedAccountCount: 2,
+				},
+			}},
 		},
 	}
 	handler := NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -48,6 +55,9 @@ func TestAccountHandlerGetOpenAIOAuthPoolCapacity(t *testing.T) {
 	require.Equal(t, "2026-07-14T12:00:00Z", payload.Data.GeneratedAt)
 	require.Equal(t, 0.15, payload.Data.FiveHourRatio)
 	require.Equal(t, 3, payload.Data.IncludedAccountCount)
+	require.Len(t, payload.Data.Groups, 1)
+	require.Equal(t, int64(7), payload.Data.Groups[0].GroupID)
+	require.Equal(t, 2, payload.Data.Groups[0].IncludedAccountCount)
 }
 
 func TestAccountHandlerGetOpenAIOAuthPoolCapacityFailure(t *testing.T) {
