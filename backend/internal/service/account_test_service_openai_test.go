@@ -352,10 +352,11 @@ func TestAccountTestService_RunTestBackgroundUsesPoolModeActiveRetry(t *testing.
 		success,
 	}}
 	svc := &AccountTestService{
-		accountRepo:         repo,
-		httpUpstream:        upstream,
-		cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-		tlsFPProfileService: nil,
+		accountRepo:          repo,
+		httpUpstream:         upstream,
+		openAIGatewayService: &OpenAIGatewayService{},
+		cfg:                  &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		tlsFPProfileService:  nil,
 	}
 
 	result, err := svc.RunTestBackground(context.Background(), account.ID, "gpt-5.4")
