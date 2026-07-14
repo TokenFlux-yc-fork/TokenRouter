@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -207,7 +208,7 @@ func TestHTTPUpstreamDoAppliesGrokCLIIdentityBeforeOAuthRoundTrip(t *testing.T) 
 			isolation := svc.getIsolationMode()
 			profile := service.HTTPUpstreamProfileDefault
 			proxyKey := directProxyKey
-			protocolMode := svc.resolveProtocolMode(profile, proxyKey, nil)
+			protocolMode := svc.resolveProtocolMode(profile, buildOpenAIHTTP2RouteKey(proxyKey, nil))
 			settings := svc.resolvePoolSettings(isolation, 1)
 			settings = svc.applyProfilePoolSettings(settings, profile)
 			cacheKey := buildCacheKey(isolation, proxyKey, accountID, protocolMode)
@@ -559,7 +560,8 @@ func (s *HTTPUpstreamSuite) TestTLSFingerprintHTTP2FallbackSplitsClientCache() {
 
 	entryH2, err := svc.getClientEntryWithTLS(proxyURL, 1, 1, profile, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
-	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, entryH2.proxyKey, errors.New("http2: protocol error"))
+	routeKey := buildOpenAIHTTP2RouteKey(entryH2.proxyKey, nil)
+	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, errors.New("http2: protocol error"))
 	entryH1, err := svc.getClientEntryWithTLS(proxyURL, 1, 1, profile, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
 
@@ -628,8 +630,74 @@ func (s *HTTPUpstreamSuite) TestOpenAIHTTP2TimeoutDoesNotActivateProxyFallback()
 	}
 	svc := s.newService()
 	proxyURL := "http://proxy.local:8080"
-	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, proxyURL, errors.New("http2: timeout awaiting response headers"))
-	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(proxyURL), "header timeout should not be treated as H2 compatibility failure")
+	routeKey := buildOpenAIHTTP2RouteKey(proxyURL, nil)
+	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, errors.New("http2: timeout awaiting response headers"))
+	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(routeKey), "header timeout should not be treated as H2 compatibility failure")
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2NonCompatibilityErrorsDoNotActivateFallback() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                true,
+			FallbackErrorThreshold: 1,
+			FallbackTTLSeconds:     600,
+		},
+	}
+	routeKey := openAIHTTP2RouteKey{egressKey: directProxyKey, authority: "https://chatgpt.com"}
+	tests := map[string]error{
+		"stream_no_error":        http2.StreamError{StreamID: 1, Code: http2.ErrCodeNo},
+		"stream_cancel":          http2.StreamError{StreamID: 1, Code: http2.ErrCodeCancel},
+		"stream_refused":         http2.StreamError{StreamID: 1, Code: http2.ErrCodeRefusedStream},
+		"stream_closed":          http2.StreamError{StreamID: 1, Code: http2.ErrCodeStreamClosed},
+		"stream_enhance_calm":    http2.StreamError{StreamID: 1, Code: http2.ErrCodeEnhanceYourCalm},
+		"connection_connect":     http2.ConnectionError(http2.ErrCodeConnect),
+		"connection_timeout":     http2.ConnectionError(http2.ErrCodeSettingsTimeout),
+		"client_connection_lost": errors.New("http2: client connection lost"),
+		"string_refused_stream":  errors.New("stream error: stream ID 1; REFUSED_STREAM"),
+		"string_graceful_goaway": errors.New("http2: Transport received GOAWAY from server ErrCode:NO_ERROR"),
+		"string_overload_goaway": errors.New("http2: Transport received GOAWAY from server ErrCode:ENHANCE_YOUR_CALM"),
+		"goaway_no_error": http2.GoAwayError{
+			ErrCode: http2.ErrCodeNo,
+		},
+		"goaway_refused": http2.GoAwayError{
+			ErrCode: http2.ErrCodeRefusedStream,
+		},
+		"goaway_enhance_calm": http2.GoAwayError{
+			ErrCode: http2.ErrCodeEnhanceYourCalm,
+		},
+		"connection_no_error": http2.ConnectionError(http2.ErrCodeNo),
+	}
+	for name, testErr := range tests {
+		s.Run(name, func() {
+			svc := s.newService()
+			require.False(s.T(), isOpenAIHTTP2CompatibilityError(testErr))
+			svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, testErr)
+			svc.recordOpenAIHTTP2BodyFailure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, testErr)
+			require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(routeKey))
+		})
+	}
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2CompatibilityErrorClassification() {
+	tests := map[string]error{
+		"unexpected_alpn":     errors.New(`http2: unexpected ALPN protocol "http/1.1"; want "h2"`),
+		"no_application":      errors.New("remote error: tls: no application protocol"),
+		"frame_too_large":     http2.ErrFrameTooLarge,
+		"stream_internal":     http2.StreamError{StreamID: 57, Code: http2.ErrCodeInternal},
+		"stream_protocol":     http2.StreamError{StreamID: 1, Code: http2.ErrCodeProtocol},
+		"goaway_flow_control": http2.GoAwayError{ErrCode: http2.ErrCodeFlowControl},
+		"connection_frame":    http2.ConnectionError(http2.ErrCodeFrameSize),
+		"compression":         http2.StreamError{StreamID: 1, Code: http2.ErrCodeCompression},
+		"security":            http2.GoAwayError{ErrCode: http2.ErrCodeInadequateSecurity},
+		"http11_required":     http2.GoAwayError{ErrCode: http2.ErrCodeHTTP11Required},
+	}
+	for name, testErr := range tests {
+		s.Run(name, func() {
+			require.True(s.T(), isOpenAIHTTP2CompatibilityError(testErr))
+		})
+	}
+	require.False(s.T(), isOpenAIHTTP2CompatibilityError(io.ErrUnexpectedEOF), "unexpected EOF is only actionable while reading an H2 response body")
+	require.True(s.T(), isOpenAIHTTP2BodyCompatibilityError(io.ErrUnexpectedEOF))
 }
 
 func (s *HTTPUpstreamSuite) TestOpenAIHTTP2ProxyCompatibilityErrorActivatesFallback() {
@@ -644,8 +712,9 @@ func (s *HTTPUpstreamSuite) TestOpenAIHTTP2ProxyCompatibilityErrorActivatesFallb
 	}
 	svc := s.newService()
 	proxyURL := "http://proxy.local:8080"
-	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, proxyURL, errors.New("http2: protocol error"))
-	require.True(s.T(), svc.isOpenAIHTTP2FallbackActive(proxyURL))
+	routeKey := buildOpenAIHTTP2RouteKey(proxyURL, nil)
+	svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, errors.New("http2: protocol error"))
+	require.True(s.T(), svc.isOpenAIHTTP2FallbackActive(routeKey))
 
 	entry, err := svc.getClientEntry(proxyURL, 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
@@ -655,6 +724,154 @@ func (s *HTTPUpstreamSuite) TestOpenAIHTTP2ProxyCompatibilityErrorActivatesFallb
 	require.NotNil(s.T(), transport.TLSNextProto)
 	require.Equal(s.T(), upstreamProtocolModeOpenAIH1Fallback, entry.protocolMode)
 }
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2DirectBodyFailureActivatesFallbackImmediately() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                true,
+			FallbackErrorThreshold: 99,
+			FallbackTTLSeconds:     600,
+		},
+	}
+	targetReq, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	require.NoError(s.T(), err)
+
+	for name, readErr := range map[string]error{
+		"unexpected_eof": io.ErrUnexpectedEOF,
+		"stream_internal": http2.StreamError{
+			StreamID: 57,
+			Code:     http2.ErrCodeInternal,
+		},
+		"goaway": http2.GoAwayError{
+			ErrCode: http2.ErrCodeProtocol,
+		},
+	} {
+		s.Run(name, func() {
+			svc := s.newService()
+			routeKey := buildOpenAIHTTP2RouteKey(directProxyKey, targetReq.URL)
+			entry, entryErr := svc.getClientEntryForTarget("", 1, 1, service.HTTPUpstreamProfileOpenAI, targetReq.URL, false, false)
+			require.NoError(s.T(), entryErr)
+			entry.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					ProtoMajor: 2,
+					Header:     make(http.Header),
+					Body:       &fixedReadErrorCloser{err: readErr},
+					Request:    req,
+				}, nil
+			})}
+			req := targetReq.Clone(service.WithHTTPUpstreamProfile(targetReq.Context(), service.HTTPUpstreamProfileOpenAI))
+			resp, doErr := svc.Do(req, "", 1, 1)
+			require.NoError(s.T(), doErr)
+
+			_, gotErr := resp.Body.Read(make([]byte, 1))
+			require.ErrorIs(s.T(), gotErr, readErr)
+			require.NoError(s.T(), resp.Body.Close())
+			require.True(s.T(), svc.isOpenAIHTTP2FallbackActive(routeKey))
+
+			entry, entryErr = svc.getClientEntryForTarget("", 1, 1, service.HTTPUpstreamProfileOpenAI, targetReq.URL, false, false)
+			require.NoError(s.T(), entryErr)
+			require.Equal(s.T(), upstreamProtocolModeOpenAIH1Fallback, entry.protocolMode)
+			transport, ok := entry.client.Transport.(*http.Transport)
+			require.True(s.T(), ok)
+			require.False(s.T(), transport.ForceAttemptHTTP2)
+		})
+	}
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2FallbackIsScopedByEgressAndTargetAuthority() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                   true,
+			AllowProxyFallbackToHTTP1: true,
+			FallbackTTLSeconds:        600,
+		},
+	}
+	svc := s.newService()
+	proxyURL := "http://proxy.local:8080"
+	targetA, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	require.NoError(s.T(), err)
+	targetB, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/responses", nil)
+	require.NoError(s.T(), err)
+	routeA := buildOpenAIHTTP2RouteKey(proxyURL, targetA.URL)
+	routeOtherAuthority := buildOpenAIHTTP2RouteKey(proxyURL, targetB.URL)
+	routeOtherEgress := buildOpenAIHTTP2RouteKey(directProxyKey, targetA.URL)
+
+	svc.recordOpenAIHTTP2BodyFailure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeA, io.ErrUnexpectedEOF)
+	require.True(s.T(), svc.isOpenAIHTTP2FallbackActive(routeA))
+	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(routeOtherAuthority))
+	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(routeOtherEgress))
+
+	entryA, err := svc.getClientEntryForTarget(proxyURL, 1, 1, service.HTTPUpstreamProfileOpenAI, targetA.URL, false, false)
+	require.NoError(s.T(), err)
+	entryOtherAuthority, err := svc.getClientEntryForTarget(proxyURL, 1, 1, service.HTTPUpstreamProfileOpenAI, targetB.URL, false, false)
+	require.NoError(s.T(), err)
+	entryOtherEgress, err := svc.getClientEntryForTarget("", 1, 1, service.HTTPUpstreamProfileOpenAI, targetA.URL, false, false)
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH1Fallback, entryA.protocolMode)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, entryOtherAuthority.protocolMode)
+	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, entryOtherEgress.protocolMode)
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2OutcomeUsesBodyEOFNotHeadersOrClose() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:                true,
+			FallbackErrorThreshold: 2,
+			FallbackWindowSeconds:  60,
+			FallbackTTLSeconds:     600,
+		},
+	}
+	routeKey := openAIHTTP2RouteKey{egressKey: directProxyKey, authority: "https://chatgpt.com"}
+	compatErr := errors.New("http2: protocol error")
+
+	s.Run("headers_and_close_are_neutral", func() {
+		svc := s.newService()
+		svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, compatErr)
+		resp := &http.Response{ProtoMajor: 2, Body: io.NopCloser(strings.NewReader("ok"))}
+		svc.observeOpenAIHTTP2ResponseBody(resp, service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey)
+		require.NoError(s.T(), resp.Body.Close())
+
+		svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, compatErr)
+		require.True(s.T(), svc.isOpenAIHTTP2FallbackActive(routeKey), "Close without EOF must not reset the first failure")
+	})
+
+	s.Run("complete_eof_resets_error_window", func() {
+		svc := s.newService()
+		svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, compatErr)
+		resp := &http.Response{ProtoMajor: 2, Body: io.NopCloser(strings.NewReader("ok"))}
+		svc.observeOpenAIHTTP2ResponseBody(resp, service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey)
+		_, readErr := io.ReadAll(resp.Body)
+		require.NoError(s.T(), readErr)
+
+		svc.recordOpenAIHTTP2Failure(service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey, compatErr)
+		require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(routeKey), "a complete H2 body must reset the previous failure")
+	})
+}
+
+func (s *HTTPUpstreamSuite) TestOpenAIHTTP2OutcomeIgnoresHTTP1BodyErrors() {
+	s.cfg.Gateway = config.GatewayConfig{
+		OpenAIHTTP2: config.GatewayOpenAIHTTP2Config{
+			Enabled:            true,
+			FallbackTTLSeconds: 600,
+		},
+	}
+	svc := s.newService()
+	routeKey := openAIHTTP2RouteKey{egressKey: directProxyKey, authority: "https://chatgpt.com"}
+	resp := &http.Response{ProtoMajor: 1, Body: &fixedReadErrorCloser{err: io.ErrUnexpectedEOF}}
+	svc.observeOpenAIHTTP2ResponseBody(resp, service.HTTPUpstreamProfileOpenAI, upstreamProtocolModeOpenAIH2, routeKey)
+
+	_, err := resp.Body.Read(make([]byte, 1))
+	require.ErrorIs(s.T(), err, io.ErrUnexpectedEOF)
+	require.False(s.T(), svc.isOpenAIHTTP2FallbackActive(routeKey))
+}
+
+type fixedReadErrorCloser struct {
+	err error
+}
+
+func (r *fixedReadErrorCloser) Read([]byte) (int, error) { return 0, r.err }
+func (r *fixedReadErrorCloser) Close() error             { return nil }
 
 // TestNormalizeProxyURL_Canonicalizes 测试代理 URL 规范化
 // 验证等价地址能够映射到同一缓存键
