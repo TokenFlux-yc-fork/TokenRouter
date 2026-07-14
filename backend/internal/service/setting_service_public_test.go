@@ -147,6 +147,25 @@ func TestSettingService_GetPublicSettingsForInjection_ExposesPublicFeatureFlags(
 	require.True(t, settings.AllowUserViewErrorRequests)
 }
 
+func TestSettingService_GetPublicSettingsForInjection_ExposesBuildIdentitySeparately(t *testing.T) {
+	svc := NewSettingService(&settingPublicRepoStub{values: map[string]string{}}, &config.Config{})
+	svc.SetVersion("0.1.224")
+	svc.SetForkID("yc-fork")
+
+	payload, err := svc.GetPublicSettingsForInjection(context.Background())
+	require.NoError(t, err)
+	encoded, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	var settings struct {
+		Version string `json:"version"`
+		ForkID  string `json:"fork_id"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &settings))
+	require.Equal(t, "0.1.224", settings.Version)
+	require.Equal(t, "yc-fork", settings.ForkID)
+}
+
 func TestSettingService_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *testing.T) {
 	svc := NewSettingService(&settingPublicRepoStub{
 		values: map[string]string{

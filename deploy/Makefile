@@ -3,7 +3,8 @@
 # 兼容从 backend、deploy 或仓库根目录调用本 Makefile。
 VERSION_SCRIPT ?= $(firstword $(wildcard ./scripts/resolve-version.sh ../backend/scripts/resolve-version.sh backend/scripts/resolve-version.sh))
 VERSION ?= $(shell $(VERSION_SCRIPT))
-LDFLAGS ?= -s -w -X main.Version=$(VERSION)
+FORK_ID ?=
+LDFLAGS ?= -s -w -X main.Version=$(VERSION) -X main.ForkID=$(FORK_ID)
 
 wire:
 	@echo "生成 Wire 代码..."

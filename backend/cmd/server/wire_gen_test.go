@@ -13,10 +13,12 @@ import (
 func TestProvideServiceBuildInfo(t *testing.T) {
 	in := handler.BuildInfo{
 		Version:   "v-test",
+		ForkID:    "test-fork",
 		BuildType: "release",
 	}
 	out := provideServiceBuildInfo(in)
 	require.Equal(t, in.Version, out.Version)
+	require.Equal(t, in.ForkID, out.ForkID)
 	require.Equal(t, in.BuildType, out.BuildType)
 }
 

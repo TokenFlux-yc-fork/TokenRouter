@@ -13,6 +13,7 @@ export interface ReleaseInfo {
 
 export interface VersionInfo {
   current_version: string
+  fork_id?: string
   latest_version: string
   has_update: boolean
   release_info?: ReleaseInfo
@@ -24,8 +25,8 @@ export interface VersionInfo {
 /**
  * Get current version
  */
-export async function getVersion(): Promise<{ version: string }> {
-  const { data } = await apiClient.get<{ version: string }>('/admin/system/version')
+export async function getVersion(): Promise<{ version: string; fork_id: string }> {
+  const { data } = await apiClient.get<{ version: string; fork_id: string }>('/admin/system/version')
   return data
 }
 

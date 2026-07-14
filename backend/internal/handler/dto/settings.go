@@ -353,6 +353,7 @@ type PublicSettings struct {
 	BackendModeEnabled               bool                     `json:"backend_mode_enabled"`
 	PaymentEnabled                   bool                     `json:"payment_enabled"`
 	Version                          string                   `json:"version"`
+	ForkID                           string                   `json:"fork_id"`
 	// 服务器全局时区与当前 UTC 偏移，供前端标注高峰计费窗口等服务端本地时间。
 	ServerTimezone              string  `json:"server_timezone"`
 	ServerUTCOffset             string  `json:"server_utc_offset"`
