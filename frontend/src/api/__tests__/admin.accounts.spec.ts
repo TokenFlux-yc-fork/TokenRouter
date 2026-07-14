@@ -60,7 +60,8 @@ describe('admin accounts API', () => {
           parent: windowSummary,
           five_hour: windowSummary
         }
-      ]
+      ],
+      groups: []
     }
     get.mockResolvedValue({ data: response })
 

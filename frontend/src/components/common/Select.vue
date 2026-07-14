@@ -7,7 +7,7 @@
       :disabled="disabled"
       :aria-expanded="isOpen"
       :aria-haspopup="true"
-      aria-label="Select option"
+      :aria-label="ariaLabel ?? t('common.selectOption')"
       :class="[
         'select-trigger',
         isOpen && 'select-trigger-open',
@@ -65,6 +65,7 @@
               v-model="searchQuery"
               type="text"
               :placeholder="searchPlaceholderText"
+              :aria-label="searchPlaceholderText"
               class="select-search-input"
               @click.stop
             />
@@ -148,6 +149,7 @@ interface Props {
   creatable?: boolean
   creatablePrefix?: string
   clearable?: boolean
+  ariaLabel?: string
 }
 
 interface Emits {

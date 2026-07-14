@@ -7,12 +7,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 )
 
 const (
 	openAIOAuthCapacityFiveHourRatio      = 0.15
 	openAIOAuthCapacityFiveHourStaleAfter = 5 * time.Hour
 	openAIOAuthCapacitySnapshotStaleAfter = 8 * time.Hour
+	openAIOAuthCapacityGroupPageSize      = 1000
 )
 
 type openAIOAuthCapacityPlanRule struct {
@@ -71,6 +74,25 @@ type OpenAIOAuthPoolCapacityUnknownPlanType struct {
 	AccountCount int    `json:"account_count"`
 }
 
+type OpenAIOAuthPoolCapacityBreakdown struct {
+	ManagedAccountCount     int                                      `json:"managed_account_count"`
+	IncludedAccountCount    int                                      `json:"included_account_count"`
+	ExcludedAccountCount    int                                      `json:"excluded_account_count"`
+	ShadowAccountCount      int                                      `json:"shadow_account_count"`
+	UnknownPlanAccountCount int                                      `json:"unknown_plan_account_count"`
+	UnknownPlanTypes        []OpenAIOAuthPoolCapacityUnknownPlanType `json:"unknown_plan_types"`
+	Totals                  OpenAIOAuthPoolCapacityTotals            `json:"totals"`
+	Plans                   []OpenAIOAuthPoolCapacityPlanSummary     `json:"plans"`
+}
+
+type OpenAIOAuthPoolCapacityGroupSummary struct {
+	GroupID     int64  `json:"group_id"`
+	GroupName   string `json:"group_name"`
+	GroupStatus string `json:"group_status"`
+	SortOrder   int    `json:"sort_order"`
+	OpenAIOAuthPoolCapacityBreakdown
+}
+
 type OpenAIOAuthPoolCapacitySummary struct {
 	GeneratedAt             string                                   `json:"generated_at"`
 	FiveHourRatio           float64                                  `json:"five_hour_ratio"`
@@ -82,6 +104,7 @@ type OpenAIOAuthPoolCapacitySummary struct {
 	UnknownPlanTypes        []OpenAIOAuthPoolCapacityUnknownPlanType `json:"unknown_plan_types"`
 	Totals                  OpenAIOAuthPoolCapacityTotals            `json:"totals"`
 	Plans                   []OpenAIOAuthPoolCapacityPlanSummary     `json:"plans"`
+	Groups                  []OpenAIOAuthPoolCapacityGroupSummary    `json:"groups"`
 }
 
 func (s *adminServiceImpl) GetOpenAIOAuthPoolCapacity(ctx context.Context) (*OpenAIOAuthPoolCapacitySummary, error) {
@@ -93,11 +116,26 @@ func (s *adminServiceImpl) GetOpenAIOAuthPoolCapacity(ctx context.Context) (*Ope
 	if err != nil {
 		return nil, fmt.Errorf("list OpenAI OAuth accounts for capacity: %w", err)
 	}
+	var groups []Group
+	if s.groupRepo != nil {
+		for page := 1; ; page++ {
+			batch, pageResult, listErr := s.groupRepo.ListWithFilters(ctx, pagination.PaginationParams{
+				Page: page, PageSize: openAIOAuthCapacityGroupPageSize, SortBy: "sort_order", SortOrder: pagination.SortOrderAsc,
+			}, PlatformOpenAI, "", "", nil)
+			if listErr != nil {
+				return nil, fmt.Errorf("list OpenAI groups for capacity: %w", listErr)
+			}
+			groups = append(groups, batch...)
+			if pageResult == nil || len(batch) < openAIOAuthCapacityGroupPageSize || int64(len(groups)) >= pageResult.Total {
+				break
+			}
+		}
+	}
 	if s.settingService != nil {
 		ctx = WithOpenAIQuotaAutoPauseSettings(ctx, s.settingService.GetOpenAIQuotaAutoPauseSettings(ctx))
 	}
 	runtimeBlocker, _ := s.runtimeBlocker.(openAIOAuthCapacityRuntimeBlockReader)
-	return buildOpenAIOAuthPoolCapacity(ctx, accounts, time.Now(), runtimeBlocker), nil
+	return buildOpenAIOAuthPoolCapacityWithGroups(ctx, accounts, groups, time.Now(), runtimeBlocker), nil
 }
 
 func buildOpenAIOAuthPoolCapacity(
@@ -106,10 +144,41 @@ func buildOpenAIOAuthPoolCapacity(
 	now time.Time,
 	runtimeBlocker openAIOAuthCapacityRuntimeBlockReader,
 ) *OpenAIOAuthPoolCapacitySummary {
+	return buildOpenAIOAuthPoolCapacityWithGroups(ctx, accounts, nil, now, runtimeBlocker)
+}
+
+func buildOpenAIOAuthPoolCapacityWithGroups(
+	ctx context.Context,
+	accounts []Account,
+	groups []Group,
+	now time.Time,
+	runtimeBlocker openAIOAuthCapacityRuntimeBlockReader,
+) *OpenAIOAuthPoolCapacitySummary {
 	now = now.UTC()
+	breakdown := aggregateOpenAIOAuthPoolCapacity(ctx, accounts, now, runtimeBlocker)
 	result := &OpenAIOAuthPoolCapacitySummary{
-		GeneratedAt:      now.Format(time.RFC3339),
-		FiveHourRatio:    openAIOAuthCapacityFiveHourRatio,
+		GeneratedAt:             now.Format(time.RFC3339),
+		FiveHourRatio:           openAIOAuthCapacityFiveHourRatio,
+		ManagedAccountCount:     breakdown.ManagedAccountCount,
+		IncludedAccountCount:    breakdown.IncludedAccountCount,
+		ExcludedAccountCount:    breakdown.ExcludedAccountCount,
+		ShadowAccountCount:      breakdown.ShadowAccountCount,
+		UnknownPlanAccountCount: breakdown.UnknownPlanAccountCount,
+		UnknownPlanTypes:        breakdown.UnknownPlanTypes,
+		Totals:                  breakdown.Totals,
+		Plans:                   breakdown.Plans,
+	}
+	result.Groups = buildOpenAIOAuthPoolCapacityGroups(ctx, accounts, groups, now, runtimeBlocker)
+	return result
+}
+
+func aggregateOpenAIOAuthPoolCapacity(
+	ctx context.Context,
+	accounts []Account,
+	now time.Time,
+	runtimeBlocker openAIOAuthCapacityRuntimeBlockReader,
+) OpenAIOAuthPoolCapacityBreakdown {
+	result := OpenAIOAuthPoolCapacityBreakdown{
 		UnknownPlanTypes: []OpenAIOAuthPoolCapacityUnknownPlanType{},
 		Plans:            make([]OpenAIOAuthPoolCapacityPlanSummary, len(openAIOAuthCapacityPlanRules)),
 	}
@@ -196,6 +265,89 @@ func buildOpenAIOAuthPoolCapacity(
 	finalizeOpenAIOAuthCapacityWindow(&result.Totals.FiveHour)
 	finalizeOpenAIOAuthCapacityWindow(&result.Totals.Weekly)
 	finalizeOpenAIOAuthCapacityWindow(&result.Totals.Monthly)
+	return result
+}
+
+func buildOpenAIOAuthPoolCapacityGroups(
+	ctx context.Context,
+	accounts []Account,
+	groups []Group,
+	now time.Time,
+	runtimeBlocker openAIOAuthCapacityRuntimeBlockReader,
+) []OpenAIOAuthPoolCapacityGroupSummary {
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].SortOrder == groups[j].SortOrder {
+			return groups[i].ID < groups[j].ID
+		}
+		return groups[i].SortOrder < groups[j].SortOrder
+	})
+
+	groupIndexes := make(map[int64]int, len(groups))
+	groupAccounts := make([][]Account, len(groups))
+	result := make([]OpenAIOAuthPoolCapacityGroupSummary, 1, len(groups)+1)
+	result[0] = OpenAIOAuthPoolCapacityGroupSummary{
+		GroupID:     0,
+		GroupName:   "",
+		GroupStatus: StatusActive,
+	}
+	for i := range groups {
+		group := groups[i]
+		if group.ID <= 0 || group.Platform != PlatformOpenAI {
+			continue
+		}
+		groupIndexes[group.ID] = i
+	}
+
+	ungroupedAccounts := make([]Account, 0)
+	for i := range accounts {
+		account := accounts[i]
+		hasGroupMembership := false
+		seen := make(map[int64]struct{}, len(account.GroupIDs)+len(account.Groups)+len(account.AccountGroups))
+		appendToGroup := func(groupID int64) {
+			if groupID <= 0 {
+				return
+			}
+			hasGroupMembership = true
+			index, ok := groupIndexes[groupID]
+			if !ok {
+				return
+			}
+			if _, ok := seen[groupID]; ok {
+				return
+			}
+			seen[groupID] = struct{}{}
+			groupAccounts[index] = append(groupAccounts[index], account)
+		}
+		for _, groupID := range account.GroupIDs {
+			appendToGroup(groupID)
+		}
+		for _, group := range account.Groups {
+			if group != nil {
+				appendToGroup(group.ID)
+			}
+		}
+		for _, accountGroup := range account.AccountGroups {
+			appendToGroup(accountGroup.GroupID)
+		}
+		if !hasGroupMembership {
+			ungroupedAccounts = append(ungroupedAccounts, account)
+		}
+	}
+
+	result[0].OpenAIOAuthPoolCapacityBreakdown = aggregateOpenAIOAuthPoolCapacity(ctx, ungroupedAccounts, now, runtimeBlocker)
+	for i := range groups {
+		group := groups[i]
+		if _, ok := groupIndexes[group.ID]; !ok {
+			continue
+		}
+		result = append(result, OpenAIOAuthPoolCapacityGroupSummary{
+			GroupID:                          group.ID,
+			GroupName:                        group.Name,
+			GroupStatus:                      group.Status,
+			SortOrder:                        group.SortOrder,
+			OpenAIOAuthPoolCapacityBreakdown: aggregateOpenAIOAuthPoolCapacity(ctx, groupAccounts[i], now, runtimeBlocker),
+		})
+	}
 	return result
 }
 

@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import OpenAIOAuthCapacityView from '../OpenAIOAuthCapacityView.vue'
 import type {
+  OpenAIOAuthPoolCapacityGroupSummary,
+  OpenAIOAuthPoolCapacityPlanSummary,
   OpenAIOAuthPoolCapacitySummary,
   OpenAIOAuthPoolCapacityWindowSummary
 } from '@/api/admin/accounts'
+import Select from '@/components/common/Select.vue'
 
 const { getOpenAIOAuthPoolCapacity } = vi.hoisted(() => ({
   getOpenAIOAuthPoolCapacity: vi.fn()
@@ -54,6 +57,49 @@ const makeWindow = (
   ...overrides
 })
 
+const makeProPlan = (): OpenAIOAuthPoolCapacityPlanSummary => ({
+  plan_type: 'pro',
+  period: 'weekly',
+  account_count: 1,
+  limit_per_account_usd: 2400,
+  five_hour_limit_per_account_usd: 360,
+  parent: makeWindow({ estimated_limit_usd: 2400, estimated_remaining_usd: 1800 }),
+  five_hour: makeWindow({ estimated_limit_usd: 360, estimated_remaining_usd: 270 })
+})
+
+const makeFreePlan = (): OpenAIOAuthPoolCapacityPlanSummary => ({
+  plan_type: 'free',
+  period: 'monthly',
+  account_count: 1,
+  limit_per_account_usd: 5,
+  five_hour_limit_per_account_usd: 0.75,
+  parent: makeWindow({ estimated_limit_usd: 5, estimated_remaining_usd: 4 }),
+  five_hour: makeWindow({ estimated_limit_usd: 0.75, estimated_remaining_usd: 0.6 })
+})
+
+const makeGroup = (
+  overrides: Partial<OpenAIOAuthPoolCapacityGroupSummary> = {}
+): OpenAIOAuthPoolCapacityGroupSummary => ({
+  group_id: 10,
+  group_name: 'Primary',
+  group_status: 'active',
+  sort_order: 0,
+  managed_account_count: 1,
+  included_account_count: 1,
+  excluded_account_count: 0,
+  shadow_account_count: 0,
+  unknown_plan_account_count: 0,
+  unknown_plan_types: [],
+  totals: {
+    parent: makeWindow({ estimated_limit_usd: 2400, estimated_remaining_usd: 1800 }),
+    five_hour: makeWindow({ estimated_limit_usd: 360, estimated_remaining_usd: 270 }),
+    weekly: makeWindow({ estimated_limit_usd: 2400, estimated_remaining_usd: 1800 }),
+    monthly: makeWindow({ estimated_limit_usd: 0, estimated_remaining_usd: 0 })
+  },
+  plans: [makeProPlan()],
+  ...overrides
+})
+
 const makeSummary = (): OpenAIOAuthPoolCapacitySummary => ({
   generated_at: '2026-07-14T00:00:00Z',
   five_hour_ratio: 0.15,
@@ -69,25 +115,36 @@ const makeSummary = (): OpenAIOAuthPoolCapacitySummary => ({
     weekly: makeWindow({ estimated_limit_usd: 2400, estimated_remaining_usd: 1800 }),
     monthly: makeWindow({ estimated_limit_usd: 5, estimated_remaining_usd: 4 })
   },
-  plans: [
-    {
-      plan_type: 'pro',
-      period: 'weekly',
-      account_count: 1,
-      limit_per_account_usd: 2400,
-      five_hour_limit_per_account_usd: 360,
-      parent: makeWindow({ estimated_limit_usd: 2400, estimated_remaining_usd: 1800 }),
-      five_hour: makeWindow({ estimated_limit_usd: 360, estimated_remaining_usd: 270 })
-    },
-    {
-      plan_type: 'free',
-      period: 'monthly',
-      account_count: 1,
-      limit_per_account_usd: 5,
-      five_hour_limit_per_account_usd: 0.75,
-      parent: makeWindow({ estimated_limit_usd: 5, estimated_remaining_usd: 4 }),
-      five_hour: makeWindow({ estimated_limit_usd: 0.75, estimated_remaining_usd: 0.6 })
-    }
+  plans: [makeProPlan(), makeFreePlan()],
+  groups: [
+    makeGroup({
+      group_id: 0,
+      group_name: '',
+      managed_account_count: 1,
+      totals: {
+        parent: makeWindow({ estimated_limit_usd: 5, estimated_remaining_usd: 4 }),
+        five_hour: makeWindow({ estimated_limit_usd: 0.75, estimated_remaining_usd: 0.6 }),
+        weekly: makeWindow({ estimated_limit_usd: 0, estimated_remaining_usd: 0 }),
+        monthly: makeWindow({ estimated_limit_usd: 5, estimated_remaining_usd: 4 })
+      },
+      plans: [makeFreePlan()]
+    }),
+    makeGroup(),
+    makeGroup({
+      group_id: 20,
+      group_name: 'Paused group',
+      group_status: 'disabled',
+      sort_order: 10,
+      managed_account_count: 0,
+      included_account_count: 0,
+      totals: {
+        parent: makeWindow({ estimated_limit_usd: 0, estimated_remaining_usd: 0 }),
+        five_hour: makeWindow({ estimated_limit_usd: 0, estimated_remaining_usd: 0 }),
+        weekly: makeWindow({ estimated_limit_usd: 0, estimated_remaining_usd: 0 }),
+        monthly: makeWindow({ estimated_limit_usd: 0, estimated_remaining_usd: 0 })
+      },
+      plans: []
+    })
   ]
 })
 
@@ -126,7 +183,44 @@ describe('OpenAIOAuthCapacityView', () => {
     expect(wrapper.get('[data-test="capacity-plan-pro"]').text()).toContain('$360.00')
     expect(wrapper.get('[data-test="unknown-plan-warning"]').text()).toContain('legacy')
     expect(wrapper.get('[data-test="unknown-plan-warning"]').text()).toContain('2')
+    expect(wrapper.findAll('[data-test^="capacity-group-row-"]')).toHaveLength(3)
+    expect(wrapper.get('[data-test="capacity-group-row-20"]').text()).toContain('Paused group')
     expect(wrapper.find('[data-test="capacity-loading"]').exists()).toBe(false)
+  })
+
+  it('switches between global, grouped, and ungrouped capacity without another request', async () => {
+    getOpenAIOAuthPoolCapacity.mockResolvedValue(makeSummary())
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const selector = wrapper.getComponent(Select)
+    expect(selector.get('button').attributes('aria-label')).toBe('admin.openaiOAuthCapacity.groupFilter')
+    expect(selector.props('options')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'all' }),
+        expect.objectContaining({ value: 0 }),
+        expect.objectContaining({ value: 10 })
+      ])
+    )
+
+    selector.vm.$emit('update:modelValue', 10)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('[data-test="capacity-card-parent"]').text()).toContain('$1800.00')
+    expect(wrapper.get('[data-test="capacity-card-five-hour"]').text()).toContain('$270.00')
+    expect(wrapper.get('[data-test="capacity-scope-managed"]').text()).toContain('1')
+    expect(wrapper.get('[data-test="capacity-scope-included"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="unknown-plan-warning"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="capacity-plan-pro"]').text()).toContain('$2400.00')
+    expect(wrapper.find('[data-test="capacity-plan-free"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="capacity-group-row-10"]').classes()).toContain('bg-primary-50/70')
+
+    await wrapper.get('[data-test="capacity-group-row-0"] button').trigger('click')
+
+    expect(wrapper.get('[data-test="capacity-card-parent"]').text()).toContain('$4.00')
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe(0)
+    expect(getOpenAIOAuthPoolCapacity).toHaveBeenCalledTimes(1)
   })
 
   it('shows an inline failure state and retries the aggregate request', async () => {
@@ -173,6 +267,24 @@ describe('OpenAIOAuthCapacityView', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="capacity-refresh-error"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="capacity-card-parent"]').text()).toContain('$1804.00')
+  })
+
+  it('returns to the global summary when the selected group disappears after refresh', async () => {
+    const initial = makeSummary()
+    const refreshed = makeSummary()
+    refreshed.groups = refreshed.groups.filter((group) => group.group_id !== 10)
+    getOpenAIOAuthPoolCapacity.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    wrapper.getComponent(Select).vm.$emit('update:modelValue', 10)
+    await wrapper.vm.$nextTick()
+    await wrapper.get('[data-test="refresh-capacity"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe('all')
     expect(wrapper.get('[data-test="capacity-card-parent"]').text()).toContain('$1804.00')
   })
 })
