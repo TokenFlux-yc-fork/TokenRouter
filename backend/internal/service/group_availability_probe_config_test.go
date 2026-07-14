@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeGroupAvailabilityProbeConfig(t *testing.T) {
@@ -77,5 +78,37 @@ func TestNormalizeGroupAvailabilityProbeConfig(t *testing.T) {
 				t.Fatalf("normalizeGroupAvailabilityProbeConfig() = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEffectiveGroupProbeConfig_UsesHealthCheckWhenAvailabilityDisabled(t *testing.T) {
+	got, err := effectiveGroupProbeConfig(GroupAvailabilityProbeDueGroup{
+		Config:                GroupAvailabilityProbeConfig{},
+		HealthCheckEnabled:    true,
+		HealthCheckTimeoutSec: 12,
+	})
+	if err != nil {
+		t.Fatalf("effectiveGroupProbeConfig() error = %v", err)
+	}
+	want := GroupAvailabilityProbeConfig{
+		Enabled:        true,
+		Prompt:         "hi",
+		TimeoutSeconds: 12,
+	}
+	if got != want {
+		t.Fatalf("effectiveGroupProbeConfig() = %+v, want %+v", got, want)
+	}
+}
+
+func TestNextGroupProbeInterval_UsesShortestEnabledInterval(t *testing.T) {
+	got := nextGroupProbeInterval(
+		GroupAvailabilityProbeDueGroup{
+			HealthCheckEnabled:     true,
+			HealthCheckIntervalSec: 45,
+		},
+		GroupAvailabilityProbeConfig{IntervalMinutes: 30},
+	)
+	if got != 45*time.Second {
+		t.Fatalf("nextGroupProbeInterval() = %v, want %v", got, 45*time.Second)
 	}
 }

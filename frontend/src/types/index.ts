@@ -628,6 +628,8 @@ export interface GroupAvailabilityProbeConfig {
   user_agent?: string
 }
 
+export type GroupHealthStatus = 'unknown' | 'healthy' | 'unhealthy'
+
 export interface Group {
   id: number
   name: string
@@ -674,6 +676,15 @@ export interface Group {
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   availability_probe_config?: GroupAvailabilityProbeConfig
+  health_check_enabled?: boolean
+  health_status?: GroupHealthStatus | string
+  health_last_check_at?: string | null
+  health_consecutive_failures?: number
+  health_consecutive_successes?: number
+  health_check_interval_sec?: number
+  health_check_timeout_sec?: number
+  health_check_failure_threshold?: number
+  health_check_success_threshold?: number
   require_oauth_only: boolean
   require_privacy_set: boolean
   created_at: string
@@ -824,6 +835,11 @@ export interface CreateGroupRequest {
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   availability_probe_config?: GroupAvailabilityProbeConfig
+  health_check_enabled?: boolean
+  health_check_interval_sec?: number
+  health_check_timeout_sec?: number
+  health_check_failure_threshold?: number
+  health_check_success_threshold?: number
   allow_messages_dispatch?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
@@ -875,6 +891,11 @@ export interface UpdateGroupRequest {
   supported_model_scopes?: string[]
   models_list_config?: ModelsListConfig
   availability_probe_config?: GroupAvailabilityProbeConfig
+  health_check_enabled?: boolean
+  health_check_interval_sec?: number
+  health_check_timeout_sec?: number
+  health_check_failure_threshold?: number
+  health_check_success_threshold?: number
   allow_messages_dispatch?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
