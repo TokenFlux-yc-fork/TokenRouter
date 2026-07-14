@@ -438,6 +438,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		GitHubOAuthEnabled               bool                     `json:"github_oauth_enabled"`
 		GoogleOAuthEnabled               bool                     `json:"google_oauth_enabled"`
 		Version                          string                   `json:"version,omitempty"`
+		ForkID                           string                   `json:"fork_id"`
 		// 服务器全局时区与当前 UTC 偏移，供前端标注高峰计费窗口等服务端本地时间。
 		ServerTimezone              string  `json:"server_timezone"`
 		ServerUTCOffset             string  `json:"server_utc_offset"`
@@ -503,6 +504,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		GitHubOAuthEnabled:               settings.GitHubOAuthEnabled,
 		GoogleOAuthEnabled:               settings.GoogleOAuthEnabled,
 		Version:                          s.version,
+		ForkID:                           s.forkID,
 		ServerTimezone:                   timezone.Name(),
 		ServerUTCOffset:                  timezone.UTCOffset(),
 		BalanceUnitName:                  settings.BalanceUnitName,

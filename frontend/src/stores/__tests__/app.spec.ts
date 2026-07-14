@@ -396,6 +396,7 @@ describe('useAppStore', () => {
         site_name: 'TestSite',
         site_logo: '/logo.png',
         version: '1.0.0',
+        fork_id: 'yc-fork',
         contact_info: 'test@test.com',
         api_base_url: 'https://api.test.com',
         doc_url: 'https://docs.test.com',
@@ -408,6 +409,7 @@ describe('useAppStore', () => {
       expect(store.siteName).toBe('TestSite')
       expect(store.siteLogo).toBe('/logo.png')
       expect(store.siteVersion).toBe('1.0.0')
+      expect(store.forkID).toBe('yc-fork')
       expect(store.publicSettingsLoaded).toBe(true)
     })
 

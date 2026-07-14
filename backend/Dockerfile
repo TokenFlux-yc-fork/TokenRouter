@@ -15,8 +15,9 @@ RUN go mod download
 COPY . .
 
 # 构建应用
+ARG FORK_ID=
 RUN VERSION_VALUE="$(./scripts/resolve-version.sh)" && \
-    go build -ldflags="-s -w -X main.Version=${VERSION_VALUE}" -o main ./cmd/server/
+    go build -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.ForkID=${FORK_ID}" -o main ./cmd/server/
 
 # 暴露端口
 EXPOSE 8080
