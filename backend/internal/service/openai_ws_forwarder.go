@@ -414,9 +414,57 @@ func (s *OpenAIGatewayService) persistOpenAIWSErrorSignal(ctx context.Context, a
 		s.persistOpenAIWSRateLimitSignal(ctx, account, headers, responseBody, codeRaw, errTypeRaw, msgRaw)
 		return
 	}
-	if openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw) == http.StatusForbidden {
+	statusCode := openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	if statusCode == http.StatusForbidden {
 		s.persistOpenAIWSForbiddenSignal(ctx, account, headers, responseBody)
 	}
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
+	if s == nil || s.rateLimitService == nil || account == nil {
+		return
+	}
+	if IsOpenAICyberWarningPayload(responseBody, extractOpenAIWSUpstreamWarningMessage(responseBody)) {
+		return
+	}
+	s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSFinalErrorEventPassiveAccountFailure(
+	ctx context.Context,
+	account *Account,
+	responseBody []byte,
+	codeRaw string,
+	errTypeRaw string,
+	msgRaw string,
+) {
+	if isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
+		return
+	}
+	statusCode := openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
+	if statusCode == http.StatusForbidden {
+		return
+	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, statusCode, responseBody)
+}
+
+func (s *OpenAIGatewayService) recordOpenAIWSDialPassiveAccountFailure(ctx context.Context, account *Account, err error) {
+	if err == nil {
+		return
+	}
+	var dialErr *openAIWSDialError
+	if !errors.As(err, &dialErr) || dialErr == nil {
+		return
+	}
+	switch dialErr.StatusCode {
+	case http.StatusTooManyRequests:
+		return
+	case http.StatusForbidden:
+		if account != nil && account.IsOpenAIOAuth() {
+			return
+		}
+	}
+	s.recordOpenAIWSPassiveAccountFailure(ctx, account, dialErr.StatusCode, []byte(strings.TrimSpace(err.Error())))
 }
 
 func (s *OpenAIGatewayService) persistOpenAIWSForbiddenSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
