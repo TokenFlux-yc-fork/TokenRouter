@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -1213,6 +1214,27 @@ func TestBuildCodexUsageProgressFromExtra_ZerosExpiredWindow(t *testing.T) {
 			t.Fatalf("expected Utilization=0 for expired 7d window, got %v", progress.Utilization)
 		}
 	})
+}
+
+func TestBuildCodexUsageProgressFromExtraRejectsNonFiniteUtilization(t *testing.T) {
+	t.Parallel()
+	tests := map[string]any{
+		"float NaN":    math.NaN(),
+		"positive Inf": math.Inf(1),
+		"negative Inf": math.Inf(-1),
+		"string NaN":   "NaN",
+		"string +Inf":  "+Inf",
+		"string -Inf":  "-Inf",
+	}
+
+	for name, value := range tests {
+		t.Run(name, func(t *testing.T) {
+			extra := map[string]any{"codex_5h_used_percent": value}
+			if progress := buildCodexUsageProgressFromExtra(extra, "5h", time.Now()); progress != nil {
+				t.Fatalf("expected nil progress for %v, got %+v", value, progress)
+			}
+		})
+	}
 }
 
 func TestCodexWindowStatsStart(t *testing.T) {
