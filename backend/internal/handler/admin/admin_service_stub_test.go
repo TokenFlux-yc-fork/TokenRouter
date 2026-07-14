@@ -81,6 +81,10 @@ type stubAdminService struct {
 	mu                      sync.Mutex
 }
 
+func (s *stubAdminService) GetOpenAIOAuthPoolCapacity(context.Context) (*service.OpenAIOAuthPoolCapacitySummary, error) {
+	return &service.OpenAIOAuthPoolCapacitySummary{}, nil
+}
+
 func newStubAdminService() *stubAdminService {
 	now := time.Now().UTC()
 	user := service.User{

@@ -76,3 +76,16 @@ describe('AppSidebar admin personal menu', () => {
     expect(dashboardIndex).toBeLessThan(modelsIndex)
   })
 })
+
+describe('AppSidebar OpenAI OAuth capacity entry', () => {
+  it('places the capacity page directly after account management', () => {
+    const accountsIndex = componentSource.indexOf("{ path: '/admin/accounts'")
+    const capacityIndex = componentSource.indexOf("{ path: '/admin/openai-oauth-capacity'")
+    const announcementsIndex = componentSource.indexOf("{ path: '/admin/announcements'")
+
+    expect(accountsIndex).toBeGreaterThanOrEqual(0)
+    expect(capacityIndex).toBeGreaterThan(accountsIndex)
+    expect(capacityIndex).toBeLessThan(announcementsIndex)
+    expect(componentSource).toContain("label: t('nav.openaiOAuthCapacity')")
+  })
+})
