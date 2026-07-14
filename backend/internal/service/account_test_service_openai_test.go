@@ -289,6 +289,54 @@ func TestAccountTestService_RunTestBackgroundWithPromptAndUserAgentOverridesHead
 	require.Equal(t, "codex-tui", upstream.requests[0].Header.Get("Originator"))
 }
 
+func TestAccountTestService_RunTestBackgroundUsesPoolModeActiveRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	success := newJSONResponse(http.StatusOK, "")
+	success.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	account := &Account{
+		ID:          902,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":                       "sk-test",
+			"base_url":                      "https://compat-upstream.example",
+			"pool_mode":                     true,
+			"pool_mode_retry_count":         2,
+			"pool_mode_retry_status_codes":  []any{float64(http.StatusTooManyRequests)},
+			"custom_error_codes_enabled":    true,
+			"custom_error_codes":            []any{float64(http.StatusTooManyRequests)},
+			"custom_error_retry_after_secs": 60,
+			"custom_error_cooldown_minutes": 5,
+		},
+	}
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusTooManyRequests, `{"error":{"message":"temporarily busy"}}`),
+		success,
+	}}
+	svc := &AccountTestService{
+		accountRepo:         repo,
+		httpUpstream:        upstream,
+		cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		tlsFPProfileService: nil,
+	}
+
+	result, err := svc.RunTestBackground(context.Background(), account.ID, "gpt-5.4")
+
+	require.NoError(t, err)
+	require.Equal(t, "success", result.Status)
+	require.Len(t, upstream.requests, 2)
+	require.Zero(t, repo.rateLimitedID, "retryable pool-mode probe failures should not mark account rate-limited before retry is exhausted")
+}
+
 func TestAccountTestService_OpenAI429PersistsSnapshotAndRateLimitState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()
