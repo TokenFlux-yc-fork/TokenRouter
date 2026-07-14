@@ -145,9 +145,7 @@ export interface OpenAIOAuthPoolCapacityUnknownPlanType {
   account_count: number
 }
 
-export interface OpenAIOAuthPoolCapacitySummary {
-  generated_at: string
-  five_hour_ratio: number
+export interface OpenAIOAuthPoolCapacityBreakdown {
   managed_account_count: number
   included_account_count: number
   excluded_account_count: number
@@ -156,6 +154,20 @@ export interface OpenAIOAuthPoolCapacitySummary {
   unknown_plan_types: OpenAIOAuthPoolCapacityUnknownPlanType[]
   totals: OpenAIOAuthPoolCapacityTotals
   plans: OpenAIOAuthPoolCapacityPlanSummary[]
+}
+
+export interface OpenAIOAuthPoolCapacityGroupSummary
+  extends OpenAIOAuthPoolCapacityBreakdown {
+  group_id: number
+  group_name: string
+  group_status: string
+  sort_order: number
+}
+
+export interface OpenAIOAuthPoolCapacitySummary extends OpenAIOAuthPoolCapacityBreakdown {
+  generated_at: string
+  five_hour_ratio: number
+  groups: OpenAIOAuthPoolCapacityGroupSummary[]
 }
 
 /**
