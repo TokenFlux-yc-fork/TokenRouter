@@ -69,6 +69,21 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoUpdateAvailable)
 }
 
+func TestProvideUpdateServiceKeepsForkIdentityOutOfVersionComparison(t *testing.T) {
+	svc := ProvideUpdateService(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.1.224"}},
+		BuildInfo{Version: "0.1.224", ForkID: "yc-fork", BuildType: "release"},
+	)
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.Equal(t, "0.1.224", info.CurrentVersion)
+	require.Equal(t, "yc-fork", info.ForkID)
+	require.False(t, info.HasUpdate)
+}
+
 func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateService {
 	return NewUpdateService(
 		&updateServiceCacheStub{},

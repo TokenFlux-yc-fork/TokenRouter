@@ -45,6 +45,7 @@ func (h *SystemHandler) GetVersion(c *gin.Context) {
 	info, _ := h.updateSvc.CheckUpdate(c.Request.Context(), false)
 	response.Success(c, gin.H{
 		"version": info.CurrentVersion,
+		"fork_id": info.ForkID,
 	})
 }
 

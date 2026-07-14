@@ -61,7 +61,7 @@ func TestSettingHandler_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t 
 			service.SettingKeyForceEmailOnThirdPartySignup: "true",
 		},
 	}
-	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version")
+	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version", "")
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -90,7 +90,7 @@ func TestSettingHandler_GetPublicSettings_ExposesAffiliateEnabled(t *testing.T) 
 			service.SettingKeyAffiliateEnabled: "true",
 		},
 	}
-	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version")
+	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version", "")
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -111,6 +111,35 @@ func TestSettingHandler_GetPublicSettings_ExposesAffiliateEnabled(t *testing.T) 
 	require.True(t, resp.Data.AffiliateEnabled)
 }
 
+func TestSettingHandler_GetPublicSettings_ExposesBuildIdentitySeparately(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := NewSettingHandler(
+		service.NewSettingService(&settingHandlerPublicRepoStub{values: map[string]string{}}, &config.Config{}),
+		"0.1.224",
+		"yc-fork",
+	)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/public", nil)
+
+	h.GetPublicSettings(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Version string `json:"version"`
+			ForkID  string `json:"fork_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, "0.1.224", resp.Data.Version)
+	require.Equal(t, "yc-fork", resp.Data.ForkID)
+}
+
 func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{
@@ -125,7 +154,7 @@ func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *
 			service.SettingKeyWeChatConnectRedirectURL:         "https://api.example.com/api/v1/auth/oauth/wechat/callback",
 			service.SettingKeyWeChatConnectFrontendRedirectURL: "/auth/wechat/callback",
 		},
-	}, &config.Config{}), "test-version")
+	}, &config.Config{}), "test-version", "")
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
