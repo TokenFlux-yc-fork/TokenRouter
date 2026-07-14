@@ -138,6 +138,9 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 				sleepGeminiBackoff(attempt)
 				continue
 			}
+			if s.rateLimitService != nil {
+				s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
+			}
 			setOpsUpstreamError(c, 0, safeErr, "")
 			return nil, s.writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed after retries: "+safeErr)
 		}

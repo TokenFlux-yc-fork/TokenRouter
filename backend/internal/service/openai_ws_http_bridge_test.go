@@ -224,6 +224,66 @@ func TestProxyOpenAIWSHTTPBridgeTurnForGrokDefaultsEmptyModelTo45(t *testing.T) 
 	require.Len(t, events, 2)
 }
 
+func TestOpenAIWSHTTPBridgeServerErrorAfterOutputRecordsPassiveFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	sseBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_bridge_error","model":"gpt-5.1"}}`,
+		"",
+		`data: {"type":"error","error":{"type":"server_error","message":"temporary upstream error"}}`,
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(sseBody)),
+	}}
+	account := &Account{
+		ID:          72,
+		Name:        "openai-http-bridge-error",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":   "sk-test",
+			"pool_mode": true,
+		},
+	}
+	repo := &openAIWSRateLimitSignalRepo{stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{*account}}}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Gateway:  config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+			Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}},
+		},
+		accountRepo:      repo,
+		rateLimitService: &RateLimitService{accountRepo: repo},
+		httpUpstream:     upstream,
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	payload := []byte(`{"type":"response.create","model":"gpt-5.1","stream":true,"input":"hi"}`)
+	var messages [][]byte
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "", "", "", "", 1,
+		func(message []byte) error {
+			messages = append(messages, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.Len(t, messages, 2, "the error is terminal after response.created was already relayed")
+	require.Equal(t, "response.created", gjson.GetBytes(messages[0], "type").String())
+	require.Equal(t, "error", gjson.GetBytes(messages[1], "type").String())
+	require.Len(t, repo.tempCalls, 1)
+}
+
 func TestProxyResponsesWebSocketFromClientForGrokUsesXAIHTTPBridge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -95,9 +95,7 @@ func (s *FailoverState) HandleFailoverError(
 	}
 
 	// 同账号重试用尽，执行临时封禁
-	if failoverErr.RetryableOnSameAccount {
-		gatewayService.TempUnscheduleRetryableError(ctx, accountID, failoverErr)
-	}
+	tempUnscheduleRetryableFailoverExhausted(ctx, gatewayService, accountID, failoverErr)
 
 	// 加入失败列表
 	s.FailedAccountIDs[accountID] = struct{}{}
@@ -125,6 +123,18 @@ func (s *FailoverState) HandleFailoverError(
 	}
 
 	return FailoverContinue
+}
+
+func tempUnscheduleRetryableFailoverExhausted(
+	ctx context.Context,
+	gatewayService TempUnscheduler,
+	accountID int64,
+	failoverErr *service.UpstreamFailoverError,
+) {
+	if gatewayService == nil || failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+		return
+	}
+	gatewayService.TempUnscheduleRetryableError(ctx, accountID, failoverErr)
 }
 
 // HandleSelectionExhausted 处理选号失败（所有候选账号都在排除列表中）时的退避重试决策。

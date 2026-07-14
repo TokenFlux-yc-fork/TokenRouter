@@ -556,6 +556,9 @@ urlFallbackLoop:
 					continue
 				}
 				logger.LegacyPrintf("service.antigravity_gateway", "%s status=request_failed retries_exhausted error=%v", p.prefix, err)
+				if s.rateLimitService != nil {
+					s.rateLimitService.RecordUpstreamRequestFailure(p.ctx, p.account, err)
+				}
 				setOpsUpstreamError(p.c, 0, safeErr, "")
 				return nil, fmt.Errorf("upstream request failed after retries: %w", err)
 			}
@@ -1184,6 +1187,9 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 	requestedModel string,
 	groupID int64, sessionHash string, isStickySession bool,
 ) *handleModelRateLimitResult {
+	if s.rateLimitService != nil && shouldRecordAntigravityPassiveAccountFailure(statusCode) {
+		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
+	}
 	// 遵守自定义错误码策略：未命中则跳过所有限流处理
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return nil
@@ -1259,6 +1265,10 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 		logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d marked_error", prefix, statusCode)
 	}
 	return nil
+}
+
+func shouldRecordAntigravityPassiveAccountFailure(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || statusCode == http.StatusServiceUnavailable
 }
 
 // getDefaultRateLimitDuration 获取默认限流时间
