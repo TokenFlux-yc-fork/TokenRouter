@@ -10,7 +10,10 @@ describe('OpenAI OAuth capacity locale keys', () => {
       parentRemaining: '主周期剩余额度',
       fiveHourRemaining: '5h 剩余额度',
       weeklyRemaining: '周剩余额度',
-      monthlyRemaining: '月剩余额度'
+      monthlyRemaining: '月剩余额度',
+      allGroups: '全部分组',
+      ungrouped: '未分组',
+      groupOverview: '分组概览'
     })
   })
 
@@ -21,7 +24,10 @@ describe('OpenAI OAuth capacity locale keys', () => {
       parentRemaining: 'Primary window remaining',
       fiveHourRemaining: '5-hour remaining',
       weeklyRemaining: 'Weekly remaining',
-      monthlyRemaining: 'Monthly remaining'
+      monthlyRemaining: 'Monthly remaining',
+      allGroups: 'All groups',
+      ungrouped: 'Ungrouped',
+      groupOverview: 'Group overview'
     })
   })
 })

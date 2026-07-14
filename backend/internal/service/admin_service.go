@@ -67,8 +67,8 @@ type AdminService interface {
 	// ListOpenAISchedulableAccountsForSchedulerScore 返回指定分组（nil 为未分组）内
 	// 可调度的 OpenAI 账号，用于按组计算调度分数。
 	ListOpenAISchedulableAccountsForSchedulerScore(ctx context.Context, groupID *int64) ([]Account, error)
-	// GetOpenAIOAuthPoolCapacity returns the estimated 5-hour and long-window
-	// capacity for active OpenAI OAuth accounts in the managed pool.
+	// GetOpenAIOAuthPoolCapacity returns global and per-group 5-hour and
+	// long-window capacity for OpenAI OAuth accounts in the managed pool.
 	GetOpenAIOAuthPoolCapacity(ctx context.Context) (*OpenAIOAuthPoolCapacitySummary, error)
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	GetAccountsByIDs(ctx context.Context, ids []int64) ([]*Account, error)

@@ -86,6 +86,29 @@
           </button>
         </div>
 
+        <section
+          data-test="capacity-group-controls"
+          class="flex flex-col gap-3 border-y border-gray-200 py-4 sm:flex-row sm:items-end sm:justify-between dark:border-dark-700"
+          :aria-label="t('admin.openaiOAuthCapacity.groupFilter')"
+        >
+          <div class="min-w-0">
+            <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
+              {{ t('admin.openaiOAuthCapacity.groupFilter') }}
+            </p>
+            <p class="mt-1 truncate text-sm font-semibold text-gray-900 dark:text-white">
+              {{ selectedScopeLabel }}
+            </p>
+          </div>
+          <Select
+            v-model="selectedGroupID"
+            data-test="capacity-group-filter"
+            class="w-full sm:w-72"
+            :options="groupOptions"
+            :aria-label="t('admin.openaiOAuthCapacity.groupFilter')"
+            searchable
+          />
+        </section>
+
         <section :aria-label="t('admin.openaiOAuthCapacity.capacitySummary')">
           <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <article
@@ -152,7 +175,12 @@
 
         <section :aria-label="t('admin.openaiOAuthCapacity.accountScope')">
           <dl class="grid grid-cols-2 gap-x-6 gap-y-4 border-y border-gray-200 py-4 sm:grid-cols-3 xl:grid-cols-5 dark:border-dark-700">
-            <div v-for="item in accountScopeItems" :key="item.key" class="min-w-0">
+            <div
+              v-for="item in accountScopeItems"
+              :key="item.key"
+              class="min-w-0"
+              :data-test="`capacity-scope-${item.key}`"
+            >
               <dt class="truncate text-xs text-gray-500 dark:text-gray-400" :title="item.label">
                 {{ item.label }}
               </dt>
@@ -163,15 +191,94 @@
           </dl>
         </section>
 
+        <section class="space-y-3" :aria-label="t('admin.openaiOAuthCapacity.groupOverview')">
+          <div>
+            <h2 class="text-base font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.openaiOAuthCapacity.groupOverview') }}
+            </h2>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.openaiOAuthCapacity.groupTotalsNonAdditive') }}
+            </p>
+          </div>
+          <div class="overflow-x-auto border-y border-gray-200 dark:border-dark-700">
+            <table data-test="capacity-groups" class="min-w-[780px] w-full text-left text-sm">
+              <thead class="bg-gray-50 text-xs text-gray-500 dark:bg-dark-800/60 dark:text-gray-400">
+                <tr>
+                  <th scope="col" class="px-3 py-2.5 font-medium">
+                    {{ t('admin.openaiOAuthCapacity.groupName') }}
+                  </th>
+                  <th scope="col" class="px-3 py-2.5 text-right font-medium">
+                    {{ t('admin.openaiOAuthCapacity.managedAccounts') }}
+                  </th>
+                  <th scope="col" class="px-3 py-2.5 text-right font-medium">
+                    {{ t('admin.openaiOAuthCapacity.includedAccounts') }}
+                  </th>
+                  <th scope="col" class="px-3 py-2.5 text-right font-medium">
+                    {{ t('admin.openaiOAuthCapacity.fiveHourRemaining') }}
+                  </th>
+                  <th scope="col" class="px-3 py-2.5 text-right font-medium">
+                    {{ t('admin.openaiOAuthCapacity.weeklyRemaining') }}
+                  </th>
+                  <th scope="col" class="px-3 py-2.5 text-right font-medium">
+                    {{ t('admin.openaiOAuthCapacity.monthlyRemaining') }}
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                <tr
+                  v-for="group in summary.groups"
+                  :key="group.group_id"
+                  :data-test="`capacity-group-row-${group.group_id}`"
+                  :class="isSelectedGroup(group.group_id) ? 'bg-primary-50/70 dark:bg-primary-950/20' : ''"
+                >
+                  <td class="px-3 py-2.5">
+                    <div class="flex min-w-0 items-center gap-2">
+                      <button
+                        type="button"
+                        class="max-w-56 truncate font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                        :title="groupLabel(group)"
+                        @click="selectGroup(group.group_id)"
+                      >
+                        {{ groupLabel(group) }}
+                      </button>
+                      <span
+                        v-if="group.group_id !== 0 && group.group_status !== 'active'"
+                        class="inline-flex flex-shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-500 dark:bg-dark-700 dark:text-gray-400"
+                      >
+                        {{ t('admin.openaiOAuthCapacity.groupDisabled') }}
+                      </span>
+                    </div>
+                  </td>
+                  <td class="whitespace-nowrap px-3 py-2.5 text-right text-gray-700 dark:text-gray-200">
+                    {{ formatCount(group.managed_account_count) }}
+                  </td>
+                  <td class="whitespace-nowrap px-3 py-2.5 text-right text-gray-700 dark:text-gray-200">
+                    {{ formatCount(group.included_account_count) }}
+                  </td>
+                  <td class="whitespace-nowrap px-3 py-2.5 text-right font-medium text-gray-900 dark:text-white">
+                    {{ formatMoney(group.totals.five_hour.estimated_remaining_usd) }}
+                  </td>
+                  <td class="whitespace-nowrap px-3 py-2.5 text-right font-medium text-gray-900 dark:text-white">
+                    {{ formatMoney(group.totals.weekly.estimated_remaining_usd) }}
+                  </td>
+                  <td class="whitespace-nowrap px-3 py-2.5 text-right font-medium text-gray-900 dark:text-white">
+                    {{ formatMoney(group.totals.monthly.estimated_remaining_usd) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <div
-          v-if="summary.unknown_plan_account_count > 0"
+          v-if="unknownPlanAccountCount > 0"
           data-test="unknown-plan-warning"
           class="border-l-4 border-amber-400 bg-amber-50 px-4 py-3 dark:border-amber-500 dark:bg-amber-950/20"
         >
           <p class="text-sm font-medium text-amber-800 dark:text-amber-200">
             {{
               t('admin.openaiOAuthCapacity.unknownPlanWarning', {
-                count: formatCount(summary.unknown_plan_account_count)
+                count: formatCount(unknownPlanAccountCount)
               })
             }}
           </p>
@@ -302,11 +409,14 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type {
+  OpenAIOAuthPoolCapacityBreakdown,
+  OpenAIOAuthPoolCapacityGroupSummary,
   OpenAIOAuthPoolCapacityPlanSummary,
   OpenAIOAuthPoolCapacitySummary,
   OpenAIOAuthPoolCapacityWindowSummary
 } from '@/api/admin/accounts'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import { formatDateTime, formatNumber } from '@/utils/format'
@@ -330,6 +440,7 @@ const { t } = useI18n()
 const { formatUsdAmount } = useBalanceDisplay()
 
 const summary = ref<OpenAIOAuthPoolCapacitySummary | null>(null)
+const selectedGroupID = ref<SelectOption['value']>('all')
 const loading = ref(false)
 const loadFailed = ref(false)
 
@@ -337,73 +448,110 @@ const formatMoney = (value: number) => formatUsdAmount(value, { fractionDigits: 
 const formatCount = (value: number) => formatNumber(value)
 const formatRatio = (value: number) => `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`
 
-const summaryCards = computed<SummaryCard[]>(() => {
+const activeBreakdown = computed<OpenAIOAuthPoolCapacityBreakdown | null>(() => {
+  if (!summary.value) return null
+  if (selectedGroupID.value === 'all') return summary.value
+  return summary.value.groups.find((group) => group.group_id === Number(selectedGroupID.value)) ?? summary.value
+})
+
+const groupLabel = (group: OpenAIOAuthPoolCapacityGroupSummary) => {
+  if (group.group_id === 0) return t('admin.openaiOAuthCapacity.ungrouped')
+  return group.group_name || `#${group.group_id}`
+}
+
+const groupOptions = computed<SelectOption[]>(() => {
   if (!summary.value) return []
+  return [
+    {
+      value: 'all',
+      label: `${t('admin.openaiOAuthCapacity.allGroups')} (${formatCount(summary.value.managed_account_count)})`
+    },
+    ...summary.value.groups.map((group) => ({
+      value: group.group_id,
+      label: `${groupLabel(group)} (${formatCount(group.managed_account_count)})`
+    }))
+  ]
+})
+
+const selectedScopeLabel = computed(() => {
+  if (!summary.value || selectedGroupID.value === 'all') return t('admin.openaiOAuthCapacity.allGroups')
+  const group = summary.value.groups.find((item) => item.group_id === Number(selectedGroupID.value))
+  return group ? groupLabel(group) : t('admin.openaiOAuthCapacity.allGroups')
+})
+
+const isSelectedGroup = (groupID: number) => selectedGroupID.value !== 'all' && Number(selectedGroupID.value) === groupID
+const selectGroup = (groupID: number) => {
+  selectedGroupID.value = groupID
+}
+
+const summaryCards = computed<SummaryCard[]>(() => {
+  if (!activeBreakdown.value) return []
   return [
     {
       key: 'parent',
       label: t('admin.openaiOAuthCapacity.parentRemaining'),
       icon: 'dollar',
       iconClass: 'bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400',
-      window: summary.value.totals.parent
+      window: activeBreakdown.value.totals.parent
     },
     {
       key: 'five-hour',
       label: t('admin.openaiOAuthCapacity.fiveHourRemaining'),
       icon: 'clock',
       iconClass: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400',
-      window: summary.value.totals.five_hour
+      window: activeBreakdown.value.totals.five_hour
     },
     {
       key: 'weekly',
       label: t('admin.openaiOAuthCapacity.weeklyRemaining'),
       icon: 'chartBar',
       iconClass: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400',
-      window: summary.value.totals.weekly
+      window: activeBreakdown.value.totals.weekly
     },
     {
       key: 'monthly',
       label: t('admin.openaiOAuthCapacity.monthlyRemaining'),
       icon: 'calendar',
       iconClass: 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400',
-      window: summary.value.totals.monthly
+      window: activeBreakdown.value.totals.monthly
     }
   ]
 })
 
 const accountScopeItems = computed(() => {
-  if (!summary.value) return []
+  if (!activeBreakdown.value) return []
   return [
     {
       key: 'managed',
       label: t('admin.openaiOAuthCapacity.managedAccounts'),
-      value: summary.value.managed_account_count
+      value: activeBreakdown.value.managed_account_count
     },
     {
       key: 'included',
       label: t('admin.openaiOAuthCapacity.includedAccounts'),
-      value: summary.value.included_account_count
+      value: activeBreakdown.value.included_account_count
     },
     {
       key: 'excluded',
       label: t('admin.openaiOAuthCapacity.excludedAccounts'),
-      value: summary.value.excluded_account_count
+      value: activeBreakdown.value.excluded_account_count
     },
     {
       key: 'shadow',
       label: t('admin.openaiOAuthCapacity.shadowAccounts'),
-      value: summary.value.shadow_account_count
+      value: activeBreakdown.value.shadow_account_count
     },
     {
       key: 'unknown-plan',
       label: t('admin.openaiOAuthCapacity.unknownPlanAccounts'),
-      value: summary.value.unknown_plan_account_count
+      value: activeBreakdown.value.unknown_plan_account_count
     }
   ]
 })
 
-const unknownPlanTypes = computed(() => summary.value?.unknown_plan_types ?? [])
-const visiblePlans = computed(() => summary.value?.plans.filter((plan) => plan.account_count > 0) ?? [])
+const unknownPlanAccountCount = computed(() => activeBreakdown.value?.unknown_plan_account_count ?? 0)
+const unknownPlanTypes = computed(() => activeBreakdown.value?.unknown_plan_types ?? [])
+const visiblePlans = computed(() => activeBreakdown.value?.plans.filter((plan) => plan.account_count > 0) ?? [])
 
 const normalizePlanType = (planType: string) =>
   planType.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-') || 'unknown'
@@ -449,7 +597,14 @@ const loadSummary = async () => {
   loading.value = true
   loadFailed.value = false
   try {
-    summary.value = await adminAPI.accounts.getOpenAIOAuthPoolCapacity()
+    const nextSummary = await adminAPI.accounts.getOpenAIOAuthPoolCapacity()
+    if (
+      selectedGroupID.value !== 'all' &&
+      !nextSummary.groups.some((group) => group.group_id === Number(selectedGroupID.value))
+    ) {
+      selectedGroupID.value = 'all'
+    }
+    summary.value = nextSummary
   } catch (error) {
     loadFailed.value = true
     console.error('Failed to load OpenAI OAuth pool capacity:', error)
