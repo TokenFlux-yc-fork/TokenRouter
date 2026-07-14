@@ -204,6 +204,9 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 					)
 					return
 				}
+				if failoverErr.ShouldReportAccountScheduleFailure() {
+					tempUnscheduleRetryableFailoverExhausted(c.Request.Context(), h.gatewayService, account.ID, failoverErr)
+				}
 				h.gatewayService.RecordOpenAIAccountSwitch()
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr

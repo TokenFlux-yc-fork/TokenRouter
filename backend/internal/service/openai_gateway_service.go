@@ -442,6 +442,20 @@ type OpenAIGatewayService struct {
 	openaiCompatAnthropicDigestSessions sync.Map
 }
 
+// TempUnscheduleRetryableError records a pool-mode failure only after the
+// handler has exhausted retries on the selected OpenAI account.
+func (s *OpenAIGatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
+	if s == nil || s.accountRepo == nil || s.rateLimitService == nil || failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+		return
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		slog.Warn("openai_retryable_error_passive_account_lookup_failed", "account_id", accountID, "status_code", failoverErr.StatusCode, "error", err)
+		return
+	}
+	s.rateLimitService.recordPassiveAccountFailure(ctx, account, failoverErr.StatusCode, failoverErr.ResponseBody)
+}
+
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
 func NewOpenAIGatewayService(
 	accountRepo AccountRepository,

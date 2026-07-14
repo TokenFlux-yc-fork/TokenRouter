@@ -238,6 +238,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(err.Error())))
 			}
 		}
+		s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, err)
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
 	// cleanExit 标记正常终端事件退出，此时上游不会再发送帧，连接可安全归还复用。

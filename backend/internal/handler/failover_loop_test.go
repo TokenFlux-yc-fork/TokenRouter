@@ -446,6 +446,22 @@ func TestHandleFailoverError_SameAccountRetry(t *testing.T) {
 		require.Equal(t, 1, fs.SwitchCount, "应立即切换账号")
 		require.Len(t, mock.calls, 1, "应立即 TempUnschedule")
 	})
+
+	t.Run("provider scope retry exhaustion does not temp unschedule account", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(5, false)
+		err := &service.UpstreamFailoverError{
+			Stage:                  service.GatewayFailureStageAccountAuth,
+			Scope:                  service.GatewayFailureScopeProvider,
+			NextAccountAction:      service.NextAccountRetry,
+			RetryableOnSameAccount: true,
+		}
+
+		action := fs.HandleFailoverError(context.Background(), mock, 100, service.PlatformGrok, 0, err)
+
+		require.Equal(t, FailoverContinue, action)
+		require.Empty(t, mock.calls)
+	})
 }
 
 // ---------------------------------------------------------------------------
