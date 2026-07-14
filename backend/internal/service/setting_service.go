@@ -51,6 +51,7 @@ type SettingService struct {
 	cfg                         *config.Config
 	onUpdate                    func() // Callback when settings are updated (for cache invalidation)
 	version                     string // Application version
+	forkID                      string // Stable fork identifier injected at build time
 	webSearchManagerBuilder     WebSearchManagerBuilder
 	antigravityUAVersionCache   atomic.Value // *cachedAntigravityUserAgentVersion
 	antigravityUAVersionSF      singleflight.Group
@@ -245,6 +246,11 @@ func (s *SettingService) SetOnUpdateCallback(callback func()) {
 // SetVersion sets the application version for injection into public settings
 func (s *SettingService) SetVersion(version string) {
 	s.version = version
+}
+
+// SetForkID sets the build-time fork identifier for public settings injection.
+func (s *SettingService) SetForkID(forkID string) {
+	s.forkID = forkID
 }
 
 // getStringOrDefault 获取字符串值或默认值

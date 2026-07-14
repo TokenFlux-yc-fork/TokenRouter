@@ -12,7 +12,7 @@
         ]"
         :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
       >
-        <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
+        <span v-if="displayVersion" class="font-medium">{{ displayVersion }}</span>
         <span
           v-else
           class="h-3 w-12 animate-pulse rounded bg-gray-200 font-medium dark:bg-dark-600"
@@ -98,9 +98,9 @@
               <div class="mb-4 text-center">
                 <div class="inline-flex items-center gap-2">
                   <span
-                    v-if="currentVersion"
+                    v-if="displayVersion"
                     class="text-2xl font-bold text-gray-900 dark:text-white"
-                    >v{{ currentVersion }}</span
+                    >{{ displayVersion }}</span
                   >
                   <span v-else class="text-2xl font-bold text-gray-400 dark:text-dark-500">--</span>
                   <!-- Show check mark when up to date -->
@@ -647,8 +647,8 @@
     </template>
 
     <!-- Non-admin: Simple static version text -->
-    <span v-else-if="version" class="text-xs text-gray-500 dark:text-dark-400">
-      v{{ version }}
+    <span v-else-if="displayVersion" class="text-xs text-gray-500 dark:text-dark-400">
+      {{ displayVersion }}
     </span>
   </div>
 </template>
@@ -666,6 +666,7 @@ import {
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
+import { formatBuildIdentity } from '@/utils/buildIdentity'
 
 const GITHUB_REPO = 'TokenFlux/TokenRouter'
 // CI 发布到 GHCR 的镜像 tag 不带 v 前缀，例如 ghcr.io/tokenflux/tokenrouter:0.1.146。
@@ -675,6 +676,7 @@ const { t } = useI18n()
 
 const props = defineProps<{
   version?: string
+  forkId?: string
 }>()
 
 const authStore = useAuthStore()
@@ -688,6 +690,8 @@ const dropdownRef = ref<HTMLElement | null>(null)
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
 const currentVersion = computed(() => appStore.currentVersion || props.version || '')
+const currentForkID = computed(() => appStore.forkID || props.forkId || '')
+const displayVersion = computed(() => formatBuildIdentity(currentVersion.value, currentForkID.value))
 const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)

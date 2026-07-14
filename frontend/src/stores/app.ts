@@ -29,6 +29,7 @@ export const useAppStore = defineStore('app', () => {
   const defaultSiteName = ref<string>('Sub2API')
   const siteLogo = ref<string>('')
   const siteVersion = ref<string>('')
+  const forkID = ref<string>('')
   const contactInfo = ref<string>('')
   const apiBaseUrl = ref<string>('')
   const docUrl = ref<string>('')
@@ -252,6 +253,7 @@ export const useAppStore = defineStore('app', () => {
     if (versionLoaded.value && !force) {
       return {
         current_version: currentVersion.value,
+        fork_id: forkID.value,
         latest_version: latestVersion.value,
         has_update: hasUpdate.value,
         build_type: buildType.value,
@@ -269,6 +271,9 @@ export const useAppStore = defineStore('app', () => {
     try {
       const data = await checkUpdatesAPI(force)
       currentVersion.value = data.current_version
+      if (typeof data.fork_id === 'string') {
+        forkID.value = data.fork_id
+      }
       latestVersion.value = data.latest_version
       hasUpdate.value = data.has_update
       buildType.value = data.build_type || 'source'
@@ -321,6 +326,7 @@ export const useAppStore = defineStore('app', () => {
     defaultSiteName.value = config.site_name || 'Sub2API'
     siteLogo.value = config.site_logo || ''
     siteVersion.value = config.version || ''
+    forkID.value = config.fork_id || ''
     contactInfo.value = config.contact_info || ''
     apiBaseUrl.value = config.api_base_url || ''
     docUrl.value = config.doc_url || ''
@@ -391,6 +397,7 @@ export const useAppStore = defineStore('app', () => {
         google_oauth_enabled: false,
         backend_mode_enabled: false,
         version: siteVersion.value,
+        fork_id: forkID.value,
         balance_unit_name: 'USD',
         balance_unit_symbol: '$',
         balance_icon_svg: '',
@@ -470,6 +477,7 @@ export const useAppStore = defineStore('app', () => {
     siteName,
     siteLogo,
     siteVersion,
+    forkID,
     contactInfo,
     apiBaseUrl,
     docUrl,
