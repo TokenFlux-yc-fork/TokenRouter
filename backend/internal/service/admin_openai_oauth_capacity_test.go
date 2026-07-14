@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +35,48 @@ func (s *openAIOAuthCapacityAccountRepoStub) ListAllWithFilters(
 	s.filters.status = status
 	s.filters.groupID = groupID
 	return append([]Account(nil), s.accounts...), s.err
+}
+
+type openAIOAuthCapacityGroupRepoStub struct {
+	GroupRepository
+	groups []Group
+	err    error
+	calls  int
+	filter struct {
+		platform  string
+		status    string
+		page      int
+		pageSize  int
+		sortBy    string
+		sortOrder string
+	}
+}
+
+func (s *openAIOAuthCapacityGroupRepoStub) ListWithFilters(
+	_ context.Context,
+	params pagination.PaginationParams,
+	platform, status, _ string,
+	_ *bool,
+) ([]Group, *pagination.PaginationResult, error) {
+	s.calls++
+	s.filter.platform = platform
+	s.filter.status = status
+	s.filter.page = params.Page
+	s.filter.pageSize = params.PageSize
+	s.filter.sortBy = params.SortBy
+	s.filter.sortOrder = params.SortOrder
+	if s.err != nil {
+		return nil, nil, s.err
+	}
+	start := (params.Page - 1) * params.PageSize
+	if start >= len(s.groups) {
+		return []Group{}, &pagination.PaginationResult{Total: int64(len(s.groups))}, nil
+	}
+	end := start + params.PageSize
+	if end > len(s.groups) {
+		end = len(s.groups)
+	}
+	return append([]Group(nil), s.groups[start:end]...), &pagination.PaginationResult{Total: int64(len(s.groups))}, nil
 }
 
 func TestBuildOpenAIOAuthPoolCapacityAggregatesPlansAndWindows(t *testing.T) {
@@ -131,6 +175,73 @@ func TestBuildOpenAIOAuthPoolCapacityAggregatesPlansAndWindows(t *testing.T) {
 	require.Equal(t, 0.75, result.Plans[4].FiveHourLimitPerAccountUSD)
 }
 
+func TestBuildOpenAIOAuthPoolCapacityAggregatesOpenAIGroups(t *testing.T) {
+	now := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
+	groups := []Group{
+		{ID: 10, Name: "Alpha", Platform: PlatformOpenAI, Status: StatusActive, SortOrder: 20},
+		{ID: 20, Name: "Beta", Platform: PlatformOpenAI, Status: StatusDisabled, SortOrder: 10},
+		{ID: 30, Name: "Empty", Platform: PlatformOpenAI, Status: StatusActive, SortOrder: 30},
+		{ID: 40, Name: "Other platform", Platform: PlatformAnthropic, Status: StatusActive},
+	}
+	account := func(id int64, plan string, groupIDs ...int64) Account {
+		return Account{
+			ID: id, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+			Status: StatusActive, Schedulable: true, GroupIDs: groupIDs,
+			Credentials: map[string]any{"plan_type": plan}, Extra: map[string]any{},
+		}
+	}
+	accounts := []Account{
+		account(1, "pro", 10, 20, 20),
+		account(2, "free"),
+		account(3, "plus", 999),
+		account(4, "enterprise", 10),
+		account(5, "team", 20),
+		account(6, "k12", 10),
+		account(7, "plus"),
+	}
+	accounts[4].Status = StatusDisabled
+	parentID := int64(1)
+	accounts[5].ParentAccountID = &parentID
+	accounts[6].AccountGroups = []AccountGroup{{GroupID: 10}}
+
+	result := buildOpenAIOAuthPoolCapacityWithGroups(context.Background(), accounts, groups, now, nil)
+
+	require.Equal(t, 7, result.ManagedAccountCount)
+	require.Equal(t, 4, result.IncludedAccountCount)
+	require.Equal(t, 2685.0, result.Totals.Parent.EstimatedLimitUSD)
+	require.Len(t, result.Groups, 4)
+	require.Equal(t, []int64{0, 20, 10, 30}, []int64{
+		result.Groups[0].GroupID,
+		result.Groups[1].GroupID,
+		result.Groups[2].GroupID,
+		result.Groups[3].GroupID,
+	})
+
+	ungrouped := result.Groups[0]
+	require.Equal(t, 1, ungrouped.ManagedAccountCount)
+	require.Equal(t, 1, ungrouped.IncludedAccountCount)
+	require.Equal(t, 5.0, ungrouped.Totals.Parent.EstimatedLimitUSD)
+
+	beta := result.Groups[1]
+	require.Equal(t, StatusDisabled, beta.GroupStatus)
+	require.Equal(t, 2, beta.ManagedAccountCount)
+	require.Equal(t, 1, beta.IncludedAccountCount)
+	require.Equal(t, 1, beta.ExcludedAccountCount)
+	require.Equal(t, 2400.0, beta.Totals.Parent.EstimatedLimitUSD)
+
+	alpha := result.Groups[2]
+	require.Equal(t, 4, alpha.ManagedAccountCount)
+	require.Equal(t, 2, alpha.IncludedAccountCount)
+	require.Equal(t, 1, alpha.ShadowAccountCount)
+	require.Equal(t, 1, alpha.UnknownPlanAccountCount)
+	require.Equal(t, 2540.0, alpha.Totals.Parent.EstimatedLimitUSD)
+
+	empty := result.Groups[3]
+	require.Zero(t, empty.ManagedAccountCount)
+	require.Zero(t, empty.Totals.Parent.EstimatedLimitUSD)
+	require.Len(t, empty.Plans, len(openAIOAuthCapacityPlanRules))
+}
+
 func TestGetOpenAIOAuthPoolCapacityExcludesQuotaAutoPausedAccounts(t *testing.T) {
 	now := time.Now()
 	account := Account{
@@ -223,9 +334,10 @@ func TestBuildOpenAIOAuthPoolCapacityTreatsNonFiniteUsageAsUnobserved(t *testing
 	require.NotContains(t, string(payload), "NaN")
 }
 
-func TestGetOpenAIOAuthPoolCapacityUsesOneFilteredAccountQuery(t *testing.T) {
+func TestGetOpenAIOAuthPoolCapacityUsesFilteredAccountAndGroupQueries(t *testing.T) {
 	repo := &openAIOAuthCapacityAccountRepoStub{accounts: []Account{}}
-	svc := &adminServiceImpl{accountRepo: repo}
+	groupRepo := &openAIOAuthCapacityGroupRepoStub{}
+	svc := &adminServiceImpl{accountRepo: repo, groupRepo: groupRepo}
 
 	result, err := svc.GetOpenAIOAuthPoolCapacity(context.Background())
 
@@ -235,7 +347,45 @@ func TestGetOpenAIOAuthPoolCapacityUsesOneFilteredAccountQuery(t *testing.T) {
 	require.Equal(t, AccountTypeOAuth, repo.filters.accountType)
 	require.Empty(t, repo.filters.status)
 	require.Zero(t, repo.filters.groupID)
+	require.Equal(t, 1, groupRepo.calls)
+	require.Equal(t, PlatformOpenAI, groupRepo.filter.platform)
+	require.Empty(t, groupRepo.filter.status)
+	require.Equal(t, 1, groupRepo.filter.page)
+	require.Equal(t, 1000, groupRepo.filter.pageSize)
+	require.Equal(t, "sort_order", groupRepo.filter.sortBy)
+	require.Equal(t, pagination.SortOrderAsc, groupRepo.filter.sortOrder)
 	require.Len(t, result.Plans, 5)
+	require.Len(t, result.Groups, 1)
+}
+
+func TestGetOpenAIOAuthPoolCapacityLoadsAllGroupPages(t *testing.T) {
+	groups := make([]Group, openAIOAuthCapacityGroupPageSize+1)
+	for i := range groups {
+		groups[i] = Group{
+			ID: int64(i + 1), Name: fmt.Sprintf("group-%d", i+1),
+			Platform: PlatformOpenAI, Status: StatusActive, SortOrder: i,
+		}
+	}
+	account := Account{
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true,
+		GroupIDs:    []int64{int64(len(groups))},
+		Credentials: map[string]any{"plan_type": "plus"}, Extra: map[string]any{},
+	}
+	repo := &openAIOAuthCapacityAccountRepoStub{accounts: []Account{account}}
+	groupRepo := &openAIOAuthCapacityGroupRepoStub{groups: groups}
+	svc := &adminServiceImpl{accountRepo: repo, groupRepo: groupRepo}
+
+	result, err := svc.GetOpenAIOAuthPoolCapacity(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, 2, groupRepo.calls)
+	require.Len(t, result.Groups, len(groups)+1)
+	require.Zero(t, result.Groups[0].ManagedAccountCount)
+	last := result.Groups[len(result.Groups)-1]
+	require.Equal(t, int64(len(groups)), last.GroupID)
+	require.Equal(t, 1, last.ManagedAccountCount)
+	require.Equal(t, 140.0, last.Totals.Parent.EstimatedLimitUSD)
 }
 
 func TestGetOpenAIOAuthPoolCapacityReturnsRepositoryError(t *testing.T) {
@@ -246,6 +396,17 @@ func TestGetOpenAIOAuthPoolCapacityReturnsRepositoryError(t *testing.T) {
 
 	require.Nil(t, result)
 	require.ErrorContains(t, err, "list OpenAI OAuth accounts for capacity")
+}
+
+func TestGetOpenAIOAuthPoolCapacityReturnsGroupRepositoryError(t *testing.T) {
+	repo := &openAIOAuthCapacityAccountRepoStub{}
+	groupRepo := &openAIOAuthCapacityGroupRepoStub{err: errors.New("group query failed")}
+	svc := &adminServiceImpl{accountRepo: repo, groupRepo: groupRepo}
+
+	result, err := svc.GetOpenAIOAuthPoolCapacity(context.Background())
+
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "list OpenAI groups for capacity")
 }
 
 func TestResolveOpenAIOAuthCapacityPlanAliases(t *testing.T) {
