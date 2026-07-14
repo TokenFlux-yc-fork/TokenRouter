@@ -107,6 +107,51 @@
               </p>
             </div>
           </div>
+          <div class="sm:col-span-2 rounded-lg border border-orange-200 bg-orange-50/70 p-3 dark:border-orange-900/60 dark:bg-orange-950/20">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <Toggle v-model="newPlan.account_circuit_breaker_enabled" />
+                  {{ t('admin.scheduledTests.accountCircuitBreaker') }}
+                </label>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.accountCircuitBreakerHelp') }}
+                </p>
+              </div>
+            </div>
+            <div
+              v-if="newPlan.account_circuit_breaker_enabled"
+              class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4"
+            >
+              <div>
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.failureThreshold') }}
+                </label>
+                <Input v-model="newPlan.failure_threshold" type="number" placeholder="3" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.successThreshold') }}
+                </label>
+                <Input v-model="newPlan.success_threshold" type="number" placeholder="2" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.failureCooldownMinutes') }}
+                </label>
+                <Input v-model="newPlan.failure_cooldown_minutes" type="number" placeholder="5" />
+              </div>
+              <div>
+                <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.timeoutSeconds') }}
+                </label>
+                <Input v-model="newPlan.timeout_seconds" type="number" placeholder="30" />
+              </div>
+              <p class="sm:col-span-4 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.scheduledTests.probePolicyHint') }}
+              </p>
+            </div>
+          </div>
         </div>
         <div class="mt-3 flex justify-end gap-2">
           <button
@@ -123,6 +168,123 @@
             <Icon v-if="creating" name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
             {{ t('common.save') }}
           </button>
+        </div>
+      </div>
+
+      <!-- Account Recent Results -->
+      <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-600 dark:bg-dark-800">
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <div class="text-sm font-medium text-gray-900 dark:text-gray-100">
+              {{ t('admin.scheduledTests.accountRecentResults') }}
+            </div>
+            <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.scheduledTests.accountRecentResultsHelp') }}
+            </div>
+          </div>
+          <button
+            @click="loadAccountResults"
+            class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-primary-500 dark:hover:bg-dark-700"
+            :title="t('common.refresh')"
+          >
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': loadingAccountResults }" :stroke-width="2" />
+          </button>
+        </div>
+
+        <div v-if="loadingAccountResults" class="flex items-center justify-center py-4">
+          <Icon name="refresh" size="sm" class="animate-spin text-gray-400" :stroke-width="2" />
+          <span class="ml-2 text-xs text-gray-500">{{ t('common.loading') }}...</span>
+        </div>
+        <div
+          v-else-if="accountResults.length === 0"
+          class="py-4 text-center text-xs text-gray-500 dark:text-gray-400"
+        >
+          {{ t('admin.scheduledTests.noResults') }}
+        </div>
+        <div v-else class="max-h-64 space-y-2 overflow-y-auto">
+          <div
+            v-for="result in accountResults"
+            :key="'account-' + result.id"
+            class="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-900"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span
+                    :class="[
+                      'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
+                      result.status === 'success'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
+                        : result.status === 'running'
+                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400'
+                          : 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400'
+                    ]"
+                  >
+                    {{
+                      result.status === 'success'
+                        ? t('admin.scheduledTests.success')
+                        : result.status === 'running'
+                          ? t('admin.scheduledTests.running')
+                          : t('admin.scheduledTests.failed')
+                    }}
+                  </span>
+                  <span class="truncate text-xs font-medium text-gray-700 dark:text-gray-300">
+                    {{ result.model_id }}
+                  </span>
+                  <span v-if="result.latency_ms > 0" class="text-xs text-gray-500 dark:text-gray-400">
+                    {{ result.latency_ms }}ms
+                  </span>
+                </div>
+                <div class="mt-1 font-mono text-[11px] text-gray-400">
+                  plan #{{ result.plan_id }} · {{ result.cron_expression }}
+                </div>
+              </div>
+              <span class="shrink-0 text-xs text-gray-400">
+                {{ formatDateTime(result.started_at) }}
+              </span>
+            </div>
+
+            <div v-if="result.error_message" class="mt-2">
+              <div
+                class="cursor-pointer text-xs font-medium text-red-600 dark:text-red-400"
+                @click="toggleResultDetail(result.id)"
+              >
+                {{ t('admin.scheduledTests.errorMessage') }}
+                <Icon
+                  name="chevronDown"
+                  size="sm"
+                  :class="[
+                    'inline transition-transform duration-200',
+                    expandedResultIds.has(result.id) ? 'rotate-180' : ''
+                  ]"
+                />
+              </div>
+              <pre
+                v-if="expandedResultIds.has(result.id)"
+                class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-red-50 p-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300"
+              >{{ result.error_message }}</pre>
+            </div>
+            <div v-else-if="result.response_text" class="mt-2">
+              <div
+                class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-400"
+                @click="toggleResultDetail(result.id)"
+              >
+                {{ t('admin.scheduledTests.responseText') }}
+                <Icon
+                  name="chevronDown"
+                  size="sm"
+                  :class="[
+                    'inline transition-transform duration-200',
+                    expandedResultIds.has(result.id) ? 'rotate-180' : ''
+                  ]"
+                />
+              </div>
+              <pre
+                v-if="expandedResultIds.has(result.id)"
+                class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-gray-100 p-2 text-xs text-gray-700 dark:bg-dark-800 dark:text-gray-300"
+              >{{ result.response_text }}</pre>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -183,6 +345,14 @@
                 class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"
               >
                 {{ t('admin.scheduledTests.autoRecover') }}
+              </span>
+
+              <!-- Account Circuit Breaker Badge -->
+              <span
+                v-if="plan.account_circuit_breaker_enabled"
+                class="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-500/20 dark:text-orange-400"
+              >
+                {{ t('admin.scheduledTests.accountCircuitBreakerBadge') }}
               </span>
             </div>
 
@@ -314,6 +484,47 @@
                   </label>
                   <p class="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
                     {{ t('admin.scheduledTests.autoRecoverHelp') }}
+                  </p>
+                </div>
+              </div>
+              <div class="sm:col-span-2 rounded-lg border border-orange-200 bg-orange-50/70 p-3 dark:border-orange-900/60 dark:bg-orange-950/20">
+                <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <Toggle v-model="editForm.account_circuit_breaker_enabled" />
+                  {{ t('admin.scheduledTests.accountCircuitBreaker') }}
+                </label>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.scheduledTests.accountCircuitBreakerHelp') }}
+                </p>
+                <div
+                  v-if="editForm.account_circuit_breaker_enabled"
+                  class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4"
+                >
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t('admin.scheduledTests.failureThreshold') }}
+                    </label>
+                    <Input v-model="editForm.failure_threshold" type="number" placeholder="3" />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t('admin.scheduledTests.successThreshold') }}
+                    </label>
+                    <Input v-model="editForm.success_threshold" type="number" placeholder="2" />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t('admin.scheduledTests.failureCooldownMinutes') }}
+                    </label>
+                    <Input v-model="editForm.failure_cooldown_minutes" type="number" placeholder="5" />
+                  </div>
+                  <div>
+                    <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t('admin.scheduledTests.timeoutSeconds') }}
+                    </label>
+                    <Input v-model="editForm.timeout_seconds" type="number" placeholder="30" />
+                  </div>
+                  <p class="sm:col-span-4 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.scheduledTests.probePolicyHint') }}
                   </p>
                 </div>
               </div>
@@ -475,7 +686,7 @@ import { Icon } from '@/components/icons'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime } from '@/utils/format'
-import type { ScheduledTestPlan, ScheduledTestResult } from '@/types'
+import type { ScheduledTestPlan, ScheduledTestResult, ScheduledTestAccountResult } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -494,8 +705,10 @@ const emit = defineEmits<{
 const loading = ref(false)
 const creating = ref(false)
 const loadingResults = ref(false)
+const loadingAccountResults = ref(false)
 const plans = ref<ScheduledTestPlan[]>([])
 const results = ref<ScheduledTestResult[]>([])
+const accountResults = ref<ScheduledTestAccountResult[]>([])
 const expandedPlanId = ref<number | null>(null)
 const expandedResultIds = reactive(new Set<number>())
 const showAddForm = ref(false)
@@ -508,7 +721,12 @@ const editForm = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  account_circuit_breaker_enabled: false,
+  failure_threshold: '3' as string,
+  success_threshold: '2' as string,
+  failure_cooldown_minutes: '5' as string,
+  timeout_seconds: '30' as string
 })
 
 const newPlan = reactive({
@@ -516,8 +734,18 @@ const newPlan = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  account_circuit_breaker_enabled: false,
+  failure_threshold: '3' as string,
+  success_threshold: '2' as string,
+  failure_cooldown_minutes: '5' as string,
+  timeout_seconds: '30' as string
 })
+
+const toPositiveNumber = (value: string, fallback: number) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback
+}
 
 const resetNewPlan = () => {
   newPlan.model_id = ''
@@ -525,6 +753,11 @@ const resetNewPlan = () => {
   newPlan.max_results = '100'
   newPlan.enabled = true
   newPlan.auto_recover = false
+  newPlan.account_circuit_breaker_enabled = false
+  newPlan.failure_threshold = '3'
+  newPlan.success_threshold = '2'
+  newPlan.failure_cooldown_minutes = '5'
+  newPlan.timeout_seconds = '30'
 }
 
 // Load plans when dialog opens
@@ -532,10 +765,11 @@ watch(
   () => props.show,
   async (visible) => {
     if (visible && props.accountId) {
-      await loadPlans()
+      await Promise.all([loadPlans(), loadAccountResults()])
     } else {
       plans.value = []
       results.value = []
+      accountResults.value = []
       expandedPlanId.value = null
       expandedResultIds.clear()
       showAddForm.value = false
@@ -556,23 +790,40 @@ const loadPlans = async () => {
   }
 }
 
+const loadAccountResults = async () => {
+  if (!props.accountId) return
+  loadingAccountResults.value = true
+  try {
+    accountResults.value = await adminAPI.scheduledTests.listAccountResults(props.accountId, 20)
+  } catch (error: any) {
+    appStore.showError(error?.message || 'Failed to load account results')
+    accountResults.value = []
+  } finally {
+    loadingAccountResults.value = false
+  }
+}
+
 const handleCreate = async () => {
   if (!props.accountId || !newPlan.model_id || !newPlan.cron_expression) return
   creating.value = true
   try {
-    const maxResults = Number(newPlan.max_results) || 100
     await adminAPI.scheduledTests.create({
       account_id: props.accountId,
       model_id: newPlan.model_id,
       cron_expression: newPlan.cron_expression,
       enabled: newPlan.enabled,
-      max_results: maxResults,
-      auto_recover: newPlan.auto_recover
+      max_results: toPositiveNumber(newPlan.max_results, 100),
+      auto_recover: newPlan.auto_recover,
+      account_circuit_breaker_enabled: newPlan.account_circuit_breaker_enabled,
+      failure_threshold: toPositiveNumber(newPlan.failure_threshold, 3),
+      success_threshold: toPositiveNumber(newPlan.success_threshold, 2),
+      failure_cooldown_minutes: toPositiveNumber(newPlan.failure_cooldown_minutes, 5),
+      timeout_seconds: toPositiveNumber(newPlan.timeout_seconds, 30)
     })
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
     resetNewPlan()
-    await loadPlans()
+    await Promise.all([loadPlans(), loadAccountResults()])
   } catch (error: any) {
     appStore.showError(error?.message || 'Failed to create plan')
   } finally {
@@ -600,6 +851,11 @@ const startEdit = (plan: ScheduledTestPlan) => {
   editForm.max_results = String(plan.max_results)
   editForm.enabled = plan.enabled
   editForm.auto_recover = plan.auto_recover
+  editForm.account_circuit_breaker_enabled = plan.account_circuit_breaker_enabled
+  editForm.failure_threshold = String(plan.failure_threshold || 3)
+  editForm.success_threshold = String(plan.success_threshold || 2)
+  editForm.failure_cooldown_minutes = String(plan.failure_cooldown_minutes || 5)
+  editForm.timeout_seconds = String(plan.timeout_seconds || 30)
 }
 
 const cancelEdit = () => {
@@ -613,9 +869,14 @@ const handleEdit = async () => {
     const updated = await adminAPI.scheduledTests.update(editingPlanId.value, {
       model_id: editForm.model_id,
       cron_expression: editForm.cron_expression,
-      max_results: Number(editForm.max_results) || 100,
+      max_results: toPositiveNumber(editForm.max_results, 100),
       enabled: editForm.enabled,
-      auto_recover: editForm.auto_recover
+      auto_recover: editForm.auto_recover,
+      account_circuit_breaker_enabled: editForm.account_circuit_breaker_enabled,
+      failure_threshold: toPositiveNumber(editForm.failure_threshold, 3),
+      success_threshold: toPositiveNumber(editForm.success_threshold, 2),
+      failure_cooldown_minutes: toPositiveNumber(editForm.failure_cooldown_minutes, 5),
+      timeout_seconds: toPositiveNumber(editForm.timeout_seconds, 30)
     })
     const index = plans.value.findIndex((p) => p.id === editingPlanId.value)
     if (index !== -1) {
@@ -623,6 +884,7 @@ const handleEdit = async () => {
     }
     appStore.showSuccess(t('admin.scheduledTests.updateSuccess'))
     editingPlanId.value = null
+    await loadAccountResults()
   } catch (error: any) {
     appStore.showError(error?.message || 'Failed to update plan')
   } finally {
@@ -641,6 +903,7 @@ const handleDelete = async () => {
     await adminAPI.scheduledTests.delete(deletingPlan.value.id)
     appStore.showSuccess(t('admin.scheduledTests.deleteSuccess'))
     plans.value = plans.value.filter((p) => p.id !== deletingPlan.value!.id)
+    accountResults.value = accountResults.value.filter((r) => r.plan_id !== deletingPlan.value!.id)
     if (expandedPlanId.value === deletingPlan.value.id) {
       expandedPlanId.value = null
       results.value = []
