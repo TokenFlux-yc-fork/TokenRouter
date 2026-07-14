@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
+	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,6 +74,32 @@ func TestOpenAIHandleStreamingAwareError_ResponsesStreamingEmitsResponseFailed(t
 	assert.True(t, strings.HasPrefix(id, "resp_"), "id should start with resp_, got %q", id)
 	assert.Equal(t, "rate_limit_exceeded", errObj["code"])
 	assert.Equal(t, "Concurrency limit exceeded for user, please retry later", errObj["message"])
+}
+
+// Native remote compact may have committed HTTP 200 with a ping before all
+// upstream accounts are exhausted. The terminal error must stay on the SSE
+// protocol even when the caller's streamStarted flag has not observed the ping.
+func TestOpenAIHandleFailoverExhausted_NativeCompactPingEmitsResponseFailed(t *testing.T) {
+	c, w := newGinContextForEndpoint(t, EndpointResponses)
+	service.MarkOpenAINativeRemoteCompactionV2(c)
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.WriteHeader(http.StatusOK)
+	_, err := c.Writer.WriteString("event: ping\ndata: {\"type\":\"ping\"}\n\n")
+	require.NoError(t, err)
+	c.Writer.Flush()
+
+	h := &OpenAIGatewayHandler{}
+	h.handleFailoverExhausted(c, &service.UpstreamFailoverError{
+		StatusCode:   http.StatusServiceUnavailable,
+		ResponseBody: []byte(`{"error":{"message":"upstream unavailable"}}`),
+	}, false)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	blocks := strings.Split(strings.TrimSuffix(w.Body.String(), "\n\n"), "\n\n")
+	require.Len(t, blocks, 2, "response must contain one ping and one terminal SSE event")
+	assert.Equal(t, "event: ping\ndata: {\"type\":\"ping\"}", blocks[0])
+	_, errObj := parseResponsesFailedSSE(t, blocks[1]+"\n\n")
+	assert.Equal(t, "upstream_error", errObj["code"])
 }
 
 // 当 setOpsRequestContext 写过 model，合成事件应回填该字段（与 codebase 已有 makeResponsesCompletedEvent 对齐）。
