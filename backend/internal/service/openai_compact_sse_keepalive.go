@@ -6,13 +6,17 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 // openAICompactSSEKeepaliveKey 存放 body-signal compact 请求的下游 SSE 心跳器。
-const openAICompactSSEKeepaliveKey = "openai_compact_sse_keepalive"
+const (
+	openAICompactSSEKeepaliveKey = "openai_compact_sse_keepalive"
+	openAIProtocolKeepaliveKey   = "openai_protocol_keepalive_bytes"
+)
 
 // openAICompactSSEKeepalive 在 compact 上游 unary 等待期间向下游写 SSE 注释行
 // 心跳。上游 /responses/compact 在模型处理期间不发送任何字节（大上下文可长达
@@ -25,10 +29,11 @@ const openAICompactSSEKeepaliveKey = "openai_compact_sse_keepalive"
 // 原 JSON+状态码链路（Codex 按 HTTP 状态码重试）；首拍之后状态码固化为 200，
 // 后续错误由写回方降级为 response.failed 流内终止事件。
 type openAICompactSSEKeepalive struct {
-	mu      sync.Mutex
-	writer  gin.ResponseWriter
-	started bool
-	stopped bool
+	mu         sync.Mutex
+	ginContext *gin.Context
+	writer     gin.ResponseWriter
+	started    bool
+	stopped    bool
 	// bytes 是心跳已写出的注释字节数。心跳不构成语义响应，handler 的
 	// "Forward 期间是否已写响应"判定（failover 放弃换号的依据）必须扣除
 	// 这部分字节，见 OpenAICompactKeepaliveAdjustedWrittenSize。
@@ -48,8 +53,9 @@ func StartOpenAICompactSSEKeepalive(c *gin.Context, interval time.Duration) func
 	}
 	originalWriter := c.Writer
 	k := &openAICompactSSEKeepalive{
-		writer: originalWriter,
-		stop:   make(chan struct{}),
+		ginContext: c,
+		writer:     originalWriter,
+		stop:       make(chan struct{}),
 	}
 	c.Set(openAICompactSSEKeepaliveKey, k)
 	wrappedWriter := &openAICompactKeepaliveWriter{ResponseWriter: originalWriter, k: k}
@@ -106,10 +112,15 @@ func (k *openAICompactSSEKeepalive) beat() bool {
 	n, err := k.writer.Write([]byte(": keepalive\n\n"))
 	k.bytes += n
 	if err != nil {
-		k.stopped = true
+		MarkOpsStreamError(k.ginContext, "downstream_write_error", err.Error(), 0)
+		k.markStoppedLocked()
 		return false
 	}
-	k.writer.Flush()
+	if err := flushOpenAIResponseWriter(k.writer); err != nil {
+		MarkOpsStreamError(k.ginContext, "downstream_flush_error", err.Error(), 0)
+		k.markStoppedLocked()
+		return false
+	}
 	return true
 }
 
@@ -177,6 +188,43 @@ func OpenAICompactKeepaliveAdjustedWrittenSize(c *gin.Context) int {
 	}
 	if real := size - k.bytes; real > 0 {
 		return real
+	}
+	return -1
+}
+
+func recordOpenAIProtocolKeepaliveBytes(c *gin.Context, n int) {
+	if c == nil || n <= 0 {
+		return
+	}
+	value, ok := c.Get(openAIProtocolKeepaliveKey)
+	if !ok {
+		counter := &atomic.Int64{}
+		c.Set(openAIProtocolKeepaliveKey, counter)
+		value = counter
+	}
+	counter, _ := value.(*atomic.Int64)
+	if counter != nil {
+		counter.Add(int64(n))
+	}
+}
+
+// OpenAISemanticWrittenSize excludes keepalive frames ignored by downstream
+// parsers so retry guards only observe model or terminal output.
+func OpenAISemanticWrittenSize(c *gin.Context) int {
+	size := OpenAICompactKeepaliveAdjustedWrittenSize(c)
+	if size < 0 || c == nil {
+		return size
+	}
+	value, ok := c.Get(openAIProtocolKeepaliveKey)
+	if !ok {
+		return size
+	}
+	counter, _ := value.(*atomic.Int64)
+	if counter == nil {
+		return size
+	}
+	if semantic := size - int(counter.Load()); semantic > 0 {
+		return semantic
 	}
 	return -1
 }
@@ -269,6 +317,10 @@ func (w *openAICompactKeepaliveWriter) Pusher() http.Pusher {
 		return nil
 	}
 	return w.ResponseWriter.Pusher()
+}
+
+func (w *openAICompactKeepaliveWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // 状态读取只有在 keepalive 与内层 writer 都有效时才加锁委托。
