@@ -1389,4 +1389,51 @@ export default {
         noData: '该账号暂无使用数据'
       }
     },
+    openaiOAuthCapacity: {
+      title: 'OpenAI OAuth 额度',
+      description: '汇总估算当前 OpenAI OAuth 账号池的剩余可用额度',
+      generatedAt: '生成时间：{time}',
+      refresh: '刷新',
+      retry: '重试',
+      loadFailed: '额度汇总加载失败',
+      loadFailedHint: '当前账号池估算结果暂不可用。',
+      refreshFailed: '刷新失败，当前仍显示上一次额度估算。',
+      capacitySummary: '额度汇总',
+      parentRemaining: '主周期剩余额度',
+      fiveHourRemaining: '5h 剩余额度',
+      weeklyRemaining: '周剩余额度',
+      monthlyRemaining: '月剩余额度',
+      estimatedLimit: '估算总额 {amount}',
+      observedRemaining: '已观测剩余',
+      unobservedLimit: '未观测额度',
+      windowCoverage: '已观测 {observed} · 缺失 {missing} · 过期 {stale}',
+      accountScope: '账号统计范围',
+      managedAccounts: '管理账号',
+      includedAccounts: '纳入估算',
+      excludedAccounts: '排除账号',
+      shadowAccounts: '影子账号',
+      unknownPlanAccounts: '未知套餐',
+      unknownPlanWarning: '{count} 个账号的套餐未知，未计入额度估算。',
+      unknownPlan: '未知',
+      planBreakdown: '套餐明细',
+      planBreakdownDescription: '5h 额度按各套餐主周期额度的 {ratio} 估算。',
+      accountCount: '{count} 个账号',
+      limitPerAccount: '单账号主周期额度',
+      fiveHourLimitPerAccount: '单账号 5h 额度',
+      fiveHourWindow: '5h 周期',
+      ofLimit: '总额 {amount}',
+      missingAndStale: '缺失 {missing} · 过期 {stale}',
+      noPlans: '当前没有纳入估算的 OpenAI OAuth 套餐。',
+      periods: {
+        weekly: '周周期',
+        monthly: '月周期'
+      },
+      plans: {
+        k12: 'K-12',
+        pro: 'Pro',
+        team: 'Team',
+        plus: 'Plus',
+        free: 'Free'
+      }
+    },
 }
