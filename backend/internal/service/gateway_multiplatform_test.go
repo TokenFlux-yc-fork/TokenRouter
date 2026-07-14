@@ -325,6 +325,15 @@ func (m *mockGroupRepoForGateway) GetAccountIDsByGroupIDs(ctx context.Context, g
 func (m *mockGroupRepoForGateway) UpdateSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error {
 	return nil
 }
+func (m *mockGroupRepoForGateway) UpdateHealthStatus(context.Context, int64, *HealthStatusUpdate) error {
+	return nil
+}
+func (m *mockGroupRepoForGateway) UpdateHealthCheckConfig(context.Context, int64, *HealthCheckConfigUpdate) error {
+	return nil
+}
+func (m *mockGroupRepoForGateway) ForceHealthCheck(context.Context, int64) error {
+	return nil
+}
 
 func ptr[T any](v T) *T {
 	return &v

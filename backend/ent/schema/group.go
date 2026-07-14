@@ -207,6 +207,36 @@ func (Group) Fields() []ent.Field {
 			Default(domain.GroupAvailabilityProbeConfig{}).
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
 			Comment("分组主动可用性探测配置"),
+		field.Bool("health_check_enabled").
+			Default(false).
+			Comment("是否启用健康检查与熔断"),
+		field.Int("health_check_interval_sec").
+			Default(60).
+			Comment("健康检查间隔（秒）"),
+		field.Int("health_check_timeout_sec").
+			Default(10).
+			Comment("单次健康检查超时时间（秒）"),
+		field.Int("health_check_failure_threshold").
+			Default(3).
+			Comment("连续失败多少次后触发熔断"),
+		field.Int("health_check_success_threshold").
+			Default(2).
+			Comment("熔断后连续成功多少次后自动恢复"),
+		field.Time("health_last_check_at").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}).
+			Comment("上次健康检查时间"),
+		field.Int("health_consecutive_failures").
+			Default(0).
+			Comment("当前连续失败次数"),
+		field.Int("health_consecutive_successes").
+			Default(0).
+			Comment("当前连续成功次数"),
+		field.String("health_status").
+			MaxLen(20).
+			Default("unknown").
+			Comment("实时健康状态：unknown/healthy/unhealthy"),
 
 		// 分组级每分钟请求数上限（0 = 不限制）。设置后优先于用户级兜底生效。
 		field.Int("rpm_limit").
@@ -253,5 +283,7 @@ func (Group) Indexes() []ent.Index {
 		index.Fields("sort_order"),
 		index.Fields("data_sharing_enabled"),
 		index.Fields("session_isolation_enabled"),
+		index.Fields("health_check_enabled"),
+		index.Fields("health_status"),
 	}
 }
