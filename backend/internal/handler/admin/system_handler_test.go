@@ -109,6 +109,40 @@ func requireSystemLockStatus(t *testing.T, repo *memoryIdempotencyRepoStub, want
 	t.Fatalf("system lock status %q not found in records: %#v", wantStatus, repo.data)
 }
 
+func TestSystemHandlerVersionEndpointsExposeBuildIdentitySeparately(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	updateSvc := &systemHandlerUpdateServiceStub{updateInfo: &service.UpdateInfo{
+		CurrentVersion: "0.1.224",
+		LatestVersion:  "0.1.224",
+		ForkID:         "yc-fork",
+	}}
+	handler := NewSystemHandler(updateSvc, nil)
+	router := gin.New()
+	router.GET("/version", handler.GetVersion)
+	router.GET("/check-updates", handler.CheckUpdates)
+
+	for _, path := range []string{"/version", "/check-updates"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		var body struct {
+			Data struct {
+				Version        string `json:"version"`
+				CurrentVersion string `json:"current_version"`
+				ForkID         string `json:"fork_id"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+		if path == "/version" {
+			require.Equal(t, "0.1.224", body.Data.Version)
+		} else {
+			require.Equal(t, "0.1.224", body.Data.CurrentVersion)
+		}
+		require.Equal(t, "yc-fork", body.Data.ForkID)
+	}
+}
+
 func TestSystemHandlerPerformUpdateAlreadyUpToDateReturnsOK(t *testing.T) {
 	updateSvc := &systemHandlerUpdateServiceStub{
 		performErr: service.ErrNoUpdateAvailable,

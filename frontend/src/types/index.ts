@@ -250,6 +250,7 @@ export interface PublicSettings {
   google_oauth_enabled: boolean
   backend_mode_enabled: boolean
   version: string
+  fork_id?: string
   // 服务器全局时区与当前 UTC 偏移；旧注入缓存可能缺失。
   server_timezone?: string
   server_utc_offset?: string

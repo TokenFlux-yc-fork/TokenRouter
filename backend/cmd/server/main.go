@@ -32,6 +32,7 @@ var embeddedVersion string
 // Build-time variables (can be set by ldflags)
 var (
 	Version   = ""
+	ForkID    = ""
 	Commit    = "unknown"
 	Date      = "unknown"
 	BuildType = "source" // "source" for manual builds, "release" for CI builds (set by ldflags)
@@ -145,6 +146,7 @@ func runMainServer() {
 
 	buildInfo := handler.BuildInfo{
 		Version:   Version,
+		ForkID:    ForkID,
 		BuildType: BuildType,
 	}
 

@@ -58,6 +58,13 @@ describe('AppSidebar header styles', () => {
     expect(componentSource.match(/:to="homePath"/g)).toHaveLength(2)
     expect(componentSource).toContain(':tabindex="sidebarCollapsed ? -1 : undefined"')
   })
+
+  it('passes the separate fork identity to the shared desktop and mobile version badge', () => {
+    expect(componentSource).toContain('<VersionBadge :version="siteVersion" :fork-id="forkID" />')
+    expect(componentSource).toContain('const forkID = computed(() => appStore.forkID)')
+    expect(componentSource.indexOf('<VersionBadge')).toBeLessThan(componentSource.indexOf('<template v-if="isAdmin">'))
+    expect(componentSource.indexOf('<VersionBadge')).toBeLessThan(componentSource.indexOf('<!-- Mobile Overlay -->'))
+  })
 })
 
 describe('AppSidebar admin personal menu', () => {
