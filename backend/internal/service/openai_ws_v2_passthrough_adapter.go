@@ -648,29 +648,79 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			},
 			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error {
-				if msgType != coderws.MessageText || wroteDownstream {
+				if msgType != coderws.MessageText {
 					return nil
 				}
-				if eventType, _, _ := parseOpenAIWSEventEnvelope(payload); eventType != "error" {
-					return nil
+				retryableFailure := func(statusCode int, retryableOnSameAccount bool) error {
+					failoverErr := &UpstreamFailoverError{
+						StatusCode:             statusCode,
+						ResponseBody:           append([]byte(nil), payload...),
+						ResponseHeaders:        cloneHeader(handshakeHeaders),
+						RetryableOnSameAccount: retryableOnSameAccount,
+					}
+					if !wroteDownstream {
+						return failoverErr
+					}
+					return newOpenAIWSRetryableCloseError("upstream retryable failure after downstream output")
 				}
-				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
-				if !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
-					return nil
+
+				eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+				switch eventType {
+				case "error":
+					errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
+					s.persistOpenAIWSErrorSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
+					if isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+						logOpenAIWSV2Passthrough(
+							"relay_rate_limit_failover account_id=%d err_code=%s err_type=%s err_message=%s",
+							account.ID,
+							truncateOpenAIWSLogValue(errCodeRaw, openAIWSLogValueMaxLen),
+							truncateOpenAIWSLogValue(errTypeRaw, openAIWSLogValueMaxLen),
+							truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
+						)
+						return retryableFailure(http.StatusTooManyRequests, false)
+					}
+					transientCapacity := isOpenAITransientProcessingError(http.StatusBadRequest, errMsgRaw, payload)
+					if transientCapacity {
+						logOpenAIWSV2Passthrough(
+							"relay_transient_failover account_id=%d event_type=%s err_code=%s err_type=%s err_message=%s",
+							account.ID,
+							eventType,
+							truncateOpenAIWSLogValue(errCodeRaw, openAIWSLogValueMaxLen),
+							truncateOpenAIWSLogValue(errTypeRaw, openAIWSLogValueMaxLen),
+							truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
+						)
+						return retryableFailure(http.StatusBadGateway, account.IsPoolMode() && transientCapacity)
+					}
+				case "response.failed":
+					failedMessage := extractOpenAISSEErrorMessage(payload)
+					errCodeRaw := extractUpstreamErrorCode(payload)
+					errTypeRaw := strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String())
+					if errTypeRaw == "" {
+						errTypeRaw = strings.TrimSpace(gjson.GetBytes(payload, "response.status_details.error.type").String())
+					}
+					rateLimited := isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, failedMessage)
+					failedStatus := http.StatusTooManyRequests
+					if !rateLimited {
+						failedStatus = openAIStreamFailedEventSemanticStatus(payload, failedMessage)
+					}
+					transientCapacity := isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, payload)
+					s.persistOpenAIWSErrorSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, failedMessage)
+					if openAIStreamFailedEventShouldFailover(payload, failedMessage) {
+						logOpenAIWSV2Passthrough(
+							"relay_transient_failover account_id=%d event_type=%s err_code=%s err_message=%s",
+							account.ID,
+							eventType,
+							truncateOpenAIWSLogValue(extractUpstreamErrorCode(payload), openAIWSLogValueMaxLen),
+							truncateOpenAIWSLogValue(failedMessage, openAIWSLogValueMaxLen),
+						)
+						return retryableFailure(failedStatus, account.IsPoolMode() && transientCapacity)
+					}
 				}
-				s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
-				logOpenAIWSV2Passthrough(
-					"relay_rate_limit_failover account_id=%d err_code=%s err_type=%s err_message=%s",
-					account.ID,
-					truncateOpenAIWSLogValue(errCodeRaw, openAIWSLogValueMaxLen),
-					truncateOpenAIWSLogValue(errTypeRaw, openAIWSLogValueMaxLen),
-					truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
-				)
-				return &UpstreamFailoverError{
-					StatusCode:      http.StatusTooManyRequests,
-					ResponseBody:    append([]byte(nil), payload...),
-					ResponseHeaders: cloneHeader(handshakeHeaders),
+				capacityMessage := extractOpenAISSEErrorMessage(payload)
+				if transientCapacity := isOpenAITransientProcessingError(http.StatusBadRequest, capacityMessage, payload); transientCapacity {
+					return retryableFailure(http.StatusBadGateway, account.IsPoolMode())
 				}
+				return nil
 			},
 			OnTrace: func(event openaiwsv2.RelayTraceEvent) {
 				logOpenAIWSV2Passthrough(
