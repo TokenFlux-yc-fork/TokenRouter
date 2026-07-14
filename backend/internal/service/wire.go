@@ -761,6 +761,7 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestRunnerService,
 	NewGroupHealthMonitor,
 	ProvideGroupAvailabilityProbeRunnerService,
+	ProvideGroupBackupPoolRefillService,
 	NewGroupCapacityService,
 	NewChannelService,
 	NewModelPricingResolver,
