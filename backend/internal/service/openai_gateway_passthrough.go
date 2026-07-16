@@ -1294,6 +1294,14 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 					trimmedData = strings.TrimSpace(replacedData)
 				}
 			}
+			eventType = strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
+			if eventType == "" && pendingSSEEventType != "" {
+				data = openAICompatPayloadWithEventType(string(dataBytes), pendingSSEEventType)
+				dataBytes = []byte(data)
+				trimmedData = strings.TrimSpace(data)
+				line = "data: " + data
+			}
+			pendingSSEEventType = ""
 			if normalizedData, normalized := normalizeOpenAIResponsesFunctionCallArguments(dataBytes); normalized {
 				dataBytes = normalizedData
 				trimmedData = strings.TrimSpace(string(normalizedData))
@@ -1316,14 +1324,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				}
 			}
 			eventType = strings.TrimSpace(gjson.Get(trimmedData, "type").String())
-			if eventType == "" && pendingSSEEventType != "" {
-				data = openAICompatPayloadWithEventType(string(dataBytes), pendingSSEEventType)
-				dataBytes = []byte(data)
-				trimmedData = strings.TrimSpace(data)
-				line = "data: " + data
-				eventType = pendingSSEEventType
-			}
-			pendingSSEEventType = ""
 			eventMessage := extractOpenAISSEErrorMessage(dataBytes)
 			if !streamOutputStarted() &&
 				isOpenAITransientProcessingError(http.StatusBadRequest, eventMessage, dataBytes) {
