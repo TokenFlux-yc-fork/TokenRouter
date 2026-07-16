@@ -1451,6 +1451,35 @@ func TestOpenAIStreamingCapacityAfterStructuralEventsReturnsFailover(t *testing.
 	}
 }
 
+func TestOpenAIStreamingPassthroughEventOnlyImageDoneNormalizesStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			"event: response.output_item.done",
+			`data: {"item":{"id":"ig_event_only","type":"image_generation_call","status":"generating","result":"aGVsbG8="}}`,
+			"",
+			"event: response.completed",
+			`data: {"response":{"id":"resp_event_only","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+			"",
+		}, "\n"))),
+	}
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+
+	_, err := svc.handleStreamingResponsePassthrough(
+		c.Request.Context(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, time.Now(), "gpt-5.4", "gpt-5.4",
+	)
+
+	require.NoError(t, err)
+	require.Contains(t, rec.Body.String(), `"type":"response.output_item.done"`)
+	require.Contains(t, rec.Body.String(), `"status":"completed"`)
+	require.NotContains(t, rec.Body.String(), `"status":"generating"`)
+}
+
 func TestOpenAIStreamingCapacityAfterToolDoneDropsDeferredTail(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
