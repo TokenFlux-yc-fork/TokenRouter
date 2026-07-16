@@ -293,6 +293,26 @@ data: {"type":"response.failed","error":{"message":"This content was flagged"}}
 	})
 }
 
+func TestEnsureOpenAIForwardErrorResponse_PreservesCommittedValidationJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+	service.MarkResponseCommitted(c)
+	c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+		"type": "invalid_request_error", "message": "responses Lite requires reasoning to be an object", "param": "reasoning",
+	}})
+	originalBody := w.Body.String()
+
+	h := &OpenAIGatewayHandler{}
+	wroteFallback := h.ensureOpenAIForwardErrorResponse(c, true, errors.New("responses Lite requires reasoning to be an object"))
+
+	require.False(t, wroteFallback)
+	require.Equal(t, originalBody, w.Body.String())
+	require.True(t, json.Valid(w.Body.Bytes()))
+	require.NotContains(t, w.Body.String(), "response.failed")
+}
+
 func TestOpenAIHandleFailoverExhausted_CyberWarningPassesThroughMessage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

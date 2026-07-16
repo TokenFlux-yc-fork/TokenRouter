@@ -710,6 +710,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexImageBridge
 	require.Contains(t, gjson.Get(nonLitePayload, "instructions").String(), "image_generation")
 
 	litePayload := requestToJSONString(captureConn.writes[1])
+	require.Equal(t, openAIResponsesLiteReasoningContext, gjson.Get(litePayload, "reasoning.context").String())
 	require.False(t, gjson.Get(litePayload, `tools.#(type=="image_generation")`).Exists())
 	require.NotContains(t, gjson.Get(litePayload, "instructions").String(), "image_generation")
 	require.Equal(t, "exec", gjson.Get(litePayload, `input.#(type=="additional_tools").tools.0.name`).String())
@@ -1169,8 +1170,10 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 
 	upstreamConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_headers","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_headers_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_headers_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
+		readDelays: []time.Duration{0, 50 * time.Millisecond},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: upstreamConn}
 	svc := &OpenAIGatewayService{
@@ -1261,7 +1264,27 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	_, event, readErr := clientConn.Read(readCtx)
 	cancelRead()
 	require.NoError(t, readErr)
-	require.Equal(t, "resp_passthrough_headers", gjson.GetBytes(event, "response.id").String())
+	require.Equal(t, "resp_passthrough_headers_1", gjson.GetBytes(event, "response.id").String())
+
+	writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.1",
+		"stream":false,
+		"previous_response_id":"resp_passthrough_headers_1",
+		"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},
+		"reasoning":{"effort":"high","context":"current_turn"},
+		"tools":[{"type":"function","name":"shell"}],
+		"input":[{"type":"message","role":"user","content":"follow up"}]
+	}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	readCtx, cancelRead = context.WithTimeout(context.Background(), 3*time.Second)
+	_, event, readErr = clientConn.Read(readCtx)
+	cancelRead()
+	require.NoError(t, readErr)
+	require.Equal(t, "resp_passthrough_headers_2", gjson.GetBytes(event, "response.id").String())
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
 	select {
@@ -1276,12 +1299,18 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	require.Equal(t, isolateOpenAISessionID(0, "pcache_passthrough"), captureDialer.lastHeaders.Get("session_id"))
 	require.Equal(t, "turn-state-1", captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
 	require.Equal(t, "turn-meta-1", captureDialer.lastHeaders.Get(openAIWSTurnMetadataHeader))
-	require.Len(t, upstreamConn.writes, 1)
-	forwarded := requestToJSONString(upstreamConn.writes[0])
-	require.False(t, gjson.Get(forwarded, `tools.#(type=="namespace")`).Exists())
-	require.Equal(t, "collaboration", gjson.Get(forwarded, `input.#(type=="additional_tools").tools.0.name`).String())
-	require.Equal(t, "namespace", gjson.Get(forwarded, "tool_choice.type").String())
-	require.Equal(t, "collaboration", gjson.Get(forwarded, "tool_choice.name").String())
+	require.Len(t, upstreamConn.writes, 2)
+	firstForwarded := requestToJSONString(upstreamConn.writes[0])
+	require.Equal(t, openAIResponsesLiteReasoningContext, gjson.Get(firstForwarded, "reasoning.context").String())
+	require.False(t, gjson.Get(firstForwarded, `tools.#(type=="namespace")`).Exists())
+	require.Equal(t, "collaboration", gjson.Get(firstForwarded, `input.#(type=="additional_tools").tools.0.name`).String())
+	require.Equal(t, "namespace", gjson.Get(firstForwarded, "tool_choice.type").String())
+	require.Equal(t, "collaboration", gjson.Get(firstForwarded, "tool_choice.name").String())
+
+	secondForwarded := requestToJSONString(upstreamConn.writes[1])
+	require.Equal(t, openAIResponsesLiteReasoningContext, gjson.Get(secondForwarded, "reasoning.context").String())
+	require.Equal(t, "high", gjson.Get(secondForwarded, "reasoning.effort").String())
+	require.Equal(t, "shell", gjson.Get(secondForwarded, "tools.0.name").String())
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ModeOffReturnsPolicyViolation(t *testing.T) {
