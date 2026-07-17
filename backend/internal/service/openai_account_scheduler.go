@@ -2126,6 +2126,14 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(accountID int64
 	scheduler.ReportResult(accountID, success, firstTokenMs)
 }
 
+// ReportOpenAIAccountScheduleFailure excludes client validation from account health.
+func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleFailure(accountID int64, model string, err error) {
+	if IsOpenAIResponsesLiteValidationError(err) {
+		return
+	}
+	s.ReportOpenAIAccountScheduleResult(accountID, model, false, nil)
+}
+
 func (s *OpenAIGatewayService) RecordOpenAIAccountSwitch() {
 	scheduler := s.getOpenAIAccountScheduler(context.Background())
 	if scheduler == nil {

@@ -1,11 +1,36 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 )
+
+const openAIResponsesLiteReasoningContext = "all_turns"
+
+type openAIResponsesLiteValidationError struct {
+	param   string
+	message string
+}
+
+func (e *openAIResponsesLiteValidationError) Error() string { return e.message }
+
+func openAIResponsesLiteValidationParam(err error) string {
+	var validationErr *openAIResponsesLiteValidationError
+	if errors.As(err, &validationErr) && validationErr.param != "" {
+		return validationErr.param
+	}
+	return "tools"
+}
+
+// IsOpenAIResponsesLiteValidationError identifies client payload errors handled before upstream I/O.
+func IsOpenAIResponsesLiteValidationError(err error) bool {
+	var validationErr *openAIResponsesLiteValidationError
+	return errors.As(err, &validationErr)
+}
 
 // normalizeOpenAIResponsesLiteTools 应用 Responses Lite 请求契约：reasoning 必须覆盖所有轮次，
 // 私有 namespace 声明则移入 input.additional_tools 容器。其它顶层工具必须属于 Lite 接口支持的
@@ -16,7 +41,10 @@ func normalizeOpenAIResponsesLiteTools(reqBody map[string]any) (bool, error) {
 	}
 	if rawReasoning, exists := reqBody["reasoning"]; exists && rawReasoning != nil {
 		if _, ok := rawReasoning.(map[string]any); !ok {
-			return false, fmt.Errorf("responses Lite requires reasoning to be an object")
+			return false, &openAIResponsesLiteValidationError{
+				param:   "reasoning",
+				message: "responses Lite requires reasoning to be an object",
+			}
 		}
 	}
 	rawTools, exists := reqBody["tools"]
@@ -78,17 +106,20 @@ func normalizeOpenAIResponsesLiteTools(reqBody map[string]any) (bool, error) {
 func ensureOpenAIResponsesLiteReasoningContext(reqBody map[string]any) (bool, error) {
 	rawReasoning, exists := reqBody["reasoning"]
 	if !exists || rawReasoning == nil {
-		reqBody["reasoning"] = map[string]any{"context": "all_turns"}
+		reqBody["reasoning"] = map[string]any{"context": openAIResponsesLiteReasoningContext}
 		return true, nil
 	}
 	reasoning, ok := rawReasoning.(map[string]any)
 	if !ok {
-		return false, fmt.Errorf("responses Lite requires reasoning to be an object")
+		return false, &openAIResponsesLiteValidationError{
+			param:   "reasoning",
+			message: "responses Lite requires reasoning to be an object",
+		}
 	}
-	if context, ok := reasoning["context"].(string); ok && context == "all_turns" {
+	if context, ok := reasoning["context"].(string); ok && context == openAIResponsesLiteReasoningContext {
 		return false, nil
 	}
-	reasoning["context"] = "all_turns"
+	reasoning["context"] = openAIResponsesLiteReasoningContext
 	return true, nil
 }
 
@@ -200,12 +231,29 @@ func openAIResponsesLiteToolIdentityForError(rawTool any) string {
 
 func normalizeOpenAIResponsesLiteToolsPayload(body []byte) ([]byte, bool, error) {
 	var requestBody map[string]any
-	if err := json.Unmarshal(body, &requestBody); err != nil {
-		return body, false, fmt.Errorf("decode responses Lite request body: %w", err)
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&requestBody); err != nil {
+		return body, false, &openAIResponsesLiteValidationError{
+			param:   "tools",
+			message: fmt.Sprintf("decode responses Lite request body: %v", err),
+		}
+	}
+	if len(bytes.TrimSpace(body[decoder.InputOffset():])) > 0 {
+		return body, false, &openAIResponsesLiteValidationError{
+			param:   "tools",
+			message: "decode responses Lite request body: invalid trailing data",
+		}
 	}
 	changed, err := normalizeOpenAIResponsesLiteTools(requestBody)
-	if err != nil || !changed {
-		return body, false, err
+	if err != nil {
+		if IsOpenAIResponsesLiteValidationError(err) {
+			return body, false, err
+		}
+		return body, false, &openAIResponsesLiteValidationError{param: "tools", message: err.Error()}
+	}
+	if !changed {
+		return body, false, nil
 	}
 	rebuilt, err := marshalOpenAIUpstreamJSON(requestBody)
 	if err != nil {
