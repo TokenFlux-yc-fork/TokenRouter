@@ -1630,54 +1630,77 @@ func grokMessagesSSECompletedResponse(responseID string, cachedTokens int) *http
 	}
 }
 
-func TestHandleGrokAccountUpstreamErrorTempUnschedulesNonRateLimitStates(t *testing.T) {
+func TestHandleGrokAccountUpstreamErrorDoesNotPersistInferenceFailures(t *testing.T) {
 	tests := []struct {
-		name            string
-		status          int
-		headers         http.Header
-		wantReason      string
-		wantMinCooldown time.Duration
-		wantMaxCooldown time.Duration
+		name        string
+		accountType string
+		status      int
+		headers     http.Header
+		body        []byte
 	}{
 		{
-			name:            "unauthorized reauth",
-			status:          http.StatusUnauthorized,
-			wantReason:      "grok credentials unauthorized",
-			wantMinCooldown: 10*time.Minute - time.Second,
-			wantMaxCooldown: 10*time.Minute + time.Second,
+			name:   "unauthorized credential response",
+			status: http.StatusUnauthorized,
+			body:   []byte(`{"error":{"code":"invalid_token","message":"token expired"}}`),
 		},
 		{
-			name:            "forbidden entitlement",
-			status:          http.StatusForbidden,
-			wantReason:      "grok access or entitlement denied",
-			wantMinCooldown: 30*time.Minute - time.Second,
-			wantMaxCooldown: 30*time.Minute + time.Second,
+			name:        "api key unauthorized response",
+			accountType: AccountTypeAPIKey,
+			status:      http.StatusUnauthorized,
+			body:        []byte(`{"error":{"code":"invalid_api_key"}}`),
 		},
 		{
-			name:            "upstream temporary error",
-			status:          http.StatusInternalServerError,
-			wantReason:      "grok upstream temporary error",
-			wantMinCooldown: 2*time.Minute - time.Second,
-			wantMaxCooldown: 2*time.Minute + time.Second,
+			name:   "ambiguous forbidden response",
+			status: http.StatusForbidden,
+			body:   []byte(`{"error":"forbidden"}`),
+		},
+		{
+			name:        "api key entitlement response",
+			accountType: AccountTypeAPIKey,
+			status:      http.StatusForbidden,
+			body:        []byte(`{"error":{"code":"subscription_required"}}`),
+		},
+		{
+			name:   "internal server error",
+			status: http.StatusInternalServerError,
+		},
+		{
+			name:   "bad gateway",
+			status: http.StatusBadGateway,
+		},
+		{
+			name:   "service unavailable with exhausted quota headers",
+			status: http.StatusServiceUnavailable,
+			headers: http.Header{
+				"X-Ratelimit-Remaining-Requests": []string{"0"},
+				"X-Ratelimit-Reset-Requests":     []string{fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())},
+			},
+		},
+		{
+			name:   "gateway timeout",
+			status: http.StatusGatewayTimeout,
+		},
+		{
+			name:   "provider overloaded",
+			status: 529,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			account := &Account{ID: 61, Platform: PlatformGrok, Type: AccountTypeOAuth}
+			accountType := tt.accountType
+			if accountType == "" {
+				accountType = AccountTypeOAuth
+			}
+			account := &Account{ID: 61, Platform: PlatformGrok, Type: accountType}
 			repo := &grokQuotaAccountRepo{}
 			svc := &OpenAIGatewayService{accountRepo: repo}
-			before := time.Now()
 
-			svc.handleGrokAccountUpstreamError(context.Background(), account, tt.status, tt.headers, nil)
+			svc.handleGrokAccountUpstreamError(context.Background(), account, tt.status, tt.headers, tt.body)
 
-			require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
-			require.Equal(t, 1, repo.tempUnschedCalls)
+			require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+			require.Zero(t, repo.tempUnschedCalls)
 			require.Zero(t, repo.rateLimitedCalls)
-			require.Equal(t, account.ID, repo.lastTempUnschedID)
-			require.Equal(t, tt.wantReason, repo.lastTempUnschedReason)
-			require.True(t, repo.lastTempUnschedUntil.After(before.Add(tt.wantMinCooldown)))
-			require.True(t, repo.lastTempUnschedUntil.Before(before.Add(tt.wantMaxCooldown)))
 		})
 	}
 }
