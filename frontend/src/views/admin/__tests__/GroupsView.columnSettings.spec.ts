@@ -309,6 +309,7 @@ describe('admin GroupsView column settings', () => {
       'session_isolation_enabled',
       'account_count',
       'status',
+      'health_status',
       'actions',
     ])
   })
@@ -397,6 +398,7 @@ describe('admin GroupsView column settings', () => {
       'capacity',
       'usage',
       'status',
+      'health_status',
       'actions',
     ])
     const columns = wrapper.findComponent(DataTableStub).props('columns')
