@@ -3839,11 +3839,13 @@ func TestShouldFailoverOpenAIPassthroughResponse_CapacityAcrossServerErrors(t *t
 		})
 	}
 	require.True(t, shouldFailoverOpenAIPassthroughResponse(nil, http.StatusTeapot, body))
-	require.False(t, shouldFailoverOpenAIPassthroughResponse(
+	ordinaryFailure := []byte(`{"error":{"code":"server_error","message":"ordinary upstream failure"}}`)
+	require.True(t, shouldFailoverOpenAIPassthroughResponse(
 		&Account{Type: AccountTypeAPIKey},
 		http.StatusInternalServerError,
-		[]byte(`{"error":{"code":"server_error","message":"ordinary upstream failure"}}`),
+		ordinaryFailure,
 	))
+	require.False(t, shouldFailoverOpenAIPassthroughResponse(nil, http.StatusInternalServerError, ordinaryFailure))
 }
 
 func TestHandleNonStreamingResponse_OAuthJSONBodyWithDataEventTextKeepsJSONUsage(t *testing.T) {
