@@ -313,6 +313,9 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 }
 
 func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if hasOpenAITransientOverloadCode(upstreamBody) {
+		return isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
+	}
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
 	}

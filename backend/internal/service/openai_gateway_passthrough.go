@@ -521,6 +521,11 @@ func validOpenAIPassthroughRetryAfter(raw string, now time.Time) bool {
 
 // writeSanitizedOpenAIPassthroughError 使用本地错误信封替换不可信的上游错误正文。
 func writeSanitizedOpenAIPassthroughError(c *gin.Context, upstreamStatus int, upstreamHeaders http.Header) {
+	downstreamStatus, message := sanitizedOpenAIPassthroughError(upstreamStatus)
+	writeOpenAIPassthroughErrorEnvelope(c, downstreamStatus, upstreamHeaders, message)
+}
+
+func sanitizedOpenAIPassthroughError(upstreamStatus int) (int, string) {
 	downstreamStatus := upstreamStatus
 	message := "Upstream request failed"
 	switch upstreamStatus {
@@ -535,7 +540,7 @@ func writeSanitizedOpenAIPassthroughError(c *gin.Context, upstreamStatus int, up
 			message = "Upstream service temporarily unavailable"
 		}
 	}
-	writeOpenAIPassthroughErrorEnvelope(c, downstreamStatus, upstreamHeaders, message)
+	return downstreamStatus, message
 }
 
 // writeOpenAIPassthroughErrorEnvelope 以本地 JSON 信封 + 净化后的头策略写出
@@ -658,11 +663,12 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		Detail:               upstreamDetail,
 		UpstreamResponseBody: upstreamDetail,
 	})
-	clientMsg := upstreamMsg
-	if clientMsg == "" {
-		clientMsg = "Upstream request failed"
+	downstreamStatus, clientMsg := sanitizedOpenAIPassthroughError(resp.StatusCode)
+	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
+		downstreamStatus = resp.StatusCode
+		clientMsg = upstreamMsg
 	}
-	handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, resp.StatusCode, "upstream_error", clientMsg)
+	handled, writeErr := writeOpenAIResponsesFailureIfCommitted(c, downstreamStatus, "upstream_error", clientMsg)
 	if writeErr != nil {
 		return fmt.Errorf("write committed Responses failure: %w", writeErr)
 	}

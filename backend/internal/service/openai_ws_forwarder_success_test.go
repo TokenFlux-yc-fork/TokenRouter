@@ -1068,7 +1068,7 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedIsNotSchedulingSuccess(
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 
 	captureConn := &openAIWSCaptureConn{events: [][]byte{
-		[]byte(`{"type":"response.failed","response":{"id":"resp_failed_1","model":"gpt-5.5","error":{"code":"server_error","message":"Internal error"}}}`),
+		[]byte(`{"type":"response.failed","response":{"id":"resp_failed_1","model":"gpt-5.5","error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}}`),
 	}}
 	pool := newOpenAIWSConnPool(cfg)
 	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
@@ -1092,7 +1092,9 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseFailedIsNotSchedulingSuccess(
 		Credentials: map[string]any{"api_key": "sk-test"},
 		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
 	}
-	svc.recordOpenAIAccountModelTransientFailure(account, "gpt-5.5", time.Now())
+	for range 2 {
+		svc.recordOpenAIAccountModelTransientFailure(account, "gpt-5.5", time.Now())
+	}
 
 	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.5","stream":false,"input":"hello"}`))
 
