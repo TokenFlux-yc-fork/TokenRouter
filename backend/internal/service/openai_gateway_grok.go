@@ -1043,39 +1043,13 @@ func (s *OpenAIGatewayService) rateLimitGrok(ctx context.Context, account *Accou
 	persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
 }
 
-func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) {
-	if s == nil || account == nil {
+func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, _ []byte) {
+	if s == nil || account == nil || statusCode != http.StatusTooManyRequests {
 		return
 	}
+	// Inference 401/403/5xx responses do not prove that an account is unhealthy.
+	// OAuth credential state is maintained by the refresh/reconciliation path,
+	// while 429 carries an account-specific retry boundary that is safe to persist.
 	now := time.Now()
 	s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
-	switch statusCode {
-	case http.StatusUnauthorized:
-		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok credentials unauthorized")
-	case http.StatusForbidden:
-		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok access or entitlement denied")
-	case http.StatusTooManyRequests:
-		// updateGrokUsageSnapshot 已同时写入运行时和持久化限流状态。
-	default:
-		if statusCode >= 500 {
-			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
-		}
-	}
-	_ = responseBody
-}
-
-func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {
-	if s == nil || account == nil {
-		return
-	}
-	until := time.Now().Add(cooldown)
-	if account.TempUnschedulableUntil != nil && account.TempUnschedulableUntil.After(until) {
-		until = *account.TempUnschedulableUntil
-	}
-	s.BlockAccountScheduling(account, until, reason)
-	if s.accountRepo != nil {
-		stateCtx, cancel := openAIAccountStateContext(ctx)
-		defer cancel()
-		_ = s.accountRepo.SetTempUnschedulable(stateCtx, account.ID, until, reason)
-	}
 }
