@@ -339,6 +339,30 @@ const OpenAIRequestBodyTooLargeClientMessage = "Request payload is too large"
 
 const openAIRequestBodyTooLargeReason = GatewayFailureReason("openai_request_body_too_large")
 
+const openAIRequestBlockedReason = GatewayFailureReason("openai_request_blocked")
+
+func isOpenAIRequestBlockedError(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	if isOpenAIRequestBlockedMessage(upstreamMsg) {
+		return true
+	}
+	if isOpenAIRequestBlockedMessage(extractUpstreamErrorMessage(upstreamBody)) {
+		return true
+	}
+	if isOpenAIRequestBlockedMessage(extractUpstreamErrorMessageFromEmbeddedJSON(upstreamMsg)) {
+		return true
+	}
+	return !gjson.ValidBytes(upstreamBody) && isOpenAIRequestBlockedMessage(string(upstreamBody))
+}
+
+func isOpenAIRequestBlockedMessage(message string) bool {
+	message = strings.TrimSpace(message)
+	message = strings.TrimSuffix(message, ".")
+	return strings.EqualFold(message, "Your request was blocked")
+}
+
 func isOpenAIRequestBodyTooLargeError(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	return statusCode == http.StatusRequestEntityTooLarge && !isOpenAIContextWindowError(upstreamMsg, upstreamBody)
 }
@@ -355,6 +379,13 @@ func newOpenAIUpstreamFailoverError(
 		ResponseBody:           responseBody,
 		ResponseHeaders:        responseHeaders.Clone(),
 		RetryableOnSameAccount: retryableOnSameAccount,
+	}
+	if isOpenAIRequestBlockedError(statusCode, upstreamMsg, responseBody) {
+		failoverErr.RetryableOnSameAccount = false
+		failoverErr.Scope = GatewayFailureScopeRequest
+		failoverErr.Reason = openAIRequestBlockedReason
+		failoverErr.NextAccountAction = NextAccountRetry
+		return failoverErr
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, responseBody) {
 		failoverErr.RetryableOnSameAccount = false

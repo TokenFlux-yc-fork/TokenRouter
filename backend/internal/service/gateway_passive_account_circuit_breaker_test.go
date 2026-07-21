@@ -229,6 +229,45 @@ func TestOpenAIRetryableOrdinary400DoesNotRecordPassiveAccountCircuitBreaker(t *
 	require.Nil(t, account.TempUnschedulableUntil)
 }
 
+func TestOpenAIRequestBlocked403DoesNotRecordPassiveAccountCircuitBreaker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newGatewayPassiveBreakerAccount(711, PlatformOpenAI)
+	account.Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusForbidden)}
+	repo := &gatewayPassiveBreakerAccountRepo{account: account}
+	svc := &OpenAIGatewayService{
+		accountRepo:      repo,
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+
+	svc.TempUnscheduleRetryableError(context.Background(), account.ID, &UpstreamFailoverError{
+		StatusCode:             http.StatusForbidden,
+		ResponseBody:           []byte(`{"error":{"message":"Your request was blocked."}}`),
+		RetryableOnSameAccount: true,
+	})
+
+	require.Empty(t, repo.calls)
+	require.Nil(t, account.TempUnschedulableUntil)
+}
+
+func TestOpenAIOrdinary403StillRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := newGatewayPassiveBreakerAccount(712, PlatformOpenAI)
+	account.Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusForbidden)}
+	repo := &gatewayPassiveBreakerAccountRepo{account: account}
+	svc := &OpenAIGatewayService{
+		accountRepo:      repo,
+		rateLimitService: NewRateLimitService(repo, nil, &config.Config{}, nil, nil),
+	}
+
+	svc.TempUnscheduleRetryableError(context.Background(), account.ID, &UpstreamFailoverError{
+		StatusCode:             http.StatusForbidden,
+		ResponseBody:           []byte(`{"error":{"message":"API key does not have access to this resource."}}`),
+		RetryableOnSameAccount: true,
+	})
+
+	requireGatewayPassiveAccountBreaker(t, repo, account, http.StatusForbidden)
+}
+
 func TestGeminiNative503FinalExitRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &gatewayPassiveBreakerAccountRepo{}

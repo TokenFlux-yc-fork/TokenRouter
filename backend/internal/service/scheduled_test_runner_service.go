@@ -308,6 +308,10 @@ func hasConsecutiveScheduledTestFailures(results []*ScheduledTestResult, thresho
 		if result == nil || result.Status == scheduledTestResultStatusSuccess {
 			break
 		}
+		if statusCode, ok := extractAccountTestHTTPStatus(result.ErrorMessage); ok &&
+			isOpenAIRequestBlockedError(statusCode, result.ErrorMessage, []byte(result.ErrorMessage)) {
+			break
+		}
 		failures++
 		if failures >= threshold {
 			return true

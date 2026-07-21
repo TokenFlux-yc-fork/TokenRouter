@@ -2401,6 +2401,9 @@ func shouldRetryPoolModeAccountTest(account *Account, errorMessage string) (int,
 	if !ok {
 		return 0, false
 	}
+	if isOpenAIRequestBlockedError(statusCode, errorMessage, []byte(errorMessage)) {
+		return statusCode, false
+	}
 	return statusCode, account.IsPoolModeRetryableStatus(statusCode)
 }
 
