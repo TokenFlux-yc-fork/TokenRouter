@@ -44,6 +44,7 @@ upstream merge.
 | `fork-build-identity` | Publish upstream version and stable `yc-fork` identity as separate build metadata and UI values. | `65b2f15a7` | Docker/build files, settings API, version UI | `local` | Build identity backend/frontend tests plus binary and browser identity probes. |
 | `responses-lite-validation` | Reject residual unsupported Responses Lite fields and preserve event/tool validation semantics. | `6a73e12df` | OpenAI gateway handler/forwarder, Responses Lite tools | `local` | Responses Lite unit tests and production protocol probes. |
 | `grok-inference-error-classification` | Persist Grok inference scheduling state only for 429; other inference errors fail over for the current request only. | `6f31ce627` | `openai_gateway_grok*` | `local` | Grok gateway tests, refresh race tests and account-state production probe. |
+| `qoder-cn-only-platform` | Treat the `qoder` platform as Qoder CN / `qoderclicn` only; require fresh CN credentials for legacy international accounts and preserve the observed CN gateway contract. | `862a0daca`, `efecddd41` | `backend/internal/pkg/qoder`, Qoder account/OAuth/gateway services, Qoder admin UI | `local` | Qoder package/admin/service tests, frontend Qoder tests, typecheck, lint and local CN protocol probe. |
 | `frontend-build-heap` | Give the containerized frontend build enough heap for the fork UI. | `fe599ead3` | `deploy/Dockerfile` | `local` | Container image build. |
 
 ## Qualification-Only Commits
