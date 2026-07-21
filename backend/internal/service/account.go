@@ -900,13 +900,16 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 	}
 	whitelist, _ := resolveFinalModelWhitelist(a.Platform, a.Credentials, mapping)
 	if a.Platform == PlatformQoder {
+		site, err := qoderSiteForAccount(a)
+		if err != nil {
+			return false
+		}
 		mappedModel, matched := a.ResolveMappedModel(requestedModel)
 		if matched {
 			// 显式账号 mapping 优先于站点默认模型限制。
 			return isModelInFinalWhitelist(a.Platform, mappedModel, whitelist)
 		}
-		site, err := qoderSiteForAccount(a)
-		if err != nil || !qoder.ModelCompatibleWithSite(site, requestedModel) {
+		if !qoder.ModelCompatibleWithSite(site, requestedModel) {
 			return false
 		}
 		return isModelInFinalWhitelist(a.Platform, requestedModel, whitelist)

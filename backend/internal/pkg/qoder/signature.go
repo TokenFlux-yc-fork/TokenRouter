@@ -11,12 +11,12 @@ const (
 	Sep     = "&"
 )
 
-// SignCenterRequest 为 center.qoder.sh API 请求生成 MD5 签名。
+// SignCenterRequest 生成登录前身份请求使用的 MD5 签名。
 func SignCenterRequest(date string) string {
 	return md5Hex(fmt.Sprintf("%s%s%s%s%s", AppCode, Sep, Secret, Sep, date))
 }
 
-// SignQoderRequest 为 api1.qoder.sh API 请求生成 MD5 签名。
+// SignQoderRequest 生成 COSY Gateway 请求使用的 MD5 签名。
 func SignQoderRequest(payloadB64, cosyKey, cosyDate, body, pathWithoutAlgo string) string {
 	return md5Hex(fmt.Sprintf("%s\n%s\n%s\n%s\n%s", payloadB64, cosyKey, cosyDate, body, pathWithoutAlgo))
 }

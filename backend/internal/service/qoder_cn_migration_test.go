@@ -25,6 +25,21 @@ func TestQoderSiteForAccountRequiresCNReauthorizationForLegacyCredentials(t *tes
 	require.Equal(t, qoder.SiteCN, site)
 }
 
+func TestLegacyQoderAccountDoesNotSupportExplicitlyMappedModels(t *testing.T) {
+	account := &Account{
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site": "global",
+			"model_mapping": map[string]any{
+				"custom-model": "qmodel",
+			},
+		},
+	}
+
+	require.False(t, account.IsModelSupported("custom-model"))
+}
+
 func TestQoderMachineForAccountUsesQoderCLICNIdentity(t *testing.T) {
 	account := &Account{
 		Platform: PlatformQoder,

@@ -454,7 +454,7 @@ func TestBuildQoderPayloadFromAnthropicMessages(t *testing.T) {
 	require.Len(t, messages, 3)
 	require.Equal(t, "system", messages[0].(map[string]any)["role"])
 	require.Equal(t, "system one\nsystem two", messages[0].(map[string]any)["content"])
-	require.Equal(t, "", messages[1].(map[string]any)["content"])
+	require.Equal(t, "hello", messages[1].(map[string]any)["content"])
 	userContents := messages[1].(map[string]any)["contents"].([]any)
 	require.Equal(t, "hello", userContents[0].(map[string]any)["text"])
 	toolResult := messages[2].(map[string]any)
@@ -786,7 +786,7 @@ func TestQoderGatewayChatCompletionsReusesSessionAndSendsFullReplay(t *testing.T
 	require.Equal(t, "user", secondMessages[1].(map[string]any)["role"])
 	require.Equal(t, "assistant", secondMessages[2].(map[string]any)["role"])
 	require.Equal(t, "user", secondMessages[3].(map[string]any)["role"])
-	require.Equal(t, "next", second["chat_context"].(map[string]any)["text"].(map[string]any)["text"])
+	require.Equal(t, "next", qoderPayloadPromptForTest(t, second))
 }
 
 func TestQoderGatewayChatCompletionsWithoutSessionDoesNotReuseByFirstText(t *testing.T) {
@@ -1833,7 +1833,7 @@ func TestQoderGatewayClaudeCodeContextWithoutSessionUsesStablePrefixKey(t *testi
 	require.Equal(t, "user", messages[1].(map[string]any)["role"])
 	require.Equal(t, "assistant", messages[2].(map[string]any)["role"])
 	require.Equal(t, "user", messages[3].(map[string]any)["role"])
-	require.Equal(t, "continue", second["chat_context"].(map[string]any)["text"].(map[string]any)["text"])
+	require.Equal(t, "continue", qoderPayloadPromptForTest(t, second))
 }
 
 func TestQoderGatewayDoesNotCommitConversationOnUpstreamFailure(t *testing.T) {
@@ -2130,7 +2130,7 @@ func TestQoderGatewayAnthropicMetadataSessionWinsOverChangingHeader(t *testing.T
 	require.Equal(t, "user", messages[0].(map[string]any)["role"])
 	require.Equal(t, "assistant", messages[1].(map[string]any)["role"])
 	require.Equal(t, "user", messages[2].(map[string]any)["role"])
-	require.Equal(t, "continue", second["chat_context"].(map[string]any)["text"].(map[string]any)["text"])
+	require.Equal(t, "continue", qoderPayloadPromptForTest(t, second))
 }
 
 func TestQoderGatewayClaudeCodeUsesExplicitHeaderSessionBeforeStableSeed(t *testing.T) {
@@ -2206,7 +2206,7 @@ func TestQoderGatewayClaudeCodeUsesMetadataSessionBeforeStableSeed(t *testing.T)
 	require.Equal(t, "user", messages[1].(map[string]any)["role"])
 	require.Equal(t, "assistant", messages[2].(map[string]any)["role"])
 	require.Equal(t, "user", messages[3].(map[string]any)["role"])
-	require.Equal(t, "continue", second["chat_context"].(map[string]any)["text"].(map[string]any)["text"])
+	require.Equal(t, "continue", qoderPayloadPromptForTest(t, second))
 
 	metadata2 := `{"device_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","account_uuid":"","session_id":"66666666-7777-8888-9999-aaaaaaaaaaaa"}`
 	other := qoderForwardMessagesForTest(t, svc, account, "", []byte(`{
@@ -2265,7 +2265,7 @@ func TestQoderGatewayClaudeCodeIgnoresVolatileBillingCCHForSystemReuse(t *testin
 	require.Equal(t, "user", messages[3].(map[string]any)["role"])
 }
 
-func TestQoderGatewayClaudeCodeUltimateStablePromptCacheKeyReportsCacheRead(t *testing.T) {
+func TestQoderGatewayClaudeCodeQwenStablePromptCacheKeyReportsCacheRead(t *testing.T) {
 	account, svc, client := newQoderGatewayForwardTestService()
 	largeTools := qoderLargeToolsJSONForTest()
 	system1 := "x-anthropic-billing-header: cc_version=2.1.177.19c; cc_entrypoint=sdk-cli; cch=29156;\n" +
@@ -2275,16 +2275,16 @@ func TestQoderGatewayClaudeCodeUltimateStablePromptCacheKeyReportsCacheRead(t *t
 		"You are a Claude agent, built on Anthropic's Claude Agent SDK.\n" +
 		"Stable Claude Code system body."
 	firstBody := []byte(`{
-		"model":"claude-opus-4-6",
-		"prompt_cache_key":"ultimate-cache-hit-session",
+		"model":"qwen3.7-plus",
+		"prompt_cache_key":"qwen-cache-hit-session",
 		"system":` + strconv.Quote(system1) + `,
 		"messages":[{"role":"user","content":"inspect"}],
 		"tools":` + largeTools + `,
 		"stream":false
 	}`)
 	secondBody := []byte(`{
-		"model":"claude-opus-4-6",
-		"prompt_cache_key":"ultimate-cache-hit-session",
+		"model":"qwen3.7-plus",
+		"prompt_cache_key":"qwen-cache-hit-session",
 		"system":` + strconv.Quote(system2) + `,
 		"messages":[
 			{"role":"user","content":"inspect"},
@@ -2299,16 +2299,16 @@ func TestQoderGatewayClaudeCodeUltimateStablePromptCacheKeyReportsCacheRead(t *t
 		"data: {\"body\":\"[DONE]\"}\n\n"
 	firstResult := qoderForwardMessagesResultForTest(t, svc, account, firstBody, qoderHeader("User-Agent", "claude-cli/2.1.177 (external, sdk-cli)"))
 	firstPayload := qoderLastUpstreamPayloadForTest(t, client)
-	require.Equal(t, "ultimate", firstResult.UpstreamModel)
+	require.Equal(t, "qmodel", firstResult.UpstreamModel)
 	require.Equal(t, 1200, firstResult.Usage.InputTokens)
-	require.Equal(t, "ultimate", client.headers["x-model-key"])
+	require.Equal(t, "qmodel", client.headers["x-model-key"])
 
 	client.body = "data: {\"body\":\"{\\\"usage\\\":{\\\"prompt_tokens\\\":1500,\\\"completion_tokens\\\":33,\\\"total_tokens\\\":1533,\\\"prompt_tokens_details\\\":{\\\"cached_tokens\\\":1400,\\\"cacheable_tokens\\\":100}}}\"}\n\n" +
 		"data: {\"body\":\"[DONE]\"}\n\n"
 	secondResult, secondResponse := qoderForwardMessagesResultAndBodyForTest(t, svc, account, secondBody, qoderHeader("User-Agent", "claude-cli/2.1.177 (external, sdk-cli)"))
 	secondPayload := qoderLastUpstreamPayloadForTest(t, client)
 
-	require.Equal(t, "ultimate", secondResult.UpstreamModel)
+	require.Equal(t, "qmodel", secondResult.UpstreamModel)
 	require.Equal(t, firstPayload["session_id"], secondPayload["session_id"])
 	require.Equal(t, 100, secondResult.Usage.InputTokens)
 	require.Equal(t, 1400, secondResult.Usage.CacheReadInputTokens)

@@ -758,6 +758,7 @@ func BuildQoderPayloadFromAnthropicMessages(body []byte, userType string) (map[s
 		return nil, "", err
 	}
 	request.userType = userType
+	request.site = qoder.SiteCN
 	payload, modelKey := buildQoderPayloadWithOptions(request, "", request.messages, true, true)
 	return payload, modelKey, nil
 }

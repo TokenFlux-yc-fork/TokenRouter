@@ -289,6 +289,12 @@ const hasError = computed(() => {
   return props.account.status === 'error'
 })
 
+const qoderNeedsReauthorization = computed(() =>
+  props.account.platform === 'qoder' &&
+  props.account.type === 'cosy' &&
+  props.account.credentials?.site !== 'cn'
+)
+
 const isQuotaExceeded = computed(() => {
   const exceeded = (used?: number | null, limit?: number | null) =>
     typeof limit === 'number' && limit > 0 && typeof used === 'number' && used >= limit
@@ -316,6 +322,9 @@ const overloadCountdown = computed(() => {
 
 // Computed: status badge class
 const statusClass = computed(() => {
+  if (qoderNeedsReauthorization.value) {
+    return 'badge-warning'
+  }
   if (hasError.value) {
     return 'badge-danger'
   }
@@ -336,6 +345,9 @@ const statusClass = computed(() => {
 
 // Computed: status text
 const statusText = computed(() => {
+  if (qoderNeedsReauthorization.value) {
+    return t('admin.accounts.status.reauthorizationRequired')
+  }
   if (hasError.value) {
     return t('admin.accounts.status.error')
   }

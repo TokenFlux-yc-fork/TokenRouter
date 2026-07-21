@@ -152,6 +152,7 @@ export default {
         limited: 'Limited',
         rateLimited: 'Rate Limited',
         overloaded: 'Overloaded',
+        reauthorizationRequired: 'Re-authorization Required',
         tempUnschedulable: 'Temp Unschedulable',
         quotaExceeded: 'Quota Exceeded',
         unschedulable: 'Unschedulable',
@@ -1005,13 +1006,13 @@ export default {
           oauthOnlyHint: 'Initial Grok support is OAuth subscription-backed Responses API text and reasoning traffic only.'
         },
         qoder: {
-          title: 'Qoder Account Authorization',
-          followSteps: 'Follow these steps to authorize your Qoder account:',
+          title: 'Qoder CN Account Authorization',
+          followSteps: 'Follow these steps to authorize your Qoder CN account:',
           step1GenerateUrl: 'Generate the authorization URL',
           generateAuthUrl: 'Generate Auth URL',
           step2OpenUrl: 'Open the URL in your browser and complete authorization',
-          openUrlDesc: 'Open the authorization URL in a new tab, choose your Qoder account, and authorize.',
-          importantNotice: 'Qoder uses a device authorization flow. This page opens the Qoder authorization window and checks completion automatically. A localhost callback URL is not expected for this flow.',
+          openUrlDesc: 'Open the authorization URL in a new tab, choose your Qoder CN account, and authorize.',
+          importantNotice: 'Qoder CN uses a device authorization flow. A localhost callback URL is not expected for this flow.',
           step3EnterCode: 'Complete Authorization',
           authCodeDesc: 'After browser authorization, this page will complete automatically. If automatic checking is interrupted, click Complete Authorization to retry the device status check.',
           authCode: 'Manual callback input (optional)',
@@ -1020,6 +1021,7 @@ export default {
           failedToGenerateUrl: 'Failed to generate Qoder auth URL',
           missingExchangeParams: 'Missing session ID or state',
           failedToExchangeCode: 'Failed to check Qoder authorization',
+          authorizationPending: 'Qoder CN authorization is still pending.',
           popupBlocked: 'The browser blocked the Qoder authorization popup. Use the open-link button to continue authorization.'
         },
         // Gemini specific
@@ -1243,18 +1245,13 @@ export default {
       openaiAccount: 'OpenAI Account',
       geminiAccount: 'Gemini Account',
       antigravityAccount: 'Antigravity Account',
-      qoderAccount: 'Qoder Account',
+      qoderAccount: 'Qoder CN Account',
       grokAccount: 'Grok Account',
       qoder: {
-        site: {
-          label: 'Qoder Site',
-          global: 'International',
-          cn: 'China',
-          changeWarning: 'Credentials may not work across sites. Save the account, then run a connection test.'
-        },
+        reauthorizationRequired: 'This account uses legacy Qoder credentials. Re-authorize it with Qoder CN before it can be scheduled.',
         accountType: {
           oauthTitle: 'Authorization Link',
-          oauthDesc: 'Recommended: complete Qoder login in the browser.',
+          oauthDesc: 'Recommended: complete Qoder CN login in the browser.',
           manualTitle: 'Manual Credentials',
           manualDesc: 'Import a PAT, or import an existing token and machine_id.'
         },

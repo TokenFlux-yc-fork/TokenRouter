@@ -103,16 +103,18 @@ const isOpenAIOAuth = computed(() => props.account?.platform === 'openai' && pro
 // 影子账号(链接型,持 parent_account_id)不持凭据、type 不可变,凭据/隐私类操作对其无效。
 const isShadow = computed(() => props.account?.parent_account_id != null)
 const supportsReauth = computed(() =>
-  (props.account?.type === 'oauth' || props.account?.type === 'setup-token') && !isShadow.value
+  (
+    props.account?.type === 'oauth' ||
+    props.account?.type === 'setup-token' ||
+    (props.account?.platform === 'qoder' && props.account?.type === 'cosy')
+  ) && !isShadow.value
 )
-const supportsTokenRefresh = computed(() =>
-  supportsReauth.value || (
-    props.account?.platform === 'qoder' &&
-    props.account?.type === 'cosy' &&
-    props.account.credentials_status?.has_refresh_token === true &&
-    !isShadow.value
-  )
-)
+const supportsTokenRefresh = computed(() => {
+  if (props.account?.platform === 'qoder' && props.account?.type === 'cosy') {
+    return props.account.credentials_status?.has_refresh_token === true && !isShadow.value
+  }
+  return supportsReauth.value
+})
 // OpenAI OAuth 母账号指自身不是影子账号(parent_account_id == null)的账号。
 const isOpenAIOAuthParent = computed(() => isOpenAIOAuth.value && !isShadow.value)
 const supportsPrivacy = computed(() => (isAntigravityOAuth.value || isOpenAIOAuth.value) && !isShadow.value)
