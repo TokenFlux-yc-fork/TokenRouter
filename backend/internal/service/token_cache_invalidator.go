@@ -55,7 +55,7 @@ func (c *CompositeTokenCacheInvalidator) InvalidateToken(ctx context.Context, ac
 		if account.IsQoderCosy() {
 			keysToDelete = append(keysToDelete, QoderTokenCacheKey(account))
 			if c.qoderTokenProvider != nil {
-				c.qoderTokenProvider.Invalidate(account.ID)
+				c.qoderTokenProvider.InvalidateAccount(account)
 			}
 		}
 	default:

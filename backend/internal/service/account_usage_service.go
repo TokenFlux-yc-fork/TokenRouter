@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"math"
 	"math/rand/v2"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -110,8 +110,9 @@ type antigravityUsageCache struct {
 }
 
 type qoderUsageCache struct {
-	usageInfo *UsageInfo
-	timestamp time.Time
+	authorizationHash string
+	usageInfo         *UsageInfo
+	timestamp         time.Time
 }
 
 const (
@@ -142,6 +143,21 @@ type UsageCache struct {
 // NewUsageCache 创建 UsageCache 实例
 func NewUsageCache() *UsageCache {
 	return &UsageCache{}
+}
+
+// InvalidateQoderUsage drops all process-local state derived from a Qoder
+// authorization. Identity-aware cache and flight keys still protect in-flight
+// requests that finish after this explicit invalidation.
+func (s *AccountUsageService) InvalidateQoderUsage(accountID int64) {
+	if s == nil {
+		return
+	}
+	if s.cache != nil {
+		s.cache.qoderCache.Delete(accountID)
+	}
+	if s.qoderSessionProvider != nil {
+		s.qoderSessionProvider.Invalidate(accountID)
+	}
 }
 
 // WindowStats 窗口期统计
@@ -1096,9 +1112,10 @@ func (s *AccountUsageService) getGrokUsage(ctx context.Context, account *Account
 }
 
 const (
-	qoderQuotaUsagePath         = "/api/v2/quota/usage"
-	qoderQuotaSnapshotExtraKey  = "qoder_quota_snapshot"
-	qoderQuotaUpdatedAtExtraKey = "qoder_quota_updated_at"
+	QoderQuotaSnapshotExtraKey  = "qoder_quota_snapshot"
+	QoderQuotaUpdatedAtExtraKey = "qoder_quota_updated_at"
+	qoderQuotaSnapshotExtraKey  = QoderQuotaSnapshotExtraKey
+	qoderQuotaUpdatedAtExtraKey = QoderQuotaUpdatedAtExtraKey
 )
 
 type qoderQuotaUsageResponse struct {
@@ -1111,6 +1128,7 @@ type qoderQuotaUsageResponse struct {
 	UpgradeURL           string                 `json:"upgradeUrl"`
 	AddCreditsURL        string                 `json:"addCreditsUrl"`
 	UserQuota            *qoderQuotaProgressRaw `json:"userQuota"`
+	UserQuotaSnake       *qoderQuotaProgressRaw `json:"user_quota"`
 	AddOnQuota           *qoderQuotaProgressRaw `json:"addOnQuota"`
 	AddOnQuotaSnake      *qoderQuotaProgressRaw `json:"add_on_quota"`
 	OrgResourcePackage   *qoderQuotaProgressRaw `json:"orgResourcePackage"`
@@ -1118,6 +1136,62 @@ type qoderQuotaUsageResponse struct {
 	SharedQuota          *qoderQuotaProgressRaw `json:"sharedQuota"`
 	SharedQuotaSnake     *qoderQuotaProgressRaw `json:"shared_quota"`
 	IsPlanQuotaProrated  bool                   `json:"isPlanQuotaProrated"`
+}
+
+func (r *qoderQuotaUsageResponse) UnmarshalJSON(data []byte) error {
+	type responseAlias qoderQuotaUsageResponse
+	var decoded responseAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*r = qoderQuotaUsageResponse(decoded)
+
+	var snake struct {
+		UserID               string                 `json:"user_id"`
+		UserType             string                 `json:"user_type"`
+		UsageType            string                 `json:"usage_type"`
+		TotalUsagePercentage *float64               `json:"total_usage_percentage"`
+		IsQuotaExceeded      *bool                  `json:"is_quota_exceeded"`
+		ExpiresAt            *qoder.FlexibleInt64   `json:"expires_at"`
+		UpgradeURL           string                 `json:"upgrade_url"`
+		AddCreditsURL        string                 `json:"add_credits_url"`
+		UserQuota            *qoderQuotaProgressRaw `json:"user_quota"`
+		IsPlanQuotaProrated  *bool                  `json:"is_plan_quota_prorated"`
+	}
+	if err := json.Unmarshal(data, &snake); err != nil {
+		return err
+	}
+	if r.UserID == "" {
+		r.UserID = snake.UserID
+	}
+	if r.UserType == "" {
+		r.UserType = snake.UserType
+	}
+	if r.UsageType == "" {
+		r.UsageType = snake.UsageType
+	}
+	if snake.TotalUsagePercentage != nil {
+		r.TotalUsagePercentage = *snake.TotalUsagePercentage
+	}
+	if snake.IsQuotaExceeded != nil {
+		r.IsQuotaExceeded = *snake.IsQuotaExceeded
+	}
+	if snake.ExpiresAt != nil {
+		r.ExpiresAt = *snake.ExpiresAt
+	}
+	if r.UpgradeURL == "" {
+		r.UpgradeURL = snake.UpgradeURL
+	}
+	if r.AddCreditsURL == "" {
+		r.AddCreditsURL = snake.AddCreditsURL
+	}
+	if r.UserQuota == nil {
+		r.UserQuota = snake.UserQuota
+	}
+	if snake.IsPlanQuotaProrated != nil {
+		r.IsPlanQuotaProrated = *snake.IsPlanQuotaProrated
+	}
+	return nil
 }
 
 type qoderQuotaProgressRaw struct {
@@ -1158,6 +1232,11 @@ func (r *qoderQuotaProgressRaw) UnmarshalJSON(data []byte) error {
 	r.remainingSet = qoderJSONHasAnyField(fields, "remaining")
 	r.percentageSet = qoderJSONHasAnyField(fields, "percentage")
 	r.availableSet = qoderJSONHasAnyField(fields, "available")
+	if strings.TrimSpace(r.OrganizationID) == "" {
+		if raw, ok := fields["organization_id"]; ok {
+			_ = json.Unmarshal(raw, &r.OrganizationID)
+		}
+	}
 	return nil
 }
 
@@ -1183,6 +1262,7 @@ func (s *AccountUsageService) getQoderUsage(ctx context.Context, account *Accoun
 	if s.cache == nil {
 		s.cache = NewUsageCache()
 	}
+	authorizationHash := qoderRefreshCredentialsHash(account.Credentials)
 
 	if !force {
 		if cached, ok := s.cache.qoderCache.Load(account.ID); ok {
@@ -1192,7 +1272,7 @@ func (s *AccountUsageService) getQoderUsage(ctx context.Context, account *Accoun
 		}
 	}
 
-	flightKey := fmt.Sprintf("qoder-usage:%d", account.ID)
+	flightKey := fmt.Sprintf("qoder-usage:%d:%s", account.ID, authorizationHash)
 	result, flightErr, _ := s.cache.qoderFlight.Do(flightKey, func() (any, error) {
 		if !force {
 			if cached, ok := s.cache.qoderCache.Load(account.ID); ok {
@@ -1209,15 +1289,30 @@ func (s *AccountUsageService) getQoderUsage(ctx context.Context, account *Accoun
 		if err != nil {
 			degraded := buildQoderDegradedUsage(err, account)
 			enrichUsageWithAccountError(degraded, account)
-			s.cache.qoderCache.Store(account.ID, &qoderUsageCache{usageInfo: degraded, timestamp: time.Now()})
+			s.cache.qoderCache.Store(account.ID, &qoderUsageCache{
+				authorizationHash: authorizationHash,
+				usageInfo:         degraded,
+				timestamp:         time.Now(),
+			})
 			return degraded, nil
 		}
 
 		usage := buildQoderUsageInfo(resp)
 		enrichUsageWithAccountError(usage, account)
-		s.persistQoderQuotaSnapshot(fetchCtx, account.ID, usage.QoderQuota)
-		s.applyQoderQuotaSchedulingSignal(fetchCtx, account, usage.QoderQuota)
-		s.cache.qoderCache.Store(account.ID, &qoderUsageCache{usageInfo: usage, timestamp: time.Now()})
+		applied, stateErr := s.applyQoderQuotaStateIfAuthorizationUnchanged(fetchCtx, account, usage.QoderQuota)
+		if stateErr != nil {
+			slog.Warn("failed to persist qoder quota state", "account_id", account.ID, "error", stateErr)
+			return usage, nil
+		}
+		if !applied {
+			staleAt := time.Now()
+			return &UsageInfo{UpdatedAt: &staleAt}, nil
+		}
+		s.cache.qoderCache.Store(account.ID, &qoderUsageCache{
+			authorizationHash: authorizationHash,
+			usageInfo:         usage,
+			timestamp:         time.Now(),
+		})
 		return usage, nil
 	})
 	if flightErr != nil {
@@ -1232,6 +1327,9 @@ func (s *AccountUsageService) getQoderUsage(ctx context.Context, account *Accoun
 
 func qoderUsageCacheUsable(account *Account, cache *qoderUsageCache, now time.Time) bool {
 	if cache == nil || cache.usageInfo == nil {
+		return false
+	}
+	if account == nil || cache.authorizationHash == "" || cache.authorizationHash != qoderRefreshCredentialsHash(account.Credentials) {
 		return false
 	}
 	if now.Sub(cache.timestamp) >= qoderUsageCacheTTL(cache.usageInfo) {
@@ -1285,24 +1383,40 @@ func (s *AccountUsageService) fetchQoderQuotaUsageWithProvider(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	logicalPath := qoder.QuotaUsagePath
-	if profile.Site == qoder.SiteCN {
-		query := url.Values{}
-		if organizationID := strings.TrimSpace(session.Identity.OrganizationID); organizationID != "" {
-			query.Set("orgId", organizationID)
-		}
-		if quotaKey := strings.TrimSpace(account.GetCredential("quota_key")); quotaKey != "" {
-			query.Set("quotaKey", quotaKey)
-		}
-		if encoded := query.Encode(); encoded != "" {
-			logicalPath += "?" + encoded
+	accessToken := ""
+	if session != nil && session.Identity != nil {
+		accessToken = strings.TrimSpace(session.Identity.SecurityOauthToken)
+	}
+	if accessToken == "" {
+		return nil, fmt.Errorf("qoder: quota usage requires security_oauth_token")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profile.OpenAPIBaseURL+qoder.QuotaUsagePath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("qoder: create quota usage request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", profile.OpenAPIUserAgent())
+	doer := newQoderRequestDoer(account, s.httpUpstream, s.tlsFPProfileService)
+	if doer == nil {
+		doer = http.DefaultClient.Do
+	}
+	resp, err := doer(req)
+	if err != nil {
+		return nil, qoder.NewRedactedTransportError("quota usage request", err, accessToken)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, &qoder.OpenAPIError{
+			Operation:  "quota usage",
+			StatusCode: resp.StatusCode,
+			Message:    qoder.RedactSensitiveTextWithSecrets(string(body), accessToken),
 		}
 	}
-	doer := newQoderRequestDoer(account, s.httpUpstream, s.tlsFPProfileService)
 	var usage qoderQuotaUsageResponse
-	client := qoder.NewClientForProfile(profile)
-	if err := client.JSONRequestContextWithDoer(ctx, http.MethodGet, session, logicalPath, nil, nil, doer, &usage); err != nil {
-		return nil, fmt.Errorf("qoder: quota usage request: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&usage); err != nil {
+		return nil, fmt.Errorf("qoder: parse quota usage response: %w", err)
 	}
 	return &usage, nil
 }
@@ -1310,7 +1424,11 @@ func (s *AccountUsageService) fetchQoderQuotaUsageWithProvider(ctx context.Conte
 // isQoderAuthenticationError 只把明确的 401/403 视为可通过 PAT 重建 session 的认证失败。
 func isQoderAuthenticationError(err error) bool {
 	var apiErr *qoder.APIError
-	return errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden)
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden
+	}
+	var openAPIErr *qoder.OpenAPIError
+	return errors.As(err, &openAPIErr) && (openAPIErr.StatusCode == http.StatusUnauthorized || openAPIErr.StatusCode == http.StatusForbidden)
 }
 
 func buildQoderUsageInfo(resp *qoderQuotaUsageResponse) *UsageInfo {
@@ -1350,7 +1468,7 @@ func qoderQuotaInfoFromResponse(resp *qoderQuotaUsageResponse, updatedAt time.Ti
 		LastUpdatedAt:        &updatedAt,
 		SnapshotFromAccount:  fromSnapshot,
 	}
-	quota.UserQuota = qoderQuotaProgressFromRaw(resp.UserQuota, true)
+	quota.UserQuota = qoderQuotaProgressFromRaw(firstNonNilQoderQuotaProgress(resp.UserQuota, resp.UserQuotaSnake), true)
 	quota.AddOnQuota = qoderQuotaProgressFromRaw(firstNonNilQoderQuotaProgress(resp.AddOnQuota, resp.AddOnQuotaSnake), true)
 	quota.OrgResourcePackage = qoderQuotaProgressFromRaw(firstNonNilQoderQuotaProgress(
 		resp.OrgResourcePackage,
@@ -1576,15 +1694,16 @@ func buildQoderDegradedUsage(err error, account *Account) *UsageInfo {
 	if err != nil {
 		var apiErr *qoder.APIError
 		if errors.As(err, &apiErr) {
-			switch apiErr.StatusCode {
-			case http.StatusUnauthorized, http.StatusForbidden:
-				info.ErrorCode = errorCodeUnauthenticated
-				info.NeedsReauth = true
-			case http.StatusTooManyRequests:
-				info.ErrorCode = errorCodeRateLimited
-			default:
-				info.ErrorCode = errorCodeNetworkError
+			applyQoderUsageHTTPError(info, apiErr.StatusCode)
+			if snapshot := qoderQuotaSnapshotFromExtra(account); snapshot != nil {
+				snapshot.SnapshotFromAccount = true
+				info.QoderQuota = snapshot
 			}
+			return info
+		}
+		var openAPIErr *qoder.OpenAPIError
+		if errors.As(err, &openAPIErr) {
+			applyQoderUsageHTTPError(info, openAPIErr.StatusCode)
 			if snapshot := qoderQuotaSnapshotFromExtra(account); snapshot != nil {
 				snapshot.SnapshotFromAccount = true
 				info.QoderQuota = snapshot
@@ -1611,24 +1730,96 @@ func buildQoderDegradedUsage(err error, account *Account) *UsageInfo {
 	return info
 }
 
+func applyQoderUsageHTTPError(info *UsageInfo, statusCode int) {
+	if info == nil {
+		return
+	}
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		info.ErrorCode = errorCodeUnauthenticated
+		info.NeedsReauth = true
+	case http.StatusTooManyRequests:
+		info.ErrorCode = errorCodeRateLimited
+	default:
+		info.ErrorCode = errorCodeNetworkError
+	}
+}
+
 func (s *AccountUsageService) persistQoderQuotaSnapshot(ctx context.Context, accountID int64, quota *QoderQuotaInfo) {
 	if s == nil || s.accountRepo == nil || quota == nil {
 		return
 	}
-	raw, err := json.Marshal(quota)
+	updates, err := qoderQuotaSnapshotUpdates(quota)
 	if err != nil {
 		return
 	}
-	var snapshot map[string]any
-	if err := json.Unmarshal(raw, &snapshot); err != nil {
-		return
-	}
-	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
-		qoderQuotaSnapshotExtraKey:  snapshot,
-		qoderQuotaUpdatedAtExtraKey: time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
+	if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
 		slog.Warn("failed to persist qoder quota snapshot", "account_id", accountID, "error", err)
 	}
+}
+
+func qoderQuotaSnapshotUpdates(quota *QoderQuotaInfo) (map[string]any, error) {
+	if quota == nil {
+		return nil, errors.New("qoder quota is nil")
+	}
+	raw, err := json.Marshal(quota)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		qoderQuotaSnapshotExtraKey:  snapshot,
+		qoderQuotaUpdatedAtExtraKey: time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func (s *AccountUsageService) applyQoderQuotaStateIfAuthorizationUnchanged(
+	ctx context.Context,
+	account *Account,
+	quota *QoderQuotaInfo,
+) (bool, error) {
+	if s == nil || s.accountRepo == nil || account == nil || quota == nil {
+		return true, nil
+	}
+	updates, err := qoderQuotaSnapshotUpdates(quota)
+	if err != nil {
+		return false, err
+	}
+	state := QoderQuotaStateUpdate{
+		AccountID:           account.ID,
+		ExpectedCredentials: account.Credentials,
+		Extra:               updates,
+	}
+	now := time.Now()
+	if resetAt, limited := qoderQuotaRateLimitResetAt(quota, now); limited {
+		state.SetRateLimitResetAt = &resetAt
+	} else if qoderQuotaShouldClearRateLimit(account, quota, now) {
+		state.ClearRateLimit = true
+		state.ExpectedRateLimitedAt = account.RateLimitedAt
+		state.ExpectedRateLimitResetAt = account.RateLimitResetAt
+	}
+
+	if repository, ok := s.accountRepo.(QoderQuotaStateRepository); ok {
+		return repository.ApplyQoderQuotaStateIfAuthorizationUnchanged(ctx, state)
+	}
+
+	// Test and compatibility repositories may not expose the atomic extension.
+	// Verify before falling back; the production repository implements the CAS.
+	current, err := s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil {
+		return false, err
+	}
+	if qoderRefreshCredentialsHash(current.Credentials) != qoderRefreshCredentialsHash(account.Credentials) {
+		return false, nil
+	}
+	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
+		return false, err
+	}
+	s.applyQoderQuotaSchedulingSignal(ctx, account, quota)
+	return true, nil
 }
 
 func qoderQuotaSnapshotFromExtra(account *Account) *QoderQuotaInfo {

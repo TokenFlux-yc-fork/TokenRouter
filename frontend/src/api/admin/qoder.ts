@@ -33,10 +33,12 @@ export interface QoderTokenInfo {
   aid?: string
   organization_id?: string
   organization_name?: string
+  organization_tags?: string[]
   name?: string
   user_type?: string
+  data_policy?: 'agree' | 'disagree'
   site?: QoderSite
-  refresh_mode?: 'cosy' | 'qodercn20'
+  refresh_mode?: 'qodercn20'
   expires_at?: string
   extra?: Record<string, unknown>
   [key: string]: unknown

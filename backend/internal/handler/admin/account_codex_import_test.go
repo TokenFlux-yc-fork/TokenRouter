@@ -877,6 +877,10 @@ func (s *codexImportMemoryAdminService) UpdateAccount(ctx context.Context, id in
 	return &account, nil
 }
 
+func (s *codexImportMemoryAdminService) ApplyQoderAuthorization(ctx context.Context, id int64, credentials, extra map[string]any) (*service.Account, error) {
+	return s.UpdateAccount(ctx, id, &service.UpdateAccountInput{Credentials: credentials, Extra: extra})
+}
+
 func (s *codexImportMemoryAdminService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {
 	for idx := range s.accounts {
 		if s.accounts[idx].ID == id {

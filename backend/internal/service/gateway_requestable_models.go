@@ -149,9 +149,14 @@ func filterRequestableModelAccounts(accounts []Account, platform string) []Accou
 	}
 	filtered := make([]Account, 0, len(accounts))
 	for i := range accounts {
-		if accountMatchesModelListPlatform(&accounts[i], platform) {
-			filtered = append(filtered, accounts[i])
+		account := &accounts[i]
+		if !accountMatchesModelListPlatform(account, platform) {
+			continue
 		}
+		if platform == PlatformQoder && (!account.IsQoderCosy() || validateQoderCNAuthorizationCredentials(account.Credentials) != nil) {
+			continue
+		}
+		filtered = append(filtered, accounts[i])
 	}
 	return filtered
 }
@@ -194,7 +199,7 @@ func mergeRequestableModelCandidates(baseModels []string, accounts []Account, ch
 	for i := range accounts {
 		account := &accounts[i]
 		if platform == PlatformQoder && account.Platform == PlatformQoder {
-			if _, err := qoderSiteForAccount(account); err != nil {
+			if err := validateQoderCNAuthorizationCredentials(account.Credentials); err != nil {
 				continue
 			}
 		}

@@ -45,7 +45,7 @@ beforeEach(() => {
 describe('useQoderOAuth', () => {
   it('generates an authorization URL and stores session state', async () => {
     vi.mocked(adminAPI.qoder.generateAuthUrl).mockResolvedValueOnce({
-      auth_url: 'https://qoder.com/device/selectAccounts?nonce=n',
+      auth_url: 'https://qoder.com.cn/device/selectAccounts?nonce=n',
       session_id: 'session-id',
       state: 'state-value',
       expires_in: 600,
@@ -57,7 +57,7 @@ describe('useQoderOAuth', () => {
 
     expect(ok).toBe(true)
     expect(adminAPI.qoder.generateAuthUrl).toHaveBeenCalledWith({ proxy_id: 7, site: 'cn' })
-    expect(oauth.authUrl.value).toBe('https://qoder.com/device/selectAccounts?nonce=n')
+    expect(oauth.authUrl.value).toBe('https://qoder.com.cn/device/selectAccounts?nonce=n')
     expect(oauth.sessionId.value).toBe('session-id')
     expect(oauth.state.value).toBe('state-value')
     expect(oauth.pollInterval.value).toBe(2)
@@ -77,7 +77,7 @@ describe('useQoderOAuth', () => {
     const pending = oauth.generateAuthUrl(7)
     oauth.resetState()
     deferred.resolve({
-      auth_url: 'https://qoder.com/old-session',
+      auth_url: 'https://qoder.com.cn/old-session',
       session_id: 'old-session',
       state: 'old-state',
       expires_in: 600,
@@ -158,6 +158,67 @@ describe('useQoderOAuth', () => {
     expect(oauth.polling.value).toBe(false)
   })
 
+  it.each([
+    ['network error', { status: 0, message: 'network unavailable' }],
+    ['request timeout', { status: 408, message: 'request timeout' }],
+    ['rate limit', { status: 429, message: 'rate limited' }],
+    ['server error', { status: 503, message: 'service unavailable' }],
+    ['legacy axios server error', { response: { status: 502 }, message: 'bad gateway' }]
+  ])('classifies %s while polling as transient', async (_name, pollError) => {
+    vi.mocked(adminAPI.qoder.poll).mockRejectedValueOnce(pollError)
+    const oauth = useQoderOAuth()
+
+    const result = await oauth.pollAuthorization(
+      { sessionId: 'session-id', state: 'state-value' },
+      { notifyError: false }
+    )
+
+    expect(result).toBeNull()
+    expect(oauth.pollFailure.value).toBe('transient')
+    expect(oauth.loading.value).toBe(false)
+    expect(oauth.polling.value).toBe(false)
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('prefers the flattened HTTP status and classifies permanent client errors as terminal', async () => {
+    vi.mocked(adminAPI.qoder.poll).mockRejectedValueOnce({
+      status: 400,
+      response: { status: 503 },
+      message: 'authorization session expired'
+    })
+    const oauth = useQoderOAuth()
+
+    const result = await oauth.pollAuthorization({
+      sessionId: 'session-id',
+      state: 'state-value'
+    })
+
+    expect(result).toBeNull()
+    expect(oauth.pollFailure.value).toBe('terminal')
+    expect(showError).toHaveBeenCalledWith('authorization session expired')
+  })
+
+  it('clears a transient poll failure after a successful retry', async () => {
+    vi.mocked(adminAPI.qoder.poll)
+      .mockRejectedValueOnce({ status: 503, message: 'service unavailable' })
+      .mockResolvedValueOnce({ status: 'pending' })
+    const oauth = useQoderOAuth()
+
+    await oauth.pollAuthorization(
+      { sessionId: 'session-id', state: 'state-value' },
+      { notifyError: false }
+    )
+    expect(oauth.pollFailure.value).toBe('transient')
+
+    const result = await oauth.pollAuthorization(
+      { sessionId: 'session-id', state: 'state-value' },
+      { notifyError: false }
+    )
+
+    expect(result?.status).toBe('pending')
+    expect(oauth.pollFailure.value).toBe('none')
+  })
+
   it('builds credentials compatible with Qoder token provider', () => {
     const oauth = useQoderOAuth()
     const credentials = oauth.buildCredentials({
@@ -170,8 +231,10 @@ describe('useQoderOAuth', () => {
       aid: 'aid',
       organization_id: 'org-1',
       organization_name: 'Qoder Org',
+      organization_tags: ['enterprise', 'coding'],
       name: 'Qoder User',
       user_type: 'personal_standard',
+      data_policy: 'disagree',
       site: 'cn',
       refresh_mode: 'qodercn20',
       expires_at: '2026-07-20T12:00:00Z',
@@ -188,8 +251,10 @@ describe('useQoderOAuth', () => {
       aid: 'aid',
       organization_id: 'org-1',
       organization_name: 'Qoder Org',
+      organization_tags: ['enterprise', 'coding'],
       name: 'Qoder User',
       user_type: 'personal_standard',
+      data_policy: 'disagree',
       site: 'cn',
       refresh_mode: 'qodercn20',
       expires_at: '2026-07-20T12:00:00Z',
@@ -203,6 +268,19 @@ describe('useQoderOAuth', () => {
       security_oauth_token: 'access-token',
       machine_id: 'machine-id'
     })
+
+    expect(credentials.site).toBe('cn')
+    expect(credentials.refresh_mode).toBe('qodercn20')
+  })
+
+  it('overrides incompatible response metadata with the CN refresh profile', () => {
+    const oauth = useQoderOAuth()
+    const credentials = oauth.buildCredentials({
+      security_oauth_token: 'access-token',
+      machine_id: 'machine-id',
+      site: 'global',
+      refresh_mode: 'cosy'
+    } as any)
 
     expect(credentials.site).toBe('cn')
     expect(credentials.refresh_mode).toBe('qodercn20')

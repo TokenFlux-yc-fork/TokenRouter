@@ -149,22 +149,23 @@ func DefaultRequestModelIDs() []string {
 
 // AuthInfo 保存从本地 Qoder 认证存储解密出的用户信息。
 type AuthInfo struct {
-	UID                    string `json:"uid"`
-	Name                   string `json:"name"`
-	AccessToken            string `json:"access_token"`
-	SecurityOauthToken     string `json:"security_oauth_token"`
-	RefreshToken           string `json:"refresh_token"`
-	ExpireTime             int64  `json:"expire_time"`
-	RefreshTokenExpireTime int64  `json:"refresh_token_expire_time"`
-	LoginMethod            string `json:"login_method"`
-	LoginTimestamp         int64  `json:"login_timestamp"`
-	EncryptUserInfo        string `json:"encrypt_user_info"`
-	Key                    string `json:"key"`
-	Email                  string `json:"email"`
-	UserType               string `json:"userType"`
-	MachineID              string `json:"_machine_id"`
-	OrganizationID         string `json:"organization_id"`
-	OrganizationName       string `json:"organization_name"`
+	UID                    string   `json:"uid"`
+	Name                   string   `json:"name"`
+	AccessToken            string   `json:"access_token"`
+	SecurityOauthToken     string   `json:"security_oauth_token"`
+	RefreshToken           string   `json:"refresh_token"`
+	ExpireTime             int64    `json:"expire_time"`
+	RefreshTokenExpireTime int64    `json:"refresh_token_expire_time"`
+	LoginMethod            string   `json:"login_method"`
+	LoginTimestamp         int64    `json:"login_timestamp"`
+	EncryptUserInfo        string   `json:"encrypt_user_info"`
+	Key                    string   `json:"key"`
+	Email                  string   `json:"email"`
+	UserType               string   `json:"userType"`
+	MachineID              string   `json:"_machine_id"`
+	OrganizationID         string   `json:"organization_id"`
+	OrganizationName       string   `json:"organization_name"`
+	OrganizationTags       []string `json:"organization_tags"`
 }
 
 // ToAuthIdentity 将本地认证信息转换为用于构建 session 的 AuthIdentity。
@@ -183,6 +184,7 @@ func (info *AuthInfo) ToAuthIdentity() *AuthIdentity {
 		UID:                info.UID,
 		OrganizationID:     info.OrganizationID,
 		OrganizationName:   info.OrganizationName,
+		OrganizationTags:   normalizeOrganizationTags(info.OrganizationTags),
 		UserType:           userType,
 		SecurityOauthToken: token,
 		RefreshToken:       info.RefreshToken,

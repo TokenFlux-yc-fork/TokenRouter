@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -84,7 +81,7 @@ func (p *QoderTokenProvider) GetSession(ctx context.Context, account *Account) (
 	if account.Platform != PlatformQoder || account.Type != AccountTypeCosy {
 		return nil, errors.New("not a qoder cosy account")
 	}
-	if _, err := qoderSiteForAccount(account); err != nil {
+	if err := validateQoderCNAuthorizationCredentials(account.Credentials); err != nil {
 		return nil, err
 	}
 
@@ -312,15 +309,6 @@ func (p *QoderTokenProvider) buildSession(ctx context.Context, account *Account)
 		return nil, time.Time{}, err
 	}
 	pat := strings.TrimSpace(account.GetCredential("pat"))
-	if pat == "" {
-		refreshMode, modeErr := qoderRefreshModeForAccount(account)
-		if modeErr != nil {
-			return nil, time.Time{}, modeErr
-		}
-		if refreshMode == qoder.RefreshModeQoderCN20 && site != qoder.SiteCN {
-			return nil, time.Time{}, errors.New("qoder qodercn20 credentials require cn site")
-		}
-	}
 	if pat != "" {
 		machine := qoderMachineForAccount(account)
 		exchangePAT := p.exchangeCNPAT
@@ -333,6 +321,7 @@ func (p *QoderTokenProvider) buildSession(ctx context.Context, account *Account)
 			return nil, time.Time{}, fmt.Errorf("qoder pat exchange: %w", err)
 		}
 		applyQoderAccountIdentityMetadata(identity, account)
+		p.populateOrganizationFromAPI(ctx, account, identity)
 		session, sessionErr := qoder.NewSessionForSite(identity, machine, site)
 		if session != nil {
 			applyQoderSessionDataPolicy(session, account)
@@ -341,14 +330,7 @@ func (p *QoderTokenProvider) buildSession(ctx context.Context, account *Account)
 	}
 
 	token := strings.TrimSpace(account.GetCredential("security_oauth_token"))
-	machineID := strings.TrimSpace(account.GetCredential("machine_id"))
 	if token != "" {
-		if machineID == "" {
-			return nil, time.Time{}, errors.New("qoder credentials require machine_id with security_oauth_token")
-		}
-		if firstNonEmptyQoder(account.GetCredential("uid"), account.GetCredential("aid")) == "" {
-			return nil, time.Time{}, errors.New("qoder credentials require uid or aid with security_oauth_token")
-		}
 		identity := &qoder.AuthIdentity{
 			Name:               firstNonEmptyQoder(account.GetCredential("name"), account.Name),
 			AID:                firstNonEmptyQoder(account.GetCredential("aid"), account.GetCredential("uid")),
@@ -367,7 +349,7 @@ func (p *QoderTokenProvider) buildSession(ctx context.Context, account *Account)
 		return session, time.Time{}, sessionErr
 	}
 
-	return nil, time.Time{}, errors.New("qoder credentials require pat or security_oauth_token+machine_id")
+	return nil, time.Time{}, errors.New("qoder credentials are incomplete")
 }
 
 func (p *QoderTokenProvider) defaultExchangeCNPAT(account *Account) qoderCNPATExchanger {
@@ -393,82 +375,100 @@ func (p *QoderTokenProvider) populateOrganizationFromAPI(ctx context.Context, ac
 	if p == nil || identity == nil {
 		return
 	}
-	if strings.TrimSpace(identity.OrganizationID) != "" {
+	if len(identity.OrganizationTags) > 0 {
 		return
 	}
 	token := strings.TrimSpace(identity.SecurityOauthToken)
 	if token == "" {
 		return
 	}
-	uid := firstNonEmptyQoder(identity.UID, identity.AID)
-	if uid == "" {
+	organizationID := strings.TrimSpace(identity.OrganizationID)
+	if organizationID == "" {
 		return
 	}
 	var tags *qoder.OrganizationTags
 	var err error
 	if p.getOrgTags != nil {
-		tags, err = p.getOrgTags(ctx, token, uid)
+		tags, err = p.getOrgTags(ctx, token, organizationID)
 	} else {
-		tags, err = p.getOrganizationTagsForAccount(ctx, account, token, uid)
+		tags, err = p.getOrganizationTagsForAccount(ctx, account, token, organizationID)
 	}
 	if err != nil || tags == nil {
 		return
 	}
-	identity.OrganizationID = strings.TrimSpace(tags.OrganizationID)
-	identity.OrganizationName = strings.TrimSpace(tags.OrganizationName)
+	identity.OrganizationTags = qoderOrganizationTags(tags.Tags)
 }
 
-func (p *QoderTokenProvider) getOrganizationTagsForAccount(ctx context.Context, account *Account, token, uid string) (*qoder.OrganizationTags, error) {
-	uid = strings.TrimSpace(uid)
-	if uid == "" {
-		return nil, fmt.Errorf("qoder: organization tags require uid")
+func (p *QoderTokenProvider) getOrganizationTagsForAccount(ctx context.Context, account *Account, token, organizationID string) (*qoder.OrganizationTags, error) {
+	organizationID = strings.TrimSpace(organizationID)
+	if organizationID == "" {
+		return nil, fmt.Errorf("qoder: organization tags require organization_id")
 	}
 	profile, err := qoderProfileForAccount(account)
 	if err != nil {
 		return nil, err
 	}
+	client := qoder.NewOAuthClientForProfile(profile, nil)
 	if doer := newQoderRequestDoer(account, p.httpUpstream, p.tlsFPProfileService); doer != nil {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, profile.OpenAPIBaseURL+qoder.OrganizationTagsPathPrefix+url.PathEscape(uid)+"/tags", nil)
-		if err != nil {
-			return nil, fmt.Errorf("qoder: create organization tags request: %w", err)
-		}
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
-		req.Header.Set("User-Agent", profile.OpenAPIUserAgent())
-
-		resp, err := doer(req)
-		if err != nil {
-			return nil, fmt.Errorf("qoder: organization tags request: %w", err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			return nil, fmt.Errorf("qoder: organization tags failed with status %d: %s", resp.StatusCode, qoder.RedactSensitiveText(string(body)))
-		}
-
-		var tags qoder.OrganizationTags
-		if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
-			return nil, fmt.Errorf("qoder: parse organization tags response: %w", err)
-		}
-		return &tags, nil
+		client.Doer = doer
 	}
-	return qoder.NewOAuthClientForProfile(profile, nil).GetOrganizationTags(ctx, token, uid)
+	return client.GetOrganizationTags(ctx, token, organizationID)
 }
 
 func applyQoderAccountIdentityMetadata(identity *qoder.AuthIdentity, account *Account) {
 	if identity == nil || account == nil {
 		return
 	}
+	if identity.DataPolicyAgreed == nil {
+		switch strings.ToLower(qoderAccountCredential(account, "data_policy", "dataPolicy")) {
+		case "agree":
+			agreed := true
+			identity.DataPolicyAgreed = &agreed
+		case "disagree":
+			agreed := false
+			identity.DataPolicyAgreed = &agreed
+		default:
+			for _, key := range []string{"data_policy_agreed", "dataPolicyAgreed"} {
+				if agreed, ok := account.Credentials[key].(bool); ok {
+					identity.DataPolicyAgreed = &agreed
+					break
+				}
+			}
+		}
+	}
+	if strings.TrimSpace(identity.UID) == "" {
+		identity.UID = qoderAccountCredential(account, "uid", "aid")
+	}
+	if strings.TrimSpace(identity.AID) == "" {
+		identity.AID = qoderAccountCredential(account, "aid", "uid")
+	}
 	if strings.TrimSpace(identity.Name) == "" {
-		identity.Name = firstNonEmptyQoder(account.GetCredential("name"), account.Name)
+		identity.Name = firstNonEmptyQoder(qoderAccountCredential(account, "name"), account.Name)
+	}
+	if strings.TrimSpace(identity.UserType) == "" {
+		identity.UserType = firstNonEmptyQoder(qoderAccountCredential(account, "user_type", "userType"), "personal_standard")
 	}
 	if strings.TrimSpace(identity.OrganizationID) == "" {
-		identity.OrganizationID = account.GetCredential("organization_id")
+		identity.OrganizationID = qoderAccountCredential(account, "organization_id", "organizationId")
 	}
 	if strings.TrimSpace(identity.OrganizationName) == "" {
-		identity.OrganizationName = account.GetCredential("organization_name")
+		identity.OrganizationName = qoderAccountCredential(account, "organization_name", "organizationName")
 	}
+	if len(identity.OrganizationTags) == 0 {
+		identity.OrganizationTags = qoderOrganizationTagsFromCredentials(account.Credentials)
+	}
+}
+
+func qoderAccountCredential(account *Account, keys ...string) string {
+	if account == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if value := strings.TrimSpace(account.GetCredential(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func qoderCredentialsHash(credentials map[string]any) string {
@@ -478,32 +478,7 @@ func qoderCredentialsHash(credentials map[string]any) string {
 }
 
 func qoderRefreshCredentialsHash(credentials map[string]any) string {
-	if len(credentials) == 0 {
-		return qoderCredentialsHash(nil)
-	}
-	keys := []string{
-		"pat",
-		"security_oauth_token",
-		"refresh_token",
-		"machine_id",
-		"machine_token",
-		"machine_type",
-		"uid",
-		"aid",
-		"organization_id",
-		"organization_name",
-		"name",
-		"user_type",
-		"site",
-		"refresh_mode",
-	}
-	auth := make(map[string]any, len(keys))
-	for _, key := range keys {
-		if value, ok := credentials[key]; ok {
-			auth[key] = value
-		}
-	}
-	return qoderCredentialsHash(auth)
+	return qoderCredentialsHash(QoderCredentialIdentitySnapshot(credentials))
 }
 
 func firstNonEmptyQoder(values ...string) string {

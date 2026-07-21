@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -100,6 +101,7 @@ func (c *Client) StreamRequestContextWithDoer(ctx context.Context, session *Sess
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)
 	}
+	requestSecrets := qoderRequestSecretValues(req, session)
 
 	if doer == nil {
 		httpClient := c.HTTPClient
@@ -110,18 +112,17 @@ func (c *Client) StreamRequestContextWithDoer(ctx context.Context, session *Sess
 	}
 	resp, err := doer(req)
 	if err != nil {
-		return nil, fmt.Errorf("qoder: request failed: %w", err)
+		return nil, NewRedactedTransportError("request failed", err, requestSecrets...)
 	}
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
-		apiErr := ParseAPIErrorBody(resp.StatusCode, string(body))
+		apiErr := ParseAPIErrorBody(resp.StatusCode, RedactSensitiveTextWithSecrets(string(body), requestSecrets...))
 		if apiErr == nil {
 			apiErr = &APIError{}
 		}
 		apiErr.StatusCode = resp.StatusCode
-		apiErr.Body = string(body)
 		if strings.TrimSpace(apiErr.Message) == "" {
 			apiErr.Message = fmt.Sprintf("Qoder upstream returned HTTP %d", resp.StatusCode)
 		}
@@ -144,21 +145,7 @@ func (c *Client) JSONRequestContextWithDoer(
 	doer RequestDoer,
 	out any,
 ) error {
-	return c.jsonRequestContextWithDoer(ctx, method, session, logicalPath, bodyJSON, extraHeaders, doer, out, false)
-}
-
-// SignatureJSONRequestContextWithDoer 使用登录前的 Appcode 签名模式发送 Gateway JSON 请求。
-func (c *Client) SignatureJSONRequestContextWithDoer(
-	ctx context.Context,
-	method string,
-	session *SessionContext,
-	logicalPath string,
-	bodyJSON []byte,
-	extraHeaders map[string]string,
-	doer RequestDoer,
-	out any,
-) error {
-	return c.jsonRequestContextWithDoer(ctx, method, session, logicalPath, bodyJSON, extraHeaders, doer, out, true)
+	return c.jsonRequestContextWithDoer(ctx, method, session, logicalPath, bodyJSON, extraHeaders, doer, out)
 }
 
 func (c *Client) jsonRequestContextWithDoer(
@@ -170,12 +157,11 @@ func (c *Client) jsonRequestContextWithDoer(
 	extraHeaders map[string]string,
 	doer RequestDoer,
 	out any,
-	signatureOnly bool,
 ) error {
 	if c == nil {
 		return fmt.Errorf("qoder: client is nil")
 	}
-	if session == nil || session.Machine == nil || (!signatureOnly && session.Identity == nil) {
+	if session == nil || session.Machine == nil || session.Identity == nil {
 		return fmt.Errorf("qoder: COSY session is incomplete")
 	}
 	logicalPath = strings.TrimSpace(logicalPath)
@@ -213,15 +199,12 @@ func (c *Client) jsonRequestContextWithDoer(
 	if err != nil {
 		return fmt.Errorf("qoder: create gateway request: %w", err)
 	}
-	if signatureOnly {
-		c.setSignatureHeaders(req, session)
-	} else {
-		c.setHeaders(req, session, logicalPath, encodedBody)
-	}
+	c.setHeaders(req, session, logicalPath, encodedBody)
 	req.Header.Set("Accept", "application/json")
 	for key, value := range extraHeaders {
 		req.Header.Set(key, value)
 	}
+	requestSecrets := qoderRequestSecretValues(req, session)
 	if doer == nil {
 		httpClient := c.HTTPClient
 		if httpClient == nil {
@@ -231,7 +214,7 @@ func (c *Client) jsonRequestContextWithDoer(
 	}
 	resp, err := doer(req)
 	if err != nil {
-		return fmt.Errorf("qoder: gateway request failed: %w", err)
+		return NewRedactedTransportError("gateway request failed", err, requestSecrets...)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -239,14 +222,14 @@ func (c *Client) jsonRequestContextWithDoer(
 		return fmt.Errorf("qoder: read gateway response: %w", err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return ParseAPIErrorBody(resp.StatusCode, string(responseBody))
+		return ParseAPIErrorBody(resp.StatusCode, RedactSensitiveTextWithSecrets(string(responseBody), requestSecrets...))
 	}
 	decodedBody, statusCode, err := unwrapQoderJSONResponse(responseBody)
 	if err != nil {
 		return err
 	}
 	if statusCode >= http.StatusBadRequest {
-		return ParseAPIErrorBody(statusCode, string(decodedBody))
+		return ParseAPIErrorBody(statusCode, RedactSensitiveTextWithSecrets(string(decodedBody), requestSecrets...))
 	}
 	if out == nil || len(strings.TrimSpace(string(decodedBody))) == 0 {
 		return nil
@@ -255,6 +238,28 @@ func (c *Client) jsonRequestContextWithDoer(
 		return fmt.Errorf("qoder: parse gateway response: %w", err)
 	}
 	return nil
+}
+
+func qoderRequestSecretValues(req *http.Request, session *SessionContext) []string {
+	secrets := make([]string, 0, 8)
+	if session != nil {
+		secrets = append(secrets, session.CosyKey, session.Info)
+		if session.Identity != nil {
+			secrets = append(secrets,
+				session.Identity.SecurityOauthToken,
+				session.Identity.RefreshToken,
+			)
+		}
+	}
+	if req != nil {
+		for _, header := range []string{
+			"Authorization",
+			"Cosy-Key",
+		} {
+			secrets = append(secrets, req.Header.Get(header))
+		}
+	}
+	return secrets
 }
 
 func ensureLeadingSlash(path string) string {
@@ -370,7 +375,7 @@ func ParseAPIErrorBody(statusCode int, body string) *APIError {
 var (
 	qoderBearerTokenPattern  = regexp.MustCompile(`(?i)\b(authorization\s*[:=]\s*bearer\s+|bearer\s+)([^\s"',;]+)`)
 	qoderCookiePattern       = regexp.MustCompile(`(?i)\b(cookie|set-cookie)(\s*[:=]\s*)([^\r\n"]+)`)
-	qoderInlineSecretPattern = regexp.MustCompile(`(?i)\b(securityOauthToken|security_oauth_token|refreshToken|refresh_token|personalToken|personal_token|cosy-key|cosyKey)(\s*[:=]\s*)([^,\s"']+)`)
+	qoderInlineSecretPattern = regexp.MustCompile(`(?i)\b(securityOauthToken|security_oauth_token|refreshToken|refresh_token|deviceToken|device_token|personalToken|personal_token|personalAccessToken|personal_access_token|accessToken|access_token|machineToken|machine_token|codeVerifier|code_verifier|nonce|verifier|pat|cosy-key|cosyKey)(\s*[:=]\s*)([^,\s"']+)`)
 	qoderJSONCodeStringRe    = regexp.MustCompile(`(?i)("code"\s*:\s*")([0-9]{1,8})(")`)
 	qoderJSONCodeNumberRe    = regexp.MustCompile(`(?i)("code"\s*:\s*)([0-9]{1,8})(\b)`)
 	qoderPlainCodeNumberRe   = regexp.MustCompile(`(?i)\b(code)(\s*[:=]\s*)([0-9]{1,8})\b`)
@@ -386,8 +391,21 @@ var qoderSensitiveErrorKeys = []string{
 	"security_oauth_token",
 	"refreshToken",
 	"refresh_token",
+	"deviceToken",
+	"device_token",
 	"personalToken",
 	"personal_token",
+	"personalAccessToken",
+	"personal_access_token",
+	"accessToken",
+	"access_token",
+	"machineToken",
+	"machine_token",
+	"codeVerifier",
+	"code_verifier",
+	"nonce",
+	"verifier",
+	"pat",
 	"token",
 	"cosy-key",
 	"cosyKey",
@@ -407,6 +425,37 @@ func RedactSensitiveText(input string) string {
 	redacted = logredact.RedactText(redacted, qoderSensitiveErrorKeys...)
 	redacted = redactQoderInlineSecrets(redacted)
 	return restoreQoderNumericCode(input, redacted)
+}
+
+// RedactSensitiveTextWithSecrets also removes credential values supplied by
+// the caller. This covers upstream responses that echo a request secret under
+// an unknown field name or in free-form text.
+func RedactSensitiveTextWithSecrets(input string, secrets ...string) string {
+	variants := make(map[string]struct{}, len(secrets)*4)
+	for _, secret := range secrets {
+		secret = strings.TrimSpace(secret)
+		if secret == "" {
+			continue
+		}
+		variants[secret] = struct{}{}
+		variants[url.QueryEscape(secret)] = struct{}{}
+		variants[url.PathEscape(secret)] = struct{}{}
+		if encoded, err := json.Marshal(secret); err == nil && len(encoded) >= 2 {
+			variants[string(encoded[1:len(encoded)-1])] = struct{}{}
+		}
+	}
+
+	ordered := make([]string, 0, len(variants))
+	for variant := range variants {
+		if variant != "" {
+			ordered = append(ordered, variant)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+	for _, variant := range ordered {
+		input = strings.ReplaceAll(input, variant, "***")
+	}
+	return RedactSensitiveText(input)
 }
 
 func redactQoderInlineSecrets(input string) string {
@@ -471,7 +520,7 @@ func (c *Client) setHeaders(req *http.Request, session *SessionContext, path, en
 	c.setBasicHeaders(req, session)
 	dataPolicy := strings.ToLower(strings.TrimSpace(session.DataPolicy))
 	if dataPolicy != "agree" && dataPolicy != "disagree" {
-		dataPolicy = "agree"
+		dataPolicy = "disagree"
 	}
 	req.Header.Set("cosy-data-policy", dataPolicy)
 	req.Header.Set("cosy-date", now)
@@ -480,6 +529,9 @@ func (c *Client) setHeaders(req *http.Request, session *SessionContext, path, en
 	if organizationID := strings.TrimSpace(session.Identity.OrganizationID); organizationID != "" {
 		req.Header.Set("cosy-organization-id", organizationID)
 	}
+	if organizationTags := normalizeOrganizationTags(session.Identity.OrganizationTags); len(organizationTags) > 0 {
+		req.Header.Set("cosy-organization-tags", strings.Join(organizationTags, ","))
+	}
 	req.Header.Set("cosy-scene", "assistant")
 	req.Header.Set("cosy-business-product", "cli")
 	req.Header.Set("cosy-business-type", "agent")
@@ -487,27 +539,19 @@ func (c *Client) setHeaders(req *http.Request, session *SessionContext, path, en
 	req.Header.Set("Authorization", ComposeBearer(payloadB64, signature))
 }
 
-func (c *Client) setSignatureHeaders(req *http.Request, session *SessionContext) {
-	c.setBasicHeaders(req, session)
-	httpDate := time.Now().UTC().Format(http.TimeFormat)
-	req.Header.Set("Date", httpDate)
-	req.Header.Set("Signature", SignCenterRequest(httpDate))
-	req.Header.Set("Appcode", AppCode)
-}
-
-func (c *Client) setBasicHeaders(req *http.Request, session *SessionContext) Site {
+func (c *Client) setBasicHeaders(req *http.Request, session *SessionContext) {
 	mid := session.Machine.MachineID
 	machineToken := mid
 	machineType := "5"
-	site := c.Site
-	if session.Site != "" {
-		site = session.Site
-	}
 	machineOS := strings.TrimSpace(c.MachineOS)
 	if machineOS == "" {
 		machineOS = MachineOS()
 	}
 	clientVersion := c.requestClientVersion(session)
+	clientIP := strings.TrimSpace(c.ClientIP)
+	if clientIP == "" {
+		clientIP = MachineIP()
+	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
@@ -515,11 +559,13 @@ func (c *Client) setBasicHeaders(req *http.Request, session *SessionContext) Sit
 	req.Header.Set("Login-Version", "v2")
 	req.Header.Set("cosy-version", clientVersion)
 	req.Header.Set("cosy-clienttype", "5")
+	if clientIP != "" {
+		req.Header.Set("cosy-clientip", clientIP)
+	}
 	req.Header.Set("cosy-machineos", machineOS)
 	req.Header.Set("cosy-machineid", mid)
 	req.Header.Set("cosy-machinetype", machineType)
 	req.Header.Set("cosy-machinetoken", machineToken)
-	return site
 }
 
 func (c *Client) requestClientVersion(session *SessionContext) string {
@@ -1135,6 +1181,19 @@ func StreamEvents(resp *http.Response) <-chan SSEEvent {
 					return
 				}
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			ch <- SSEEvent{
+				Type:   "error",
+				Text:   fmt.Sprintf("qoder: read upstream stream: %v", err),
+				IsDone: true,
+			}
+			return
+		}
+		ch <- SSEEvent{
+			Type:   "error",
+			Text:   "qoder upstream stream ended before [DONE]",
+			IsDone: true,
 		}
 	}()
 	return ch

@@ -1014,6 +1014,14 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if h.tokenCacheInvalidator != nil && account != nil && account.IsQoderCosy() && service.QoderCNReauthorizationProvided(req.Credentials) {
+		if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(c.Request.Context(), account); invalidateErr != nil {
+			slog.Warn("update_account.invalidate_qoder_token_failed",
+				"account_id", accountID,
+				"err", invalidateErr,
+			)
+		}
+	}
 
 	// OpenAI APIKey: credentials 修改后重新探测上游能力（base_url/api_key 可能变更）。
 	// 异步执行，探测失败不影响账号更新响应。
@@ -1353,9 +1361,11 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 	}
 
-	updatedAccount, err := h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{
-		Credentials: newCredentials,
-	})
+	updateInput := &service.UpdateAccountInput{Credentials: newCredentials}
+	if account.IsQoderCosy() {
+		updateInput.QoderRefreshExpectedCredentials = account.Credentials
+	}
+	updatedAccount, err := h.adminService.UpdateAccount(ctx, account.ID, updateInput)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1408,20 +1418,20 @@ func (h *AccountHandler) Refresh(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), updatedAccount))
 }
 
-// ApplyOAuthCredentialsRequest 是重新授权后保存 OAuth 凭据的专用请求体。
+// ApplyOAuthCredentialsRequest 是重新授权后保存 OAuth/COSY 凭据的专用请求体。
 type ApplyOAuthCredentialsRequest struct {
-	Type        string         `json:"type" binding:"required,oneof=oauth setup-token"`
+	Type        string         `json:"type" binding:"required,oneof=oauth setup-token cosy"`
 	Credentials map[string]any `json:"credentials" binding:"required"`
 	Extra       map[string]any `json:"extra"`
 }
 
-// ApplyOAuthCredentials 保存重新授权得到的新凭据，并增量合并 Extra。
+// ApplyOAuthCredentials 保存重新授权得到的新 OAuth/COSY 凭据，并增量合并 Extra。
 // POST /api/v1/admin/accounts/:id/apply-oauth-credentials
 //
 // 该接口刻意不复用通用 Update：
 //   - 只接收 type、credentials、extra，避免前端误传其它账号配置；
 //   - Extra 走 JSONB key 级合并，避免重新授权清空 base_rpm、quota_*、privacy_mode 等持久化配置；
-//   - 服务端统一清理错误状态并失效 token 缓存，避免新授权后仍命中旧 token。
+//   - Qoder CN 通过专用 CAS 写入一次提交凭据、Extra、状态恢复与 scheduler outbox。
 func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -1438,11 +1448,20 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 	ctx := c.Request.Context()
 	existing, err := h.adminService.GetAccount(ctx, accountID)
 	if err != nil {
-		response.NotFound(c, "Account not found")
+		response.ErrorFrom(c, err)
 		return
 	}
-	if !existing.IsOAuth() {
-		response.ErrorFrom(c, infraerrors.BadRequest("NOT_OAUTH", "cannot apply oauth credentials to non-OAuth account"))
+	isQoderCosy := existing.IsQoderCosy()
+	if !existing.IsOAuth() && !isQoderCosy {
+		response.ErrorFrom(c, infraerrors.BadRequest("NOT_REAUTHORIZABLE", "cannot apply authorization credentials to this account"))
+		return
+	}
+	if (isQoderCosy && req.Type != service.AccountTypeCosy) || (!isQoderCosy && req.Type == service.AccountTypeCosy) {
+		response.ErrorFrom(c, infraerrors.BadRequest("INVALID_REAUTHORIZATION_TYPE", "authorization credential type does not match the account platform"))
+		return
+	}
+	if isQoderCosy && !service.QoderCNReauthorizationProvided(req.Credentials) {
+		response.ErrorFrom(c, infraerrors.BadRequest("QODER_CN_REAUTH_REQUIRED", "complete Qoder CN OAuth or PAT credentials are required"))
 		return
 	}
 	if err := service.ValidateOpenAILongContextBillingExtra(existing.Platform, req.Extra); err != nil {
@@ -1450,40 +1469,47 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		return
 	}
 
-	updatedAccount, err := h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
-		Type:        req.Type,
-		Credentials: req.Credentials,
-	})
+	var updatedAccount *service.Account
+	if isQoderCosy {
+		updatedAccount, err = h.adminService.ApplyQoderAuthorization(ctx, accountID, req.Credentials, req.Extra)
+	} else {
+		updatedAccount, err = h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
+			Type:        req.Type,
+			Credentials: req.Credentials,
+		})
+		if err == nil && len(req.Extra) > 0 {
+			if extraErr := h.adminService.UpdateAccountExtra(ctx, accountID, req.Extra); extraErr != nil {
+				extraKeys := make([]string, 0, len(req.Extra))
+				for key := range req.Extra {
+					extraKeys = append(extraKeys, key)
+				}
+				slog.Error("apply_oauth_credentials.update_extra_failed",
+					"account_id", accountID,
+					"extra_keys", extraKeys,
+					"err", extraErr,
+				)
+			}
+		}
+		if err == nil {
+			if cleared, clearErr := h.adminService.ClearAccountError(ctx, accountID); clearErr != nil {
+				slog.Warn("apply_oauth_credentials.clear_error_failed",
+					"account_id", accountID,
+					"err", clearErr,
+				)
+			} else if cleared != nil {
+				updatedAccount = cleared
+			}
+		}
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-
-	// Extra 采用增量合并；失败只记录日志，避免重新授权的 token 落库结果被回滚。
-	if len(req.Extra) > 0 {
-		if extraErr := h.adminService.UpdateAccountExtra(ctx, accountID, req.Extra); extraErr != nil {
-			extraKeys := make([]string, 0, len(req.Extra))
-			for k := range req.Extra {
-				extraKeys = append(extraKeys, k)
-			}
-			slog.Error("apply_oauth_credentials.update_extra_failed",
-				"account_id", accountID,
-				"extra_keys", extraKeys,
-				"err", extraErr,
-			)
-		}
+	if isQoderCosy && h.accountUsageService != nil {
+		h.accountUsageService.InvalidateQoderUsage(accountID)
 	}
 
-	if cleared, clearErr := h.adminService.ClearAccountError(ctx, accountID); clearErr != nil {
-		slog.Warn("apply_oauth_credentials.clear_error_failed",
-			"account_id", accountID,
-			"err", clearErr,
-		)
-	} else if cleared != nil {
-		updatedAccount = cleared
-	}
-
-	if h.tokenCacheInvalidator != nil && updatedAccount != nil && updatedAccount.IsOAuth() {
+	if h.tokenCacheInvalidator != nil && updatedAccount != nil && (existing.IsOAuth() || isQoderCosy) {
 		if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(ctx, updatedAccount); invalidateErr != nil {
 			slog.Warn("apply_oauth_credentials.invalidate_token_failed",
 				"account_id", accountID,

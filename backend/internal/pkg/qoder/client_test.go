@@ -2,6 +2,8 @@ package qoder
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -15,16 +17,64 @@ func testSession() *SessionContext {
 		CosyKey: "test-cosy-key",
 		Info:    "test-info",
 		Identity: &AuthIdentity{
-			Name:           "test",
-			UID:            "u-123",
-			AID:            "a-456",
-			OrganizationID: "org-789",
+			Name:             "test",
+			UID:              "u-123",
+			AID:              "a-456",
+			OrganizationID:   "org-789",
+			OrganizationTags: []string{"Enterprise", "CN"},
 		},
 		Machine: &MachineIdentity{
 			MachineID:    "mid-abc",
 			MachineToken: "mytoken",
 			MachineType:  "5",
 		},
+	}
+}
+
+func TestStreamEventsRequiresDoneSentinel(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantText  string
+		wantError bool
+	}{
+		{
+			name: "normal done",
+			body: "data: [DONE]\n\n",
+		},
+		{
+			name:      "output then eof",
+			body:      "data: {\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"partial\\\"}}]}\"}\n\n",
+			wantText:  "partial",
+			wantError: true,
+		},
+		{
+			name:      "empty eof",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := &http.Response{Body: io.NopCloser(strings.NewReader(tt.body))}
+			var events []SSEEvent
+			for event := range StreamEvents(resp) {
+				events = append(events, event)
+			}
+
+			require.NotEmpty(t, events)
+			last := events[len(events)-1]
+			require.True(t, last.IsDone)
+			if tt.wantError {
+				require.Equal(t, "error", last.Type)
+				require.Contains(t, last.Text, "ended before [DONE]")
+			} else {
+				require.NotEqual(t, "error", last.Type)
+			}
+			if tt.wantText != "" {
+				require.Equal(t, tt.wantText, events[0].Text)
+			}
+		})
 	}
 }
 
@@ -63,14 +113,15 @@ func TestCNClientUsesGatewayEndpointVersionAndCanonicalSignaturePath(t *testing.
 	require.Equal(t, "5", captured.Header.Get("Cosy-Machinetype"))
 	require.NotContains(t, captured.Header, "Cosy-Machinecode")
 	require.Equal(t, "5", captured.Header.Get("Cosy-Clienttype"))
-	require.Equal(t, "agree", captured.Header.Get("Cosy-Data-Policy"))
+	require.Equal(t, "disagree", captured.Header.Get("Cosy-Data-Policy"))
 	require.Equal(t, "assistant", captured.Header.Get("Cosy-Scene"))
 	require.Equal(t, "cli", captured.Header.Get("Cosy-Business-Product"))
 	require.Equal(t, "agent", captured.Header.Get("Cosy-Business-Type"))
-	require.NotContains(t, captured.Header, "Cosy-Clientip")
+	require.NotEmpty(t, captured.Header.Get("Cosy-Clientip"))
 	require.NotContains(t, captured.Header, "Date")
 	require.NotContains(t, captured.Header, "Signature")
 	require.NotContains(t, captured.Header, "Appcode")
+	require.Equal(t, "Enterprise,CN", captured.Header.Get("Cosy-Organization-Tags"))
 	require.Regexp(t, `^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`, captured.Header.Get("traceparent"))
 
 	authorization := strings.TrimPrefix(captured.Header.Get("Authorization"), "Bearer COSY.")
@@ -135,62 +186,146 @@ func TestJSONRequestAddsEncodeQueryWithoutSigningIt(t *testing.T) {
 	require.Equal(t, expectedSignature, parts[1])
 }
 
-func TestSignatureJSONRequestUsesAppcodeHeadersWithoutAuthorization(t *testing.T) {
+func TestGatewayHTTPErrorBodiesRedactSessionValuesInUnknownFields(t *testing.T) {
 	profile := MustProfileForSite(SiteCN)
 	profile.GatewayBaseURL = "https://gateway.example"
 	client := NewClientForProfile(profile)
-	client.ClientIP = "172.18.0.1"
 	session := testSession()
-	session.Identity = nil
-	session.Site = SiteCN
-	var captured *http.Request
+	session.Identity.SecurityOauthToken = "gateway-access-secret"
+	session.Identity.RefreshToken = "gateway-refresh-secret"
+
+	tests := []struct {
+		name string
+		call func(RequestDoer) error
+	}{
+		{
+			name: "stream",
+			call: func(doer RequestDoer) error {
+				_, err := client.StreamRequestContextWithDoer(context.Background(), session, "", []byte(`{"model":"auto"}`), nil, doer)
+				return err
+			},
+		},
+		{
+			name: "json",
+			call: func(doer RequestDoer) error {
+				return client.JSONRequestContextWithDoer(context.Background(), http.MethodGet, session, DataPolicyPath, nil, nil, doer, &map[string]any{})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var echoed []string
+			doer := func(req *http.Request) (*http.Response, error) {
+				echoed = []string{
+					session.Identity.SecurityOauthToken,
+					session.Identity.RefreshToken,
+					req.Header.Get("Authorization"),
+					req.Header.Get("Cosy-Key"),
+				}
+				return &http.Response{
+					StatusCode: http.StatusForbidden,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"detail":"` + strings.Join(echoed, " ") + `"}`)),
+					Request:    req,
+				}, nil
+			}
+
+			err := tt.call(doer)
+			require.Error(t, err)
+			var apiErr *APIError
+			require.ErrorAs(t, err, &apiErr)
+			require.Contains(t, apiErr.Body, "***")
+			for _, secret := range echoed {
+				require.NotContains(t, apiErr.Body, secret)
+				require.NotContains(t, apiErr.Message, secret)
+			}
+		})
+	}
+}
+
+func TestGatewayTransportErrorsRedactRequestAndSessionValues(t *testing.T) {
+	profile := MustProfileForSite(SiteCN)
+	profile.GatewayBaseURL = "https://gateway.example"
+	client := NewClientForProfile(profile)
+	session := testSession()
+	session.Identity.SecurityOauthToken = "gateway-access-secret"
+	session.Identity.RefreshToken = "gateway-refresh-secret"
+	transportCause := errors.New("connection reset")
+
 	doer := func(req *http.Request) (*http.Response, error) {
-		captured = req
+		return nil, fmt.Errorf(
+			"request dump %s %s %s %s: %w",
+			req.Header.Get("Authorization"),
+			req.Header.Get("Cosy-Key"),
+			req.Header.Get("Cosy-Machineid"),
+			session.Identity.SecurityOauthToken,
+			transportCause,
+		)
+	}
+
+	_, err := client.StreamRequestContextWithDoer(context.Background(), session, "", []byte(`{"model":"auto"}`), nil, doer)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, transportCause)
+	for _, secret := range []string{
+		session.CosyKey,
+		session.Identity.SecurityOauthToken,
+		session.Identity.RefreshToken,
+	} {
+		require.NotContains(t, err.Error(), secret)
+		require.NotContains(t, errors.Unwrap(err).Error(), secret)
+	}
+	require.Contains(t, err.Error(), session.Machine.MachineID)
+}
+
+func TestGatewayActualSecretRedactionPreservesShortIdentityErrorFields(t *testing.T) {
+	profile := MustProfileForSite(SiteCN)
+	profile.GatewayBaseURL = "https://gateway.example"
+	client := NewClientForProfile(profile)
+	session := testSession()
+	session.Identity.UID = "115"
+	session.Identity.AID = "1783841289162"
+	session.Identity.OrganizationID = "429"
+	session.Identity.SecurityOauthToken = "gateway-access-secret"
+	session.Machine.MachineID = "403"
+	session.Machine.MachineToken = "403"
+
+	doer := func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
-			StatusCode: http.StatusOK,
+			StatusCode: http.StatusTooManyRequests,
 			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(`{}`)),
-			Request:    req,
+			Body: io.NopCloser(strings.NewReader(
+				`{"code":115,"agentLimitResetTime":1783841289162,"detail":"gateway-access-secret"}`,
+			)),
+			Request: req,
 		}, nil
 	}
 
-	err := client.SignatureJSONRequestContextWithDoer(
-		context.Background(),
-		http.MethodPost,
-		session,
-		AuthStatusPath,
-		[]byte(`{"userId":"user-1"}`),
-		nil,
-		doer,
-		&map[string]any{},
-	)
+	_, err := client.StreamRequestContextWithDoer(context.Background(), session, "", []byte(`{"model":"auto"}`), nil, doer)
 
-	require.NoError(t, err)
-	require.Equal(t, "1", captured.URL.Query().Get("Encode"))
-	require.Equal(t, "5", captured.Header.Get("Cosy-Clienttype"))
-	require.NotEmpty(t, captured.Header.Get("Date"))
-	require.Equal(t, AppCode, captured.Header.Get("Appcode"))
-	require.NotEmpty(t, captured.Header.Get("Signature"))
-	require.NotContains(t, captured.Header, "Authorization")
-	require.NotContains(t, captured.Header, "Cosy-Key")
-	require.NotContains(t, captured.Header, "Cosy-User")
-	require.NotContains(t, captured.Header, "Cosy-Date")
-	require.NotContains(t, captured.Header, "Cosy-Data-Policy")
-	require.NotContains(t, captured.Header, "Cosy-Organization-Id")
-	require.NotContains(t, captured.Header, "Cosy-Organization-Tags")
+	require.Error(t, err)
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, "115", apiErr.Code)
+	require.EqualValues(t, 1783841289162, apiErr.AgentLimitResetTime)
+	require.NotContains(t, apiErr.Body, session.Identity.SecurityOauthToken)
+	require.NotContains(t, apiErr.Message, session.Identity.SecurityOauthToken)
+	require.Contains(t, apiErr.Body, `"detail":"***"`)
 }
 
 func getHeaders(t *testing.T) http.Header {
 	t.Helper()
 	c := NewClient("https://test.qoder.sh")
+	c.ClientIP = "172.18.0.1"
 	req, _ := http.NewRequest("POST", "https://test.qoder.sh/test", nil)
 	c.setHeaders(req, testSession(), "/test", "encoded-body")
 	return req.Header
 }
 
-func TestHeadersOmitClientIPForQoderCLICN(t *testing.T) {
+func TestHeadersIncludeClientIPForQoderCLICN(t *testing.T) {
 	h := getHeaders(t)
-	require.NotContains(t, h, "cosy-clientip")
+	require.Equal(t, "172.18.0.1", h.Get("cosy-clientip"))
 }
 
 func TestHeadersMachineTypeIs5(t *testing.T) {
@@ -217,6 +352,15 @@ func TestHeadersUseSessionDataPolicy(t *testing.T) {
 	if h.Get("cosy-data-policy") != "disagree" {
 		t.Errorf("cosy-data-policy = %q, want disagree", h.Get("cosy-data-policy"))
 	}
+}
+
+func TestHeadersFallbackToDisagreeForUnknownDataPolicy(t *testing.T) {
+	session := testSession()
+	session.DataPolicy = "unknown"
+	client := NewClient("")
+	req, _ := http.NewRequest("POST", "https://gateway.qoder.com.cn/test", nil)
+	client.setHeaders(req, session, "/test", "encoded-body")
+	require.Equal(t, "disagree", req.Header.Get("cosy-data-policy"))
 }
 
 func TestHeadersUseQoderCLICNVersion(t *testing.T) {
@@ -252,9 +396,9 @@ func TestCNHeadersUseQoderCLICNWireIdentity(t *testing.T) {
 	require.Equal(t, "mid-abc", req.Header.Get("cosy-machinetoken"))
 	require.Equal(t, "5", req.Header.Get("cosy-machinetype"))
 	require.NotContains(t, req.Header, "cosy-machinecode")
-	require.NotContains(t, req.Header, "cosy-clientip")
+	require.Equal(t, "172.18.0.1", req.Header.Get("cosy-clientip"))
 	require.Equal(t, "5", req.Header.Get("cosy-clienttype"))
-	require.Equal(t, "agree", req.Header.Get("cosy-data-policy"))
+	require.Equal(t, "disagree", req.Header.Get("cosy-data-policy"))
 	require.Equal(t, "assistant", req.Header.Get("Cosy-Scene"))
 	require.Equal(t, "cli", req.Header.Get("Cosy-Business-Product"))
 	require.Equal(t, "agent", req.Header.Get("Cosy-Business-Type"))
@@ -267,9 +411,9 @@ func TestHeadersOrganizationID(t *testing.T) {
 	}
 }
 
-func TestHeadersOmitOrganizationTagsForQoderCLICN(t *testing.T) {
+func TestHeadersIncludeOrganizationTagsForQoderCLICN(t *testing.T) {
 	h := getHeaders(t)
-	require.NotContains(t, h, "cosy-organization-tags")
+	require.Equal(t, "Enterprise,CN", h.Get("cosy-organization-tags"))
 }
 
 func TestHeadersScene(t *testing.T) {

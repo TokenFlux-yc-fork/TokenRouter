@@ -12,13 +12,11 @@ import (
 )
 
 type qoderCN20SessionRefresher func(ctx context.Context, refreshToken string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error)
-type qoderCNCosySessionRefresher func(ctx context.Context, refreshToken, securityOauthToken, userID, organizationID string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error)
 
 // QoderTokenRefresher 使用 Qoder refresh_token 换取新的 COSY session。
 type QoderTokenRefresher struct {
 	qoderOAuthService *QoderOAuthService
 	refreshCN20       qoderCN20SessionRefresher
-	refreshCNCosy     qoderCNCosySessionRefresher
 	httpUpstream      HTTPUpstream
 	tlsFPProfileSvc   *TLSFingerprintProfileService
 }
@@ -60,8 +58,7 @@ func (r *QoderTokenRefresher) CanRefresh(account *Account) bool {
 	if account == nil || account.Platform != PlatformQoder || account.Type != AccountTypeCosy {
 		return false
 	}
-	_, err := qoderSiteForAccount(account)
-	return err == nil
+	return validateQoderCNAuthorizationCredentials(account.Credentials) == nil
 }
 
 func (r *QoderTokenRefresher) NeedsRefresh(account *Account, _ time.Duration) bool {
@@ -83,27 +80,27 @@ func (r *QoderTokenRefresher) NeedsRefresh(account *Account, _ time.Duration) bo
 }
 
 func (r *QoderTokenRefresher) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
-	if !r.CanRefresh(account) {
+	if account == nil || account.Platform != PlatformQoder || account.Type != AccountTypeCosy {
 		return nil, errors.New("not a qoder cosy account")
+	}
+	if err := validateQoderCNAuthorizationCredentials(account.Credentials); err != nil {
+		return nil, err
 	}
 	site, err := qoderSiteForAccount(account)
 	if err != nil {
 		return nil, err
 	}
-	refreshMode, err := qoderRefreshModeForAccount(account)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(account.GetCredential("pat")) != "" {
-		refreshMode = qoder.RefreshModeCosy
-	}
-	machineID := strings.TrimSpace(account.GetCredential("machine_id"))
-	if machineID == "" && strings.TrimSpace(account.GetCredential("pat")) == "" {
-		return nil, errors.New("qoder refresh requires machine_id")
+	pat := strings.TrimSpace(account.GetCredential("pat"))
+	refreshMode := ""
+	if pat == "" {
+		refreshMode, err = qoderRefreshModeForAccount(account)
+		if err != nil {
+			return nil, err
+		}
 	}
 	machine := qoderMachineForAccount(account)
 	doer := newQoderRequestDoer(account, r.httpUpstream, r.tlsFPProfileSvc)
-	identity, expiresAt, err := r.refreshIdentity(ctx, account, site, refreshMode, machine, doer)
+	identity, expiresAt, err := r.refreshIdentity(ctx, account, site, machine, doer)
 	if err != nil {
 		return nil, fmt.Errorf("qoder refresh token: %w", err)
 	}
@@ -113,8 +110,11 @@ func (r *QoderTokenRefresher) Refresh(ctx context.Context, account *Account) (ma
 	if strings.TrimSpace(identity.SecurityOauthToken) == "" {
 		return nil, errors.New("qoder refresh returned empty security_oauth_token")
 	}
+	if pat == "" && strings.TrimSpace(identity.RefreshToken) == "" {
+		return nil, errors.New("qoder qodercn20 refresh returned empty refresh_token")
+	}
 	applyQoderAccountIdentityMetadata(identity, account)
-	newCredentials := qoderTokenInfoCredentials(identity, account, machine)
+	newCredentials := qoderTokenInfoCredentials(identity, machine)
 	if r.qoderOAuthService != nil {
 		newCredentials = r.qoderOAuthService.BuildAccountCredentials(&QoderTokenInfo{
 			SecurityOauthToken: strings.TrimSpace(identity.SecurityOauthToken),
@@ -126,15 +126,24 @@ func (r *QoderTokenRefresher) Refresh(ctx context.Context, account *Account) (ma
 			AID:                strings.TrimSpace(identity.AID),
 			OrganizationID:     strings.TrimSpace(identity.OrganizationID),
 			OrganizationName:   strings.TrimSpace(identity.OrganizationName),
+			OrganizationTags:   qoderOrganizationTags(identity.OrganizationTags),
 			Name:               strings.TrimSpace(identity.Name),
 			UserType:           firstNonEmptyQoder(identity.UserType, "personal_standard"),
+			DataPolicy:         qoderDataPolicyFromIdentity(identity),
 			Site:               string(site),
 			RefreshMode:        refreshMode,
 		})
 	}
-	newCredentials = MergeCredentials(account.Credentials, newCredentials)
 	newCredentials["site"] = string(site)
-	newCredentials["refresh_mode"] = refreshMode
+	if pat != "" {
+		// PAT-backed accounts must retain the original PAT. A refresh token
+		// returned incidentally by the exchange must not switch their auth mode.
+		newCredentials["pat"] = pat
+		delete(newCredentials, "refresh_token")
+		delete(newCredentials, "refresh_mode")
+	} else {
+		newCredentials["refresh_mode"] = refreshMode
+	}
 	if machineID := strings.TrimSpace(machine.MachineID); machineID != "" {
 		newCredentials["machine_token"] = machineID
 		newCredentials["machine_type"] = "5"
@@ -142,26 +151,21 @@ func (r *QoderTokenRefresher) Refresh(ctx context.Context, account *Account) (ma
 	if !expiresAt.IsZero() {
 		newCredentials["expires_at"] = expiresAt.UTC().Format(time.RFC3339)
 	}
-	refreshToken := strings.TrimSpace(account.GetCredential("refresh_token"))
-	if strings.TrimSpace(stringFromCredentialValue(newCredentials["refresh_token"])) == "" {
-		if refreshToken != "" {
-			newCredentials["refresh_token"] = refreshToken
-		}
-	}
 	// 目前观测到的 Qoder refresh 响应没有可靠的新过期时间。
 	// 不保留导入时的旧 expires_at，否则 NeedsRefresh 会立刻把刚刷新的账号
 	// 判定为即将过期，并可能形成刷新循环。
 	if expiresAt.IsZero() {
 		delete(newCredentials, "expires_at")
 	}
-	return newCredentials, nil
+	// Replace the complete authorization projection so legacy aliases and
+	// retired fields such as quota_key cannot survive a successful refresh.
+	return replaceQoderAuthorizationCredentials(account.Credentials, newCredentials), nil
 }
 
 func (r *QoderTokenRefresher) refreshIdentity(
 	ctx context.Context,
 	account *Account,
 	site qoder.Site,
-	refreshMode string,
 	machine *qoder.MachineIdentity,
 	doer qoder.RequestDoer,
 ) (*qoder.AuthIdentity, time.Time, error) {
@@ -176,24 +180,13 @@ func (r *QoderTokenRefresher) refreshIdentity(
 	if refreshToken == "" {
 		return nil, time.Time{}, errors.New("no refresh token available")
 	}
-	securityToken := strings.TrimSpace(account.GetCredential("security_oauth_token"))
-	if refreshMode == qoder.RefreshModeQoderCN20 {
-		if site != qoder.SiteCN {
-			return nil, time.Time{}, errors.New("qoder qodercn20 refresh requires cn site")
-		}
-		if r.refreshCN20 != nil {
-			return r.refreshCN20(ctx, refreshToken, machine)
-		}
-		return qoder.RefreshQoderCN20SessionContext(ctx, refreshToken, machine, qoder.MustProfileForSite(site), doer)
+	if site != qoder.SiteCN {
+		return nil, time.Time{}, errors.New("qoder qodercn20 refresh requires cn site")
 	}
-	userID := firstNonEmptyQoder(account.GetCredential("uid"), account.GetCredential("aid"))
-	organizationID := account.GetCredential("organization_id")
-	if r.refreshCNCosy != nil {
-		identity, err := r.refreshCNCosy(ctx, refreshToken, securityToken, userID, organizationID, machine)
-		return identity, time.Time{}, err
+	if r.refreshCN20 != nil {
+		return r.refreshCN20(ctx, refreshToken, machine)
 	}
-	identity, err := qoder.RefreshCosySessionForProfileContext(ctx, qoder.MustProfileForSite(site), refreshToken, securityToken, userID, organizationID, machine, doer)
-	return identity, time.Time{}, err
+	return qoder.RefreshQoderCN20SessionContext(ctx, refreshToken, machine, qoder.MustProfileForSite(site), doer)
 }
 
 func QoderTokenCacheKey(account *Account) string {
@@ -203,7 +196,7 @@ func QoderTokenCacheKey(account *Account) string {
 	return "qoder:account:" + strconv.FormatInt(account.ID, 10)
 }
 
-func qoderTokenInfoCredentials(identity *qoder.AuthIdentity, account *Account, machine *qoder.MachineIdentity) map[string]any {
+func qoderTokenInfoCredentials(identity *qoder.AuthIdentity, machine *qoder.MachineIdentity) map[string]any {
 	credentials := map[string]any{}
 	if identity != nil {
 		if token := strings.TrimSpace(identity.SecurityOauthToken); token != "" {
@@ -224,11 +217,17 @@ func qoderTokenInfoCredentials(identity *qoder.AuthIdentity, account *Account, m
 		if orgName := strings.TrimSpace(identity.OrganizationName); orgName != "" {
 			credentials["organization_name"] = orgName
 		}
+		if tags := qoderOrganizationTags(identity.OrganizationTags); len(tags) > 0 {
+			credentials["organization_tags"] = tags
+		}
 		if name := strings.TrimSpace(identity.Name); name != "" {
 			credentials["name"] = name
 		}
 		if userType := strings.TrimSpace(identity.UserType); userType != "" {
 			credentials["user_type"] = userType
+		}
+		if dataPolicy := qoderDataPolicyFromIdentity(identity); dataPolicy != "" {
+			credentials["data_policy"] = dataPolicy
 		}
 	}
 	if machine != nil {
@@ -240,13 +239,6 @@ func qoderTokenInfoCredentials(identity *qoder.AuthIdentity, account *Account, m
 		}
 		if machineType := strings.TrimSpace(machine.MachineType); machineType != "" {
 			credentials["machine_type"] = machineType
-		}
-	}
-	if account != nil {
-		if refreshToken := account.GetCredential("refresh_token"); refreshToken != "" {
-			if _, ok := credentials["refresh_token"]; !ok {
-				credentials["refresh_token"] = refreshToken
-			}
 		}
 	}
 	return credentials

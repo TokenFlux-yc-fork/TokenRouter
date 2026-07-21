@@ -165,7 +165,7 @@ func (a *Account) IsSchedulable() bool {
 		if !a.IsQoderCosy() {
 			return false
 		}
-		if _, err := qoderSiteForAccount(a); err != nil {
+		if err := validateQoderCNAuthorizationCredentials(a.Credentials); err != nil {
 			return false
 		}
 	}
@@ -906,7 +906,9 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 		}
 		mappedModel, matched := a.ResolveMappedModel(requestedModel)
 		if matched {
-			// 显式账号 mapping 优先于站点默认模型限制。
+			if !qoder.ModelCompatibleWithSite(site, mappedModel) {
+				return false
+			}
 			return isModelInFinalWhitelist(a.Platform, mappedModel, whitelist)
 		}
 		if !qoder.ModelCompatibleWithSite(site, requestedModel) {

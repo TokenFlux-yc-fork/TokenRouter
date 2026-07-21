@@ -2592,6 +2592,7 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import { hasCompleteQoderCNAuthorization } from '@/utils/qoderAuthorization'
 import {
   applyCodexImageToolMode,
   readCodexImageToolMode,
@@ -2867,8 +2868,9 @@ const isQoderCosyAccount = computed(() =>
   props.account?.platform === 'qoder' && props.account?.type === 'cosy'
 )
 const qoderNeedsReauthorization = computed(() => {
-  const credentials = props.account?.credentials as Record<string, unknown> | undefined
-  return isQoderCosyAccount.value && credentials?.site !== 'cn'
+  return isQoderCosyAccount.value &&
+    props.account != null &&
+    !hasCompleteQoderCNAuthorization(props.account)
 })
 const qoderAvailableModels = computed(() => getModelsByPlatform('qoder'))
 const supportsOAuthLikeModelRestriction = computed(() =>
@@ -3223,7 +3225,9 @@ const applyQoderModelRestriction = (credentials: Record<string, unknown>) => {
   if (persisted.modelMapping) {
     credentials.model_mapping = persisted.modelMapping
   } else {
-    delete credentials.model_mapping
+    // Qoder configuration updates are incremental. null explicitly removes a
+    // previously persisted mapping; omission means leave it unchanged.
+    credentials.model_mapping = null
   }
   credentials.model_whitelist = persisted.modelWhitelist
 }
@@ -4394,6 +4398,17 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
+    }
+
+    if (props.account.platform === 'qoder') {
+      const credentials = updatePayload.credentials as Record<string, unknown>
+      if (!tempUnschedEnabled.value) {
+        credentials.temp_unschedulable_enabled = null
+        credentials.temp_unschedulable_rules = null
+      }
+      if (!interceptWarmupRequests.value) {
+        credentials.intercept_warmup_requests = null
+      }
     }
 
     // Grok OAuth：保存自定义上游地址与请求头覆写。base_url 仅改写转发端点，

@@ -136,6 +136,20 @@ type qoderPolicyContextRepoStub struct {
 	rateLimitCtxErr error
 }
 
+type qoderGatewayStateRepoStub struct {
+	qoderRateLimitRepoStub
+	update  QoderGatewayStateUpdate
+	applied bool
+}
+
+func (r *qoderGatewayStateRepoStub) ApplyQoderGatewayStateIfAuthorizationUnchanged(
+	_ context.Context,
+	update QoderGatewayStateUpdate,
+) (bool, error) {
+	r.update = update
+	return r.applied, nil
+}
+
 func (r *qoderPolicyContextRepoStub) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
 	r.rateLimitCtxErr = ctx.Err()
 	return r.qoderRateLimitRepoStub.SetRateLimited(ctx, id, resetAt)
@@ -665,17 +679,18 @@ func TestQoderGatewayAppliesAccountModelMapping(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	account := &Account{
-		ID:       88,
-		Name:     "qoder",
-		Platform: PlatformQoder,
-		Type:     AccountTypeCosy,
-		Credentials: map[string]any{
-			"site": "cn",
+		ID:          88,
+		Name:        "qoder",
+		Platform:    PlatformQoder,
+		Type:        AccountTypeCosy,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"model_mapping": map[string]any{
-				"claude-opus-4-6": "ultimate",
+				"custom-qoder": "qmodel",
 			},
 			"model_whitelist": []any{},
-		},
+		}),
 	}
 	client := &qoderAccountTestClientStub{
 		body: "data: {\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"OK\\\"}}]}\"}\n\n" +
@@ -691,15 +706,39 @@ func TestQoderGatewayAppliesAccountModelMapping(t *testing.T) {
 			session:         &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
 		},
 	}
-	body := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}],"stream":true}`)
+	body := []byte(`{"model":"custom-qoder","messages":[{"role":"user","content":"hi"}],"stream":true}`)
 
 	result, err := svc.ForwardChatCompletions(context.Background(), c, account, body)
 
 	require.NoError(t, err)
-	require.Equal(t, "claude-opus-4-6", result.Model)
-	require.Equal(t, "ultimate", result.UpstreamModel)
-	require.Equal(t, "ultimate", client.headers["x-model-key"])
-	require.Contains(t, rec.Body.String(), `"model":"claude-opus-4-6"`)
+	require.Equal(t, "custom-qoder", result.Model)
+	require.Equal(t, "qmodel", result.UpstreamModel)
+	require.Equal(t, "qmodel", client.headers["x-model-key"])
+	require.Contains(t, rec.Body.String(), `"model":"custom-qoder"`)
+}
+
+func TestQoderGatewayRejectsAccountMappingToLegacyGlobalRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	account := &Account{
+		ID:       89,
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site": "cn",
+			"model_mapping": map[string]any{
+				"custom-qoder": "ultimate",
+			},
+		},
+	}
+	svc := &QoderGatewayService{}
+	body := []byte(`{"model":"custom-qoder","messages":[{"role":"user","content":"hi"}],"stream":true}`)
+
+	result, err := svc.ForwardChatCompletions(context.Background(), c, account, body)
+
+	require.ErrorContains(t, err, `qoder model "ultimate" is not supported by the CN site`)
+	require.Nil(t, result)
 }
 
 func TestQoderGatewayForwardUsesOriginalModelAfterChannelMapping(t *testing.T) {
@@ -1801,7 +1840,7 @@ func TestQoderGatewayClaudeCodeContextWithoutSessionUsesStablePrefixKey(t *testi
 		"You are Claude Code, Anthropic's official CLI for Claude.\n" +
 		"Stable Claude Code system body."
 	first := qoderForwardMessagesForTest(t, svc, account, "", []byte(`{
-		"model":"claude-opus-4-6",
+		"model":"deepseek-v4-pro",
 		"system":`+strconv.Quote(system1)+`,
 		"messages":[{"role":"user","content":"inspect"}],
 		"tools":`+largeTools+`,
@@ -1811,7 +1850,7 @@ func TestQoderGatewayClaudeCodeContextWithoutSessionUsesStablePrefixKey(t *testi
 		qoderHeader("X-Test-Claude-Code-Context", "true"),
 	)
 	second := qoderForwardMessagesForTest(t, svc, account, "", []byte(`{
-		"model":"claude-opus-4-6",
+		"model":"deepseek-v4-pro",
 		"system":`+strconv.Quote(system2)+`,
 		"messages":[
 			{"role":"user","content":"inspect"},
@@ -3916,6 +3955,27 @@ func TestQoderGatewayAgentLimitSetsRateLimitedUntilReset(t *testing.T) {
 	require.Equal(t, int64(1783841289162), repo.resetAt.UnixMilli())
 }
 
+func TestQoderGatewayErrorPolicyUsesAuthorizationCAS(t *testing.T) {
+	repo := &qoderGatewayStateRepoStub{applied: true}
+	svc := &QoderGatewayService{accountRepo: repo}
+	account := &Account{
+		ID: 771,
+		Credentials: map[string]any{
+			"site":                 "cn",
+			"security_oauth_token": "request-token",
+			"model_mapping":        map[string]any{"alias": "qmodel"},
+		},
+	}
+
+	svc.applyUpstreamErrorPolicy(context.Background(), account, &qoder.APIError{StatusCode: http.StatusTooManyRequests})
+
+	require.Equal(t, account.ID, repo.update.AccountID)
+	require.Equal(t, account.Credentials, repo.update.ExpectedCredentials)
+	require.NotNil(t, repo.update.RateLimitResetAt)
+	require.Nil(t, repo.update.OverloadUntil)
+	require.Zero(t, repo.rateLimitedID, "CAS-capable repositories must not use the ID-only fallback")
+}
+
 func TestQoderGatewayUpstreamErrorPolicyIgnoresCanceledRequestContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -3992,18 +4052,19 @@ func TestQoderGatewayRefreshAccountSessionPersistsCredentialsAndInvalidatesCache
 	now := time.Now()
 	expiredAt := now.Add(-1 * time.Hour) // 已过期
 	account := Account{
-		ID:       91,
-		Name:     "qoder",
-		Platform: PlatformQoder,
-		Type:     AccountTypeCosy,
-		Status:   StatusActive,
-		Credentials: map[string]any{
-			"site":                 "cn",
+		ID:          91,
+		Name:        "qoder",
+		Platform:    PlatformQoder,
+		Type:        AccountTypeCosy,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
+			"uid":                  "user-1",
 			"expires_at":           expiredAt.Format(time.RFC3339), // 设置过期时间让 NeedsRefresh 返回 true
-		},
+		}),
 	}
 	repo := &qoderRefreshAccountRepoStub{
 		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
@@ -4020,9 +4081,8 @@ func TestQoderGatewayRefreshAccountSessionPersistsCredentialsAndInvalidatesCache
 		},
 	}
 	refresher := NewQoderTokenRefresher(nil)
-	refresher.refreshCNCosy = func(_ context.Context, refreshToken, securityOauthToken, _, _ string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+	refresher.refreshCN20 = func(_ context.Context, refreshToken string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error) {
 		require.Equal(t, "old-refresh", refreshToken)
-		require.Equal(t, "old-token", securityOauthToken)
 		require.Equal(t, "machine-1", machine.MachineID)
 		return &qoder.AuthIdentity{
 			SecurityOauthToken: "new-token",
@@ -4030,7 +4090,7 @@ func TestQoderGatewayRefreshAccountSessionPersistsCredentialsAndInvalidatesCache
 			UID:                "user-1",
 			AID:                "user-1",
 			UserType:           "personal_standard",
-		}, nil
+		}, time.Time{}, nil
 	}
 	svc := &QoderGatewayService{
 		tokenProvider: provider,
@@ -4076,19 +4136,19 @@ func TestQoderGatewayRefreshAccountSessionRequiresInjectedRefreshAPI(t *testing.
 func TestQoderGatewayRefreshAccountSessionIgnoresNonAuthCredentialDrift(t *testing.T) {
 	now := time.Now()
 	failedAccount := Account{
-		ID:       91,
-		Name:     "qoder",
-		Platform: PlatformQoder,
-		Type:     AccountTypeCosy,
-		Status:   StatusActive,
-		Credentials: map[string]any{
-			"site":                 "cn",
+		ID:          91,
+		Name:        "qoder",
+		Platform:    PlatformQoder,
+		Type:        AccountTypeCosy,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
 			"uid":                  "user-1",
 			"expires_at":           now.Add(1 * time.Hour).Format(time.RFC3339),
-		},
+		}),
 	}
 	freshAccount := failedAccount
 	freshAccount.Credentials = cloneCredentials(failedAccount.Credentials)
@@ -4097,14 +4157,14 @@ func TestQoderGatewayRefreshAccountSessionIgnoresNonAuthCredentialDrift(t *testi
 		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{freshAccount}},
 	}
 	refresher := NewQoderTokenRefresher(nil)
-	refresher.refreshCNCosy = func(_ context.Context, refreshToken, _ string, _, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+	refresher.refreshCN20 = func(_ context.Context, refreshToken string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error) {
 		require.Equal(t, "old-refresh", refreshToken)
 		return &qoder.AuthIdentity{
 			UID:                "user-1",
 			AID:                "user-1",
 			SecurityOauthToken: "new-token",
 			RefreshToken:       "new-refresh",
-		}, nil
+		}, time.Time{}, nil
 	}
 	svc := &QoderGatewayService{
 		tokenProvider: NewQoderTokenProvider(),
@@ -4127,27 +4187,28 @@ func TestQoderGatewayRefreshAccountSessionRecoversRotatedRefreshTokenRace(t *tes
 	now := time.Now()
 	expiredAt := now.Add(-1 * time.Hour) // 已过期
 	account := Account{
-		ID:       92,
-		Name:     "qoder",
-		Platform: PlatformQoder,
-		Type:     AccountTypeCosy,
-		Status:   StatusActive,
-		Credentials: map[string]any{
-			"site":                 "cn",
+		ID:          92,
+		Name:        "qoder",
+		Platform:    PlatformQoder,
+		Type:        AccountTypeCosy,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
+			"uid":                  "user-1",
 			"expires_at":           expiredAt.Format(time.RFC3339), // 设置过期时间
-		},
+		}),
 	}
 	racedAccount := account
-	racedAccount.Credentials = map[string]any{
-		"site":                 "cn",
+	racedAccount.Credentials = completeQoderCN20TestCredentials(map[string]any{
 		"security_oauth_token": "new-token",
 		"refresh_token":        "new-refresh",
 		"machine_id":           "machine-1",
+		"uid":                  "user-1",
 		"expires_at":           now.Add(1 * time.Hour).Format(time.RFC3339), // 新 token 未过期
-	}
+	})
 	repo := &qoderRefreshRaceRepoStub{
 		qoderRefreshAccountRepoStub: qoderRefreshAccountRepoStub{
 			stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
@@ -4155,9 +4216,9 @@ func TestQoderGatewayRefreshAccountSessionRecoversRotatedRefreshTokenRace(t *tes
 		raceAccount: &racedAccount,
 	}
 	refresher := NewQoderTokenRefresher(nil)
-	refresher.refreshCNCosy = func(_ context.Context, refreshToken, _ string, _, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+	refresher.refreshCN20 = func(_ context.Context, refreshToken string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error) {
 		require.Equal(t, "old-refresh", refreshToken)
-		return nil, errors.New("invalid_grant: refresh token has already been used")
+		return nil, time.Time{}, errors.New("invalid_grant: refresh token has already been used")
 	}
 	svc := &QoderGatewayService{
 		tokenProvider: NewQoderTokenProvider(),
@@ -4178,28 +4239,28 @@ func TestQoderGatewayRefreshAccountSessionRecoversRotatedRefreshTokenRace(t *tes
 func TestQoderGatewayRefreshAccountSessionWaitsForLockHolderRotation(t *testing.T) {
 	now := time.Now()
 	account := Account{
-		ID:       94,
-		Name:     "qoder",
-		Platform: PlatformQoder,
-		Type:     AccountTypeCosy,
-		Credentials: map[string]any{
-			"site":                 "cn",
+		ID:          94,
+		Name:        "qoder",
+		Platform:    PlatformQoder,
+		Type:        AccountTypeCosy,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
 			"uid":                  "user-1",
 			"expires_at":           now.Add(1 * time.Hour).Format(time.RFC3339),
-		},
+		}),
 	}
 	rotatedAccount := account
-	rotatedAccount.Credentials = map[string]any{
-		"site":                 "cn",
+	rotatedAccount.Credentials = completeQoderCN20TestCredentials(map[string]any{
 		"security_oauth_token": "new-token",
 		"refresh_token":        "new-refresh",
 		"machine_id":           "machine-1",
 		"uid":                  "user-1",
 		"expires_at":           now.Add(2 * time.Hour).Format(time.RFC3339),
-	}
+	})
 	repo := &qoderRefreshRaceRepoStub{
 		qoderRefreshAccountRepoStub: qoderRefreshAccountRepoStub{
 			stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
@@ -4234,18 +4295,19 @@ func TestQoderGatewayRefreshAccountSessionWaitsForLockHolderRotation(t *testing.
 func TestQoderGatewayRefreshAccountSessionLockHeldReturnsRefreshInProgressWithoutStaleAccount(t *testing.T) {
 	now := time.Now()
 	account := Account{
-		ID:       95,
-		Name:     "qoder",
-		Platform: PlatformQoder,
-		Type:     AccountTypeCosy,
-		Credentials: map[string]any{
-			"site":                 "cn",
+		ID:          95,
+		Name:        "qoder",
+		Platform:    PlatformQoder,
+		Type:        AccountTypeCosy,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
 			"uid":                  "user-1",
 			"expires_at":           now.Add(1 * time.Hour).Format(time.RFC3339),
-		},
+		}),
 	}
 	repo := &qoderRefreshAccountRepoStub{
 		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
@@ -4273,19 +4335,64 @@ func TestQoderGatewayRefreshAccountSessionLockHeldReturnsRefreshInProgressWithou
 	require.Equal(t, "old-token", repo.accounts[0].GetCredential("security_oauth_token"))
 }
 
+func TestQoderGatewayRefreshAccountSessionLockHeldReturnsChangedStateImmediately(t *testing.T) {
+	now := time.Now()
+	requestAccount := Account{
+		ID:          951,
+		Name:        "qoder",
+		Platform:    PlatformQoder,
+		Type:        AccountTypeCosy,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
+			"security_oauth_token": "old-token",
+			"refresh_token":        "old-refresh",
+			"machine_id":           "machine-1",
+			"uid":                  "user-1",
+			"expires_at":           now.Add(time.Hour).Format(time.RFC3339),
+		}),
+	}
+	disabledAccount := requestAccount
+	disabledAccount.Status = StatusDisabled
+	disabledAccount.Schedulable = false
+	repo := &qoderRefreshAccountRepoStub{
+		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{disabledAccount}},
+	}
+	provider := NewQoderTokenProvider()
+	provider.sessions[requestAccount.ID] = qoderSessionCacheEntry{
+		credentialsHash: qoderCredentialsHash(requestAccount.Credentials),
+		session:         &qoder.SessionContext{},
+	}
+	svc := &QoderGatewayService{
+		tokenProvider: provider,
+		accountRepo:   repo,
+		newRefresher:  func() *QoderTokenRefresher { return NewQoderTokenRefresher(nil) },
+		refreshAPI:    NewOAuthRefreshAPI(repo, qoderRefreshLockCacheStub{}),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+
+	refreshed, err := svc.RefreshAccountSession(ctx, &requestAccount)
+
+	require.Nil(t, refreshed)
+	require.ErrorIs(t, err, errOAuthRefreshAccountStateChanged)
+	require.Less(t, time.Since(started), qoderRefreshLockPoll)
+}
+
 func TestQoderGatewayRefreshExecutorNeedsRefreshUsesFailedCredentialSnapshot(t *testing.T) {
 	now := time.Now()
 	failedAccount := Account{
 		ID:       96,
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
-		Credentials: map[string]any{
-			"site":                 "cn",
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"security_oauth_token": "failed-token",
 			"refresh_token":        "failed-refresh",
 			"machine_id":           "machine-1",
+			"uid":                  "user-1",
 			"expires_at":           now.Add(1 * time.Hour).Format(time.RFC3339),
-		},
+		}),
 	}
 	rotatedAccount := failedAccount
 	rotatedAccount.Credentials = cloneCredentials(failedAccount.Credentials)
@@ -4313,6 +4420,15 @@ func TestQoderGatewayRefreshExecutorNeedsRefreshUsesFailedCredentialSnapshot(t *
 
 	executor.failedCredentials = qoderRefreshCredentialsHash(failedAccount.Credentials)
 	require.False(t, executor.NeedsRefresh(&rotatedAccount, 15*time.Minute))
+
+	failedPAT := failedAccount
+	failedPAT.Credentials = map[string]any{
+		"site":       "cn",
+		"pat":        "pat-token",
+		"machine_id": "machine-1",
+	}
+	executor.failedCredentials = qoderRefreshCredentialsHash(failedPAT.Credentials)
+	require.True(t, executor.NeedsRefresh(&failedPAT, 15*time.Minute))
 
 	missingRefreshToken := failedAccount
 	missingRefreshToken.Credentials = cloneCredentials(failedAccount.Credentials)
@@ -4650,29 +4766,30 @@ func TestQoderGatewayStreamsAnthropicResponseCompletesEmptyContentBlock(t *testi
 	require.Contains(t, body, "event: message_stop")
 }
 
-func TestQoderGatewayStreamsAnthropicResponseCompletesOnEOFWithoutDone(t *testing.T) {
+func TestQoderGatewayStreamsAnthropicResponseRejectsEOFWithoutDoneAfterOutput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	resp := &http.Response{
 		Body: io.NopCloser(bytes.NewBufferString(
-			"data: {\"body\":\"{\\\"usage\\\":{\\\"prompt_tokens\\\":8,\\\"completion_tokens\\\":0,\\\"total_tokens\\\":8}}\"}\n\n",
+			"data: {\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"partial\\\"}}]}\"}\n\n",
 		)),
 	}
 
 	result, err := WriteQoderAnthropicStreamResponse(context.Background(), c, "claude-opus-4-6", resp)
-	require.NoError(t, err)
-	require.Equal(t, 8, result.Usage.InputTokens)
 
-	body := rec.Body.String()
-	require.Contains(t, body, "event: message_start")
-	require.Contains(t, body, "event: content_block_start")
-	require.Contains(t, body, `"content_block":{"text":"","type":"text"}`)
-	require.Contains(t, body, "event: content_block_stop")
-	require.Contains(t, body, "event: message_delta")
-	require.Contains(t, body, `"stop_reason":"end_turn"`)
-	require.Contains(t, body, "event: message_stop")
-	require.Equal(t, 1, strings.Count(body, "event: message_stop"))
+	require.ErrorContains(t, err, "ended before [DONE]")
+	require.Nil(t, result)
+	require.NotContains(t, rec.Body.String(), "event: message_stop")
+}
+
+func TestQoderGatewayReadEventsRejectsEmptyEOFWithoutDone(t *testing.T) {
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(""))}
+
+	events, err := ReadQoderSSEEvents(resp)
+
+	require.ErrorContains(t, err, "ended before [DONE]")
+	require.Nil(t, events)
 }
 
 func TestQoderGatewayWritesAnthropicStreamNormalizesExecuteBashToolCall(t *testing.T) {
@@ -4848,7 +4965,7 @@ func newQoderGatewayForwardTestService() (*Account, *QoderGatewayService, *qoder
 		Name:        "qoder",
 		Platform:    PlatformQoder,
 		Type:        AccountTypeCosy,
-		Credentials: map[string]any{"site": "cn"},
+		Credentials: completeQoderCN20TestCredentials(nil),
 	}
 	client := &qoderAccountTestClientStub{
 		body: "data: {\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"OK\\\"}}]}\"}\n\n" +

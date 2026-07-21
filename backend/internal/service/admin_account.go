@@ -528,15 +528,90 @@ type accountProbeEnabledAtomicUpdater interface {
 	UpdateWithUpstreamBillingProbeEnabled(context.Context, *Account, bool) error
 }
 
+type qoderConfigurationAtomicUpdater interface {
+	UpdateQoderConfigurationIfRuntimeUnchanged(context.Context, *Account, *Account) error
+}
+
+var errQoderAuthorizationEndpointRequired = infraerrors.BadRequest(
+	"QODER_AUTHORIZATION_ENDPOINT_REQUIRED",
+	"Qoder authorization credentials must be applied through the reauthorization endpoint",
+)
+
+// ApplyQoderAuthorization validates the candidate against the account's current
+// transport, then applies only the authorization projection with a repository
+// compare-and-set. The account snapshot used during validation is never saved.
+func (s *adminServiceImpl) ApplyQoderAuthorization(
+	ctx context.Context,
+	id int64,
+	credentials map[string]any,
+	extra map[string]any,
+) (*Account, error) {
+	existing, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !existing.IsQoderCosy() {
+		return nil, infraerrors.BadRequest("NOT_QODER_COSY", "Qoder CN authorization requires a Qoder COSY account")
+	}
+	if !QoderCNReauthorizationProvided(credentials) {
+		return nil, ErrQoderCNReauthorizationRequired
+	}
+
+	candidate := *existing
+	candidate.Credentials = replaceQoderAuthorizationCredentials(existing.Credentials, credentials)
+	ensureQoderMachineCredentials(&candidate)
+	s.attachAccountProxyForValidation(ctx, &candidate)
+	if err := validateQoderCosyCredentials(ctx, &candidate, s.httpUpstream, s.tlsFPProfileService); err != nil {
+		return nil, err
+	}
+
+	updater, ok := s.accountRepo.(QoderAuthorizationRepository)
+	if !ok {
+		return nil, errors.New("Qoder authorization repository is not configured")
+	}
+	applied, err := updater.ApplyQoderAuthorizationIfUnchanged(ctx, QoderAuthorizationUpdate{
+		AccountID:                       id,
+		ExpectedCredentials:             existing.Credentials,
+		Credentials:                     candidate.Credentials,
+		Extra:                           extra,
+		ExpectedStatus:                  existing.Status,
+		ExpectedError:                   existing.ErrorMessage,
+		ExpectedSchedulable:             existing.Schedulable,
+		ExpectedTempUnschedulableUntil:  existing.TempUnschedulableUntil,
+		ExpectedTempUnschedulableReason: existing.TempUnschedulableReason,
+		ExpectedRateLimitedAt:           existing.RateLimitedAt,
+		ExpectedRateLimitResetAt:        existing.RateLimitResetAt,
+		RestoreErrorState:               existing.Status == StatusError,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return nil, ErrQoderAuthorizationConflict
+	}
+	return s.accountRepo.GetByID(ctx, id)
+}
+
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	if input.QoderRefreshExpectedCredentials != nil {
+		return s.applyQoderRefreshCredentials(ctx, account, input)
+	}
+	var expectedQoderState *Account
 	originalQoderNeedsReauthorization := false
 	if account.IsQoderCosy() {
+		expected := *account
+		expected.Credentials = shallowCopyMap(account.Credentials)
+		expected.Extra = shallowCopyMap(account.Extra)
+		expectedQoderState = &expected
 		_, siteErr := qoderSiteForAccount(account)
 		originalQoderNeedsReauthorization = errors.Is(siteErr, ErrQoderCNReauthorizationRequired)
+		if qoderCredentialsContainIdentityChange(account.Credentials, input.Credentials) {
+			return nil, errQoderAuthorizationEndpointRequired
+		}
 	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
@@ -589,7 +664,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	} else if len(input.Credentials) > 0 {
 		// 敏感子键采用"incoming 没提供就保留"的合并语义：前端响应已脱敏，
 		// 全对象 PUT 编辑时不会再带回 token，避免覆盖时清空已有凭证。
-		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+		if account.IsQoderCosy() {
+			account.Credentials = mergeQoderConfigurationCredentials(account.Credentials, input.Credentials)
+		} else {
+			account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
+		}
 		// 校验并规范化请求头覆写配置（header 名小写化、格式检查）
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
 			return nil, err
@@ -723,7 +802,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		_, siteErr := qoderSiteForAccount(account)
 		switch {
 		case siteErr == nil:
-			if originalQoderNeedsReauthorization && !qoderCNReauthorizationProvided(input.Credentials) {
+			if originalQoderNeedsReauthorization && !QoderCNReauthorizationProvided(input.Credentials) {
 				return nil, fmt.Errorf("%w: submit new Qoder CN OAuth or PAT credentials", ErrQoderCNReauthorizationRequired)
 			}
 			ensureQoderMachineCredentials(account)
@@ -740,16 +819,24 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 	}
-	probeEnabledAppliedAtomically := false
+	accountUpdatedAtomically := false
+	if expectedQoderState != nil {
+		if updater, ok := s.accountRepo.(qoderConfigurationAtomicUpdater); ok {
+			if err := updater.UpdateQoderConfigurationIfRuntimeUnchanged(ctx, account, expectedQoderState); err != nil {
+				return nil, err
+			}
+			accountUpdatedAtomically = true
+		}
+	}
 	if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
 		if updater, ok := s.accountRepo.(accountProbeEnabledAtomicUpdater); ok {
 			if err := updater.UpdateWithUpstreamBillingProbeEnabled(ctx, account, *requestedProbeEnabledUpdate); err != nil {
 				return nil, err
 			}
-			probeEnabledAppliedAtomically = true
+			accountUpdatedAtomically = true
 		}
 	}
-	if !probeEnabledAppliedAtomically {
+	if !accountUpdatedAtomically {
 		if err := s.accountRepo.Update(ctx, account); err != nil {
 			return nil, err
 		}
@@ -783,6 +870,44 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		return nil, err
 	}
 	return updated, nil
+}
+
+func (s *adminServiceImpl) applyQoderRefreshCredentials(
+	ctx context.Context,
+	account *Account,
+	input *UpdateAccountInput,
+) (*Account, error) {
+	if account == nil || !account.IsQoderCosy() {
+		return nil, infraerrors.BadRequest("NOT_QODER_COSY", "Qoder CN refresh requires a Qoder COSY account")
+	}
+	if !QoderCNReauthorizationProvided(input.Credentials) {
+		return nil, ErrQoderCNReauthorizationRequired
+	}
+
+	credentials := shallowCopyMap(input.Credentials)
+	tokenVersion := time.Now().UnixMilli()
+	if previous := (&Account{Credentials: input.QoderRefreshExpectedCredentials}).GetCredentialAsInt64("_token_version"); previous >= tokenVersion {
+		tokenVersion = previous + 1
+	}
+	credentials["_token_version"] = tokenVersion
+
+	updater, ok := s.accountRepo.(QoderOAuthRefreshSuccessRepository)
+	if !ok {
+		return nil, errors.New("Qoder OAuth refresh success repository is not configured")
+	}
+	applied, err := updater.UpdateQoderOAuthCredentialsIfUnchanged(
+		ctx,
+		account.ID,
+		input.QoderRefreshExpectedCredentials,
+		credentials,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return nil, ErrQoderAuthorizationConflict
+	}
+	return s.accountRepo.GetByID(ctx, account.ID)
 }
 
 // UpdateAccountExtra 仅对账号 Extra JSONB 做 key 级合并，避免覆盖运行态或持久化配置键。
@@ -859,6 +984,14 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// 影子账号绝不持有凭据:批量更新携带凭据时,目标中不得含影子(外审 G5,与单账号
 	// UpdateAccount 守卫对齐)。覆盖显式 IDs 与 filter 解析出的 IDs(此处 AccountIDs 已解析完成)。
 	if len(input.Credentials) > 0 {
+		if qoderBulkCredentialsContainIdentityMutation(input.Credentials) {
+			for _, acc := range cachedTargets {
+				if acc != nil && acc.IsQoderCosy() {
+					return nil, infraerrors.Newf(http.StatusBadRequest, "QODER_BULK_REAUTH_REQUIRED",
+						"Qoder identity credentials cannot be changed in bulk; reauthorize each account individually")
+				}
+			}
+		}
 		for _, acc := range cachedTargets {
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_NO_CREDENTIALS",

@@ -71,6 +71,67 @@ describe('AccountStatusIndicator', () => {
       .toBe('admin.accounts.status.reauthorizationRequired')
   })
 
+  it.each(['cn', ' CN '])('完整的 %s 站点 Qoder 凭据不误报需要重新授权', (site) => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          platform: 'qoder',
+          type: 'cosy',
+          credentials: {
+            site,
+            refresh_mode: 'qodercn20',
+            machine_id: 'machine-id',
+            uid: 'user-id'
+          },
+          credentials_status: {
+            has_security_oauth_token: true,
+            has_refresh_token: true
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).not.toContain('admin.accounts.status.reauthorizationRequired')
+  })
+
+  it('CN 站点的残缺 device 凭据仍提示重新授权', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          platform: 'qoder',
+          type: 'cosy',
+          credentials: { site: 'cn', refresh_mode: 'qodercn20' },
+          credentials_status: { has_security_oauth_token: true }
+        })
+      },
+      global: { stubs: { Icon: true } }
+    })
+
+    expect(wrapper.find('.badge-warning').text())
+      .toBe('admin.accounts.status.reauthorizationRequired')
+  })
+
+  it('CN PAT 不依赖 refresh mode 即可视为完整授权', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          platform: 'qoder',
+          type: 'cosy',
+          credentials: { site: 'cn', refresh_mode: 'cosy' },
+          credentials_status: { has_pat: true }
+        })
+      },
+      global: { stubs: { Icon: true } }
+    })
+
+    expect(wrapper.text()).not.toContain('admin.accounts.status.reauthorizationRequired')
+  })
+
   it('Grok 账号额度限流时显示自动恢复时间而非临时不可调度', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

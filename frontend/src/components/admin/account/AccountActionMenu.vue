@@ -72,6 +72,7 @@ import { computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
+import { canRefreshQoderCNAuthorization } from '@/utils/qoderAuthorization'
 
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
 const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'invite-reset', 'create-spark-shadow'])
@@ -111,7 +112,7 @@ const supportsReauth = computed(() =>
 )
 const supportsTokenRefresh = computed(() => {
   if (props.account?.platform === 'qoder' && props.account?.type === 'cosy') {
-    return props.account.credentials_status?.has_refresh_token === true && !isShadow.value
+    return canRefreshQoderCNAuthorization(props.account) && !isShadow.value
   }
   return supportsReauth.value
 })

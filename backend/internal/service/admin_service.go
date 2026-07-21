@@ -80,6 +80,9 @@ type AdminService interface {
 	// RecoverDuplicateAccount 在重试结果不明时返回先前已提交的复制件，绝不创建账号。
 	RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
 	UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error)
+	// ApplyQoderAuthorization validates and atomically applies a complete Qoder CN
+	// authorization while preserving concurrent account configuration changes.
+	ApplyQoderAuthorization(ctx context.Context, id int64, credentials, extra map[string]any) (*Account, error)
 	// UpdateAccountExtra 仅对 Extra 做 JSONB key 级增量合并，不覆盖已有持久化配置。
 	UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error
 	DeleteAccount(ctx context.Context, id int64) error
@@ -396,6 +399,10 @@ type UpdateAccountInput struct {
 	ExpiresAt             *int64
 	AutoPauseOnExpired    *bool
 	SkipMixedChannelCheck bool // 跳过混合渠道检查（用户已确认风险）
+	// QoderRefreshExpectedCredentials is set only by the trusted refresh path.
+	// It makes an upstream token rotation conditional on the identity that was
+	// actually used, without exposing authorization updates through the generic PUT.
+	QoderRefreshExpectedCredentials map[string]any
 }
 
 // BulkUpdateAccountsInput describes the payload for bulk updating accounts.

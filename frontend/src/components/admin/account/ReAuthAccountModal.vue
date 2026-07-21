@@ -3,6 +3,7 @@
     :show="show"
     :title="t('admin.accounts.reAuthorizeAccount')"
     width="normal"
+    :close-on-escape="!qoderSaving"
     @close="handleClose"
   >
     <div v-if="account" class="space-y-4">
@@ -146,7 +147,7 @@
 
     <template #footer>
       <div v-if="account" class="flex justify-between gap-3">
-        <button type="button" class="btn btn-secondary" @click="handleClose">
+        <button type="button" :disabled="qoderSaving" class="btn btn-secondary" @click="handleClose">
           {{ t('common.cancel') }}
         </button>
         <button
@@ -188,7 +189,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
@@ -202,6 +203,7 @@ import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useQoderOAuth } from '@/composables/useQoderOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import type { Account } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -246,6 +248,18 @@ const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
 // State
 const addMethod = ref<AddMethod>('oauth')
 const geminiOAuthType = ref<'code_assist' | 'google_one' | 'ai_studio'>('code_assist')
+const qoderSavingGeneration = ref<number | null>(null)
+const qoderSaving = computed(() => qoderSavingGeneration.value !== null)
+const QODER_AUTO_POLL_TIMEOUT_MS = 10 * 60 * 1000
+let qoderFlowGeneration = 0
+let qoderPollTimer: number | null = null
+let qoderPollDeadline = 0
+let qoderPollInFlightGeneration: number | null = null
+
+interface QoderFlowContext {
+  generation: number
+  accountId: number
+}
 
 // Computed - check platform
 const isOpenAI = computed(() => props.account?.platform === 'openai')
@@ -277,7 +291,7 @@ const currentLoading = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.loading.value
   if (isGemini.value) return geminiOAuth.loading.value
   if (isAntigravity.value) return antigravityOAuth.loading.value
-  if (isQoder.value) return qoderOAuth.loading.value || qoderOAuth.polling.value
+  if (isQoder.value) return qoderOAuth.loading.value || qoderOAuth.polling.value || qoderSaving.value
   if (isGrok.value) return grokOAuth.loading.value
   return claudeOAuth.loading.value
 })
@@ -303,33 +317,6 @@ const canExchangeCode = computed(() => {
   return (isQoder.value || authCode.trim()) && sessionId && !loading
 })
 
-// Watchers
-watch(
-  () => props.show,
-  (newVal) => {
-    if (newVal && props.account) {
-      // Initialize addMethod based on current account type (Claude only)
-      if (
-        isAnthropic.value &&
-        (props.account.type === 'oauth' || props.account.type === 'setup-token')
-      ) {
-        addMethod.value = props.account.type as AddMethod
-      }
-      if (isGemini.value) {
-        const creds = (props.account.credentials || {}) as Record<string, unknown>
-        geminiOAuthType.value =
-          creds.oauth_type === 'google_one'
-            ? 'google_one'
-            : creds.oauth_type === 'ai_studio'
-              ? 'ai_studio'
-              : 'code_assist'
-      }
-    } else {
-      resetState()
-    }
-  }
-)
-
 // Methods
 const resetState = () => {
   addMethod.value = 'oauth'
@@ -343,8 +330,150 @@ const resetState = () => {
   oauthFlowRef.value?.reset()
 }
 
+const clearQoderPollTimer = () => {
+  if (qoderPollTimer !== null) {
+    window.clearTimeout(qoderPollTimer)
+    qoderPollTimer = null
+  }
+}
+
+const stopQoderAutoPolling = () => {
+  clearQoderPollTimer()
+  qoderPollDeadline = 0
+}
+
+const invalidateQoderFlow = () => {
+  qoderFlowGeneration += 1
+  stopQoderAutoPolling()
+  qoderPollInFlightGeneration = null
+  qoderSavingGeneration.value = null
+  qoderOAuth.invalidatePendingRequests()
+}
+
+const captureQoderFlow = (): QoderFlowContext | null => {
+  if (!props.show || !props.account || !isQoder.value) return null
+  return {
+    generation: qoderFlowGeneration,
+    accountId: props.account.id
+  }
+}
+
+const isCurrentQoderFlow = (context: QoderFlowContext) =>
+  context.generation === qoderFlowGeneration &&
+  props.show &&
+  props.account?.id === context.accountId &&
+  isQoder.value
+
 const handleClose = () => {
+  if (qoderSaving.value) return
+  invalidateQoderFlow()
   emit('close')
+}
+
+const persistQoderCredentials = async (
+  tokenInfo: Parameters<typeof qoderOAuth.buildCredentials>[0],
+  context: QoderFlowContext
+) => {
+  if (!isCurrentQoderFlow(context) || qoderSaving.value) return
+
+  stopQoderAutoPolling()
+  qoderSavingGeneration.value = context.generation
+  const credentials = qoderOAuth.buildCredentials(tokenInfo)
+  try {
+    const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(context.accountId, {
+      type: 'cosy',
+      credentials
+    })
+    if (!isCurrentQoderFlow(context)) return
+
+    qoderSavingGeneration.value = null
+    appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+    emit('reauthorized', updatedAccount)
+    handleClose()
+  } catch (error: any) {
+    if (!isCurrentQoderFlow(context)) return
+    qoderOAuth.error.value = extractApiErrorMessage(error, t('admin.accounts.oauth.authFailed'))
+    appStore.showError(qoderOAuth.error.value)
+  } finally {
+    if (qoderSavingGeneration.value === context.generation) {
+      qoderSavingGeneration.value = null
+    }
+  }
+}
+
+const scheduleQoderPoll = (context: QoderFlowContext) => {
+  if (!isCurrentQoderFlow(context) || qoderPollDeadline === 0) return
+  const remainingMs = qoderPollDeadline - Date.now()
+  if (remainingMs <= 0) {
+    stopQoderAutoPolling()
+    return
+  }
+
+  const intervalMs = Math.max(1, qoderOAuth.pollInterval.value) * 1000
+  clearQoderPollTimer()
+  qoderPollTimer = window.setTimeout(() => {
+    qoderPollTimer = null
+    if (Date.now() >= qoderPollDeadline) {
+      stopQoderAutoPolling()
+      return
+    }
+    void pollQoderAuthorizationOnce(context, false)
+  }, Math.min(intervalMs, remainingMs))
+}
+
+const pollQoderAuthorizationOnce = async (
+  context: QoderFlowContext,
+  manual: boolean
+) => {
+  if (
+    !isCurrentQoderFlow(context) ||
+    qoderSaving.value ||
+    qoderPollInFlightGeneration === context.generation
+  ) return
+  if (!manual && qoderPollDeadline > 0 && Date.now() >= qoderPollDeadline) {
+    stopQoderAutoPolling()
+    return
+  }
+
+  const sessionId = qoderOAuth.sessionId.value
+  const state = qoderOAuth.state.value
+  if (!sessionId || !state) return
+
+  qoderPollInFlightGeneration = context.generation
+  try {
+    const result = await qoderOAuth.pollAuthorization(
+      { sessionId, state },
+      { notifyError: manual }
+    )
+    if (!isCurrentQoderFlow(context)) return
+    if (!result) {
+      if (qoderOAuth.pollFailure.value === 'transient') {
+        scheduleQoderPoll(context)
+      } else {
+        stopQoderAutoPolling()
+      }
+      return
+    }
+    if (result.status === 'completed' && result.token_info) {
+      await persistQoderCredentials(result.token_info, context)
+      return
+    }
+
+    if (manual) {
+      appStore.showInfo(t('admin.accounts.oauth.qoder.authorizationPending'))
+    }
+    scheduleQoderPoll(context)
+  } finally {
+    if (qoderPollInFlightGeneration === context.generation) {
+      qoderPollInFlightGeneration = null
+    }
+  }
+}
+
+const startQoderAutoPolling = (context: QoderFlowContext) => {
+  stopQoderAutoPolling()
+  qoderPollDeadline = Date.now() + QODER_AUTO_POLL_TIMEOUT_MS
+  void pollQoderAuthorizationOnce(context, false)
 }
 
 const handleGenerateUrl = async () => {
@@ -360,7 +489,14 @@ const handleGenerateUrl = async () => {
   } else if (isAntigravity.value) {
     await antigravityOAuth.generateAuthUrl(props.account.proxy_id)
   } else if (isQoder.value) {
-    await qoderOAuth.generateAuthUrl(props.account.proxy_id)
+    if (qoderSaving.value) return
+    invalidateQoderFlow()
+    const context = captureQoderFlow()
+    if (!context) return
+    const generated = await qoderOAuth.generateAuthUrl(props.account.proxy_id)
+    if (generated && isCurrentQoderFlow(context)) {
+      startQoderAutoPolling(context)
+    }
   } else if (isGrok.value) {
     await grokOAuth.generateAuthUrl(props.account.proxy_id)
   } else {
@@ -369,37 +505,16 @@ const handleGenerateUrl = async () => {
 }
 
 const handleExchangeCode = async () => {
-  if (!props.account) return
+  if (!props.account || qoderSaving.value) return
 
   const authCode = oauthFlowRef.value?.authCode || ''
   if (!isQoder.value && !authCode.trim()) return
 
   if (isQoder.value) {
-    const sessionId = qoderOAuth.sessionId.value
-    const state = qoderOAuth.state.value
-    if (!sessionId || !state) return
-
-    const result = await qoderOAuth.pollAuthorization({ sessionId, state })
-    if (!result) return
-    if (result.status !== 'completed' || !result.token_info) {
-      appStore.showInfo(t('admin.accounts.oauth.qoder.authorizationPending'))
-      return
-    }
-
-    const credentials = qoderOAuth.buildCredentials(result.token_info)
-    try {
-      await adminAPI.accounts.update(props.account.id, {
-        type: 'cosy',
-        credentials
-      })
-      const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
-      appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-      emit('reauthorized', updatedAccount)
-      handleClose()
-    } catch (error: any) {
-      qoderOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
-      appStore.showError(qoderOAuth.error.value)
-    }
+    const context = captureQoderFlow()
+    if (!context) return
+    clearQoderPollTimer()
+    await pollQoderAuthorizationOnce(context, true)
   } else if (isOpenAILike.value) {
     // OpenAI OAuth flow
     const oauthClient = openaiOAuth
@@ -623,4 +738,34 @@ const handleCookieAuth = async (sessionKey: string) => {
     claudeOAuth.loading.value = false
   }
 }
+
+watch(
+  () => [props.show, props.account?.id] as const,
+  ([visible]) => {
+    invalidateQoderFlow()
+    resetState()
+    if (!visible || !props.account) return
+
+    if (
+      isAnthropic.value &&
+      (props.account.type === 'oauth' || props.account.type === 'setup-token')
+    ) {
+      addMethod.value = props.account.type as AddMethod
+    }
+    if (isGemini.value) {
+      const creds = (props.account.credentials || {}) as Record<string, unknown>
+      geminiOAuthType.value =
+        creds.oauth_type === 'google_one'
+          ? 'google_one'
+          : creds.oauth_type === 'ai_studio'
+            ? 'ai_studio'
+            : 'code_assist'
+    }
+  },
+  { immediate: true }
+)
+
+onUnmounted(() => {
+  invalidateQoderFlow()
+})
 </script>

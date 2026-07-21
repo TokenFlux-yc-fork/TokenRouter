@@ -398,15 +398,25 @@ func (r *accountRepository) ListCRSAccountIDs(ctx context.Context) (map[string]i
 }
 
 func (r *accountRepository) Update(ctx context.Context, account *service.Account) error {
-	return r.updateAccount(ctx, account, nil)
+	return r.updateAccount(ctx, account, nil, nil)
 }
 
 // UpdateWithUpstreamBillingProbeEnabled 在管理员编辑账号的同一行锁事务中更新探测开关。
 func (r *accountRepository) UpdateWithUpstreamBillingProbeEnabled(ctx context.Context, account *service.Account, enabled bool) error {
-	return r.updateAccount(ctx, account, &enabled)
+	return r.updateAccount(ctx, account, &enabled, nil)
 }
 
-func (r *accountRepository) updateAccount(ctx context.Context, account *service.Account, explicitProbeEnabled *bool) error {
+// UpdateQoderConfigurationIfRuntimeUnchanged prevents an administrator's
+// pre-validation snapshot from overwriting runtime state changed while the
+// upstream validation request was in flight.
+func (r *accountRepository) UpdateQoderConfigurationIfRuntimeUnchanged(ctx context.Context, account, expected *service.Account) error {
+	if account == nil || expected == nil || account.ID != expected.ID || !account.IsQoderCosy() || !expected.IsQoderCosy() {
+		return service.ErrQoderAccountUpdateConflict
+	}
+	return r.updateAccount(ctx, account, nil, expected)
+}
+
+func (r *accountRepository) updateAccount(ctx context.Context, account *service.Account, explicitProbeEnabled *bool, expectedQoderState *service.Account) error {
 	if account == nil {
 		return nil
 	}
@@ -430,7 +440,7 @@ func (r *accountRepository) updateAccount(ctx context.Context, account *service.
 		}
 	}
 
-	updated, err := r.updateLockedAccount(ctx, client, account, explicitProbeEnabled)
+	updated, err := r.updateLockedAccount(ctx, client, account, explicitProbeEnabled, expectedQoderState)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
 	}
@@ -452,8 +462,8 @@ func (r *accountRepository) updateAccount(ctx context.Context, account *service.
 	return nil
 }
 
-func (r *accountRepository) updateLockedAccount(ctx context.Context, client *dbent.Client, account *service.Account, explicitProbeEnabled *bool) (*dbent.Account, error) {
-	extra, err := lockAndMergeAccountProbeExtra(ctx, client, account, explicitProbeEnabled)
+func (r *accountRepository) updateLockedAccount(ctx context.Context, client *dbent.Client, account *service.Account, explicitProbeEnabled *bool, expectedQoderState *service.Account) (*dbent.Account, error) {
+	extra, err := lockAndMergeAccountProbeExtra(ctx, client, account, explicitProbeEnabled, expectedQoderState)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +553,11 @@ func (r *accountRepository) updateLockedAccount(ctx context.Context, client *dbe
 	return builder.Save(ctx)
 }
 
-func lockAndMergeAccountProbeExtra(ctx context.Context, client *dbent.Client, account *service.Account, explicitProbeEnabled *bool) (map[string]any, error) {
+func lockAndMergeAccountProbeExtra(ctx context.Context, client *dbent.Client, account *service.Account, explicitProbeEnabled *bool, expectedStates ...*service.Account) (map[string]any, error) {
+	var expectedQoderState *service.Account
+	if len(expectedStates) > 0 {
+		expectedQoderState = expectedStates[0]
+	}
 	credentials, err := json.Marshal(normalizeJSONMap(account.Credentials))
 	if err != nil {
 		return nil, err
@@ -557,9 +571,10 @@ func lockAndMergeAccountProbeExtra(ctx context.Context, client *dbent.Client, ac
 			platform = $2
 			AND type = $3
 			AND credentials = $4::jsonb
-			AND proxy_id IS NOT DISTINCT FROM $5,
-			extra -> 'upstream_billing_probe_enabled',
-			extra -> 'upstream_billing_probe'
+				AND proxy_id IS NOT DISTINCT FROM $5,
+				extra -> 'upstream_billing_probe_enabled',
+				extra -> 'upstream_billing_probe',
+				credentials
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -576,15 +591,31 @@ func lockAndMergeAccountProbeExtra(ctx context.Context, client *dbent.Client, ac
 	}
 
 	var (
-		identityUnchanged bool
-		currentEnabled    []byte
-		currentSnapshot   []byte
+		identityUnchanged  bool
+		currentEnabled     []byte
+		currentSnapshot    []byte
+		currentCredentials []byte
 	)
-	if err := rows.Scan(&identityUnchanged, &currentEnabled, &currentSnapshot); err != nil {
+	if err := rows.Scan(&identityUnchanged, &currentEnabled, &currentSnapshot, &currentCredentials); err != nil {
 		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rejectStaleQoderAuthorizationUpdate(account, currentCredentials); err != nil {
+		return nil, err
+	}
+	if expectedQoderState != nil {
+		currentRuntime, err := loadLockedQoderRuntimeState(ctx, client, account.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !qoderLockedStateMatches(expectedQoderState, currentCredentials, currentRuntime) {
+			return nil, service.ErrQoderAccountUpdateConflict
+		}
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
@@ -614,6 +645,150 @@ func lockAndMergeAccountProbeExtra(ctx context.Context, client *dbent.Client, ac
 	}
 	extra[service.UpstreamBillingProbeExtraKey] = snapshot
 	return extra, nil
+}
+
+type lockedQoderRuntimeState struct {
+	status                  string
+	errorMessage            string
+	schedulable             bool
+	proxyID                 sql.NullInt64
+	lastUsedAt              sql.NullTime
+	rateLimitedAt           sql.NullTime
+	rateLimitResetAt        sql.NullTime
+	overloadUntil           sql.NullTime
+	tempUnschedulableUntil  sql.NullTime
+	tempUnschedulableReason string
+	sessionWindowStart      sql.NullTime
+	sessionWindowEnd        sql.NullTime
+	sessionWindowStatus     string
+	extra                   []byte
+}
+
+func loadLockedQoderRuntimeState(ctx context.Context, client *dbent.Client, accountID int64) (lockedQoderRuntimeState, error) {
+	rows, err := client.QueryContext(ctx, `
+		SELECT
+				status,
+				COALESCE(error_message, ''),
+				schedulable,
+				proxy_id,
+				last_used_at,
+			rate_limited_at,
+			rate_limit_reset_at,
+			overload_until,
+			temp_unschedulable_until,
+			COALESCE(temp_unschedulable_reason, ''),
+			session_window_start,
+			session_window_end,
+			COALESCE(session_window_status, ''),
+			extra
+		FROM accounts
+		WHERE id = $1 AND deleted_at IS NULL
+	`, accountID)
+	if err != nil {
+		return lockedQoderRuntimeState{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return lockedQoderRuntimeState{}, err
+		}
+		return lockedQoderRuntimeState{}, service.ErrAccountNotFound
+	}
+	var current lockedQoderRuntimeState
+	if err := rows.Scan(
+		&current.status,
+		&current.errorMessage,
+		&current.schedulable,
+		&current.proxyID,
+		&current.lastUsedAt,
+		&current.rateLimitedAt,
+		&current.rateLimitResetAt,
+		&current.overloadUntil,
+		&current.tempUnschedulableUntil,
+		&current.tempUnschedulableReason,
+		&current.sessionWindowStart,
+		&current.sessionWindowEnd,
+		&current.sessionWindowStatus,
+		&current.extra,
+	); err != nil {
+		return lockedQoderRuntimeState{}, err
+	}
+	return current, rows.Err()
+}
+
+func qoderLockedStateMatches(expected *service.Account, currentCredentials []byte, current lockedQoderRuntimeState) bool {
+	if expected == nil || expected.Status != current.status || expected.ErrorMessage != current.errorMessage ||
+		expected.Schedulable != current.schedulable || expected.TempUnschedulableReason != current.tempUnschedulableReason ||
+		expected.SessionWindowStatus != current.sessionWindowStatus {
+		return false
+	}
+	if !nullableInt64Matches(expected.ProxyID, current.proxyID) ||
+		!nullableTimeMatches(expected.LastUsedAt, current.lastUsedAt) ||
+		!nullableTimeMatches(expected.RateLimitedAt, current.rateLimitedAt) ||
+		!nullableTimeMatches(expected.RateLimitResetAt, current.rateLimitResetAt) ||
+		!nullableTimeMatches(expected.OverloadUntil, current.overloadUntil) ||
+		!nullableTimeMatches(expected.TempUnschedulableUntil, current.tempUnschedulableUntil) ||
+		!nullableTimeMatches(expected.SessionWindowStart, current.sessionWindowStart) ||
+		!nullableTimeMatches(expected.SessionWindowEnd, current.sessionWindowEnd) {
+		return false
+	}
+	return jsonMapsEqual(expected.Credentials, currentCredentials) && jsonMapsEqual(expected.Extra, current.extra)
+}
+
+func nullableInt64Matches(expected *int64, current sql.NullInt64) bool {
+	if expected == nil || !current.Valid {
+		return expected == nil && !current.Valid
+	}
+	return *expected == current.Int64
+}
+
+func nullableTimeMatches(expected *time.Time, current sql.NullTime) bool {
+	if expected == nil || !current.Valid {
+		return expected == nil && !current.Valid
+	}
+	return expected.Equal(current.Time)
+}
+
+func jsonMapsEqual(expected map[string]any, currentJSON []byte) bool {
+	var current map[string]any
+	if len(currentJSON) > 0 && string(currentJSON) != "null" {
+		if err := json.Unmarshal(currentJSON, &current); err != nil {
+			return false
+		}
+	}
+	expectedJSON, err := json.Marshal(normalizeJSONMap(expected))
+	if err != nil {
+		return false
+	}
+	canonicalCurrentJSON, err := json.Marshal(normalizeJSONMap(current))
+	return err == nil && string(expectedJSON) == string(canonicalCurrentJSON)
+}
+
+func rejectStaleQoderAuthorizationUpdate(account *service.Account, currentJSON []byte) error {
+	if account == nil || !account.IsQoderCosy() || len(currentJSON) == 0 || string(currentJSON) == "null" {
+		return nil
+	}
+	var currentCredentials map[string]any
+	if err := json.Unmarshal(currentJSON, &currentCredentials); err != nil {
+		return err
+	}
+	incomingIdentityJSON, err := json.Marshal(service.QoderCredentialIdentitySnapshot(account.Credentials))
+	if err != nil {
+		return err
+	}
+	currentIdentityJSON, err := json.Marshal(service.QoderCredentialIdentitySnapshot(currentCredentials))
+	if err != nil {
+		return err
+	}
+	if string(incomingIdentityJSON) == string(currentIdentityJSON) {
+		return nil
+	}
+	incomingVersion := account.GetCredentialAsInt64("_token_version")
+	currentVersion := (&service.Account{Credentials: currentCredentials}).GetCredentialAsInt64("_token_version")
+	if incomingVersion <= currentVersion {
+		return service.ErrQoderAuthorizationConflict
+	}
+	return nil
 }
 
 func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, credentials map[string]any) error {
@@ -1258,6 +1433,362 @@ func (r *accountRepository) UpdateGrokOAuthCredentialsIfUnchanged(
 	expectedProxyID *int64,
 	credentials map[string]any,
 ) (bool, error) {
+	return r.updateOAuthCredentialsIfUnchanged(
+		ctx,
+		id,
+		service.PlatformGrok,
+		service.AccountTypeOAuth,
+		expectedCredentials,
+		expectedProxyID,
+		credentials,
+	)
+}
+
+// UpdateQoderOAuthCredentialsIfUnchanged prevents an in-flight refresh from replacing
+// credentials that were concurrently reauthorized. Proxy and routing changes are
+// preserved because a successful upstream rotation may already have consumed the old
+// refresh token and therefore must not be discarded for unrelated account edits.
+func (r *accountRepository) UpdateQoderOAuthCredentialsIfUnchanged(
+	ctx context.Context,
+	id int64,
+	expectedCredentials map[string]any,
+	credentials map[string]any,
+) (bool, error) {
+	if r == nil || r.sql == nil {
+		return false, errors.New("account repository SQL executor is not configured")
+	}
+	expectedJSON, err := json.Marshal(normalizeJSONMap(service.QoderCredentialIdentitySnapshot(expectedCredentials)))
+	if err != nil {
+		return false, err
+	}
+	credentialsJSON, err := json.Marshal(normalizeJSONMap(service.QoderCredentialIdentitySnapshot(credentials)))
+	if err != nil {
+		return false, err
+	}
+	identityKeys := service.QoderCredentialIdentityKeys()
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+		UPDATE accounts AS a
+		SET credentials = (a.credentials - $6::text[]) || $1::jsonb,
+			updated_at = NOW()
+		WHERE a.id = $2
+			AND a.deleted_at IS NULL
+			AND a.platform = $3
+			AND a.type = $4
+			AND (
+				SELECT COALESCE(jsonb_object_agg(entry.key, entry.value), '{}'::jsonb)
+				FROM jsonb_each(a.credentials) AS entry(key, value)
+				WHERE entry.key = ANY($6::text[])
+			) = $5::jsonb
+		RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $7, updated.id, NULL, NULL FROM updated
+	`,
+		string(credentialsJSON),
+		id,
+		service.PlatformQoder,
+		service.AccountTypeCosy,
+		string(expectedJSON),
+		pq.Array(identityKeys),
+		service.SchedulerOutboxEventAccountChanged,
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rowsAffected == 0 {
+		return false, nil
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
+// ApplyQoderAuthorizationIfUnchanged atomically swaps the authorization
+// projection, merges OAuth metadata, conditionally clears the observed error
+// and stale runtime blocks, and publishes the scheduler change. Account-local
+// credentials, Extra keys, proxy/routing settings, and concurrent state changes
+// are read from the current row.
+func (r *accountRepository) ApplyQoderAuthorizationIfUnchanged(
+	ctx context.Context,
+	update service.QoderAuthorizationUpdate,
+) (bool, error) {
+	if r == nil || r.sql == nil {
+		return false, errors.New("account repository SQL executor is not configured")
+	}
+	expectedJSON, err := json.Marshal(normalizeJSONMap(service.QoderCredentialIdentitySnapshot(update.ExpectedCredentials)))
+	if err != nil {
+		return false, err
+	}
+	credentialsJSON, err := json.Marshal(normalizeJSONMap(service.QoderCredentialIdentitySnapshot(update.Credentials)))
+	if err != nil {
+		return false, err
+	}
+	extraJSON, err := json.Marshal(normalizeJSONMap(update.Extra))
+	if err != nil {
+		return false, err
+	}
+	identityKeys := service.QoderCredentialIdentityKeys()
+	quotaSnapshotKeys := []string{
+		service.QoderQuotaSnapshotExtraKey,
+		service.QoderQuotaUpdatedAtExtraKey,
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts AS a
+			SET credentials = (COALESCE(a.credentials, '{}'::jsonb) - $12::text[]) || $1::jsonb,
+				extra = (COALESCE(a.extra, '{}'::jsonb) || $2::jsonb) - $18::text[],
+				status = CASE
+					WHEN $3::boolean
+						AND a.status IS NOT DISTINCT FROM $4
+						AND a.error_message IS NOT DISTINCT FROM $5
+						AND a.schedulable IS NOT DISTINCT FROM $6
+					THEN $7 ELSE a.status END,
+				error_message = CASE
+					WHEN $3::boolean
+						AND a.status IS NOT DISTINCT FROM $4
+						AND a.error_message IS NOT DISTINCT FROM $5
+						AND a.schedulable IS NOT DISTINCT FROM $6
+					THEN '' ELSE a.error_message END,
+				schedulable = CASE
+					WHEN $3::boolean
+						AND a.status IS NOT DISTINCT FROM $4
+						AND a.error_message IS NOT DISTINCT FROM $5
+						AND a.schedulable IS NOT DISTINCT FROM $6
+					THEN TRUE ELSE a.schedulable END,
+				temp_unschedulable_until = CASE
+					WHEN a.temp_unschedulable_until IS NOT DISTINCT FROM $14::timestamptz
+						AND COALESCE(a.temp_unschedulable_reason, '') = $15
+					THEN NULL ELSE a.temp_unschedulable_until END,
+				temp_unschedulable_reason = CASE
+					WHEN a.temp_unschedulable_until IS NOT DISTINCT FROM $14::timestamptz
+						AND COALESCE(a.temp_unschedulable_reason, '') = $15
+					THEN NULL ELSE a.temp_unschedulable_reason END,
+				rate_limited_at = CASE
+					WHEN a.rate_limited_at IS NOT DISTINCT FROM $16::timestamptz
+						AND a.rate_limit_reset_at IS NOT DISTINCT FROM $17::timestamptz
+					THEN NULL ELSE a.rate_limited_at END,
+				rate_limit_reset_at = CASE
+					WHEN a.rate_limited_at IS NOT DISTINCT FROM $16::timestamptz
+						AND a.rate_limit_reset_at IS NOT DISTINCT FROM $17::timestamptz
+					THEN NULL ELSE a.rate_limit_reset_at END,
+				updated_at = NOW()
+			WHERE a.id = $8
+				AND a.deleted_at IS NULL
+				AND a.platform = $9
+				AND a.type = $10
+				AND (
+					SELECT COALESCE(jsonb_object_agg(entry.key, entry.value), '{}'::jsonb)
+					FROM jsonb_each(COALESCE(a.credentials, '{}'::jsonb)) AS entry(key, value)
+					WHERE entry.key = ANY($12::text[])
+				) = $11::jsonb
+			RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $13, updated.id, NULL, NULL FROM updated
+	`,
+		string(credentialsJSON),
+		string(extraJSON),
+		update.RestoreErrorState,
+		update.ExpectedStatus,
+		update.ExpectedError,
+		update.ExpectedSchedulable,
+		service.StatusActive,
+		update.AccountID,
+		service.PlatformQoder,
+		service.AccountTypeCosy,
+		string(expectedJSON),
+		pq.Array(identityKeys),
+		service.SchedulerOutboxEventAccountChanged,
+		update.ExpectedTempUnschedulableUntil,
+		update.ExpectedTempUnschedulableReason,
+		update.ExpectedRateLimitedAt,
+		update.ExpectedRateLimitResetAt,
+		pq.Array(quotaSnapshotKeys),
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rowsAffected == 0 {
+		return false, nil
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, update.AccountID)
+	return true, nil
+}
+
+// ApplyQoderQuotaStateIfAuthorizationUnchanged atomically persists a quota
+// snapshot and its scheduling signal. A response fetched with an old identity
+// cannot mutate the account after reauthorization.
+func (r *accountRepository) ApplyQoderQuotaStateIfAuthorizationUnchanged(
+	ctx context.Context,
+	update service.QoderQuotaStateUpdate,
+) (bool, error) {
+	if r == nil || r.sql == nil {
+		return false, errors.New("account repository SQL executor is not configured")
+	}
+	expectedJSON, err := json.Marshal(normalizeJSONMap(service.QoderCredentialIdentitySnapshot(update.ExpectedCredentials)))
+	if err != nil {
+		return false, err
+	}
+	extraJSON, err := json.Marshal(normalizeJSONMap(update.Extra))
+	if err != nil {
+		return false, err
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts AS a
+			SET extra = COALESCE(a.extra, '{}'::jsonb) || $1::jsonb,
+				rate_limited_at = CASE
+					WHEN $2::boolean
+						AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at < $3::timestamptz)
+					THEN NOW()
+					WHEN $4::boolean
+						AND a.rate_limited_at IS NOT DISTINCT FROM $5::timestamptz
+						AND a.rate_limit_reset_at IS NOT DISTINCT FROM $6::timestamptz
+					THEN NULL ELSE a.rate_limited_at END,
+				rate_limit_reset_at = CASE
+					WHEN $2::boolean
+						AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at < $3::timestamptz)
+					THEN $3::timestamptz
+					WHEN $4::boolean
+						AND a.rate_limited_at IS NOT DISTINCT FROM $5::timestamptz
+						AND a.rate_limit_reset_at IS NOT DISTINCT FROM $6::timestamptz
+					THEN NULL ELSE a.rate_limit_reset_at END,
+				updated_at = NOW()
+			WHERE a.id = $7
+				AND a.deleted_at IS NULL
+				AND a.platform = $8
+				AND a.type = $9
+				AND (
+					SELECT COALESCE(jsonb_object_agg(entry.key, entry.value), '{}'::jsonb)
+					FROM jsonb_each(COALESCE(a.credentials, '{}'::jsonb)) AS entry(key, value)
+					WHERE entry.key = ANY($11::text[])
+				) = $10::jsonb
+			RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $12, updated.id, NULL, NULL FROM updated
+	`,
+		string(extraJSON),
+		update.SetRateLimitResetAt != nil,
+		update.SetRateLimitResetAt,
+		update.ClearRateLimit,
+		update.ExpectedRateLimitedAt,
+		update.ExpectedRateLimitResetAt,
+		update.AccountID,
+		service.PlatformQoder,
+		service.AccountTypeCosy,
+		string(expectedJSON),
+		pq.Array(service.QoderCredentialIdentityKeys()),
+		service.SchedulerOutboxEventAccountChanged,
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rowsAffected == 0 {
+		return false, nil
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, update.AccountID)
+	return true, nil
+}
+
+// ApplyQoderGatewayStateIfAuthorizationUnchanged prevents a late response from
+// an old Qoder authorization from rate-limiting or overloading a newly
+// authorized account. Concurrent responses for the same authorization may only
+// extend an existing scheduling window.
+func (r *accountRepository) ApplyQoderGatewayStateIfAuthorizationUnchanged(
+	ctx context.Context,
+	update service.QoderGatewayStateUpdate,
+) (bool, error) {
+	if r == nil || r.sql == nil {
+		return false, errors.New("account repository SQL executor is not configured")
+	}
+	if update.RateLimitResetAt == nil && update.OverloadUntil == nil {
+		return false, nil
+	}
+	expectedJSON, err := json.Marshal(normalizeJSONMap(service.QoderCredentialIdentitySnapshot(update.ExpectedCredentials)))
+	if err != nil {
+		return false, err
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+			UPDATE accounts AS a
+			SET rate_limited_at = CASE
+					WHEN $1::boolean
+						AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at < $2::timestamptz)
+					THEN NOW() ELSE a.rate_limited_at END,
+				rate_limit_reset_at = CASE
+					WHEN $1::boolean
+						AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at < $2::timestamptz)
+					THEN $2::timestamptz ELSE a.rate_limit_reset_at END,
+				overload_until = CASE
+					WHEN $3::boolean
+						AND (a.overload_until IS NULL OR a.overload_until < $4::timestamptz)
+					THEN $4::timestamptz ELSE a.overload_until END,
+				updated_at = NOW()
+			WHERE a.id = $5
+				AND a.deleted_at IS NULL
+				AND a.platform = $6
+				AND a.type = $7
+				AND (
+					SELECT COALESCE(jsonb_object_agg(entry.key, entry.value), '{}'::jsonb)
+					FROM jsonb_each(COALESCE(a.credentials, '{}'::jsonb)) AS entry(key, value)
+					WHERE entry.key = ANY($9::text[])
+				) = $8::jsonb
+				AND (
+					($1::boolean AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at < $2::timestamptz))
+					OR ($3::boolean AND (a.overload_until IS NULL OR a.overload_until < $4::timestamptz))
+				)
+			RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $10, updated.id, NULL, NULL FROM updated
+	`,
+		update.RateLimitResetAt != nil,
+		update.RateLimitResetAt,
+		update.OverloadUntil != nil,
+		update.OverloadUntil,
+		update.AccountID,
+		service.PlatformQoder,
+		service.AccountTypeCosy,
+		string(expectedJSON),
+		pq.Array(service.QoderCredentialIdentityKeys()),
+		service.SchedulerOutboxEventAccountChanged,
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rowsAffected == 0 {
+		return false, nil
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, update.AccountID)
+	return true, nil
+}
+
+func (r *accountRepository) updateOAuthCredentialsIfUnchanged(
+	ctx context.Context,
+	id int64,
+	platform string,
+	accountType string,
+	expectedCredentials map[string]any,
+	expectedProxyID *int64,
+	credentials map[string]any,
+) (bool, error) {
 	if r == nil || r.sql == nil {
 		return false, errors.New("account repository SQL executor is not configured")
 	}
@@ -1287,8 +1818,8 @@ func (r *accountRepository) UpdateGrokOAuthCredentialsIfUnchanged(
 	`,
 		string(credentialsJSON),
 		id,
-		service.PlatformGrok,
-		service.AccountTypeOAuth,
+		platform,
+		accountType,
 		string(expectedJSON),
 		expectedProxyID,
 		service.SchedulerOutboxEventAccountChanged,
@@ -1410,6 +1941,160 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 		service.StatusActive,
 		string(expectedJSON),
 		expectedProxyID,
+		service.SchedulerOutboxEventAccountChanged,
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rowsAffected == 0 {
+		return false, nil
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
+// SetQoderOAuthRefreshErrorIfSnapshotUnchanged prevents a failed refresh
+// attempt from disabling an account whose authorization or transport changed
+// after the upstream request began. Unrelated routing configuration is ignored.
+func (r *accountRepository) SetQoderOAuthRefreshErrorIfSnapshotUnchanged(
+	ctx context.Context,
+	id int64,
+	snapshot service.QoderRefreshFailureSnapshot,
+	errorMsg string,
+) (bool, error) {
+	if r == nil || r.sql == nil {
+		return false, errors.New("account repository SQL executor is not configured")
+	}
+	expectedJSON, err := json.Marshal(normalizeJSONMap(service.QoderCredentialIdentitySnapshot(snapshot.Authorization)))
+	if err != nil {
+		return false, err
+	}
+	expectedTransportJSON, err := json.Marshal(normalizeJSONMap(service.QoderRefreshTransportExtraSnapshot(snapshot.TransportExtra)))
+	if err != nil {
+		return false, err
+	}
+	identityKeys := service.QoderCredentialIdentityKeys()
+	transportExtraKeys := service.QoderRefreshTransportExtraKeys()
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+		UPDATE accounts AS a
+		SET status = $1,
+			error_message = $2,
+			schedulable = FALSE,
+			updated_at = NOW()
+		WHERE a.id = $3
+			AND a.deleted_at IS NULL
+			AND a.platform = $4
+			AND a.type = $5
+			AND a.status = $6
+			AND (
+				SELECT COALESCE(jsonb_object_agg(entry.key, entry.value), '{}'::jsonb)
+				FROM jsonb_each(COALESCE(a.credentials, '{}'::jsonb)) AS entry(key, value)
+				WHERE entry.key = ANY($9::text[])
+			) = $7::jsonb
+			AND a.proxy_id IS NOT DISTINCT FROM $8
+			AND (
+				SELECT COALESCE(jsonb_object_agg(entry.key, entry.value), '{}'::jsonb)
+				FROM jsonb_each(COALESCE(a.extra, '{}'::jsonb)) AS entry(key, value)
+				WHERE entry.key = ANY($11::text[])
+			) = $10::jsonb
+		RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $12, updated.id, NULL, NULL FROM updated
+	`,
+		service.StatusError,
+		errorMsg,
+		id,
+		service.PlatformQoder,
+		service.AccountTypeCosy,
+		service.StatusActive,
+		string(expectedJSON),
+		snapshot.ProxyID,
+		pq.Array(identityKeys),
+		string(expectedTransportJSON),
+		pq.Array(transportExtraKeys),
+		service.SchedulerOutboxEventAccountChanged,
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rowsAffected == 0 {
+		return false, nil
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
+// SetQoderOAuthRefreshTempUnschedulableIfSnapshotUnchanged applies a bounded
+// cooldown only while the attempted Qoder authorization and transport are current.
+func (r *accountRepository) SetQoderOAuthRefreshTempUnschedulableIfSnapshotUnchanged(
+	ctx context.Context,
+	id int64,
+	snapshot service.QoderRefreshFailureSnapshot,
+	until time.Time,
+	reason string,
+) (bool, error) {
+	if r == nil || r.sql == nil {
+		return false, errors.New("account repository SQL executor is not configured")
+	}
+	expectedJSON, err := json.Marshal(normalizeJSONMap(service.QoderCredentialIdentitySnapshot(snapshot.Authorization)))
+	if err != nil {
+		return false, err
+	}
+	expectedTransportJSON, err := json.Marshal(normalizeJSONMap(service.QoderRefreshTransportExtraSnapshot(snapshot.TransportExtra)))
+	if err != nil {
+		return false, err
+	}
+	identityKeys := service.QoderCredentialIdentityKeys()
+	transportExtraKeys := service.QoderRefreshTransportExtraKeys()
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+		UPDATE accounts AS a
+		SET temp_unschedulable_until = $1,
+			temp_unschedulable_reason = $2,
+			updated_at = NOW()
+		WHERE a.id = $3
+			AND a.deleted_at IS NULL
+			AND a.platform = $4
+			AND a.type = $5
+			AND a.status = $6
+			AND (
+				SELECT COALESCE(jsonb_object_agg(entry.key, entry.value), '{}'::jsonb)
+				FROM jsonb_each(COALESCE(a.credentials, '{}'::jsonb)) AS entry(key, value)
+				WHERE entry.key = ANY($9::text[])
+			) = $7::jsonb
+			AND a.proxy_id IS NOT DISTINCT FROM $8
+			AND (
+				SELECT COALESCE(jsonb_object_agg(entry.key, entry.value), '{}'::jsonb)
+				FROM jsonb_each(COALESCE(a.extra, '{}'::jsonb)) AS entry(key, value)
+				WHERE entry.key = ANY($11::text[])
+			) = $10::jsonb
+			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until < $1)
+		RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $12, updated.id, NULL, NULL FROM updated
+	`,
+		until,
+		reason,
+		id,
+		service.PlatformQoder,
+		service.AccountTypeCosy,
+		service.StatusActive,
+		string(expectedJSON),
+		snapshot.ProxyID,
+		pq.Array(identityKeys),
+		string(expectedTransportJSON),
+		pq.Array(transportExtraKeys),
 		service.SchedulerOutboxEventAccountChanged,
 	)
 	if err != nil {

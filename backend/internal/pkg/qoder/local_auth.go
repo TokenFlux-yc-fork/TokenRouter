@@ -14,7 +14,7 @@ func DefaultAuthDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".qoder", ".auth")
+	return filepath.Join(home, ".qoder-cn", ".auth")
 }
 
 // ReadLocalAuth 从本地文件系统读取并解密 Qoder 认证数据。
@@ -75,8 +75,8 @@ func LoadLocalIdentity(authDir string) (*AuthIdentity, *MachineIdentity, error) 
 	identity := info.ToAuthIdentity()
 	machine := &MachineIdentity{
 		MachineID:    info.MachineID,
-		MachineToken: RandomToken(50),
-		MachineType:  RandomHex(18),
+		MachineToken: info.MachineID,
+		MachineType:  "5",
 	}
 
 	return identity, machine, nil

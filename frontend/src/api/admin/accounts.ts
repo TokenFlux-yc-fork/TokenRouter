@@ -403,7 +403,7 @@ export async function refreshCredentials(id: number): Promise<Account> {
 export async function applyOAuthCredentials(
   id: number,
   payload: {
-    type: 'oauth' | 'setup-token'
+    type: 'oauth' | 'setup-token' | 'cosy'
     credentials: Record<string, unknown>
     extra?: Record<string, unknown>
   }

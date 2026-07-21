@@ -101,6 +101,12 @@ func TestCompositeTokenCacheInvalidator_QoderCosy(t *testing.T) {
 		ID:       42,
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site":           "cn",
+			"pat":            "new-pat",
+			"machine_id":     "new-machine",
+			"_token_version": int64(2),
+		},
 	}
 
 	err := invalidator.InvalidateToken(context.Background(), account)
@@ -109,8 +115,11 @@ func TestCompositeTokenCacheInvalidator_QoderCosy(t *testing.T) {
 	require.Contains(t, cache.deletedKeys, "qoder:account:42")
 	provider.mu.Lock()
 	_, cached := provider.sessions[42]
+	state := provider.accountStates[42]
 	provider.mu.Unlock()
 	require.False(t, cached, "qoder provider session cache should be invalidated too")
+	require.Equal(t, int64(2), state.credentialVersion)
+	require.Equal(t, qoderCredentialsHash(account.Credentials), state.credentialsHash)
 }
 
 func TestCompositeTokenCacheInvalidator_QoderCosyInvalidatesProviderWithoutExternalCache(t *testing.T) {

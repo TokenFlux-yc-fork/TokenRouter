@@ -173,7 +173,7 @@ func TestGatewayModels_QoderGroupFallsBackToQoderModels(t *testing.T) {
 		&gatewayModelsAccountRepoStub{
 			byGroup: map[int64][]service.Account{
 				groupID: {
-					{ID: 1, Platform: service.PlatformQoder},
+					{ID: 1, Platform: service.PlatformQoder, Type: service.AccountTypeCosy, Credentials: map[string]any{"site": "cn", "pat": "pat-token"}},
 				},
 			},
 		},
@@ -693,7 +693,7 @@ func TestGatewayModels_QoderCustomModelsListFiltersDefaultFallbackModels(t *test
 		&gatewayModelsAccountRepoStub{
 			byGroup: map[int64][]service.Account{
 				groupID: {
-					{ID: 1, Platform: service.PlatformQoder},
+					{ID: 1, Platform: service.PlatformQoder, Type: service.AccountTypeCosy, Credentials: map[string]any{"site": "cn", "pat": "pat-token"}},
 				},
 			},
 		},
@@ -719,7 +719,7 @@ func TestGatewayModels_QoderCustomModelsListFiltersDefaultFallbackModels(t *test
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"deepseek-v4-pro", "lite"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"deepseek-v4-pro"}, modelIDsForTest(got.Data))
 }
 
 func TestGatewayModels_ChannelRestrictionEmptyDoesNotFallBackToDefaults(t *testing.T) {

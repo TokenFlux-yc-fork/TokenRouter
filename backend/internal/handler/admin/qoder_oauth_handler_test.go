@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -85,4 +86,46 @@ func TestQoderOAuthHandlerGenerateAuthURLAcceptsCNAndRejectsLegacyOrUnknownSite(
 	router.ServeHTTP(invalidRecorder, invalidRequest)
 	require.Equal(t, http.StatusBadRequest, invalidRecorder.Code)
 	require.Contains(t, invalidRecorder.Body.String(), "unsupported site")
+}
+
+func TestQoderOAuthHandlerPollClassifiesTerminalAndTransientErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := service.NewQoderOAuthService(nil)
+	defer svc.Stop()
+	handler := NewQoderOAuthHandler(svc)
+	router := gin.New()
+	router.POST("/api/v1/admin/qoder/oauth/poll", handler.Poll)
+
+	t.Run("invalid session is terminal", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/qoder/oauth/poll", bytes.NewBufferString(
+			`{"session_id":"missing","state":"missing"}`,
+		))
+		req.Header.Set("Content-Type", "application/json")
+
+		router.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Contains(t, rec.Body.String(), "QODER_OAUTH_SESSION_INVALID")
+	})
+
+	t.Run("transport cancellation is transient", func(t *testing.T) {
+		auth, err := svc.GenerateAuthURL(context.Background(), nil)
+		require.NoError(t, err)
+		payload, err := json.Marshal(map[string]any{
+			"session_id": auth.SessionID,
+			"state":      auth.State,
+		})
+		require.NoError(t, err)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/qoder/oauth/poll", bytes.NewReader(payload)).WithContext(ctx)
+		req.Header.Set("Content-Type", "application/json")
+
+		router.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		require.Contains(t, rec.Body.String(), "QODER_OAUTH_POLL_UNAVAILABLE")
+	})
 }

@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -94,6 +96,7 @@ func parseFlexibleInt64(data []byte) (FlexibleInt64, error) {
 type DeviceTokenResponse struct {
 	ID           string        `json:"id"`
 	Token        string        `json:"token"`
+	DeviceToken  string        `json:"device_token"`
 	AccessToken  string        `json:"access_token"`
 	RefreshToken string        `json:"refresh_token"`
 	UserID       string        `json:"user_id"`
@@ -174,75 +177,115 @@ func parseFlexibleExpiresAt(data []byte) (FlexibleInt64, error) {
 	return 0, fmt.Errorf("qoder: invalid expiry %q", text)
 }
 
-// UserInfo 兼容两站 userinfo 的 snake_case 与 camelCase 字段。
+// UserInfo 兼容国内站 userinfo 的 snake_case 与 camelCase 字段。
 type UserInfo struct {
-	ID               string `json:"id"`
-	UserID           string `json:"user_id"`
-	Name             string `json:"name"`
-	UserName         string `json:"user_name"`
-	UserType         string `json:"userType"`
-	Email            string `json:"email"`
-	AvatarURL        string `json:"avatar_url"`
-	OrganizationID   string `json:"organization_id"`
-	OrganizationName string `json:"organization_name"`
+	ID                     string   `json:"id"`
+	UserID                 string   `json:"user_id"`
+	UID                    string   `json:"uid"`
+	Name                   string   `json:"name"`
+	Username               string   `json:"username"`
+	UserName               string   `json:"user_name"`
+	UserType               string   `json:"userType"`
+	Email                  string   `json:"email"`
+	AvatarURL              string   `json:"avatar_url"`
+	OrganizationID         string   `json:"organization_id"`
+	OrganizationName       string   `json:"organization_name"`
+	OrganizationTags       []string `json:"organization_tags"`
+	IsDataPolicyModifiable *bool    `json:"is_data_policy_modifiable,omitempty"`
 }
 
 type OrganizationTags struct {
-	OrganizationID   string `json:"organization_id"`
-	OrganizationName string `json:"organization_name"`
+	Tags []string `json:"tags"`
 }
 
 func (u *UserInfo) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		ID                    string `json:"id"`
-		UserID                string `json:"user_id"`
-		Name                  string `json:"name"`
-		UserName              string `json:"user_name"`
-		Email                 string `json:"email"`
-		AvatarURL             string `json:"avatar_url"`
-		AvatarURLCamel        string `json:"avatarUrl"`
-		UserType              string `json:"userType"`
-		UserTypeSnake         string `json:"user_type"`
-		OrganizationID        string `json:"organization_id"`
-		OrganizationName      string `json:"organization_name"`
-		OrganizationIDCamel   string `json:"organizationId"`
-		OrganizationNameCamel string `json:"organizationName"`
+		ID                        string   `json:"id"`
+		UserID                    string   `json:"user_id"`
+		UID                       string   `json:"uid"`
+		Name                      string   `json:"name"`
+		Username                  string   `json:"username"`
+		UserName                  string   `json:"user_name"`
+		Email                     string   `json:"email"`
+		Avatar                    string   `json:"avatar"`
+		AvatarURL                 string   `json:"avatar_url"`
+		AvatarURLCamel            string   `json:"avatarUrl"`
+		UserType                  string   `json:"userType"`
+		UserTypeSnake             string   `json:"user_type"`
+		OrganizationID            string   `json:"organization_id"`
+		OrganizationName          string   `json:"organization_name"`
+		OrganizationIDCamel       string   `json:"organizationId"`
+		OrganizationNameCamel     string   `json:"organizationName"`
+		OrgID                     string   `json:"orgId"`
+		OrgName                   string   `json:"orgName"`
+		OrganizationTags          []string `json:"organization_tags"`
+		OrganizationTagsCamel     []string `json:"organizationTags"`
+		IsPrivacyPolicyModifiable *bool    `json:"isPrivacyPolicyModifiable"`
+		IsDataPolicyModifiable    *bool    `json:"is_data_policy_modifiable"`
+		Organization              struct {
+			ID                    string   `json:"id"`
+			Name                  string   `json:"name"`
+			OrgID                 string   `json:"org_id"`
+			OrgName               string   `json:"org_name"`
+			OrgIDCamel            string   `json:"orgId"`
+			OrgNameCamel          string   `json:"orgName"`
+			OrganizationID        string   `json:"organization_id"`
+			OrganizationName      string   `json:"organization_name"`
+			OrganizationIDCamel   string   `json:"organizationId"`
+			OrganizationNameCamel string   `json:"organizationName"`
+			OrganizationTags      []string `json:"organization_tags"`
+			OrganizationTagsCamel []string `json:"organizationTags"`
+		} `json:"organization"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	organizationTags := normalizeOrganizationTags(raw.OrganizationTags)
+	if len(organizationTags) == 0 {
+		organizationTags = normalizeOrganizationTags(raw.OrganizationTagsCamel)
+	}
+	if len(organizationTags) == 0 {
+		organizationTags = normalizeOrganizationTags(raw.Organization.OrganizationTags)
+	}
+	if len(organizationTags) == 0 {
+		organizationTags = normalizeOrganizationTags(raw.Organization.OrganizationTagsCamel)
+	}
+	isDataPolicyModifiable := raw.IsPrivacyPolicyModifiable
+	if isDataPolicyModifiable == nil {
+		isDataPolicyModifiable = raw.IsDataPolicyModifiable
 	}
 	*u = UserInfo{
-		ID:               raw.ID,
-		UserID:           raw.UserID,
-		Name:             raw.Name,
-		UserName:         raw.UserName,
-		UserType:         firstNonEmpty(raw.UserType, raw.UserTypeSnake),
-		Email:            raw.Email,
-		AvatarURL:        firstNonEmpty(raw.AvatarURL, raw.AvatarURLCamel),
-		OrganizationID:   firstNonEmpty(raw.OrganizationID, raw.OrganizationIDCamel),
-		OrganizationName: firstNonEmpty(raw.OrganizationName, raw.OrganizationNameCamel),
-	}
-	return nil
-}
-
-func (o *OrganizationTags) UnmarshalJSON(data []byte) error {
-	type organizationTagsAlias OrganizationTags
-	var raw struct {
-		organizationTagsAlias
-		ID                    string `json:"id"`
-		Name                  string `json:"name"`
-		OrganizationIDCamel   string `json:"organizationId"`
-		OrganizationNameCamel string `json:"organizationName"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*o = OrganizationTags(raw.organizationTagsAlias)
-	if strings.TrimSpace(o.OrganizationID) == "" {
-		o.OrganizationID = firstNonEmpty(raw.OrganizationIDCamel, raw.ID)
-	}
-	if strings.TrimSpace(o.OrganizationName) == "" {
-		o.OrganizationName = firstNonEmpty(raw.OrganizationNameCamel, raw.Name)
+		ID:        raw.ID,
+		UserID:    firstNonEmpty(raw.UserID, raw.UID),
+		UID:       raw.UID,
+		Name:      firstNonEmpty(raw.Name, raw.Username, raw.UserName),
+		Username:  raw.Username,
+		UserName:  firstNonEmpty(raw.UserName, raw.Username),
+		UserType:  firstNonEmpty(raw.UserType, raw.UserTypeSnake),
+		Email:     raw.Email,
+		AvatarURL: firstNonEmpty(raw.AvatarURL, raw.AvatarURLCamel, raw.Avatar),
+		OrganizationID: firstNonEmpty(
+			raw.OrganizationID,
+			raw.OrganizationIDCamel,
+			raw.OrgID,
+			raw.Organization.OrganizationID,
+			raw.Organization.OrganizationIDCamel,
+			raw.Organization.OrgID,
+			raw.Organization.OrgIDCamel,
+			raw.Organization.ID,
+		),
+		OrganizationName: firstNonEmpty(
+			raw.OrganizationName,
+			raw.OrganizationNameCamel,
+			raw.OrgName,
+			raw.Organization.OrganizationName,
+			raw.Organization.OrganizationNameCamel,
+			raw.Organization.OrgName,
+			raw.Organization.OrgNameCamel,
+			raw.Organization.Name,
+		),
+		OrganizationTags:       organizationTags,
+		IsDataPolicyModifiable: isDataPolicyModifiable,
 	}
 	return nil
 }
@@ -252,6 +295,56 @@ type OAuthClient struct {
 	HTTPClient *http.Client
 	Profile    Profile
 	Doer       RequestDoer
+}
+
+type oauthTransportError struct {
+	operation string
+	message   string
+	cause     error
+}
+
+type redactedOAuthTransportCause struct {
+	message string
+	cause   error
+}
+
+func (e *oauthTransportError) Error() string {
+	return fmt.Sprintf("qoder: %s: %s", e.operation, e.message)
+}
+
+func (e *oauthTransportError) Unwrap() error {
+	return e.cause
+}
+
+func (e *redactedOAuthTransportCause) Error() string {
+	return e.message
+}
+
+func (e *redactedOAuthTransportCause) Is(target error) bool {
+	return errors.Is(e.cause, target)
+}
+
+func newOAuthTransportError(operation string, err error, secrets ...string) error {
+	return NewRedactedTransportError(operation, err, secrets...)
+}
+
+// NewRedactedTransportError preserves errors.Is classification while preventing
+// request dumps and explicitly supplied credentials from entering error text.
+func NewRedactedTransportError(operation string, err error, secrets ...string) error {
+	message := err.Error()
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		message = urlErr.Err.Error()
+	}
+	message = RedactSensitiveTextWithSecrets(message, secrets...)
+	if message == "" {
+		message = "transport failed"
+	}
+	return &oauthTransportError{
+		operation: operation,
+		message:   message,
+		cause:     &redactedOAuthTransportCause{message: message, cause: err},
+	}
 }
 
 func NewOAuthClient(baseURL string, httpClient *http.Client) *OAuthClient {
@@ -304,7 +397,6 @@ func NewDeviceAuthRequestForProfile(profile Profile) (*DeviceAuthRequest, error)
 	nonce := RandomUUIDLike()
 	machineID := RandomToken(50)
 	if normalized.Site == SiteCN {
-		nonce = RandomHex(32)
 		machineID = RandomUUIDLike()
 	}
 	return &DeviceAuthRequest{
@@ -371,7 +463,7 @@ func (c *OAuthClient) PollDeviceToken(ctx context.Context, nonce, verifier strin
 
 	resp, err := c.do(req)
 	if err != nil {
-		return nil, false, fmt.Errorf("qoder: device token poll request: %w", err)
+		return nil, false, newOAuthTransportError("device token poll request", err, nonce, verifier)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -380,14 +472,18 @@ func (c *OAuthClient) PollDeviceToken(ctx context.Context, nonce, verifier strin
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, false, fmt.Errorf("qoder: device token poll failed with status %d: %s", resp.StatusCode, RedactSensitiveText(string(body)))
+		return nil, false, &OpenAPIError{
+			Operation:  "device token poll",
+			StatusCode: resp.StatusCode,
+			Message:    RedactSensitiveTextWithSecrets(string(body), nonce, verifier),
+		}
 	}
 
 	var token DeviceTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
 		return nil, false, fmt.Errorf("qoder: parse device token poll response: %w", err)
 	}
-	if strings.TrimSpace(token.Token) == "" && strings.TrimSpace(token.AccessToken) == "" {
+	if token.DeviceLoginTokenValue() == "" {
 		return nil, false, nil
 	}
 	return &token, true, nil
@@ -407,13 +503,17 @@ func (c *OAuthClient) GetUserInfo(ctx context.Context, token string) (*UserInfo,
 
 	resp, err := c.do(req)
 	if err != nil {
-		return nil, fmt.Errorf("qoder: userinfo request: %w", err)
+		return nil, newOAuthTransportError("userinfo request", err, token)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("qoder: userinfo failed with status %d: %s", resp.StatusCode, RedactSensitiveText(string(body)))
+		return nil, &OpenAPIError{
+			Operation:  "userinfo",
+			StatusCode: resp.StatusCode,
+			Message:    RedactSensitiveTextWithSecrets(string(body), token),
+		}
 	}
 
 	var info UserInfo
@@ -423,15 +523,15 @@ func (c *OAuthClient) GetUserInfo(ctx context.Context, token string) (*UserInfo,
 	return &info, nil
 }
 
-func (c *OAuthClient) GetOrganizationTags(ctx context.Context, token, uid string) (*OrganizationTags, error) {
+func (c *OAuthClient) GetOrganizationTags(ctx context.Context, token, organizationID string) (*OrganizationTags, error) {
 	if c == nil {
 		c = NewOAuthClient("", nil)
 	}
-	uid = strings.TrimSpace(uid)
-	if uid == "" {
-		return nil, fmt.Errorf("qoder: organization tags require uid")
+	organizationID = strings.TrimSpace(organizationID)
+	if organizationID == "" {
+		return nil, fmt.Errorf("qoder: organization tags require organization_id")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+OrganizationTagsPathPrefix+url.PathEscape(uid)+"/tags", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+OrganizationTagsPathPrefix+url.PathEscape(organizationID)+"/tags", nil)
 	if err != nil {
 		return nil, fmt.Errorf("qoder: create organization tags request: %w", err)
 	}
@@ -441,13 +541,17 @@ func (c *OAuthClient) GetOrganizationTags(ctx context.Context, token, uid string
 
 	resp, err := c.do(req)
 	if err != nil {
-		return nil, fmt.Errorf("qoder: organization tags request: %w", err)
+		return nil, newOAuthTransportError("organization tags request", err, token)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("qoder: organization tags failed with status %d: %s", resp.StatusCode, RedactSensitiveText(string(body)))
+		return nil, &OpenAPIError{
+			Operation:  "organization tags",
+			StatusCode: resp.StatusCode,
+			Message:    RedactSensitiveTextWithSecrets(string(body), token),
+		}
 	}
 
 	var tags OrganizationTags
@@ -467,7 +571,14 @@ func (c *OAuthClient) ExchangeQoderCN20PAT(ctx context.Context, pat string) (*De
 	if err != nil {
 		return nil, fmt.Errorf("qoder: encode PAT exchange request: %w", err)
 	}
-	return c.postTokenRequest(ctx, JobTokenExchangePath, body, "PAT exchange")
+	token, err := c.postTokenRequest(ctx, JobTokenExchangePath, body, "PAT exchange", pat)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := token.ValidatePAT(time.Now()); err != nil {
+		return nil, fmt.Errorf("qoder: invalid PAT exchange response: %w", err)
+	}
+	return token, nil
 }
 
 // RefreshQoderCN20Token 使用国内站 refresh token 换取新的 OpenAPI token。
@@ -480,7 +591,14 @@ func (c *OAuthClient) RefreshQoderCN20Token(ctx context.Context, refreshToken st
 	if err != nil {
 		return nil, fmt.Errorf("qoder: encode token refresh request: %w", err)
 	}
-	return c.postTokenRequest(ctx, DeviceTokenRefreshPath, body, "token refresh")
+	token, err := c.postTokenRequest(ctx, DeviceTokenRefreshPath, body, "token refresh", refreshToken)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := token.ValidateDeviceRefresh(time.Now()); err != nil {
+		return nil, fmt.Errorf("qoder: invalid token refresh response: %w", err)
+	}
+	return token, nil
 }
 
 // CompleteQoderCN20Identity 使用本客户端冻结的 profile 与 transport 完成国内 COSY 身份交换。
@@ -493,7 +611,7 @@ func (c *OAuthClient) CompleteQoderCN20Identity(
 	return CompleteQoderCN20IdentityContext(ctx, c.profile(), token, user, machine, c.do)
 }
 
-func (c *OAuthClient) postTokenRequest(ctx context.Context, path string, body []byte, operation string) (*DeviceTokenResponse, error) {
+func (c *OAuthClient) postTokenRequest(ctx context.Context, path string, body []byte, operation string, secrets ...string) (*DeviceTokenResponse, error) {
 	if c == nil {
 		c = NewOAuthClientForProfile(MustProfileForSite(SiteCN), nil)
 	}
@@ -509,7 +627,7 @@ func (c *OAuthClient) postTokenRequest(ctx context.Context, path string, body []
 	req.Header.Set("Cosy-MachineOS", MachineOS())
 	resp, err := c.do(req)
 	if err != nil {
-		return nil, fmt.Errorf("qoder: %s request: %w", operation, err)
+		return nil, newOAuthTransportError(operation+" request", err, secrets...)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -517,15 +635,12 @@ func (c *OAuthClient) postTokenRequest(ctx context.Context, path string, body []
 		return nil, &OpenAPIError{
 			Operation:  operation,
 			StatusCode: resp.StatusCode,
-			Message:    RedactSensitiveText(string(responseBody)),
+			Message:    RedactSensitiveTextWithSecrets(string(responseBody), secrets...),
 		}
 	}
 	var token DeviceTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
 		return nil, fmt.Errorf("qoder: parse %s response: %w", operation, err)
-	}
-	if _, err := token.ValidateQoderCN20(time.Now()); err != nil {
-		return nil, fmt.Errorf("qoder: invalid %s response: %w", operation, err)
 	}
 	return &token, nil
 }
@@ -603,11 +718,31 @@ func (r *DeviceTokenResponse) AccessTokenValue() string {
 	if r == nil {
 		return ""
 	}
-	// 官方 Qoder CN 客户端优先使用 access_token，token 仅用于旧响应兼容回退。
-	if strings.TrimSpace(r.AccessToken) != "" {
-		return strings.TrimSpace(r.AccessToken)
+	return r.PATTokenValue()
+}
+
+// PATTokenValue 按 qoderclicn 的 job-token exchange 优先级选择 bearer token。
+func (r *DeviceTokenResponse) PATTokenValue() string {
+	if r == nil {
+		return ""
+	}
+	return firstNonEmpty(r.Token, r.DeviceToken, r.AccessToken)
+}
+
+// DeviceLoginTokenValue 返回 device poll 唯一认可的 token 字段。
+func (r *DeviceTokenResponse) DeviceLoginTokenValue() string {
+	if r == nil {
+		return ""
 	}
 	return strings.TrimSpace(r.Token)
+}
+
+// DeviceRefreshTokenValue 返回 device refresh 唯一认可的 device_token 字段。
+func (r *DeviceTokenResponse) DeviceRefreshTokenValue() string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.DeviceToken)
 }
 
 // ExpiryTime 将 token 响应中的绝对或相对有效期规范化为 UTC 时间。
@@ -633,33 +768,72 @@ func (r *DeviceTokenResponse) ExpiryTime(now time.Time) time.Time {
 	return now.Add(time.Duration(expiresIn) * time.Second).UTC()
 }
 
-// ValidateQoderCN20 校验国内标准 OAuth/PAT 返回并规范化过期时间。
+// ValidateQoderCN20 保留旧调用名称；Qoder CN token 的 refresh 与 expiry 均可缺省。
 func (r *DeviceTokenResponse) ValidateQoderCN20(now time.Time) (time.Time, error) {
+	return r.ValidatePAT(now)
+}
+
+// ValidatePAT 校验 PAT exchange 的有效 token，过期时间为可选元数据。
+func (r *DeviceTokenResponse) ValidatePAT(now time.Time) (time.Time, error) {
 	if r == nil {
 		return time.Time{}, fmt.Errorf("token response is empty")
 	}
-	if r.AccessTokenValue() == "" {
+	if r.PATTokenValue() == "" {
 		return time.Time{}, fmt.Errorf("access token is missing")
+	}
+	return r.ExpiryTime(now), nil
+}
+
+// ValidateDeviceLogin 校验 device poll 响应；身份补充字段和过期时间均可缺省。
+func (r *DeviceTokenResponse) ValidateDeviceLogin(now time.Time) (time.Time, error) {
+	if r == nil {
+		return time.Time{}, fmt.Errorf("token response is empty")
+	}
+	if r.DeviceLoginTokenValue() == "" {
+		return time.Time{}, fmt.Errorf("device login token is missing")
+	}
+	return r.ExpiryTime(now), nil
+}
+
+// ValidateDeviceRefresh 校验 device refresh 响应，严格要求轮换后的两个 token。
+func (r *DeviceTokenResponse) ValidateDeviceRefresh(now time.Time) (time.Time, error) {
+	if r == nil {
+		return time.Time{}, fmt.Errorf("token response is empty")
+	}
+	if r.DeviceRefreshTokenValue() == "" {
+		return time.Time{}, fmt.Errorf("device token is missing")
 	}
 	if strings.TrimSpace(r.RefreshToken) == "" {
 		return time.Time{}, fmt.Errorf("refresh token is missing")
 	}
-	expiresAt := r.ExpiryTime(now)
-	if expiresAt.IsZero() {
-		return time.Time{}, fmt.Errorf("positive expiry is missing")
-	}
-	return expiresAt, nil
+	return r.ExpiryTime(now), nil
 }
 
 func BuildIdentityFromDeviceToken(user *UserInfo, token *DeviceTokenResponse) *AuthIdentity {
-	accessToken := token.AccessTokenValue()
+	if user != nil && token != nil {
+		pollUserID := strings.TrimSpace(token.UserID)
+		userinfoUserID := userIDFromInfo(user)
+		if pollUserID != "" && userinfoUserID != "" && pollUserID != userinfoUserID {
+			slog.Warn("qoder device login ignored mismatched userinfo enrichment")
+			user = nil
+		}
+	}
+	accessToken := token.DeviceLoginTokenValue()
+	return buildIdentityFromTokenValue(user, token, accessToken)
+}
+
+func buildIdentityFromTokenValue(user *UserInfo, token *DeviceTokenResponse, accessToken string) *AuthIdentity {
+	if token == nil {
+		token = &DeviceTokenResponse{}
+	}
 	userID := strings.TrimSpace(token.UserID)
-	name := ""
+	name := strings.TrimSpace(token.UserName)
 	userType := "personal_standard"
 	organizationID := ""
 	organizationName := ""
+	var organizationTags []string
 	if user != nil {
-		if resolvedUserID := firstNonEmpty(user.UserID, user.ID); resolvedUserID != "" {
+		if resolvedUserID := firstNonEmpty(user.UserID, user.UID, user.ID); resolvedUserID != "" {
 			userID = resolvedUserID
 		}
 		name = firstNonEmpty(user.Name, user.UserName, token.UserName)
@@ -668,6 +842,7 @@ func BuildIdentityFromDeviceToken(user *UserInfo, token *DeviceTokenResponse) *A
 		}
 		organizationID = strings.TrimSpace(user.OrganizationID)
 		organizationName = strings.TrimSpace(user.OrganizationName)
+		organizationTags = normalizeOrganizationTags(user.OrganizationTags)
 	}
 	return &AuthIdentity{
 		Name:               name,
@@ -675,6 +850,7 @@ func BuildIdentityFromDeviceToken(user *UserInfo, token *DeviceTokenResponse) *A
 		UID:                userID,
 		OrganizationID:     organizationID,
 		OrganizationName:   organizationName,
+		OrganizationTags:   organizationTags,
 		UserType:           userType,
 		SecurityOauthToken: accessToken,
 		RefreshToken:       strings.TrimSpace(token.RefreshToken),

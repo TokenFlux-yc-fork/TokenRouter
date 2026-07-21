@@ -81,8 +81,8 @@ func TestLockAndMergeAccountProbeExtraUsesCurrentDatabaseSnapshot(t *testing.T) 
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "enabled", "snapshot"}).
-					AddRow(tt.identityUnchanged, tt.databaseEnabled, tt.databaseSnapshot))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "enabled", "snapshot", "credentials"}).
+					AddRow(tt.identityUnchanged, tt.databaseEnabled, tt.databaseSnapshot, []byte(`{"api_key":"sk-test"}`)))
 
 			account := &service.Account{
 				ID:          27,
@@ -196,8 +196,8 @@ func TestUpdateWithUpstreamBillingProbeEnabledRollsBackWhenOutboxFails(t *testin
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 		WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "enabled", "snapshot"}).
-			AddRow(true, []byte(`true`), []byte(`{"status":"ok"}`)))
+		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "enabled", "snapshot", "credentials"}).
+			AddRow(true, []byte(`true`), []byte(`{"status":"ok"}`), []byte(`{"api_key":"sk-test"}`)))
 	mock.ExpectExec(`(?s)UPDATE .*accounts.*SET.*WHERE .*id.*`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)SELECT .* FROM "accounts" WHERE "id" = \$1`).

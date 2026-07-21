@@ -4,6 +4,8 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { QoderPollResponse, QoderTokenInfo } from '@/api/admin/qoder'
 
+export type QoderPollFailure = 'none' | 'transient' | 'terminal'
+
 export function useQoderOAuth() {
   const appStore = useAppStore()
   const { t } = useI18n()
@@ -15,6 +17,7 @@ export function useQoderOAuth() {
   const loading = ref(false)
   const polling = ref(false)
   const error = ref('')
+  const pollFailure = ref<QoderPollFailure>('none')
   let requestGeneration = 0
 
   // 每次只允许最新请求修改共享状态，切换站点时可使所有旧请求立即失效。
@@ -29,6 +32,7 @@ export function useQoderOAuth() {
     requestGeneration += 1
     loading.value = false
     polling.value = false
+    pollFailure.value = 'none'
   }
 
   const resetState = () => {
@@ -40,6 +44,7 @@ export function useQoderOAuth() {
     loading.value = false
     polling.value = false
     error.value = ''
+    pollFailure.value = 'none'
   }
 
   const generateAuthUrl = async (proxyId: number | null | undefined): Promise<boolean> => {
@@ -122,9 +127,14 @@ export function useQoderOAuth() {
   const pollAuthorization = async (params: {
     sessionId: string
     state: string
-  }): Promise<QoderPollResponse | null> => {
+  }, options: {
+    notifyError?: boolean
+  } = {}): Promise<QoderPollResponse | null> => {
+    const notifyError = options.notifyError !== false
+    pollFailure.value = 'none'
     if (!params.sessionId || !params.state) {
       error.value = t('admin.accounts.oauth.qoder.missingExchangeParams')
+      pollFailure.value = 'terminal'
       return null
     }
 
@@ -143,11 +153,19 @@ export function useQoderOAuth() {
       return isCurrentRequest(generation) ? result : null
     } catch (err: any) {
       if (!isCurrentRequest(generation)) return null
+      const rawStatus = err?.status ?? err?.response?.status
+      const status = typeof rawStatus === 'number' ? rawStatus : Number(rawStatus)
+      pollFailure.value =
+        !Number.isFinite(status) || status <= 0 || status === 408 || status === 429 || status >= 500
+          ? 'transient'
+          : 'terminal'
       error.value =
         err.response?.data?.detail ||
         err.message ||
         t('admin.accounts.oauth.qoder.failedToExchangeCode')
-      appStore.showError(error.value)
+      if (notifyError) {
+        appStore.showError(error.value)
+      }
       return null
     } finally {
       if (isCurrentRequest(generation)) {
@@ -167,10 +185,12 @@ export function useQoderOAuth() {
     aid: tokenInfo.aid,
     organization_id: tokenInfo.organization_id,
     organization_name: tokenInfo.organization_name,
+    organization_tags: tokenInfo.organization_tags,
     name: tokenInfo.name,
     user_type: tokenInfo.user_type,
+    data_policy: tokenInfo.data_policy,
     site: 'cn',
-    refresh_mode: tokenInfo.refresh_mode || 'qodercn20',
+    refresh_mode: 'qodercn20',
     expires_at: tokenInfo.expires_at,
     extra: tokenInfo.extra
   })
@@ -183,6 +203,7 @@ export function useQoderOAuth() {
     loading,
     polling,
     error,
+    pollFailure,
     invalidatePendingRequests,
     resetState,
     generateAuthUrl,

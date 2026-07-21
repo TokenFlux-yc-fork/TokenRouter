@@ -5,17 +5,6 @@ import (
 	"fmt"
 )
 
-const (
-	AppCode = "cosy"
-	Secret  = "d2FyLCB3YXIgbmV2ZXIgY2hhbmdlcw=="
-	Sep     = "&"
-)
-
-// SignCenterRequest 生成登录前身份请求使用的 MD5 签名。
-func SignCenterRequest(date string) string {
-	return md5Hex(fmt.Sprintf("%s%s%s%s%s", AppCode, Sep, Secret, Sep, date))
-}
-
 // SignQoderRequest 生成 COSY Gateway 请求使用的 MD5 签名。
 func SignQoderRequest(payloadB64, cosyKey, cosyDate, body, pathWithoutAlgo string) string {
 	return md5Hex(fmt.Sprintf("%s\n%s\n%s\n%s\n%s", payloadB64, cosyKey, cosyDate, body, pathWithoutAlgo))

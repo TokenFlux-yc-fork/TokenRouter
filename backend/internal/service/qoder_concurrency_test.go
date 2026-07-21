@@ -84,12 +84,12 @@ func TestQoderTokenProviderConcurrent(t *testing.T) {
 		ID:       12345,
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
-		Credentials: map[string]any{
-			"site":                 "cn",
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"security_oauth_token": "test_oauth_token",
+			"refresh_token":        "test_refresh_token",
 			"machine_id":           "test_machine_id",
 			"uid":                  "test_uid",
-		},
+		}),
 	}
 
 	const numGoroutines = 50
@@ -333,12 +333,13 @@ func TestQoderTokenProviderInvalidateRace(t *testing.T) {
 		ID:       999,
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
-		Credentials: map[string]any{
-			"site":                 "cn",
+		Credentials: completeQoderCN20TestCredentials(map[string]any{
 			"security_oauth_token": "token_999",
+			"refresh_token":        "refresh_999",
 			"machine_id":           "machine_999",
+			"uid":                  nil,
 			"aid":                  "aid_999",
-		},
+		}),
 	}
 
 	ctx := context.Background()

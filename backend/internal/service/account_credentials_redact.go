@@ -4,9 +4,11 @@ package service
 // dto 层做响应脱敏、service 层做更新合并都引用此清单——新增凭证类型时务必同步。
 var SensitiveCredentialKeys = []string{
 	// OAuth
-	"access_token", "refresh_token", "id_token", "agent_private_key",
+	"access_token", "accessToken", "refresh_token", "refreshToken", "id_token", "agent_private_key",
 	// Qoder COSY 凭据
-	"pat", "security_oauth_token", "machine_token",
+	"pat", "personal_access_token", "personal_token", "personalAccessToken", "personalToken",
+	"device_token", "deviceToken", "security_oauth_token", "securityOauthToken", "machine_token", "machineToken",
+	"nonce", "verifier", "code_verifier", "codeVerifier",
 	// API Key 类
 	"api_key", "session_key", "cookie",
 	// 云服务凭据

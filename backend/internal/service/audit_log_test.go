@@ -67,10 +67,14 @@ func TestRedactAuditBody_JSONRedactsSecrets(t *testing.T) {
 // 以及 camelCase 等命名变体（归一化比对）。
 func TestRedactAuditBody_AuthoritativeTablesSynced(t *testing.T) {
 	raw := []byte(`{
-		"credentials": {
-			"session_key": "sk-session-aaa",
-			"service_account_json": "{\"private_key\":\"pem-body-bbb\"}",
-			"service_account": "sa-blob-ccc"
+			"credentials": {
+				"session_key": "sk-session-aaa",
+				"service_account_json": "{\"private_key\":\"pem-body-bbb\"}",
+				"service_account": "sa-blob-ccc",
+				"device_token": "device-token-kkk",
+				"personal_access_token": "personal-token-lll",
+				"nonce": "nonce-mmm",
+				"verifier": "verifier-nnn"
 		},
 		"proxy_key": "socks5|1.2.3.4|1080|proxyuser|proxypass-ddd",
 		"custom_key": "sk-custom-eee",
@@ -91,6 +95,7 @@ func TestRedactAuditBody_AuthoritativeTablesSynced(t *testing.T) {
 		"proxypass-ddd", "sk-custom-eee",
 		"easypay-merchant-fff", "alipay-pem-ggg", "wxpay-v3-hhh",
 		"stripe-sk-iii", "whsec-jjj",
+		"device-token-kkk", "personal-token-lll", "nonce-mmm", "verifier-nnn",
 	} {
 		if strings.Contains(out, secret) {
 			t.Fatalf("redacted body still contains secret %q: %s", secret, out)

@@ -389,100 +389,28 @@ function withOpenCodeToolCalling(models: Record<string, any>) {
 }
 
 function buildQoderOpenCodeModels() {
-  return withOpenCodeToolCalling({
-    'claude-opus-4-6': {
-      name: 'Claude Opus 4.6',
-      limit: {
-        context: 200000,
-        output: 128000
+  const names: Record<string, string> = {
+    auto: 'Qoder Auto',
+    'qwen3.8-max-preview': 'Qwen3.8-Max-Preview',
+    'qwen3.7-max': 'Qwen3.7-Max',
+    'qwen3.7-plus': 'Qwen3.7-Plus',
+    'qwen3.6-flash': 'Qwen3.6-Flash',
+    'deepseek-v4-pro': 'DeepSeek-V4-Pro',
+    'deepseek-v4-flash': 'DeepSeek-V4-Flash',
+    'glm-5.2': 'GLM-5.2',
+    'kimi-k2.7-code': 'Kimi-K2.7-Code',
+    'minimax-m2.7': 'MiniMax-M2.7'
+  }
+  const models = Object.fromEntries(
+    Object.entries(names).map(([model, name]) => [
+      model,
+      {
+        name,
+        limit: { context: 400000, output: 128000 }
       }
-    },
-    auto: {
-      name: 'Qoder Auto',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    performance: {
-      name: 'Qoder Performance',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    efficient: {
-      name: 'Qoder Efficient',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    lite: {
-      name: 'Qoder Lite',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    'qwen3.7-max': {
-      name: 'Qwen3.7-Max',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    'qwen3.7-plus': {
-      name: 'Qwen3.7-Plus',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    'deepseek-v4-pro': {
-      name: 'DeepSeek-V4-Pro',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    'deepseek-v4-flash': {
-      name: 'DeepSeek-V4-Flash',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    'glm-5.2': {
-      name: 'GLM-5.2',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    // Kimi-K3 使用 Qoder 新增的独立路由，不替换仍可用的 Kimi-K2.7-Code。
-    'kimi-k3': {
-      name: 'Kimi-K3',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    'kimi-k2.7-code': {
-      name: 'Kimi-K2.7-Code',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    },
-    'minimax-m3': {
-      name: 'MiniMax-M3',
-      limit: {
-        context: 400000,
-        output: 128000
-      }
-    }
-  })
+    ])
+  )
+  return withOpenCodeToolCalling(models)
 }
 
 // OpenAI tabs (2 OS types)

@@ -40,6 +40,23 @@ func TestLegacyQoderAccountDoesNotSupportExplicitlyMappedModels(t *testing.T) {
 	require.False(t, account.IsModelSupported("custom-model"))
 }
 
+func TestQoderCNAccountRejectsMappingToLegacyGlobalRoute(t *testing.T) {
+	account := &Account{
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site": "cn",
+			"model_mapping": map[string]any{
+				"custom-model": "ultimate",
+				"cn-model":     "qmodel",
+			},
+		},
+	}
+
+	require.False(t, account.IsModelSupported("custom-model"))
+	require.True(t, account.IsModelSupported("cn-model"))
+}
+
 func TestQoderMachineForAccountUsesQoderCLICNIdentity(t *testing.T) {
 	account := &Account{
 		Platform: PlatformQoder,

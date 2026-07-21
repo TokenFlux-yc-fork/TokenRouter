@@ -31,10 +31,14 @@ type stubAdminService struct {
 	getUserErr                          error
 	createAccountErr                    error
 	createSparkShadowErr                error
+	getAccountErr                       error
 	updateAccountErr                    error
 	bulkUpdateAccountErr                error
 	checkMixedErr                       error
 	updateAccountInput                  *service.UpdateAccountInput
+	applyQoderCredentials               map[string]any
+	applyQoderExtra                     map[string]any
+	applyQoderErr                       error
 	updateExtraCalls                    []map[string]any
 	clearAccountErrorIDs                []int64
 	lastMixedCheck                      struct {
@@ -396,6 +400,9 @@ func (s *stubAdminService) ListOpenAISchedulableAccountsForSchedulerScore(_ cont
 }
 
 func (s *stubAdminService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {
+	if s.getAccountErr != nil {
+		return nil, s.getAccountErr
+	}
 	for i := range s.accounts {
 		if s.accounts[i].ID == id {
 			account := s.accounts[i]
@@ -463,6 +470,33 @@ func (s *stubAdminService) UpdateAccount(ctx context.Context, id int64, input *s
 	}
 	account := service.Account{ID: id, Name: input.Name, Platform: service.PlatformAnthropic, Type: input.Type, Status: service.StatusActive, Credentials: input.Credentials}
 	return &account, nil
+}
+
+func (s *stubAdminService) ApplyQoderAuthorization(ctx context.Context, id int64, credentials, extra map[string]any) (*service.Account, error) {
+	if s.applyQoderErr != nil {
+		return nil, s.applyQoderErr
+	}
+	s.applyQoderCredentials = credentials
+	s.applyQoderExtra = extra
+	for i := range s.accounts {
+		if s.accounts[i].ID == id {
+			s.accounts[i].Credentials = credentials
+			s.accounts[i].Status = service.StatusActive
+			s.accounts[i].Schedulable = true
+			s.accounts[i].ErrorMessage = ""
+			account := s.accounts[i]
+			return &account, nil
+		}
+	}
+	return &service.Account{
+		ID:          id,
+		Platform:    service.PlatformQoder,
+		Type:        service.AccountTypeCosy,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Credentials: credentials,
+		Extra:       extra,
+	}, nil
 }
 
 func (s *stubAdminService) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {

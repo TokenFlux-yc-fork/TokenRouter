@@ -160,6 +160,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import type { Account } from '@/types'
 import { formatCountdown, formatDateTime, formatCountdownWithSuffix, formatTime } from '@/utils/format'
+import { hasCompleteQoderCNAuthorization } from '@/utils/qoderAuthorization'
 
 const { t } = useI18n()
 
@@ -292,7 +293,7 @@ const hasError = computed(() => {
 const qoderNeedsReauthorization = computed(() =>
   props.account.platform === 'qoder' &&
   props.account.type === 'cosy' &&
-  props.account.credentials?.site !== 'cn'
+  !hasCompleteQoderCNAuthorization(props.account)
 )
 
 const isQuotaExceeded = computed(() => {

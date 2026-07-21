@@ -51,6 +51,66 @@ type GrokOAuthRefreshMutationRepository interface {
 	SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnchanged(ctx context.Context, id int64, expectedCredentials map[string]any, expectedProxyID *int64, until time.Time, reason string) (bool, error)
 }
 
+var qoderRefreshTransportExtraKeyList = []string{
+	"enable_tls_fingerprint",
+	"tls_fingerprint_profile_id",
+}
+
+// QoderRefreshFailureSnapshot is the account state used by one failed upstream
+// attempt. Failure state may only be persisted while both authorization and
+// transport configuration still match this snapshot.
+type QoderRefreshFailureSnapshot struct {
+	Authorization  map[string]any
+	ProxyID        *int64
+	TransportExtra map[string]any
+}
+
+// QoderRefreshTransportExtraKeys returns the account extra keys that affect a
+// Qoder refresh request's transport.
+func QoderRefreshTransportExtraKeys() []string {
+	return append([]string(nil), qoderRefreshTransportExtraKeyList...)
+}
+
+// QoderRefreshTransportExtraSnapshot projects account extra onto the fields
+// that affect a Qoder refresh request. Missing keys remain distinguishable from
+// keys explicitly set to null.
+func QoderRefreshTransportExtraSnapshot(extra map[string]any) map[string]any {
+	transport := make(map[string]any, len(qoderRefreshTransportExtraKeyList))
+	for _, key := range qoderRefreshTransportExtraKeyList {
+		if value, ok := extra[key]; ok {
+			transport[key] = value
+		}
+	}
+	return transport
+}
+
+// QoderRefreshFailureSnapshotForAccount captures the state relevant to a
+// failed Qoder refresh without retaining top-level map or proxy pointer aliases.
+func QoderRefreshFailureSnapshotForAccount(account *Account) QoderRefreshFailureSnapshot {
+	if account == nil {
+		return QoderRefreshFailureSnapshot{
+			Authorization:  map[string]any{},
+			TransportExtra: map[string]any{},
+		}
+	}
+	snapshot := QoderRefreshFailureSnapshot{
+		Authorization:  QoderCredentialIdentitySnapshot(account.Credentials),
+		TransportExtra: QoderRefreshTransportExtraSnapshot(account.Extra),
+	}
+	if account.ProxyID != nil {
+		proxyID := *account.ProxyID
+		snapshot.ProxyID = &proxyID
+	}
+	return snapshot
+}
+
+// QoderOAuthRefreshMutationRepository protects background failure state from
+// racing with administrator reauthorization or transport changes.
+type QoderOAuthRefreshMutationRepository interface {
+	SetQoderOAuthRefreshErrorIfSnapshotUnchanged(ctx context.Context, id int64, snapshot QoderRefreshFailureSnapshot, errorMsg string) (bool, error)
+	SetQoderOAuthRefreshTempUnschedulableIfSnapshotUnchanged(ctx context.Context, id int64, snapshot QoderRefreshFailureSnapshot, until time.Time, reason string) (bool, error)
+}
+
 // TokenRefreshService OAuth token自动刷新服务
 // 定期检查并刷新即将过期的token
 type TokenRefreshService struct {
@@ -1024,13 +1084,16 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			}
 			errorMsg := "Token refresh failed (non-retryable): " + logredact.RedactText(err.Error())
 			isGrokOAuth := account.IsGrokOAuth()
-			if !isGrokOAuth {
+			isQoderCosy := account.IsQoderCosy()
+			conditionalMutation := isGrokOAuth || isQoderCosy
+			if !conditionalMutation {
 				s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			}
 			s.clearAntigravityForceTokenRefresh(ctx, account, "non_retryable")
 			persistentlyBlocked := false
 			var setErr error
-			if isGrokOAuth {
+			switch {
+			case isGrokOAuth:
 				conditionalRepo, ok := s.accountRepo.(GrokOAuthRefreshMutationRepository)
 				if !ok {
 					return &providerConfigurationRefreshError{
@@ -1049,7 +1112,24 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 						return errRefreshSkipped
 					}
 				}
-			} else {
+			case isQoderCosy:
+				conditionalRepo, ok := s.accountRepo.(QoderOAuthRefreshMutationRepository)
+				if !ok {
+					return &providerConfigurationRefreshError{
+						err: errors.New("qoder OAuth conditional refresh mutation repository is not configured"),
+					}
+				}
+				persistentlyBlocked, setErr = conditionalRepo.SetQoderOAuthRefreshErrorIfSnapshotUnchanged(
+					ctx,
+					account.ID,
+					QoderRefreshFailureSnapshotForAccount(account),
+					errorMsg,
+				)
+				if setErr == nil && !persistentlyBlocked {
+					slog.Info("token_refresh.qoder_error_status_skipped_stale_snapshot", "account_id", account.ID)
+					return errRefreshSkipped
+				}
+			default:
 				setErr = s.accountRepo.SetError(ctx, account.ID, errorMsg)
 				persistentlyBlocked = setErr == nil
 			}
@@ -1058,16 +1138,16 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 					"account_id", account.ID,
 					"error", setErr,
 				)
-				if isGrokOAuth {
+				if conditionalMutation {
 					return &providerCycleContainmentRefreshError{
-						err: fmt.Errorf("failed to conditionally persist Grok OAuth refresh failure: %w", setErr),
+						err: fmt.Errorf("failed to conditionally persist OAuth refresh failure: %w", setErr),
 					}
 				}
-			} else if isGrokOAuth && persistentlyBlocked {
+			} else if conditionalMutation && persistentlyBlocked {
 				s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			}
 			cacheInvalidationFailed := false
-			if account.Type == AccountTypeOAuth && (!isGrokOAuth || persistentlyBlocked) {
+			if (account.Type == AccountTypeOAuth || isQoderCosy) && (!conditionalMutation || persistentlyBlocked) {
 				if s.cacheInvalidator == nil {
 					cacheInvalidationFailed = true
 				} else if invalidateErr := s.cacheInvalidator.InvalidateToken(ctx, account); invalidateErr != nil {
@@ -1158,6 +1238,39 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 				"until", until.Format(time.RFC3339),
 			)
 		}
+		return lastErr
+	}
+	if account.IsQoderCosy() {
+		conditionalRepo, ok := s.accountRepo.(QoderOAuthRefreshMutationRepository)
+		if !ok {
+			return &providerConfigurationRefreshError{
+				err: errors.New("qoder OAuth conditional refresh mutation repository is not configured"),
+			}
+		}
+		applied, setErr := conditionalRepo.SetQoderOAuthRefreshTempUnschedulableIfSnapshotUnchanged(
+			ctx,
+			account.ID,
+			QoderRefreshFailureSnapshotForAccount(account),
+			until,
+			reason,
+		)
+		if setErr != nil {
+			slog.Warn("token_refresh.set_temp_unschedulable_failed",
+				"account_id", account.ID,
+				"error", setErr,
+			)
+			return &providerCycleContainmentRefreshError{
+				err: fmt.Errorf("failed to conditionally persist Qoder OAuth refresh cooldown: %w", setErr),
+			}
+		} else if !applied {
+			slog.Info("token_refresh.qoder_temp_unschedulable_skipped_stale_snapshot", "account_id", account.ID)
+			return errRefreshSkipped
+		}
+		s.notifyAccountSchedulingBlocked(account, until, "token_refresh_retry_exhausted")
+		slog.Info("token_refresh.temp_unschedulable_set",
+			"account_id", account.ID,
+			"until", until.Format(time.RFC3339),
+		)
 		return lastErr
 	}
 
@@ -1423,10 +1536,6 @@ func isSharedProviderRefreshError(err error) bool {
 	if err == nil {
 		return false
 	}
-	var qoderOpenAPIErr *qoder.OpenAPIError
-	if errors.As(err, &qoderOpenAPIErr) && qoderOpenAPIErr.InvalidCredentials() {
-		return false
-	}
 	msg := strings.ToLower(err.Error())
 	for _, needle := range []string{
 		"invalid_client",
@@ -1437,6 +1546,10 @@ func isSharedProviderRefreshError(err error) bool {
 		if strings.Contains(msg, needle) {
 			return true
 		}
+	}
+	var qoderOpenAPIErr *qoder.OpenAPIError
+	if errors.As(err, &qoderOpenAPIErr) && qoderOpenAPIErr.InvalidCredentials() {
+		return false
 	}
 	return false
 }

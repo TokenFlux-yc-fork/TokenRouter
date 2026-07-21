@@ -7,6 +7,7 @@ const {
   generateQoderAuthUrlMock,
   exchangeQoderCodeMock,
   pollQoderAuthMock,
+  showErrorMock,
   getSettingsMock,
   getWebSearchEmulationConfigMock,
   listTLSProfilesMock,
@@ -16,6 +17,7 @@ const {
   generateQoderAuthUrlMock: vi.fn(),
   exchangeQoderCodeMock: vi.fn(),
   pollQoderAuthMock: vi.fn(),
+  showErrorMock: vi.fn(),
   getSettingsMock: vi.fn(),
   getWebSearchEmulationConfigMock: vi.fn(),
   listTLSProfilesMock: vi.fn(),
@@ -49,7 +51,7 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError: showErrorMock,
     showSuccess: vi.fn(),
     showInfo: vi.fn(),
     showWarning: vi.fn()
@@ -216,6 +218,7 @@ async function fillQoderManualForm(wrapper: ReturnType<typeof mountModal>) {
   await visibleInputs.find((input) => input.attributes('placeholder') === 'dt-...')!.setValue('token')
   await visibleInputs.find((input) => input.attributes('placeholder') === 'machine_id')!.setValue('machine')
   await visibleInputs.find((input) => input.attributes('placeholder') === 'uid or aid')!.setValue('uid')
+  await wrapper.get('[data-testid="create-qoder-refresh-token"]').setValue('refresh-token')
 }
 
 describe('CreateAccountModal Qoder model restriction', () => {
@@ -228,6 +231,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     generateQoderAuthUrlMock.mockReset()
     exchangeQoderCodeMock.mockReset()
     pollQoderAuthMock.mockReset()
+    showErrorMock.mockReset()
 
     createAccountMock.mockResolvedValue({})
     getSettingsMock.mockResolvedValue({ account_quota_notify_enabled: false })
@@ -239,6 +243,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -256,7 +261,8 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(payload.credentials.model_mapping).toBeUndefined()
     expect(payload.credentials.model_whitelist).toBeUndefined()
     expect(payload.credentials.site).toBe('cn')
-    expect(payload.credentials.refresh_mode).toBe('cosy')
+    expect(payload.credentials.refresh_mode).toBe('qodercn20')
+    expect(payload.credentials.refresh_token).toBe('refresh-token')
   })
 
   it('creates Qoder manual account with PAT bootstrap without token fields', async () => {
@@ -289,9 +295,37 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(payload.type).toBe('cosy')
     expect(payload.credentials).toMatchObject({ pat: 'pat-123' })
     expect(payload.credentials.site).toBe('cn')
-    expect(payload.credentials.refresh_mode).toBe('cosy')
+    expect(payload.credentials.refresh_mode).toBeUndefined()
+    expect(payload.credentials.refresh_token).toBeUndefined()
     expect(payload.credentials.security_oauth_token).toBeUndefined()
     expect(payload.credentials.machine_id).toBeUndefined()
+  })
+
+  it('exposes selected state and switch semantics for Qoder controls', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="create-account-platform-qoder"]').trigger('click')
+    await flushPromises()
+
+    const oauthButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('admin.accounts.qoder.accountType.oauthTitle'))
+    const manualButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('admin.accounts.qoder.accountType.manualTitle'))
+    expect(oauthButton?.attributes('aria-pressed')).toBe('true')
+    expect(manualButton?.attributes('aria-pressed')).toBe('false')
+
+    await manualButton!.trigger('click')
+    expect(oauthButton?.attributes('aria-pressed')).toBe('false')
+    expect(manualButton?.attributes('aria-pressed')).toBe('true')
+
+    const tlsToggle = wrapper.get('[data-testid="create-qoder-tls-fingerprint-toggle"]')
+    expect(tlsToggle.attributes('role')).toBe('switch')
+    expect(tlsToggle.attributes('aria-checked')).toBe('false')
+    expect(tlsToggle.attributes('aria-label'))
+      .toBe('admin.accounts.quotaControl.tlsFingerprint.label')
+    await tlsToggle.trigger('click')
+    expect(tlsToggle.attributes('aria-checked')).toBe('true')
   })
 
   it('creates manual credentials for the China site without a site selector', async () => {
@@ -305,10 +339,23 @@ describe('CreateAccountModal Qoder model restriction', () => {
     const payload = createAccountMock.mock.calls[0]?.[0]
     expect(payload.credentials).toMatchObject({
       site: 'cn',
-      refresh_mode: 'cosy',
+      refresh_mode: 'qodercn20',
       security_oauth_token: 'token',
+      refresh_token: 'refresh-token',
       machine_id: 'machine'
     })
+  })
+
+  it('requires a refresh token for direct Qoder CN credentials', async () => {
+    const wrapper = mountModal()
+    await fillQoderManualForm(wrapper)
+    await wrapper.get('[data-testid="create-qoder-refresh-token"]').setValue('')
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.qoder.pleaseEnterRefreshToken')
   })
 
   it('keeps site selection unavailable while a manual account creation request is pending', async () => {
@@ -368,6 +415,141 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(payload.credentials.model_whitelist).toEqual([])
   })
 
+  it('continues Qoder OAuth polling after a transient failure', async () => {
+    vi.useFakeTimers()
+    generateQoderAuthUrlMock.mockResolvedValueOnce({
+      auth_url: 'https://qoder.com.cn/device',
+      session_id: 'session-id',
+      state: 'state-value',
+      expires_in: 600,
+      interval: 2
+    })
+    pollQoderAuthMock
+      .mockRejectedValueOnce({ status: 503, message: 'service unavailable' })
+      .mockResolvedValueOnce({
+        status: 'completed',
+        token_info: {
+          security_oauth_token: 'cn-token',
+          machine_id: 'cn-machine',
+          uid: 'cn-user'
+        }
+      })
+    const wrapper = mountModal()
+    await openQoderOAuthStep(wrapper)
+
+    await wrapper.get('[data-testid="generate-qoder-auth-url"]').trigger('click')
+    await flushPromises()
+
+    expect(pollQoderAuthMock).toHaveBeenCalledTimes(1)
+    expect(showErrorMock).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+
+    expect(pollQoderAuthMock).toHaveBeenCalledTimes(2)
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(showErrorMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('stops Qoder OAuth polling after a terminal failure', async () => {
+    vi.useFakeTimers()
+    generateQoderAuthUrlMock.mockResolvedValueOnce({
+      auth_url: 'https://qoder.com.cn/device',
+      session_id: 'session-id',
+      state: 'state-value',
+      expires_in: 600,
+      interval: 2
+    })
+    pollQoderAuthMock.mockRejectedValueOnce({
+      status: 400,
+      message: 'authorization session expired'
+    })
+    const popup = {
+      opener: window,
+      close: vi.fn(),
+      focus: vi.fn(),
+      location: { href: 'about:blank' }
+    }
+    vi.mocked(window.open).mockReturnValueOnce(popup as unknown as Window)
+    const wrapper = mountModal()
+    await openQoderOAuthStep(wrapper)
+
+    await wrapper.get('[data-testid="generate-qoder-auth-url"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(pollQoderAuthMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).not.toHaveBeenCalled()
+    expect(popup.close).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('stops Qoder OAuth polling after the automatic polling deadline', async () => {
+    vi.useFakeTimers()
+    generateQoderAuthUrlMock.mockResolvedValueOnce({
+      auth_url: 'https://qoder.com.cn/device',
+      session_id: 'session-id',
+      state: 'state-value',
+      expires_in: 600,
+      interval: 601
+    })
+    pollQoderAuthMock.mockResolvedValue({ status: 'pending' })
+    const popup = {
+      opener: window,
+      close: vi.fn(),
+      focus: vi.fn(),
+      location: { href: 'about:blank' }
+    }
+    vi.mocked(window.open).mockReturnValueOnce(popup as unknown as Window)
+    const wrapper = mountModal()
+    await openQoderOAuthStep(wrapper)
+
+    await wrapper.get('[data-testid="generate-qoder-auth-url"]').trigger('click')
+    await flushPromises()
+    expect(pollQoderAuthMock).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(600_001)
+    await vi.advanceTimersByTimeAsync(601_000)
+
+    expect(pollQoderAuthMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock).not.toHaveBeenCalled()
+    expect(popup.close).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('stops Qoder polling and closes its popup when unmounted', async () => {
+    vi.useFakeTimers()
+    generateQoderAuthUrlMock.mockResolvedValueOnce({
+      auth_url: 'https://qoder.com.cn/device',
+      session_id: 'session-id',
+      state: 'state-value',
+      expires_in: 600,
+      interval: 2
+    })
+    pollQoderAuthMock.mockResolvedValue({ status: 'pending' })
+    const popup = {
+      opener: window,
+      close: vi.fn(),
+      focus: vi.fn(),
+      location: { href: 'about:blank' }
+    }
+    vi.mocked(window.open).mockReturnValueOnce(popup as unknown as Window)
+    const wrapper = mountModal()
+    await openQoderOAuthStep(wrapper)
+
+    await wrapper.get('[data-testid="generate-qoder-auth-url"]').trigger('click')
+    await flushPromises()
+    expect(pollQoderAuthMock).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(popup.close).toHaveBeenCalledTimes(1)
+    expect(pollQoderAuthMock).toHaveBeenCalledTimes(1)
+  })
+
   it('discards a generated OAuth session after returning to the account form', async () => {
     const deferred = createDeferred<{
       auth_url: string
@@ -385,7 +567,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
 
     await findButtonByText(wrapper, 'common.back').trigger('click')
     deferred.resolve({
-      auth_url: 'https://qoder.com/old-session',
+      auth_url: 'https://qoder.com.cn/old-session',
       session_id: 'old-session',
       state: 'old-state',
       expires_in: 600,
@@ -400,7 +582,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
 
   it('does not create an account when an exchange completes after returning', async () => {
     generateQoderAuthUrlMock.mockResolvedValueOnce({
-      auth_url: 'https://qoder.com/device',
+      auth_url: 'https://qoder.com.cn/device',
       session_id: 'global-session',
       state: 'state-value',
       expires_in: 600,
@@ -434,7 +616,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
 
   it('keeps navigation and duplicate exchange disabled while account creation is pending', async () => {
     generateQoderAuthUrlMock.mockResolvedValueOnce({
-      auth_url: 'https://qoder.com/device',
+      auth_url: 'https://qoder.com.cn/device',
       session_id: 'global-session',
       state: 'state-value',
       expires_in: 600,
@@ -474,7 +656,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
 
   it('ignores dialog close events until a pending Qoder account creation succeeds', async () => {
     generateQoderAuthUrlMock.mockResolvedValueOnce({
-      auth_url: 'https://qoder.com/device',
+      auth_url: 'https://qoder.com.cn/device',
       session_id: 'global-session',
       state: 'state-value',
       expires_in: 600,
@@ -514,7 +696,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
 
   it('keeps the current OAuth session retryable after account creation fails', async () => {
     generateQoderAuthUrlMock.mockResolvedValueOnce({
-      auth_url: 'https://qoder.com/device',
+      auth_url: 'https://qoder.com.cn/device',
       session_id: 'global-session',
       state: 'state-value',
       expires_in: 600,
@@ -526,7 +708,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
       site: 'cn'
     })
     createAccountMock
-      .mockRejectedValueOnce(new Error('create failed'))
+      .mockRejectedValueOnce({ status: 400, message: 'invalid Qoder CN credentials' })
       .mockResolvedValueOnce({})
 
     const wrapper = mountModal()
@@ -539,6 +721,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(createAccountMock).toHaveBeenCalledTimes(1)
     expect(wrapper.emitted('created')).toBeUndefined()
     expect(wrapper.get('[data-testid="qoder-oauth-session"]').text()).toBe('global-session')
+    expect(showErrorMock).toHaveBeenCalledWith('invalid Qoder CN credentials')
 
     await findButtonByText(wrapper, 'admin.accounts.oauth.completeAuth').trigger('click')
     await flushPromises()
@@ -550,7 +733,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
 
   it('keeps the current OAuth session retryable after local creation validation fails', async () => {
     generateQoderAuthUrlMock.mockResolvedValueOnce({
-      auth_url: 'https://qoder.com/device',
+      auth_url: 'https://qoder.com.cn/device',
       session_id: 'global-session',
       state: 'state-value',
       expires_in: 600,
@@ -636,7 +819,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await wrapper.get('[data-testid="generate-qoder-auth-url"]').trigger('click')
     firstGenerate.resolve({
-      auth_url: 'https://qoder.com/old-device',
+      auth_url: 'https://qoder.com.cn/old-device',
       session_id: 'old-session',
       state: 'old-state',
       expires_in: 600,
@@ -646,30 +829,67 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(reusedPopup.close).toHaveBeenCalledTimes(1)
 
     secondGenerate.resolve({
-      auth_url: 'https://qoder.com/current-device',
+      auth_url: 'https://qoder.com.cn/current-device',
       session_id: 'current-session',
       state: 'current-state',
       expires_in: 600,
       interval: 2
     })
     await flushPromises()
-    expect(reusedPopup.location.href).toBe('https://qoder.com/current-device')
+    expect(reusedPopup.location.href).toBe('https://qoder.com.cn/current-device')
 
     await wrapper.get('[data-testid="generate-qoder-auth-url"]').trigger('click')
     expect(reusedPopup.close).toHaveBeenCalledTimes(2)
     thirdGenerate.resolve({
-      auth_url: 'https://qoder.com/replacement-device',
+      auth_url: 'https://qoder.com.cn/replacement-device',
       session_id: 'replacement-session',
       state: 'replacement-state',
       expires_in: 600,
       interval: 2
     })
     await flushPromises()
-    expect(replacementPopup.location.href).toBe('https://qoder.com/replacement-device')
+    expect(replacementPopup.location.href).toBe('https://qoder.com.cn/replacement-device')
 
     wrapper.findAllComponents(BaseDialogStub)[0]!.vm.$emit('close')
     await flushPromises()
     expect(replacementPopup.close).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('detaches the popup opener before navigating to Qoder CN', async () => {
+    generateQoderAuthUrlMock.mockResolvedValueOnce({
+      auth_url: 'https://qoder.com.cn/device/selectAccounts',
+      session_id: 'session-id',
+      state: 'state-value',
+      expires_in: 600,
+      interval: 2
+    })
+
+    let openerAtNavigation: Window | null | undefined
+    let navigatedTo = 'about:blank'
+    const popup = {
+      opener: window as Window | null,
+      close: vi.fn(),
+      focus: vi.fn(),
+      location: {} as Location
+    }
+    Object.defineProperty(popup.location, 'href', {
+      configurable: true,
+      get: () => navigatedTo,
+      set: (value: string) => {
+        openerAtNavigation = popup.opener
+        navigatedTo = value
+      }
+    })
+    vi.mocked(window.open).mockReturnValueOnce(popup as unknown as Window)
+
+    const wrapper = mountModal()
+    await openQoderOAuthStep(wrapper)
+    await wrapper.get('[data-testid="generate-qoder-auth-url"]').trigger('click')
+    await flushPromises()
+
+    expect(openerAtNavigation).toBeNull()
+    expect(navigatedTo).toBe('https://qoder.com.cn/device/selectAccounts')
     wrapper.unmount()
   })
 })

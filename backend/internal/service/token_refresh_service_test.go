@@ -981,7 +981,7 @@ func TestIsNonRetryableRefreshError(t *testing.T) {
 			require.Equal(t, tt.expected, result)
 		})
 	}
-	require.False(t, isSharedProviderRefreshError(&qoder.OpenAPIError{
+	require.True(t, isSharedProviderRefreshError(&qoder.OpenAPIError{
 		Operation:  "token refresh",
 		StatusCode: 400,
 		Message:    "invalid_scope",

@@ -977,6 +977,20 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.security_oauth_token).toBe('redacted')
   })
 
+  it('emits Qoder configuration tombstones when scheduling flags are disabled', async () => {
+    const account = buildQoderAccount()
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials?.temp_unschedulable_enabled).toBeNull()
+    expect(credentials?.temp_unschedulable_rules).toBeNull()
+    expect(credentials?.intercept_warmup_requests).toBeNull()
+  })
+
   it('keeps legacy Qoder credentials unchanged and requires reauthorization', async () => {
     const account = buildQoderAccount()
     updateAccountMock.mockResolvedValue(account)
@@ -996,6 +1010,30 @@ describe('EditAccountModal', () => {
       'claude-opus-4-6': 'ultimate',
       auto: 'auto'
     })
+  })
+
+  it('accepts a normalized CN site without requesting Qoder reauthorization', () => {
+    const account = buildQoderAccount()
+    account.credentials.site = ' CN '
+    account.credentials.refresh_mode = 'qodercn20'
+    account.credentials.uid = 'user-id'
+    account.credentials_status = {
+      has_security_oauth_token: true,
+      has_refresh_token: true
+    }
+    const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="edit-qoder-reauthorization-required"]').exists()).toBe(false)
+  })
+
+  it('requires complete device credentials even when the Qoder site is CN', () => {
+    const account = buildQoderAccount()
+    account.credentials.site = 'cn'
+    account.credentials.refresh_mode = 'qodercn20'
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get('[data-testid="edit-qoder-reauthorization-required"]').text())
+      .toContain('admin.accounts.qoder.reauthorizationRequired')
   })
 
   it('does not persist generated Qoder model mappings on unrelated edits', async () => {
@@ -1057,6 +1095,24 @@ describe('EditAccountModal', () => {
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({ 'glm-5.2': 'gm51model' })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_whitelist).toEqual([])
+  })
+
+  it('explicitly clears a previously persisted Qoder model_mapping', async () => {
+    const account = buildQoderAccount()
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    const requestInputs = wrapper.findAll('input[placeholder="admin.accounts.requestModel"]')
+    expect(requestInputs).toHaveLength(2)
+    for (const input of requestInputs) {
+      await input.setValue('')
+    }
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toBeNull()
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_whitelist).toEqual([])
   })
 

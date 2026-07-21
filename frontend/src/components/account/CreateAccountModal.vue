@@ -894,6 +894,7 @@
         <div class="mt-2 grid grid-cols-2 gap-3">
           <button
             type="button"
+            :aria-pressed="qoderAccountType === 'oauth'"
             @click="qoderAccountType = 'oauth'"
             :class="[
               'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
@@ -924,6 +925,7 @@
 
           <button
             type="button"
+            :aria-pressed="qoderAccountType === 'manual'"
             @click="qoderAccountType = 'manual'"
             :class="[
               'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
@@ -1010,7 +1012,9 @@
             <label class="input-label">{{ t('admin.accounts.qoder.refreshToken') }}</label>
             <input
               v-model="qoderRefreshToken"
+              data-testid="create-qoder-refresh-token"
               type="password"
+              :required="!qoderPAT.trim()"
               class="input font-mono"
               autocomplete="off"
             />
@@ -1152,6 +1156,9 @@
           <button
             type="button"
             data-testid="create-qoder-tls-fingerprint-toggle"
+            role="switch"
+            :aria-checked="tlsFingerprintEnabled"
+            :aria-label="t('admin.accounts.quotaControl.tlsFingerprint.label')"
             @click="tlsFingerprintEnabled = !tlsFingerprintEnabled"
             :class="[
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
@@ -3892,6 +3899,7 @@ import {
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import {
   BEDROCK_REGION_OPTIONS,
@@ -3994,7 +4002,9 @@ const geminiOAuth = useGeminiOAuth() // Gemini OAuth
 const antigravityOAuth = useAntigravityOAuth() // Antigravity OAuth
 const qoderOAuth = useQoderOAuth() // Qoder 设备授权
 const grokOAuth = useGrokOAuth() // Grok OAuth
+const QODER_AUTO_POLL_TIMEOUT_MS = 10 * 60 * 1000
 let qoderPollTimer: number | null = null
+let qoderPollTimeoutTimer: number | null = null
 interface QoderAuthPopupLease {
   generation: number
   popup: Window | null
@@ -5317,7 +5327,7 @@ const submitCreateAccount = async (
       })
       return false
     }
-    appStore.showError(error.response?.data?.message || error.response?.data?.detail || t('admin.accounts.failedToCreate'))
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.failedToCreate')))
     return false
   } finally {
     // 旧流程结束时不能解除新流程的提交锁。
@@ -5842,10 +5852,7 @@ const handleSubmit = async () => {
       appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
       return
     }
-    const credentials: Record<string, unknown> = {
-      site: 'cn',
-      refresh_mode: 'cosy'
-    }
+    const credentials: Record<string, unknown> = { site: 'cn' }
     if (qoderPAT.value.trim()) {
       credentials.pat = qoderPAT.value.trim()
     } else {
@@ -5861,16 +5868,19 @@ const handleSubmit = async () => {
         appStore.showError(t('admin.accounts.qoder.pleaseEnterUidAid'))
         return
       }
+      if (!qoderRefreshToken.value.trim()) {
+        appStore.showError(t('admin.accounts.qoder.pleaseEnterRefreshToken'))
+        return
+      }
 
       const uidAid = qoderUidAid.value.trim()
+      credentials.refresh_mode = 'qodercn20'
       credentials.security_oauth_token = qoderSecurityOauthToken.value.trim()
+      credentials.refresh_token = qoderRefreshToken.value.trim()
       credentials.machine_id = qoderMachineId.value.trim()
       credentials.uid = uidAid
       credentials.aid = uidAid
       credentials.user_type = qoderUserType.value.trim() || 'personal_standard'
-      if (qoderRefreshToken.value.trim()) {
-        credentials.refresh_token = qoderRefreshToken.value.trim()
-      }
     }
     applyQoderModelRestriction(credentials)
     applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
@@ -6007,9 +6017,13 @@ const getQoderPopupFeatures = () => {
 const stopQoderPolling = () => {
   qoderPollGeneration += 1
   qoderOAuth.invalidatePendingRequests()
-  if (qoderPollTimer) {
+  if (qoderPollTimer !== null) {
     window.clearInterval(qoderPollTimer)
     qoderPollTimer = null
+  }
+  if (qoderPollTimeoutTimer !== null) {
+    window.clearTimeout(qoderPollTimeoutTimer)
+    qoderPollTimeoutTimer = null
   }
   qoderPollInFlight = false
 }
@@ -6090,13 +6104,14 @@ const pollQoderAuthorizationOnce = async () => {
   qoderPollInFlight = true
 
   try {
-    const result = await qoderOAuth.pollAuthorization({
-      sessionId,
-      state
-    })
+    const result = await qoderOAuth.pollAuthorization(
+      { sessionId, state },
+      { notifyError: false }
+    )
     if (generation !== qoderPollGeneration || !isCurrentQoderFlow(flowContext)) return
-    if (!result && qoderOAuth.error.value) {
+    if (!result && qoderOAuth.pollFailure.value === 'terminal') {
       stopQoderPolling()
+      closeQoderAuthPopup()
       return
     }
     if (result?.status !== 'completed' || !result.token_info) return
@@ -6120,6 +6135,12 @@ const startQoderPolling = (intervalSeconds = 2) => {
     if (generation !== qoderPollGeneration) return
     void pollQoderAuthorizationOnce()
   }, intervalMs)
+  qoderPollTimeoutTimer = window.setTimeout(() => {
+    if (generation === qoderPollGeneration) {
+      stopQoderPolling()
+      closeQoderAuthPopup()
+    }
+  }, QODER_AUTO_POLL_TIMEOUT_MS)
 }
 
 const handleGenerateUrl = async () => {
@@ -6157,6 +6178,7 @@ const handleGenerateUrl = async () => {
       return
     }
     if (authPopup) {
+      authPopup.opener = null
       authPopup.location.href = qoderOAuth.authUrl.value
       authPopup.focus()
     } else {

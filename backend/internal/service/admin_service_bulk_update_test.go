@@ -250,3 +250,68 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 	require.Equal(t, 0, result.Failed)
 	require.Equal(t, []int64{7, 11}, result.SuccessIDs)
 }
+
+func TestAdminServiceBulkUpdateAccountsRejectsQoderIdentityUpdateForExplicitIDs(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{
+			ID:       17,
+			Platform: PlatformQoder,
+			Type:     AccountTypeCosy,
+			Credentials: map[string]any{
+				"site": "global",
+				"pat":  "legacy-pat",
+			},
+		}},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{17},
+		Credentials: map[string]any{"site": "cn"},
+	})
+
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "Qoder")
+	require.ErrorContains(t, err, "reauthor")
+	require.Empty(t, repo.bulkUpdateIDs)
+}
+
+func TestAdminServiceBulkUpdateAccountsRejectsQoderIdentityUpdateForFilterTargets(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		listData: []Account{{ID: 23, Platform: PlatformQoder, Type: AccountTypeCosy}},
+		getByIDsAccounts: []*Account{{
+			ID:       23,
+			Platform: PlatformQoder,
+			Type:     AccountTypeCosy,
+		}},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		Filters:     &BulkUpdateAccountFilters{Platform: PlatformQoder},
+		Credentials: map[string]any{"refresh_mode": "qodercn20"},
+	})
+
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "Qoder")
+	require.Empty(t, repo.bulkUpdateIDs)
+}
+
+func TestAdminServiceBulkUpdateAccountsAllowsQoderModelConfiguration(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{ID: 29, Platform: PlatformQoder, Type: AccountTypeCosy}},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{29},
+		Credentials: map[string]any{
+			"model_mapping":   map[string]any{"custom": "qwen3.7-plus"},
+			"model_whitelist": []any{"qwen3.7-plus"},
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, []int64{29}, repo.bulkUpdateIDs)
+}

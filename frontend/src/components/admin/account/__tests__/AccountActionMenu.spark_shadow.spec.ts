@@ -158,7 +158,16 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
       platform: 'qoder',
       type: 'cosy',
       parent_account_id: null,
-      credentials_status: { has_refresh_token: true },
+      credentials: {
+        site: 'cn',
+        refresh_mode: 'qodercn20',
+        machine_id: 'machine-id',
+        uid: 'user-id'
+      },
+      credentials_status: {
+        has_security_oauth_token: true,
+        has_refresh_token: true
+      },
     })
     const wrapper = mount(AccountActionMenu, {
       props: { show: true, account, position },
@@ -170,12 +179,24 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
     wrapper.unmount()
   })
 
-  it('无 refresh_token 的 Qoder COSY 账号仍显示重授权入口', () => {
+  it.each([
+    ['缺少站点', undefined],
+    ['旧国际站点', { site: 'global' }],
+  ])('%s的 Qoder COSY 账号隐藏不可用的刷新入口', (_, credentials) => {
     const account = makeAccount({
       platform: 'qoder',
       type: 'cosy',
       parent_account_id: null,
-      credentials_status: { has_pat: true },
+      credentials: {
+        refresh_mode: 'qodercn20',
+        machine_id: 'machine-id',
+        uid: 'user-id',
+        ...credentials
+      },
+      credentials_status: {
+        has_security_oauth_token: true,
+        has_refresh_token: true
+      },
     })
     const wrapper = mount(AccountActionMenu, {
       props: { show: true, account, position },
@@ -184,6 +205,48 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
     const body = getBodyText()
     expect(body).toContain('admin.accounts.reAuthorize')
     expect(body).not.toContain('admin.accounts.refreshToken')
+    wrapper.unmount()
+  })
+
+  it('规范化 CN 站点后保留 Qoder 刷新入口', () => {
+    const account = makeAccount({
+      platform: 'qoder',
+      type: 'cosy',
+      parent_account_id: null,
+      credentials: {
+        site: ' CN ',
+        refresh_mode: 'qodercn20',
+        machine_id: 'machine-id',
+        aid: 'account-id'
+      },
+      credentials_status: {
+        has_security_oauth_token: true,
+        has_refresh_token: true
+      },
+    })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, position },
+      attachTo: document.body,
+    })
+    expect(getBodyText()).toContain('admin.accounts.refreshToken')
+    wrapper.unmount()
+  })
+
+  it('Qoder CN PAT 账号同时显示重授权和 session 刷新入口', () => {
+    const account = makeAccount({
+      platform: 'qoder',
+      type: 'cosy',
+      parent_account_id: null,
+      credentials: { site: 'cn', refresh_mode: 'cosy' },
+      credentials_status: { has_pat: true },
+    })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, position },
+      attachTo: document.body,
+    })
+    const body = getBodyText()
+    expect(body).toContain('admin.accounts.reAuthorize')
+    expect(body).toContain('admin.accounts.refreshToken')
     wrapper.unmount()
   })
 

@@ -38,9 +38,9 @@ func TestAccountIsModelSupported_QoderMappingWhitelistSemantics(t *testing.T) {
 			name: "whitelist allows mapped final route key",
 			credentials: map[string]any{
 				"model_mapping": map[string]any{
-					"claude-opus-4-6": "ultimate",
+					"claude-opus-4-6": "qmodel",
 				},
-				"model_whitelist": []any{"ultimate"},
+				"model_whitelist": []any{"qmodel"},
 			},
 			requestedModel: "claude-opus-4-6",
 			expected:       true,
@@ -49,9 +49,9 @@ func TestAccountIsModelSupported_QoderMappingWhitelistSemantics(t *testing.T) {
 			name: "whitelist rejects final model miss",
 			credentials: map[string]any{
 				"model_mapping": map[string]any{
-					"claude-opus-4-6": "ultimate",
+					"claude-opus-4-6": "qmodel",
 				},
-				"model_whitelist": []any{"ultimate"},
+				"model_whitelist": []any{"qmodel"},
 			},
 			requestedModel: "auto",
 			expected:       false,
@@ -68,7 +68,7 @@ func TestAccountIsModelSupported_QoderMappingWhitelistSemantics(t *testing.T) {
 			name: "legacy raw self mapping is not treated as a whitelist",
 			credentials: map[string]any{
 				"model_mapping": map[string]any{
-					"ultimate": "ultimate",
+					"qmodel": "qmodel",
 				},
 			},
 			requestedModel: "auto",
@@ -94,7 +94,7 @@ func TestAccountGetConfiguredRequestModels_QoderMappingWhitelistSemantics(t *tes
 		Platform: PlatformQoder,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"claude-opus-4-6": "ultimate",
+				"claude-opus-4-6": "qmodel",
 			},
 		},
 	}
@@ -104,9 +104,9 @@ func TestAccountGetConfiguredRequestModels_QoderMappingWhitelistSemantics(t *tes
 		Platform: PlatformQoder,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"claude-opus-4-6": "ultimate",
+				"claude-opus-4-6": "qmodel",
 			},
-			"model_whitelist": []any{"ultimate"},
+			"model_whitelist": []any{"qmodel"},
 		},
 	}
 	require.Equal(t, []string{"claude-opus-4-6"}, withWhitelist.GetConfiguredRequestModels())
@@ -135,5 +135,7 @@ func TestAccountIsModelSupported_QoderSiteCompatibility(t *testing.T) {
 	require.False(t, legacy.IsModelSupported("unknown-raw-key"))
 
 	cn.Credentials["model_mapping"] = map[string]any{"claude-opus-4-6": "ultimate"}
-	require.True(t, cn.IsModelSupported("claude-opus-4-6"), "显式账号 mapping 应覆盖站点默认限制")
+	require.False(t, cn.IsModelSupported("claude-opus-4-6"), "显式账号 mapping 的最终 route 必须兼容国内站")
+	cn.Credentials["model_mapping"] = map[string]any{"claude-opus-4-6": "qmodel"}
+	require.True(t, cn.IsModelSupported("claude-opus-4-6"), "自定义请求名可映射到国内站 route")
 }

@@ -142,6 +142,9 @@ func (s *QoderGatewayService) ForwardChatCompletions(ctx context.Context, c *gin
 		responseModel = requestModel
 	}
 	body = applyQoderAccountModelMapping(account, body)
+	if err := validateQoderForwardModel(account, body); err != nil {
+		return nil, err
+	}
 	payload, modelKey, conversationPlan, err := s.buildQoderPayloadFromChatCompletions(c, account, body)
 	if err != nil {
 		return nil, err
@@ -226,6 +229,9 @@ func (s *QoderGatewayService) ForwardResponses(ctx context.Context, c *gin.Conte
 		responseModel = requestModel
 	}
 	body = applyQoderAccountModelMapping(account, body)
+	if err := validateQoderForwardModel(account, body); err != nil {
+		return nil, err
+	}
 	request, err := parseQoderResponsesPayload(body)
 	if err != nil {
 		return nil, err
@@ -316,6 +322,9 @@ func (s *QoderGatewayService) ForwardMessages(ctx context.Context, c *gin.Contex
 		responseModel = requestModel
 	}
 	body = applyQoderAccountModelMapping(account, body)
+	if err := validateQoderForwardModel(account, body); err != nil {
+		return nil, err
+	}
 	payload, modelKey, conversationPlan, err := s.buildQoderPayloadFromAnthropicMessages(c, account, body)
 	if err != nil {
 		return nil, err
@@ -536,7 +545,9 @@ func (s *QoderGatewayService) RefreshAccountSession(ctx context.Context, account
 		QoderTokenRefresher: refresher,
 		failedCredentials:   failedCredentialsHash,
 	}
-	result, err := refreshAPI.RefreshIfNeeded(ctx, account, executor, 15*time.Minute)
+	// A request-triggered refresh must fail closed if the account changed while the
+	// upstream call was in flight (disabled, no longer CN, or no refresh token).
+	result, err := refreshAPI.RefreshIfNeeded(withOAuthRefreshRequestPath(ctx), account, executor, 15*time.Minute)
 	if err != nil {
 		return nil, err
 	}
@@ -549,6 +560,9 @@ func (s *QoderGatewayService) RefreshAccountSession(ctx context.Context, account
 	}
 
 	if result != nil && result.Account != nil {
+		if eligibilityErr := qoderOAuthRequestAccountEligibilityError(result.Account); eligibilityErr != nil {
+			return nil, eligibilityErr
+		}
 		if s.tokenProvider != nil {
 			s.tokenProvider.InvalidateAccount(result.Account)
 		}
@@ -556,6 +570,9 @@ func (s *QoderGatewayService) RefreshAccountSession(ctx context.Context, account
 	}
 	if s.accountRepo != nil {
 		if fresh, err := s.accountRepo.GetByID(ctx, account.ID); err == nil && fresh != nil {
+			if eligibilityErr := qoderOAuthRequestAccountEligibilityError(fresh); eligibilityErr != nil {
+				return nil, eligibilityErr
+			}
 			if s.tokenProvider != nil {
 				s.tokenProvider.InvalidateAccount(fresh)
 			}
@@ -564,6 +581,9 @@ func (s *QoderGatewayService) RefreshAccountSession(ctx context.Context, account
 	}
 	if s.tokenProvider != nil && (result == nil || result.Refreshed) {
 		s.tokenProvider.Invalidate(account.ID)
+	}
+	if eligibilityErr := qoderOAuthRequestAccountEligibilityError(account); eligibilityErr != nil {
+		return nil, eligibilityErr
 	}
 	return account, nil
 }
@@ -581,7 +601,10 @@ func (s *QoderGatewayService) waitForQoderLockedRefresh(ctx context.Context, acc
 			return nil, false, err
 		}
 		if fresh == nil {
-			return nil, false, nil
+			return nil, false, qoderOAuthRequestAccountEligibilityError(nil)
+		}
+		if eligibilityErr := qoderOAuthRequestAccountEligibilityError(fresh); eligibilityErr != nil {
+			return nil, false, eligibilityErr
 		}
 		if qoderRefreshCredentialsHash(fresh.Credentials) != failedCredentialsHash {
 			if s.tokenProvider != nil {
@@ -596,6 +619,9 @@ func (s *QoderGatewayService) waitForQoderLockedRefresh(ctx context.Context, acc
 	if fresh, changed, err := readFresh(); changed {
 		return fresh, nil
 	} else if err != nil {
+		if errors.Is(err, errOAuthRefreshAccountStateChanged) {
+			return nil, err
+		}
 		lastErr = err
 	}
 
@@ -614,6 +640,9 @@ func (s *QoderGatewayService) waitForQoderLockedRefresh(ctx context.Context, acc
 				return fresh, nil
 			}
 			if err != nil {
+				if errors.Is(err, errOAuthRefreshAccountStateChanged) {
+					return nil, err
+				}
 				lastErr = err
 			}
 		}
@@ -633,12 +662,10 @@ func (e qoderGatewayRefreshExecutor) NeedsRefresh(account *Account, ttl time.Dur
 	if !e.CanRefresh(account) {
 		return false
 	}
-	if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
-		return false
-	}
 	// request-time 401/403 刷新应基于“失败时的凭证快照”判定：
 	// - DB 中凭证已经变了，说明其它 worker 已刷新，当前请求不应再次消费 refresh_token。
 	// - DB 中仍是同一份失败凭证，则即使 expires_at 还没临近，也需要刷新这份已被上游拒绝的 token。
+	// PAT 没有 refresh_token，但请求期仍需重新 exchange 被上游拒绝的 session。
 	if e.failedCredentials != "" {
 		return qoderRefreshCredentialsHash(account.Credentials) == e.failedCredentials
 	}
@@ -672,17 +699,34 @@ func (s *QoderGatewayService) applyUpstreamErrorPolicy(ctx context.Context, acco
 	}
 	stateCtx, cancel := qoderAccountStateUpdateContext(ctx)
 	defer cancel()
+	update := QoderGatewayStateUpdate{
+		AccountID:           account.ID,
+		ExpectedCredentials: account.Credentials,
+	}
 	switch {
 	case apiErr.IsAgentLimit():
 		resetAt, ok := apiErr.AgentLimitResetAt()
 		if !ok {
 			resetAt = time.Now().Add(30 * time.Second)
 		}
-		_ = s.accountRepo.SetRateLimited(stateCtx, account.ID, resetAt)
+		update.RateLimitResetAt = &resetAt
 	case apiErr.StatusCode == http.StatusTooManyRequests:
-		_ = s.accountRepo.SetRateLimited(stateCtx, account.ID, time.Now().Add(30*time.Second))
+		resetAt := time.Now().Add(30 * time.Second)
+		update.RateLimitResetAt = &resetAt
 	case apiErr.StatusCode >= 500:
-		_ = s.accountRepo.SetOverloaded(stateCtx, account.ID, time.Now().Add(30*time.Second))
+		until := time.Now().Add(30 * time.Second)
+		update.OverloadUntil = &until
+	default:
+		return
+	}
+	if repository, ok := s.accountRepo.(QoderGatewayStateRepository); ok {
+		_, _ = repository.ApplyQoderGatewayStateIfAuthorizationUnchanged(stateCtx, update)
+		return
+	}
+	if update.RateLimitResetAt != nil {
+		_ = s.accountRepo.SetRateLimited(stateCtx, account.ID, *update.RateLimitResetAt)
+	} else if update.OverloadUntil != nil {
+		_ = s.accountRepo.SetOverloaded(stateCtx, account.ID, *update.OverloadUntil)
 	}
 }
 
@@ -699,6 +743,21 @@ func applyQoderAccountModelMapping(account *Account, body []byte) []byte {
 		return body
 	}
 	return ReplaceModelInBody(body, mappedModel)
+}
+
+func validateQoderForwardModel(account *Account, body []byte) error {
+	site, err := qoderSiteForAccount(account)
+	if err != nil {
+		return err
+	}
+	model := strings.TrimSpace(gjsonString(body, "model"))
+	if model == "" {
+		return errors.New("model is required")
+	}
+	if !qoder.ModelCompatibleWithSite(site, model) {
+		return fmt.Errorf("qoder model %q is not supported by the CN site", model)
+	}
+	return nil
 }
 
 func BuildQoderPayloadFromChatCompletions(body []byte, userType string) (map[string]any, string, error) {
@@ -4838,7 +4897,7 @@ func streamQoderEvents(ctx context.Context, resp *http.Response, handle func(qod
 						return err
 					}
 				}
-				return nil
+				return errors.New("qoder upstream stream ended before [DONE]")
 			}
 			if result.err != nil {
 				return result.err

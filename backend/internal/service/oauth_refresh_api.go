@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 )
 
 // OAuthRefreshExecutor 各平台实现的 OAuth 刷新执行器
@@ -28,6 +30,18 @@ type GrokOAuthRefreshSuccessRepository interface {
 		id int64,
 		expectedCredentials map[string]any,
 		expectedProxyID *int64,
+		credentials map[string]any,
+	) (bool, error)
+}
+
+// QoderOAuthRefreshSuccessRepository is the persistence boundary for Qoder token rotation.
+// The compare-and-set makes a concurrent administrator reauthorization authoritative,
+// while unrelated account configuration such as proxy changes remains preserved.
+type QoderOAuthRefreshSuccessRepository interface {
+	UpdateQoderOAuthCredentialsIfUnchanged(
+		ctx context.Context,
+		id int64,
+		expectedCredentials map[string]any,
 		credentials map[string]any,
 	) (bool, error)
 }
@@ -53,6 +67,25 @@ func withOAuthRefreshRequestPath(ctx context.Context) context.Context {
 func isOAuthRefreshRequestPath(ctx context.Context) bool {
 	requestPath, _ := ctx.Value(oauthRefreshRequestPathKey{}).(bool)
 	return requestPath
+}
+
+func qoderOAuthRequestAccountEligibilityError(account *Account) error {
+	if account == nil {
+		return fmt.Errorf("%w: account not found", errOAuthRefreshAccountStateChanged)
+	}
+	if !account.IsQoderCosy() {
+		return fmt.Errorf("%w: account is no longer a Qoder COSY account", errOAuthRefreshAccountStateChanged)
+	}
+	if !account.IsSchedulable() {
+		return fmt.Errorf("%w: qoder account is no longer schedulable", errOAuthRefreshAccountStateChanged)
+	}
+	if _, err := qoderSiteForAccount(account); err != nil {
+		return fmt.Errorf("%w: %v", errOAuthRefreshAccountStateChanged, err)
+	}
+	if strings.TrimSpace(account.GetCredential("pat")) == "" && strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+		return fmt.Errorf("%w: qoder account is no longer refreshable", errOAuthRefreshAccountStateChanged)
+	}
+	return nil
 }
 
 type contextMutex struct {
@@ -112,6 +145,7 @@ func snapshotOAuthRefreshAccount(account *Account) *Account {
 	}
 	snapshot := *account
 	snapshot.Credentials = shallowCopyMap(account.Credentials)
+	snapshot.Extra = shallowCopyMap(account.Extra)
 	if account.ProxyID != nil {
 		proxyID := *account.ProxyID
 		snapshot.ProxyID = &proxyID
@@ -234,6 +268,11 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			return nil, withGrokCredentialFailureSnapshot(eligibilityErr, freshAccount)
 		}
 	}
+	if requestPath && freshAccount.Platform == PlatformQoder {
+		if eligibilityErr := qoderOAuthRequestAccountEligibilityError(freshAccount); eligibilityErr != nil {
+			return nil, eligibilityErr
+		}
+	}
 	if !executor.CanRefresh(freshAccount) {
 		if requestPath && freshAccount.IsGrokOAuth() && strings.TrimSpace(freshAccount.GetGrokRefreshToken()) == "" {
 			return nil, withGrokCredentialFailureSnapshot(errGrokOAuthRefreshTokenMissing, freshAccount)
@@ -268,6 +307,11 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 						return nil, withGrokCredentialFailureSnapshot(eligibilityErr, recoveredAccount)
 					}
 				}
+				if requestPath && freshAccount.Platform == PlatformQoder {
+					if eligibilityErr := qoderOAuthRequestAccountEligibilityError(recoveredAccount); eligibilityErr != nil {
+						return nil, eligibilityErr
+					}
+				}
 				slog.Info("oauth_refresh_race_recovered",
 					"account_id", freshAccount.ID,
 					"platform", freshAccount.Platform,
@@ -292,7 +336,13 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		for k, v := range newCredentials {
 			cloned[k] = v
 		}
-		cloned["_token_version"] = time.Now().UnixMilli()
+		tokenVersion := time.Now().UnixMilli()
+		if freshAccount.IsQoderCosy() {
+			if previous := attemptedAccount.GetCredentialAsInt64("_token_version"); previous >= tokenVersion {
+				tokenVersion = previous + 1
+			}
+		}
+		cloned["_token_version"] = tokenVersion
 		newCredentials = cloned
 
 		if freshAccount.IsGrokOAuth() {
@@ -336,7 +386,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 				)
 				return &OAuthRefreshResult{Account: currentAccount}, nil
 			}
-			durableAccount, readErr := api.loadGrokDurableAccountAfterPersist(ctx, cacheKey, freshAccount.ID)
+			durableAccount, readErr := api.loadDurableAccountAfterPersist(ctx, cacheKey, freshAccount.ID)
 			if readErr != nil || durableAccount == nil {
 				if readErr == nil {
 					readErr = fmt.Errorf("account not found after Grok OAuth success CAS")
@@ -346,6 +396,60 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 				}
 			}
 			// CAS 只修改凭据；返回持久化后的最新行，避免并发管理或调度变更被旧快照覆盖。
+			freshAccount = durableAccount
+		} else if freshAccount.IsQoderCosy() {
+			conditionalRepo, ok := api.accountRepo.(QoderOAuthRefreshSuccessRepository)
+			if !ok {
+				return nil, &providerConfigurationRefreshError{
+					err: fmt.Errorf("qoder OAuth refresh success CAS repository is not configured"),
+				}
+			}
+			applied, updateErr := conditionalRepo.UpdateQoderOAuthCredentialsIfUnchanged(
+				ctx,
+				freshAccount.ID,
+				attemptedAccount.Credentials,
+				newCredentials,
+			)
+			if updateErr != nil {
+				slog.Error("oauth_refresh_update_failed",
+					"account_id", freshAccount.ID,
+					"platform", freshAccount.Platform,
+					"error", updateErr,
+				)
+				return nil, &providerCycleContainmentRefreshError{
+					err: fmt.Errorf("Qoder OAuth refresh succeeded but credential persistence failed: %w", updateErr),
+				}
+			}
+			if !applied {
+				currentAccount, readErr := api.accountRepo.GetByID(ctx, freshAccount.ID)
+				if readErr != nil || currentAccount == nil {
+					if readErr == nil {
+						readErr = fmt.Errorf("account not found after Qoder OAuth success CAS miss")
+					}
+					return nil, &providerCycleContainmentRefreshError{
+						err: fmt.Errorf("qoder OAuth success CAS lost and current state is unavailable: %w", readErr),
+					}
+				}
+				if requestPath {
+					if eligibilityErr := qoderOAuthRequestAccountEligibilityError(currentAccount); eligibilityErr != nil {
+						return nil, eligibilityErr
+					}
+				}
+				slog.Info("oauth_refresh_success_cas_skipped_stale_credentials",
+					"account_id", freshAccount.ID,
+					"platform", freshAccount.Platform,
+				)
+				return &OAuthRefreshResult{Account: currentAccount}, nil
+			}
+			durableAccount, readErr := api.loadDurableAccountAfterPersist(ctx, cacheKey, freshAccount.ID)
+			if readErr != nil || durableAccount == nil {
+				if readErr == nil {
+					readErr = fmt.Errorf("account not found after Qoder OAuth success CAS")
+				}
+				return nil, &providerCycleContainmentRefreshError{
+					err: fmt.Errorf("qoder OAuth success persisted but durable account state is unavailable: %w", readErr),
+				}
+			}
 			freshAccount = durableAccount
 		} else if updateErr := persistAccountCredentials(ctx, api.accountRepo, freshAccount, newCredentials); updateErr != nil {
 			slog.Error("oauth_refresh_update_failed",
@@ -359,6 +463,11 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if requestPath && freshAccount.Platform == PlatformGrok {
 		if eligibilityErr := grokOAuthRequestAccountEligibilityError(freshAccount); eligibilityErr != nil {
 			return nil, withGrokCredentialFailureSnapshot(eligibilityErr, freshAccount)
+		}
+	}
+	if requestPath && freshAccount.Platform == PlatformQoder {
+		if eligibilityErr := qoderOAuthRequestAccountEligibilityError(freshAccount); eligibilityErr != nil {
+			return nil, eligibilityErr
 		}
 	}
 
@@ -381,7 +490,7 @@ func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey 
 	}
 }
 
-func (api *OAuthRefreshAPI) loadGrokDurableAccountAfterPersist(parent context.Context, cacheKey string, accountID int64) (*Account, error) {
+func (api *OAuthRefreshAPI) loadDurableAccountAfterPersist(parent context.Context, cacheKey string, accountID int64) (*Account, error) {
 	cleanupParent := context.Background()
 	if parent != nil {
 		cleanupParent = context.WithoutCancel(parent)
@@ -408,6 +517,10 @@ func isInvalidGrantError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var qoderOpenAPIErr *qoder.OpenAPIError
+	if errors.As(err, &qoderOpenAPIErr) && qoderOpenAPIErr.InvalidCredentials() {
+		return true
+	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "invalid_grant") ||
 		strings.Contains(msg, "refresh_token_reused") ||
@@ -423,6 +536,9 @@ func (api *OAuthRefreshAPI) tryRecoverFromRefreshRace(ctx context.Context, usedA
 	reReadAccount, err := api.accountRepo.GetByID(ctx, usedAccount.ID)
 	if err != nil || reReadAccount == nil {
 		return nil, false
+	}
+	if usedAccount.Platform == PlatformQoder && qoderRefreshCredentialsHash(usedAccount.Credentials) != qoderRefreshCredentialsHash(reReadAccount.Credentials) {
+		return reReadAccount, true
 	}
 	usedRT := usedAccount.GetCredential("refresh_token")
 	currentRT := reReadAccount.GetCredential("refresh_token")

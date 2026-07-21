@@ -1248,26 +1248,27 @@ export default {
       qoderAccount: 'Qoder CN Account',
       grokAccount: 'Grok Account',
       qoder: {
-        reauthorizationRequired: 'This account uses legacy Qoder credentials. Re-authorize it with Qoder CN before it can be scheduled.',
+        reauthorizationRequired: 'This account does not have complete Qoder CN authorization credentials. Re-authorize it before it can be scheduled.',
         accountType: {
           oauthTitle: 'Authorization Link',
           oauthDesc: 'Recommended: complete Qoder CN login in the browser.',
           manualTitle: 'Manual Credentials',
-          manualDesc: 'Import a PAT, or import an existing token and machine_id.'
+          manualDesc: 'Import a PAT, or a complete Qoder CN device credential set.'
         },
         pat: 'Qoder PAT (optional)',
-        patHint: 'When a PAT is provided, the backend bootstraps the COSY session; leave it empty to use an existing token and machine_id below.',
+        patHint: 'When a PAT is provided, the backend bootstraps the COSY session; leave it empty to use the device token, refresh token, machine ID, and UID/AID below.',
         securityOauthToken: 'Security OAuth Token',
         securityOauthTokenHint: 'Existing Qoder security_oauth_token, usually starting with dt-.',
         machineId: 'Machine ID',
         machineIdHint: 'Required together with security_oauth_token.',
         uidAid: 'Qoder UID / AID',
         uidAidHint: 'Required for COSY headers. Enter the UID or AID from the same Qoder account.',
-        refreshToken: 'Refresh Token (optional)',
+        refreshToken: 'Refresh Token',
         userType: 'User Type (optional)',
         pleaseEnterSecurityOauthToken: 'Please enter Security OAuth Token',
         pleaseEnterMachineId: 'Please enter Machine ID',
-        pleaseEnterUidAid: 'Please enter Qoder UID / AID'
+        pleaseEnterUidAid: 'Please enter Qoder UID / AID',
+        pleaseEnterRefreshToken: 'Please enter Refresh Token'
       },
       inputMethod: 'Input Method',
       reAuthorizedSuccess: 'Account re-authorized successfully',

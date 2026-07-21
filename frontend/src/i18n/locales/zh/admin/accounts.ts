@@ -1321,26 +1321,27 @@ export default {
       qoderAccount: 'Qoder CN 账号',
       grokAccount: 'Grok 账号',
       qoder: {
-        reauthorizationRequired: '该账号仍使用旧 Qoder 凭据，必须通过 Qoder CN 重新授权后才能参与调度。',
+        reauthorizationRequired: '该账号缺少完整的 Qoder CN 授权凭据，必须重新授权后才能参与调度。',
         accountType: {
           oauthTitle: '授权链接',
           oauthDesc: '推荐：浏览器完成 Qoder CN 登录授权。',
           manualTitle: '手动凭证',
-          manualDesc: '导入 PAT，或导入已有 token 与 machine_id。'
+          manualDesc: '导入 PAT，或导入完整的 Qoder CN 设备凭据。'
         },
         pat: 'Qoder PAT（可选）',
-        patHint: '填入 PAT 时会由后端完成 COSY 会话引导；留空则使用下方已有 token 与 machine_id。',
+        patHint: '填入 PAT 时会由后端完成 COSY 会话引导；留空则使用下方 device token、refresh token、machine ID 与 UID/AID。',
         securityOauthToken: 'Security OAuth Token',
         securityOauthTokenHint: '现有 Qoder security_oauth_token，通常以 dt- 开头。',
         machineId: 'Machine ID',
         machineIdHint: '必须与 security_oauth_token 配套保存。',
         uidAid: 'Qoder UID / AID',
         uidAidHint: 'COSY 请求头必需。请输入同一 Qoder 账号的 UID 或 AID。',
-        refreshToken: 'Refresh Token（可选）',
+        refreshToken: 'Refresh Token',
         userType: 'User Type（可选）',
         pleaseEnterSecurityOauthToken: '请输入 Security OAuth Token',
         pleaseEnterMachineId: '请输入 Machine ID',
-        pleaseEnterUidAid: '请输入 Qoder UID / AID'
+        pleaseEnterUidAid: '请输入 Qoder UID / AID',
+        pleaseEnterRefreshToken: '请输入 Refresh Token'
       },
       inputMethod: '输入方式',
       reAuthorizedSuccess: '账号重新授权成功',

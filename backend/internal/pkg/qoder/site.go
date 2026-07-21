@@ -18,8 +18,6 @@ const (
 )
 
 const (
-	// RefreshModeCosy 表示凭据持有最终 COSY 身份。
-	RefreshModeCosy = "cosy"
 	// RefreshModeQoderCN20 表示凭据持有 QoderCN20 refresh token。
 	RefreshModeQoderCN20 = "qodercn20"
 )
@@ -34,9 +32,9 @@ const (
 	// CNClientVersion 是 qoderclicn 当前 COSY 客户端版本。
 	CNClientVersion = "1.1.2"
 	// CNOAuthClientID 是国内站公开 OAuth client ID。
-	CNOAuthClientID = "f5a7f67c-11a8-491e-8b8e-a07f2d0df4b7"
+	CNOAuthClientID = "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"
 	// CNOpenAPIProductName 是国内站 CLI 的产品名。
-	CNOpenAPIProductName = "Qoder CLI CN"
+	CNOpenAPIProductName = "qoder"
 )
 
 // Profile 集中保存一个 Qoder 站点使用的协议端点和客户端标识。
@@ -45,7 +43,6 @@ type Profile struct {
 	Site                   Site
 	DeviceAuthorizationURL string
 	OpenAPIBaseURL         string
-	CenterBaseURL          string
 	GatewayBaseURL         string
 	ClientVersion          string
 	OAuthClientID          string
@@ -63,11 +60,9 @@ func ParseSite(value string) (Site, error) {
 	}
 }
 
-// ParseRefreshMode 严格解析刷新模式；空值按旧式 COSY 刷新处理。
+// ParseRefreshMode 严格解析仍受支持的 Qoder CN device OAuth 刷新模式。
 func ParseRefreshMode(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", RefreshModeCosy:
-		return RefreshModeCosy, nil
 	case RefreshModeQoderCN20:
 		return RefreshModeQoderCN20, nil
 	default:
@@ -111,9 +106,6 @@ func NormalizeProfile(profile Profile) (Profile, error) {
 	}
 	if strings.TrimSpace(profile.OpenAPIBaseURL) != "" {
 		base.OpenAPIBaseURL = strings.TrimRight(strings.TrimSpace(profile.OpenAPIBaseURL), "/")
-	}
-	if strings.TrimSpace(profile.CenterBaseURL) != "" {
-		base.CenterBaseURL = strings.TrimRight(strings.TrimSpace(profile.CenterBaseURL), "/")
 	}
 	if strings.TrimSpace(profile.GatewayBaseURL) != "" {
 		base.GatewayBaseURL = strings.TrimRight(strings.TrimSpace(profile.GatewayBaseURL), "/")

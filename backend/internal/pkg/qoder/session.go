@@ -40,15 +40,17 @@ func init() {
 
 // AuthIdentity 表示用户认证身份。
 type AuthIdentity struct {
-	Name               string `json:"name"`
-	AID                string `json:"aid"`
-	UID                string `json:"uid"`
-	YxUID              string `json:"yx_uid"`
-	OrganizationID     string `json:"organization_id"`
-	OrganizationName   string `json:"organization_name"`
-	UserType           string `json:"user_type"`
-	SecurityOauthToken string `json:"security_oauth_token"`
-	RefreshToken       string `json:"refresh_token"`
+	Name               string   `json:"name"`
+	AID                string   `json:"aid"`
+	UID                string   `json:"uid"`
+	YxUID              string   `json:"yx_uid"`
+	OrganizationID     string   `json:"organization_id"`
+	OrganizationName   string   `json:"organization_name"`
+	OrganizationTags   []string `json:"organization_tags,omitempty"`
+	UserType           string   `json:"user_type"`
+	SecurityOauthToken string   `json:"security_oauth_token"`
+	RefreshToken       string   `json:"refresh_token"`
+	DataPolicyAgreed   *bool    `json:"-"`
 }
 
 // MachineIdentity 表示运行客户端的机器身份。
@@ -70,9 +72,24 @@ type SessionContext struct {
 	DataPolicy    string
 }
 
-// BuildAuthPayloadJSON 将 AuthIdentity 转换为紧凑 JSON 字节。
+type runtimeAuthPayload struct {
+	UID              string   `json:"uid"`
+	OrganizationID   string   `json:"organization_id,omitempty"`
+	OrganizationTags []string `json:"organization_tags,omitempty"`
+	DataPolicyAgreed *bool    `json:"data_policy_agreed,omitempty"`
+}
+
+// BuildAuthPayloadJSON 构造 qoderclicn 传给运行时加密模块的最小身份投影。
 func BuildAuthPayloadJSON(identity *AuthIdentity) ([]byte, error) {
-	return json.Marshal(identity)
+	if identity == nil {
+		return json.Marshal(runtimeAuthPayload{})
+	}
+	return json.Marshal(runtimeAuthPayload{
+		UID:              identity.UID,
+		OrganizationID:   identity.OrganizationID,
+		OrganizationTags: normalizeOrganizationTags(identity.OrganizationTags),
+		DataPolicyAgreed: identity.DataPolicyAgreed,
+	})
 }
 
 // BuildPayloadB64 构造 COSY header 使用的 base64 payload。
@@ -173,6 +190,10 @@ func NewSessionForProfileWithKey(identity *AuthIdentity, machine *MachineIdentit
 	}
 	info := base64.StdEncoding.EncodeToString(encryptedInfo)
 
+	dataPolicy := "disagree"
+	if identity != nil && identity.DataPolicyAgreed != nil && *identity.DataPolicyAgreed {
+		dataPolicy = "agree"
+	}
 	return &SessionContext{
 		TempKey:       tempKey,
 		CosyKey:       cosyKey,
@@ -181,7 +202,7 @@ func NewSessionForProfileWithKey(identity *AuthIdentity, machine *MachineIdentit
 		Machine:       machine,
 		Site:          normalizedProfile.Site,
 		ClientVersion: normalizedProfile.ClientVersion,
-		DataPolicy:    "agree",
+		DataPolicy:    dataPolicy,
 	}, nil
 }
 

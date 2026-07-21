@@ -2,9 +2,25 @@ package service
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
+
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
+	"github.com/stretchr/testify/require"
 )
+
+func TestQoderDefaultPublicModelsOnlyUsesCNModelCatalog(t *testing.T) {
+	models := qoderDefaultPublicModels()
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	want := qoder.DefaultRequestModelIDs()
+	sort.Strings(want)
+
+	require.Equal(t, want, ids)
+}
 
 func TestParseMarketplaceAvailabilityWindowSettings(t *testing.T) {
 	tests := []struct {
@@ -375,6 +391,7 @@ func TestModelMarketplaceQoderAccountMappedCustomModelUsesRouteKeyManualPricing(
 					Type:     AccountTypeCosy,
 					Credentials: map[string]any{
 						"site": "cn",
+						"pat":  "pat-token",
 						"model_mapping": map[string]any{
 							"custom-qoder-model": "qmodel",
 						},

@@ -34,10 +34,14 @@ func TestUpdateAccount_PreservesSensitiveCredsWhenIncomingOmits(t *testing.T) {
 			Type:     AccountTypeOAuth,
 			Status:   StatusActive,
 			Credentials: map[string]any{
-				"refresh_token": "rt-existing",
-				"access_token":  "at-existing",
-				"id_token":      "id-existing",
-				"base_url":      "https://old.example.com",
+				"refresh_token":         "rt-existing",
+				"access_token":          "at-existing",
+				"id_token":              "id-existing",
+				"device_token":          "device-existing",
+				"personal_access_token": "personal-existing",
+				"nonce":                 "nonce-existing",
+				"verifier":              "verifier-existing",
+				"base_url":              "https://old.example.com",
 			},
 		},
 	}
@@ -58,6 +62,10 @@ func TestUpdateAccount_PreservesSensitiveCredsWhenIncomingOmits(t *testing.T) {
 	require.Equal(t, "rt-existing", repo.account.Credentials["refresh_token"])
 	require.Equal(t, "at-existing", repo.account.Credentials["access_token"])
 	require.Equal(t, "id-existing", repo.account.Credentials["id_token"])
+	require.Equal(t, "device-existing", repo.account.Credentials["device_token"])
+	require.Equal(t, "personal-existing", repo.account.Credentials["personal_access_token"])
+	require.Equal(t, "nonce-existing", repo.account.Credentials["nonce"])
+	require.Equal(t, "verifier-existing", repo.account.Credentials["verifier"])
 	// 非敏感键被替换
 	require.Equal(t, "https://new.example.com", repo.account.Credentials["base_url"])
 }

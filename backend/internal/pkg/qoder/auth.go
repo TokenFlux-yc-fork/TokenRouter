@@ -1,27 +1,15 @@
 package qoder
 
 import (
-	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
-
-// CenterBaseURL 保留旧调用名称，CN 的 Center 与 Gateway 使用同一地址。
-const CenterBaseURL = CNGatewayBaseURL
 
 // APIBaseURL 是国内站推理地址。
 const APIBaseURL = CNGatewayBaseURL
-
-// ClientVersion 是 qoderclicn COSY 客户端版本。
-const ClientVersion = CNClientVersion
 
 // GenerateRequestID 生成随机请求 ID。
 func GenerateRequestID() string {
@@ -86,132 +74,6 @@ func NewMachine() *MachineIdentity {
 func NewMachineForSite(site Site) *MachineIdentity {
 	machineID := RandomUUIDLike()
 	return &MachineIdentity{MachineID: machineID, MachineToken: machineID, MachineType: "5"}
-}
-
-// ExchangePAT 使用 Personal Access Token 换取 AuthIdentity。
-func ExchangePAT(pat string, machine *MachineIdentity, centerURL string) (*AuthIdentity, error) {
-	return ExchangePATContext(context.Background(), pat, machine, centerURL, nil)
-}
-
-// ExchangePATContext 使用传入的 context 和请求执行器换取 AuthIdentity。
-func ExchangePATContext(ctx context.Context, pat string, machine *MachineIdentity, centerURL string, doer RequestDoer) (*AuthIdentity, error) {
-	inner := map[string]any{
-		"personalToken":      pat,
-		"securityOauthToken": "",
-		"refreshToken":       "",
-		"needRefresh":        false,
-		"authInfo":           map[string]any{},
-	}
-	return exchangeJobToken(ctx, inner, machine, centerURL, "PAT exchange", doer)
-}
-
-// RefreshSession 使用 Qoder refresh_token 换取新的 COSY 身份。
-func RefreshSession(refreshToken, securityOauthToken string, machine *MachineIdentity, centerURL string) (*AuthIdentity, error) {
-	return RefreshSessionContext(context.Background(), refreshToken, securityOauthToken, machine, centerURL, nil)
-}
-
-// RefreshSessionContext 使用传入的 context 和请求执行器刷新 COSY 身份。
-func RefreshSessionContext(ctx context.Context, refreshToken, securityOauthToken string, machine *MachineIdentity, centerURL string, doer RequestDoer) (*AuthIdentity, error) {
-	if strings.TrimSpace(securityOauthToken) == "" {
-		return nil, fmt.Errorf("qoder: refresh requires securityOauthToken")
-	}
-	inner := map[string]any{
-		"personalToken":      "",
-		"securityOauthToken": strings.TrimSpace(securityOauthToken),
-		"refreshToken":       strings.TrimSpace(refreshToken),
-		"needRefresh":        true,
-		"authInfo":           map[string]any{},
-	}
-	return exchangeJobToken(ctx, inner, machine, centerURL, "refresh", doer)
-}
-
-func exchangeJobToken(ctx context.Context, inner map[string]any, machine *MachineIdentity, centerURL string, operation string, doer RequestDoer) (*AuthIdentity, error) {
-	if centerURL == "" {
-		centerURL = CenterBaseURL
-	}
-	if machine == nil {
-		machine = NewMachine()
-	}
-
-	innerJSON, _ := json.Marshal(inner)
-	outer := map[string]any{
-		"payload":       string(innerJSON),
-		"encodeVersion": "1",
-	}
-	outerJSON, _ := json.Marshal(outer)
-
-	req, err := newCenterEncodedRequest("POST", centerURL+"/algo/api/v3/user/jobToken?Encode=1", outerJSON, machine)
-	if err != nil {
-		return nil, fmt.Errorf("qoder: %s request: %w", operation, err)
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	req = req.WithContext(ctx)
-
-	if doer == nil {
-		client := &http.Client{Timeout: 15 * time.Second}
-		doer = client.Do
-	}
-	resp, err := doer(req)
-	if err != nil {
-		return nil, fmt.Errorf("qoder: %s request: %w", operation, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != 200 {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("qoder: %s failed with status %d: %s", operation, resp.StatusCode, RedactSensitiveText(string(bodyBytes)))
-	}
-
-	var data map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, fmt.Errorf("qoder: parse %s response: %w", operation, err)
-	}
-
-	token, _ := data["securityOauthToken"].(string)
-	refreshToken, _ := data["refreshToken"].(string)
-	name, _ := data["name"].(string)
-	uid, _ := data["id"].(string)
-	userType, _ := data["userType"].(string)
-	if userType == "" {
-		userType = "personal_standard"
-	}
-	if strings.TrimSpace(token) == "" {
-		return nil, fmt.Errorf("qoder: %s response missing securityOauthToken", operation)
-	}
-
-	return &AuthIdentity{
-		Name:               name,
-		AID:                uid,
-		UID:                uid,
-		UserType:           userType,
-		SecurityOauthToken: strings.TrimSpace(token),
-		RefreshToken:       strings.TrimSpace(refreshToken),
-	}, nil
-}
-
-func newCenterEncodedRequest(method, rawURL string, payload []byte, machine *MachineIdentity) (*http.Request, error) {
-	body := EncodeJSON(payload)
-	req, err := http.NewRequest(method, rawURL, bytes.NewReader([]byte(body)))
-	if err != nil {
-		return nil, err
-	}
-	date := time.Now().UTC().Format(http.TimeFormat)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("User-Agent", "Go-http-client/2.0")
-	req.Header.Set("cosy-machinetoken", machine.MachineToken)
-	req.Header.Set("cosy-machinetype", machine.MachineType)
-	req.Header.Set("cosy-machineid", machine.MachineID)
-	req.Header.Set("cosy-version", ClientVersion)
-	req.Header.Set("cosy-clienttype", "5")
-	req.Header.Set("login-version", "v2")
-	req.Header.Set("appcode", AppCode)
-	req.Header.Set("Date", date)
-	req.Header.Set("signature", SignCenterRequest(date))
-	return req, nil
 }
 
 // pathWithoutAlgo 移除 URL path 中用于签名计算之外的 "/algo" 前缀。

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -35,13 +34,7 @@ func validateQoderCosyCredentials(ctx context.Context, account *Account, httpUps
 	if account.Type != AccountTypeCosy {
 		return fmt.Errorf("qoder accounts require %s account type", AccountTypeCosy)
 	}
-	if account.Credentials == nil {
-		return errors.New("qoder cosy credentials are required")
-	}
-	if _, err := qoderSiteForAccount(account); err != nil {
-		return err
-	}
-	if _, err := qoderRefreshModeForAccount(account); err != nil {
+	if err := validateQoderCNAuthorizationCredentials(account.Credentials); err != nil {
 		return err
 	}
 
@@ -55,16 +48,5 @@ func validateQoderCosyCredentials(ctx context.Context, account *Account, httpUps
 		return nil
 	}
 
-	token := strings.TrimSpace(account.GetCredential("security_oauth_token"))
-	machineID := strings.TrimSpace(account.GetCredential("machine_id"))
-	if token != "" {
-		if machineID == "" {
-			return errors.New("qoder cosy credentials require machine_id with security_oauth_token")
-		}
-		if strings.TrimSpace(account.GetCredential("uid")) == "" && strings.TrimSpace(account.GetCredential("aid")) == "" {
-			return errors.New("qoder cosy credentials require uid or aid with security_oauth_token")
-		}
-		return nil
-	}
-	return errors.New("qoder cosy credentials require pat or security_oauth_token+machine_id")
+	return nil
 }

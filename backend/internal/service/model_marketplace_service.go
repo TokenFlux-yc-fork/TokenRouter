@@ -15,6 +15,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/geminicli"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 )
 
 const (
@@ -650,7 +651,7 @@ func defaultMarketplaceModelDefs(platform string) []marketplaceModelDef {
 		}
 		return models
 	case PlatformQoder:
-		models := make([]marketplaceModelDef, 0, len(defaultQoderModelAliases))
+		models := make([]marketplaceModelDef, 0, len(qoder.DefaultModels))
 		models = append(models, qoderDefaultPublicModels()...)
 		return models
 	default:
@@ -686,7 +687,7 @@ func marketplaceDisplayNameLookup(platform string) map[string]string {
 		}
 		return out
 	case PlatformQoder:
-		out := make(map[string]string, len(defaultQoderModelAliases))
+		out := make(map[string]string, len(qoder.DefaultModels))
 		for _, model := range qoderDefaultPublicModels() {
 			registerMarketplaceDisplayName(out, model.ID, model.DisplayName)
 		}
@@ -697,15 +698,11 @@ func marketplaceDisplayNameLookup(platform string) map[string]string {
 }
 
 func qoderDefaultPublicModels() []marketplaceModelDef {
-	models := make([]marketplaceModelDef, 0, len(defaultQoderModelAliases))
-	for alias, info := range defaultQoderModelAliases {
-		displayName := info.DisplayName
-		if displayName == "" {
-			displayName = alias
-		}
+	models := make([]marketplaceModelDef, 0, len(qoder.DefaultModels))
+	for _, model := range qoder.DefaultModels {
 		models = append(models, marketplaceModelDef{
-			ID:          alias,
-			DisplayName: displayName,
+			ID:          model.ID,
+			DisplayName: model.DisplayName,
 		})
 	}
 	sortMarketplaceModelDefs(models)

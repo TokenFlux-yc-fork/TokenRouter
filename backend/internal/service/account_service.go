@@ -120,6 +120,60 @@ type AccountDuplicateRepository interface {
 	CreateWithAccountGroups(ctx context.Context, account *Account, groups []AccountGroup) error
 }
 
+// QoderAuthorizationUpdate is the compare-and-set payload for one Qoder CN
+// reauthorization. The repository replaces only authorization credentials,
+// merges Extra keys, and clears only the stale runtime blocks observed before
+// validation. Concurrent routing, administrative, and runtime changes survive.
+type QoderAuthorizationUpdate struct {
+	AccountID                       int64
+	ExpectedCredentials             map[string]any
+	Credentials                     map[string]any
+	Extra                           map[string]any
+	ExpectedStatus                  string
+	ExpectedError                   string
+	ExpectedSchedulable             bool
+	ExpectedTempUnschedulableUntil  *time.Time
+	ExpectedTempUnschedulableReason string
+	ExpectedRateLimitedAt           *time.Time
+	ExpectedRateLimitResetAt        *time.Time
+	RestoreErrorState               bool
+}
+
+// QoderAuthorizationRepository applies a validated Qoder CN authorization
+// without writing the stale account snapshot used during upstream validation.
+type QoderAuthorizationRepository interface {
+	ApplyQoderAuthorizationIfUnchanged(ctx context.Context, update QoderAuthorizationUpdate) (bool, error)
+}
+
+// QoderQuotaStateUpdate atomically records one quota response only while the
+// authorization identity used for the upstream request is still current.
+type QoderQuotaStateUpdate struct {
+	AccountID                int64
+	ExpectedCredentials      map[string]any
+	Extra                    map[string]any
+	SetRateLimitResetAt      *time.Time
+	ClearRateLimit           bool
+	ExpectedRateLimitedAt    *time.Time
+	ExpectedRateLimitResetAt *time.Time
+}
+
+type QoderQuotaStateRepository interface {
+	ApplyQoderQuotaStateIfAuthorizationUnchanged(ctx context.Context, update QoderQuotaStateUpdate) (bool, error)
+}
+
+// QoderGatewayStateUpdate applies a request-time scheduling signal only while
+// the authorization used for that upstream request is still current.
+type QoderGatewayStateUpdate struct {
+	AccountID           int64
+	ExpectedCredentials map[string]any
+	RateLimitResetAt    *time.Time
+	OverloadUntil       *time.Time
+}
+
+type QoderGatewayStateRepository interface {
+	ApplyQoderGatewayStateIfAuthorizationUnchanged(ctx context.Context, update QoderGatewayStateUpdate) (bool, error)
+}
+
 // AdminAccountRepository 将账号复制写入能力声明为显式构造依赖，
 // 避免强制只读网关测试替身实现该能力。
 type AdminAccountRepository interface {

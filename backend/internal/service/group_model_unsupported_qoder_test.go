@@ -19,7 +19,7 @@ func TestAvailableRequestModelsFromAccountsUsesQoderAccountSite(t *testing.T) {
 			Type:        AccountTypeCosy,
 			Status:      StatusActive,
 			Schedulable: true,
-			Credentials: map[string]any{"site": site},
+			Credentials: map[string]any{"site": site, "pat": "pat-token"},
 		}
 	}
 
@@ -37,6 +37,7 @@ func TestAvailableRequestModelsFromAccountsUsesQoderAccountSite(t *testing.T) {
 func TestAvailableRequestModelsFromAccountsFiltersConfiguredQoderModels(t *testing.T) {
 	newAccount := func(id int64, site string, credentials map[string]any) Account {
 		credentials["site"] = site
+		credentials["pat"] = "pat-token"
 		return Account{
 			ID:          id,
 			Platform:    PlatformQoder,
@@ -54,7 +55,7 @@ func TestAvailableRequestModelsFromAccountsFiltersConfiguredQoderModels(t *testi
 	require.Equal(t, []string{"qwen3.6-flash"}, cnModels)
 
 	cnMappingOverride := newAccount(12, "cn", map[string]any{
-		"model_mapping": map[string]any{"claude-opus-4-6": "ultimate"},
+		"model_mapping": map[string]any{"claude-opus-4-6": "qmodel"},
 	})
 	overrideModels := availableRequestModelsFromAccounts([]Account{cnMappingOverride}, PlatformQoder)
 	require.Equal(t, []string{"claude-opus-4-6"}, overrideModels)

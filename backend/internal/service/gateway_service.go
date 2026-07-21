@@ -1192,6 +1192,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		return nil
 	}
 
+	accounts = filterRequestableModelAccounts(accounts, platform)
 	models := configuredRequestModelsFromAccounts(accounts, platform)
 	// 没有账号显式模型范围时返回 nil，由调用方使用平台默认模型。
 	if len(models) == 0 {

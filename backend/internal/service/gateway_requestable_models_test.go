@@ -219,16 +219,38 @@ func TestResolveRequestableModels_UnrestrictedAccountAddsDefaultsAndMappingSourc
 func TestResolveRequestableModels_QoderUsesCNAccountsOnly(t *testing.T) {
 	groupID := int64(4121)
 	global := Account{
-		ID:          90,
-		Platform:    PlatformQoder,
-		Type:        AccountTypeCosy,
-		Credentials: map[string]any{"site": "global"},
+		ID:       90,
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site":          "global",
+			"model_mapping": map[string]any{"legacy-only": "qmodel"},
+		},
+	}
+	incomplete := Account{
+		ID:       92,
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site":          "cn",
+			"model_mapping": map[string]any{"incomplete-only": "qmodel"},
+		},
+	}
+	wrongType := Account{
+		ID:       93,
+		Platform: PlatformQoder,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"site":          "cn",
+			"pat":           "pat-token",
+			"model_mapping": map[string]any{"wrong-type-only": "qmodel"},
+		},
 	}
 	cn := Account{
 		ID:          91,
 		Platform:    PlatformQoder,
 		Type:        AccountTypeCosy,
-		Credentials: map[string]any{"site": "cn"},
+		Credentials: map[string]any{"site": "cn", "pat": "pat-token"},
 	}
 	resolve := func(accounts ...Account) []string {
 		svc := &GatewayService{
@@ -240,6 +262,8 @@ func TestResolveRequestableModels_QoderUsesCNAccountsOnly(t *testing.T) {
 
 	legacyIDs := resolve(global)
 	require.Empty(t, legacyIDs)
+	require.Empty(t, resolve(incomplete))
+	require.Empty(t, resolve(wrongType))
 
 	cnIDs := resolve(cn)
 	require.Contains(t, cnIDs, "qwen3.6-flash")
@@ -247,13 +271,16 @@ func TestResolveRequestableModels_QoderUsesCNAccountsOnly(t *testing.T) {
 	require.NotContains(t, cnIDs, "claude-opus-4-6")
 	require.NotContains(t, cnIDs, "minimax-m3")
 
-	mixedIDs := resolve(global, cn)
+	mixedIDs := resolve(global, incomplete, wrongType, cn)
 	require.Contains(t, mixedIDs, "qwen3.6-flash")
 	require.Contains(t, mixedIDs, "minimax-m2.7")
 	require.NotContains(t, mixedIDs, "claude-opus-4-6")
 	require.NotContains(t, mixedIDs, "minimax-m3")
+	require.NotContains(t, mixedIDs, "legacy-only")
+	require.NotContains(t, mixedIDs, "incomplete-only")
+	require.NotContains(t, mixedIDs, "wrong-type-only")
 
-	cn.Credentials["model_mapping"] = map[string]any{"claude-opus-4-6": "ultimate"}
+	cn.Credentials["model_mapping"] = map[string]any{"claude-opus-4-6": "qmodel"}
 	require.Contains(t, resolve(cn), "claude-opus-4-6")
 }
 
@@ -530,6 +557,7 @@ func TestResolveRequestableModels_QoderRequiresEffectivePricing(t *testing.T) {
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
 			"site": "cn",
+			"pat":  "pat-token",
 		},
 	}
 	svc := &GatewayService{

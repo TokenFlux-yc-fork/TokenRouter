@@ -92,7 +92,7 @@ func (h *QoderOAuthHandler) Poll(c *gin.Context) {
 
 	result, err := h.qoderOAuthService.Poll(c.Request.Context(), req.SessionID, req.State, req.ProxyID)
 	if err != nil {
-		response.BadRequest(c, "授权状态检查失败: "+err.Error())
+		response.ErrorFrom(c, err)
 		return
 	}
 
