@@ -184,6 +184,12 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	if account.Platform == PlatformOpenAI &&
+		isOpenAIRequestBlockedError(statusCode, extractUpstreamErrorMessage(responseBody), responseBody) {
+		slog.Info("openai_request_blocked_account_state_skipped", "account_id", account.ID)
+		return false
+	}
+
 	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
 
 	// 池模式默认不标记本地账号状态；仅当用户显式配置自定义错误码时按本地策略处理。
@@ -558,6 +564,10 @@ func (s *RateLimitService) hasScheduledAccountCircuitBreaker(ctx context.Context
 
 func shouldRecordPassiveAccountCircuitBreaker(account *Account, statusCode int, responseBody []byte) bool {
 	if account == nil || !account.IsUpstreamPoolHealthTarget() {
+		return false
+	}
+	if account.Platform == PlatformOpenAI &&
+		isOpenAIRequestBlockedError(statusCode, extractUpstreamErrorMessage(responseBody), responseBody) {
 		return false
 	}
 	if statusCode == 0 || statusCode >= http.StatusInternalServerError {
