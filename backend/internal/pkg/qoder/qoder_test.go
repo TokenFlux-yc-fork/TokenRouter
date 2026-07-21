@@ -297,15 +297,22 @@ func TestDefaultModels(t *testing.T) {
 		ids = append(ids, model.ID)
 	}
 	want := []string{
+		"claude-opus-4-6",
 		"auto",
+		"performance",
+		"efficient",
+		"lite",
 		"qwen3.8-max-preview",
 		"qwen3.7-max",
 		"qwen3.7-plus",
-		"qwen3.6-flash",
+		// 验证新增路由会通过默认模型接口对外展示。
+		"kimi-k3",
+		"kimi-k2.7-code",
+		"glm-5.2",
 		"deepseek-v4-pro",
 		"deepseek-v4-flash",
-		"glm-5.2",
-		"kimi-k2.7-code",
+		"minimax-m3",
+		"qwen3.6-flash",
 		"minimax-m2.7",
 	}
 	if len(ids) != len(want) {

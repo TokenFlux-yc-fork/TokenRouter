@@ -16,7 +16,6 @@ func TestAvailableRequestModelsFromAccountsUsesQoderAccountSite(t *testing.T) {
 		return Account{
 			ID:          id,
 			Platform:    PlatformQoder,
-			Type:        AccountTypeCosy,
 			Status:      StatusActive,
 			Schedulable: true,
 			Credentials: map[string]any{"site": site},
@@ -27,11 +26,12 @@ func TestAvailableRequestModelsFromAccountsUsesQoderAccountSite(t *testing.T) {
 	require.ElementsMatch(t, qoder.DefaultRequestModelIDsForSite(qoder.SiteCN), cnModels)
 	require.NotContains(t, cnModels, "claude-opus-4-6")
 
-	legacyModels := availableRequestModelsFromAccounts([]Account{newAccount(2, "global")}, PlatformQoder)
-	require.Empty(t, legacyModels)
+	globalModels := availableRequestModelsFromAccounts([]Account{newAccount(2, "global")}, PlatformQoder)
+	require.ElementsMatch(t, qoder.DefaultRequestModelIDsForSite(qoder.SiteGlobal), globalModels)
+	require.NotContains(t, globalModels, "minimax-m2.7")
 
 	mixedModels := availableRequestModelsFromAccounts([]Account{newAccount(3, "global"), newAccount(4, "cn")}, PlatformQoder)
-	require.ElementsMatch(t, qoder.DefaultRequestModelIDsForSite(qoder.SiteCN), mixedModels)
+	require.ElementsMatch(t, qoder.DefaultRequestModelIDs(), mixedModels)
 }
 
 func TestAvailableRequestModelsFromAccountsFiltersConfiguredQoderModels(t *testing.T) {
@@ -40,7 +40,6 @@ func TestAvailableRequestModelsFromAccountsFiltersConfiguredQoderModels(t *testi
 		return Account{
 			ID:          id,
 			Platform:    PlatformQoder,
-			Type:        AccountTypeCosy,
 			Status:      StatusActive,
 			Schedulable: true,
 			Credentials: credentials,
@@ -59,9 +58,9 @@ func TestAvailableRequestModelsFromAccountsFiltersConfiguredQoderModels(t *testi
 	overrideModels := availableRequestModelsFromAccounts([]Account{cnMappingOverride}, PlatformQoder)
 	require.Equal(t, []string{"claude-opus-4-6"}, overrideModels)
 
-	legacyWhitelist := newAccount(13, "global", map[string]any{
+	globalWhitelist := newAccount(13, "global", map[string]any{
 		"model_whitelist": []any{"claude-opus-4-6", "qwen3.6-flash"},
 	})
-	mixedModels := availableRequestModelsFromAccounts([]Account{cnWhitelist, legacyWhitelist}, PlatformQoder)
-	require.Equal(t, []string{"qwen3.6-flash"}, mixedModels)
+	mixedModels := availableRequestModelsFromAccounts([]Account{cnWhitelist, globalWhitelist}, PlatformQoder)
+	require.ElementsMatch(t, []string{"claude-opus-4-6", "qwen3.6-flash"}, mixedModels)
 }

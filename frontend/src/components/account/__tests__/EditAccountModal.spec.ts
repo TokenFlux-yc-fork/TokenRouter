@@ -977,19 +977,17 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.security_oauth_token).toBe('redacted')
   })
 
-  it('keeps legacy Qoder credentials unchanged and requires reauthorization', async () => {
+  it('switches Qoder site without deleting credentials or model mappings', async () => {
     const account = buildQoderAccount()
     updateAccountMock.mockResolvedValue(account)
     const wrapper = mountModal(account)
 
-    expect(wrapper.get('[data-testid="edit-qoder-reauthorization-required"]').text())
-      .toContain('admin.accounts.qoder.reauthorizationRequired')
-    expect(wrapper.find('[data-testid="edit-qoder-site-global"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="edit-qoder-site-cn"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="edit-qoder-site-cn"]').trigger('click')
+    expect(wrapper.text()).toContain('admin.accounts.qoder.site.changeWarning')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
-    expect(credentials.site).toBe('global')
+    expect(credentials.site).toBe('cn')
     expect(credentials.refresh_mode).toBe('cosy')
     expect(credentials.security_oauth_token).toBe('redacted')
     expect(credentials.model_mapping).toEqual({

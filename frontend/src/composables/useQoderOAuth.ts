@@ -2,7 +2,7 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { QoderPollResponse, QoderTokenInfo } from '@/api/admin/qoder'
+import type { QoderPollResponse, QoderSite, QoderTokenInfo } from '@/api/admin/qoder'
 
 export function useQoderOAuth() {
   const appStore = useAppStore()
@@ -42,7 +42,10 @@ export function useQoderOAuth() {
     error.value = ''
   }
 
-  const generateAuthUrl = async (proxyId: number | null | undefined): Promise<boolean> => {
+  const generateAuthUrl = async (
+    proxyId: number | null | undefined,
+    site: QoderSite = 'global'
+  ): Promise<boolean> => {
     const generation = beginRequest()
     loading.value = true
     authUrl.value = ''
@@ -51,7 +54,7 @@ export function useQoderOAuth() {
     error.value = ''
 
     try {
-      const payload: Record<string, unknown> = { site: 'cn' }
+      const payload: Record<string, unknown> = { site }
       if (proxyId) payload.proxy_id = proxyId
 
       const response = await adminAPI.qoder.generateAuthUrl(payload as any)
@@ -169,8 +172,8 @@ export function useQoderOAuth() {
     organization_name: tokenInfo.organization_name,
     name: tokenInfo.name,
     user_type: tokenInfo.user_type,
-    site: 'cn',
-    refresh_mode: tokenInfo.refresh_mode || 'qodercn20',
+    site: tokenInfo.site,
+    refresh_mode: tokenInfo.refresh_mode,
     expires_at: tokenInfo.expires_at,
     extra: tokenInfo.extra
   })

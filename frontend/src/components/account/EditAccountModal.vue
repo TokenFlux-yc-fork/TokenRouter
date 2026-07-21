@@ -26,12 +26,42 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
-      <div
-        v-if="qoderNeedsReauthorization"
-        data-testid="edit-qoder-reauthorization-required"
-        class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-200"
-      >
-        {{ t('admin.accounts.qoder.reauthorizationRequired') }}
+      <!-- 编辑站点只改路由上下文，不擅自改写令牌来源。 -->
+      <div v-if="isQoderCosyAccount" class="space-y-2">
+        <label class="input-label">{{ t('admin.accounts.qoder.site.label') }}</label>
+        <div class="grid grid-cols-2 gap-2" role="group" :aria-label="t('admin.accounts.qoder.site.label')">
+          <button
+            type="button"
+            data-testid="edit-qoder-site-global"
+            :aria-pressed="qoderSite === 'global'"
+            @click="qoderSite = 'global'"
+            :class="[
+              'rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
+              qoderSite === 'global'
+                ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-dark-500 dark:bg-dark-700 dark:text-gray-300'
+            ]"
+          >
+            {{ t('admin.accounts.qoder.site.global') }}
+          </button>
+          <button
+            type="button"
+            data-testid="edit-qoder-site-cn"
+            :aria-pressed="qoderSite === 'cn'"
+            @click="qoderSite = 'cn'"
+            :class="[
+              'rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
+              qoderSite === 'cn'
+                ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-dark-500 dark:bg-dark-700 dark:text-gray-300'
+            ]"
+          >
+            {{ t('admin.accounts.qoder.site.cn') }}
+          </button>
+        </div>
+        <p v-if="qoderSiteChanged" class="text-xs text-amber-600 dark:text-amber-400">
+          {{ t('admin.accounts.qoder.site.changeWarning') }}
+        </p>
       </div>
 
       <!-- API Key fields (only for apikey type) -->
@@ -2619,7 +2649,8 @@ import {
   buildPersistedModelRestriction,
   splitQoderPersistedModelRestriction,
   splitPersistedModelRestriction,
-  isValidWildcardPattern
+  isValidWildcardPattern,
+  type QoderSite
 } from '@/composables/useModelWhitelist'
 
 interface Props {
@@ -2694,6 +2725,7 @@ const qoderModelRestrictionConfigured = ref(false)
 const qoderModelRestrictionTouched = ref(false)
 const qoderModelWhitelistConfigured = ref(false)
 const qoderModelWhitelistTouched = ref(false)
+const qoderSite = ref<QoderSite>('global')
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const DEFAULT_POOL_MODE_RETRY_STATUS_CODES = [401, 403, 429]
@@ -2866,11 +2898,12 @@ const supportsTLSFingerprint = (account: Account | null | undefined) => {
 const isQoderCosyAccount = computed(() =>
   props.account?.platform === 'qoder' && props.account?.type === 'cosy'
 )
-const qoderNeedsReauthorization = computed(() => {
+const originalQoderSite = computed<QoderSite>(() => {
   const credentials = props.account?.credentials as Record<string, unknown> | undefined
-  return isQoderCosyAccount.value && credentials?.site !== 'cn'
+  return credentials?.site === 'cn' ? 'cn' : 'global'
 })
-const qoderAvailableModels = computed(() => getModelsByPlatform('qoder'))
+const qoderSiteChanged = computed(() => isQoderCosyAccount.value && qoderSite.value !== originalQoderSite.value)
+const qoderAvailableModels = computed(() => getModelsByPlatform('qoder', qoderSite.value))
 const supportsOAuthLikeModelRestriction = computed(() =>
   (props.account?.platform === 'openai' && props.account?.type === 'oauth') ||
   (props.account?.platform === 'grok' && props.account?.type === 'oauth') ||
@@ -3065,7 +3098,10 @@ const openAICompactStatusKey = computed(() => {
 
 // Computed: current preset mappings based on platform
 const presetMappings = computed(() =>
-  getPresetMappingsByPlatform(props.account?.platform || 'anthropic')
+  getPresetMappingsByPlatform(
+    props.account?.platform || 'anthropic',
+    isQoderCosyAccount.value ? qoderSite.value : undefined
+  )
 )
 const tempUnschedPresets = computed(() => [
   {
@@ -3274,6 +3310,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load intercept warmup requests setting (applies to all account types)
   const credentials = newAccount.credentials as Record<string, unknown> | undefined
+  qoderSite.value = newAccount.platform === 'qoder' && credentials?.site === 'cn' ? 'cn' : 'global'
   interceptWarmupRequests.value = credentials?.intercept_warmup_requests === true
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
@@ -4387,6 +4424,7 @@ const handleSubmit = async () => {
 
       if (props.account.platform === 'qoder') {
         applyQoderModelRestriction(newCredentials)
+        newCredentials.site = qoderSite.value
       } else if (props.account.platform === 'openai') {
         applyOpenAIModelMappingCredentials(newCredentials)
       } else {

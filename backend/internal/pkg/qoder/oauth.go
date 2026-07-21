@@ -19,14 +19,14 @@ import (
 )
 
 const (
-	// OpenAPIBaseURL 是国内站 OpenAPI 地址。
-	OpenAPIBaseURL = CNOpenAPIBaseURL
+	// OpenAPIBaseURL 是国际站 OpenAPI 地址，保留名称以兼容旧调用。
+	OpenAPIBaseURL = GlobalOpenAPIBaseURL
 
-	// OAuthClientID 是国内站公开 client ID。
-	OAuthClientID = CNOAuthClientID
+	// OAuthClientID 是国际站公开 client ID，保留名称以兼容旧调用。
+	OAuthClientID = GlobalOAuthClientID
 
-	// DeviceAuthorizationURL 是国内站授权地址。
-	DeviceAuthorizationURL = CNDeviceAuthorizationURL
+	// DeviceAuthorizationURL 是国际站授权地址，保留名称以兼容旧调用。
+	DeviceAuthorizationURL = GlobalDeviceAuthorizationURL
 
 	// DevicePollPath 是浏览器授权后轮询 device token 的端点。
 	DevicePollPath = "/api/v1/deviceToken/poll"
@@ -255,7 +255,7 @@ type OAuthClient struct {
 }
 
 func NewOAuthClient(baseURL string, httpClient *http.Client) *OAuthClient {
-	profile := MustProfileForSite(SiteCN)
+	profile := MustProfileForSite(SiteGlobal)
 	if strings.TrimSpace(baseURL) != "" {
 		profile.OpenAPIBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	}
@@ -266,7 +266,7 @@ func NewOAuthClient(baseURL string, httpClient *http.Client) *OAuthClient {
 func NewOAuthClientForProfile(profile Profile, httpClient *http.Client) *OAuthClient {
 	normalized, err := NormalizeProfile(profile)
 	if err != nil {
-		normalized = MustProfileForSite(SiteCN)
+		normalized = MustProfileForSite(SiteGlobal)
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 20 * time.Second}
@@ -279,7 +279,7 @@ func NewOAuthClientForProfile(profile Profile, httpClient *http.Client) *OAuthCl
 }
 
 func NewDeviceAuthRequest() (*DeviceAuthRequest, error) {
-	return NewDeviceAuthRequestForProfile(MustProfileForSite(SiteCN))
+	return NewDeviceAuthRequestForProfile(MustProfileForSite(SiteGlobal))
 }
 
 // NewDeviceAuthRequestForSite 为指定站点生成设备授权参数。
@@ -320,7 +320,7 @@ func NewDeviceAuthRequestForProfile(profile Profile) (*DeviceAuthRequest, error)
 func (r *DeviceAuthRequest) AuthorizationURL() string {
 	profile := r.Profile
 	if strings.TrimSpace(profile.DeviceAuthorizationURL) == "" {
-		profile = MustProfileForSite(SiteCN)
+		profile = MustProfileForSite(SiteGlobal)
 	}
 	clientID := strings.TrimSpace(r.ClientID)
 	if clientID == "" {
@@ -573,11 +573,11 @@ func (e *OpenAPIError) UpstreamFailure() bool {
 
 func (c *OAuthClient) profile() Profile {
 	if c == nil {
-		return MustProfileForSite(SiteCN)
+		return MustProfileForSite(SiteGlobal)
 	}
 	profile, err := NormalizeProfile(c.Profile)
 	if err != nil {
-		profile = MustProfileForSite(SiteCN)
+		profile = MustProfileForSite(SiteGlobal)
 	}
 	if strings.TrimSpace(c.BaseURL) != "" {
 		profile.OpenAPIBaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")

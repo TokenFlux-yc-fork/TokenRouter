@@ -21,13 +21,11 @@ func TestMachineIPFromAddressesUsesFirstNonLoopbackIPv4(t *testing.T) {
 func TestParseSiteAndRefreshModeCompatibility(t *testing.T) {
 	site, err := ParseSite("")
 	require.NoError(t, err)
-	require.Equal(t, SiteCN, site)
+	require.Equal(t, SiteGlobal, site)
 
 	site, err = ParseSite("cn")
 	require.NoError(t, err)
 	require.Equal(t, SiteCN, site)
-	_, err = ParseSite("global")
-	require.ErrorContains(t, err, "Qoder CN")
 	_, err = ParseSite("unknown")
 	require.ErrorContains(t, err, "unsupported site")
 
@@ -42,6 +40,16 @@ func TestParseSiteAndRefreshModeCompatibility(t *testing.T) {
 }
 
 func TestProfileForSiteUsesFrozenProductionValues(t *testing.T) {
+	global, err := ProfileForSite(SiteGlobal)
+	require.NoError(t, err)
+	require.Equal(t, GlobalDeviceAuthorizationURL, global.DeviceAuthorizationURL)
+	require.Equal(t, GlobalOpenAPIBaseURL, global.OpenAPIBaseURL)
+	require.Equal(t, GlobalCenterBaseURL, global.CenterBaseURL)
+	require.Equal(t, GlobalGatewayBaseURL, global.GatewayBaseURL)
+	require.Equal(t, GlobalClientVersion, global.ClientVersion)
+	require.Equal(t, GlobalOAuthClientID, global.OAuthClientID)
+	require.Equal(t, "Qoder/"+GlobalClientVersion, global.OpenAPIUserAgent())
+
 	cn, err := ProfileForSite(SiteCN)
 	require.NoError(t, err)
 	require.Equal(t, CNDeviceAuthorizationURL, cn.DeviceAuthorizationURL)
@@ -50,10 +58,7 @@ func TestProfileForSiteUsesFrozenProductionValues(t *testing.T) {
 	require.Equal(t, CNGatewayBaseURL, cn.GatewayBaseURL)
 	require.Equal(t, CNClientVersion, cn.ClientVersion)
 	require.Equal(t, CNOAuthClientID, cn.OAuthClientID)
-	require.Equal(t, "Qoder CLI CN/"+CNClientVersion, cn.OpenAPIUserAgent())
-
-	_, err = ProfileForSite(SiteGlobal)
-	require.ErrorContains(t, err, "Qoder CN")
+	require.Equal(t, "Qoder CN/"+CNClientVersion, cn.OpenAPIUserAgent())
 }
 
 func TestNormalizeProfileAllowsTestEndpointInjection(t *testing.T) {
@@ -77,6 +82,22 @@ func TestMachineOSForNormalizesArchitectureAliases(t *testing.T) {
 
 func TestModelsAndAliasesAreSiteAware(t *testing.T) {
 	require.Equal(t, []string{
+		"claude-opus-4-6",
+		"auto",
+		"performance",
+		"efficient",
+		"lite",
+		"qwen3.8-max-preview",
+		"qwen3.7-max",
+		"qwen3.7-plus",
+		"kimi-k3",
+		"kimi-k2.7-code",
+		"glm-5.2",
+		"deepseek-v4-pro",
+		"deepseek-v4-flash",
+		"minimax-m3",
+	}, DefaultRequestModelIDsForSite(SiteGlobal))
+	require.Equal(t, []string{
 		"auto",
 		"qwen3.8-max-preview",
 		"qwen3.7-max",
@@ -88,10 +109,14 @@ func TestModelsAndAliasesAreSiteAware(t *testing.T) {
 		"kimi-k2.7-code",
 		"minimax-m2.7",
 	}, DefaultRequestModelIDsForSite(SiteCN))
-	require.Equal(t, DefaultRequestModelIDsForSite(SiteCN), DefaultRequestModelIDs())
 
-	route, ok := AliasForSite(SiteCN, "minimax-m2.7")
+	route, ok := AliasForSite(SiteGlobal, "qwen3.8-max-preview")
+	require.True(t, ok)
+	require.Equal(t, "qmodel_preview", route)
+	route, ok = AliasForSite(SiteCN, "minimax-m2.7")
 	require.True(t, ok)
 	require.Equal(t, "mmodel", route)
+	require.False(t, ModelCompatibleWithSite(SiteGlobal, "minimax-m2.7"))
 	require.True(t, ModelCompatibleWithSite(SiteCN, "minimax-m2.7"))
+	require.True(t, ModelCompatibleWithSite(SiteGlobal, "unknown-raw-key"))
 }

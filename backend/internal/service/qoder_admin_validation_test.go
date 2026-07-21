@@ -19,7 +19,6 @@ func TestValidateQoderCosyCredentialsAcceptsDirectToken(t *testing.T) {
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
-			"site":                 "cn",
 			"security_oauth_token": "dt-token",
 			"machine_id":           "machine-1",
 			"uid":                  "uid-1",
@@ -41,7 +40,6 @@ func TestCreateQoderDirectTokenAccountPersistsStableMachineIdentity(t *testing.T
 		Type:                 AccountTypeCosy,
 		SkipDefaultGroupBind: true,
 		Credentials: map[string]any{
-			"site":                 "cn",
 			"security_oauth_token": "dt-token",
 			"machine_id":           "machine-1",
 			"uid":                  "uid-1",
@@ -58,7 +56,6 @@ func TestCreateQoderDirectTokenAccountRejectsMissingMachineID(t *testing.T) {
 	repo := &upstreamBillingProbeAccountRepo{}
 	svc := &adminServiceImpl{accountRepo: repo}
 	credentials := map[string]any{
-		"site":                 "cn",
 		"security_oauth_token": "dt-token",
 		"uid":                  "uid-1",
 	}
@@ -77,6 +74,32 @@ func TestCreateQoderDirectTokenAccountRejectsMissingMachineID(t *testing.T) {
 	require.Empty(t, credentials["machine_type"])
 }
 
+func TestCreateQoderPATAccountPersistsStableMachineIdentity(t *testing.T) {
+	old := qoderValidatePAT
+	defer func() { qoderValidatePAT = old }()
+	qoderValidatePAT = func(_ context.Context, _ *Account, _ string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+		require.NotEmpty(t, machine.MachineID)
+		require.NotEmpty(t, machine.MachineToken)
+		require.NotEmpty(t, machine.MachineType)
+		return &qoder.AuthIdentity{UID: "uid-1", SecurityOauthToken: "dt-token"}, nil
+	}
+	repo := &upstreamBillingProbeAccountRepo{}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	created, err := svc.CreateAccount(context.Background(), &CreateAccountInput{
+		Name:                 "qoder-pat",
+		Platform:             PlatformQoder,
+		Type:                 AccountTypeCosy,
+		SkipDefaultGroupBind: true,
+		Credentials:          map[string]any{"pat": "pat-123"},
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, created.GetCredential("machine_id"))
+	require.NotEmpty(t, created.GetCredential("machine_token"))
+	require.NotEmpty(t, created.GetCredential("machine_type"))
+}
+
 func TestCreateQoderCNPATAccountUsesOfficialMachineIdentity(t *testing.T) {
 	old := qoderValidateCNPAT
 	defer func() { qoderValidateCNPAT = old }()
@@ -84,8 +107,8 @@ func TestCreateQoderCNPATAccountUsesOfficialMachineIdentity(t *testing.T) {
 		parsedMachineID, err := uuid.Parse(machine.MachineID)
 		require.NoError(t, err)
 		require.Equal(t, uuid.Version(4), parsedMachineID.Version())
-		require.Equal(t, machine.MachineID, machine.MachineToken)
-		require.Equal(t, "5", machine.MachineType)
+		require.Empty(t, machine.MachineToken)
+		require.Empty(t, machine.MachineType)
 		return &qoder.AuthIdentity{UID: "uid-cn", SecurityOauthToken: "dt-cn"}, nil
 	}
 	repo := &upstreamBillingProbeAccountRepo{}
@@ -104,11 +127,11 @@ func TestCreateQoderCNPATAccountUsesOfficialMachineIdentity(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, created.GetCredential("machine_id"), 36)
-	require.Equal(t, created.GetCredential("machine_id"), created.GetCredential("machine_token"))
-	require.Equal(t, "5", created.GetCredential("machine_type"))
+	require.Empty(t, created.GetCredential("machine_token"))
+	require.Empty(t, created.GetCredential("machine_type"))
 }
 
-func TestEnsureQoderCNMachineCredentialsNormalizesLegacyFields(t *testing.T) {
+func TestEnsureQoderCNMachineCredentialsRemovesLegacyFields(t *testing.T) {
 	account := &Account{Credentials: map[string]any{
 		"site":                 "cn",
 		"security_oauth_token": "cosy-token",
@@ -120,20 +143,19 @@ func TestEnsureQoderCNMachineCredentialsNormalizesLegacyFields(t *testing.T) {
 	ensureQoderMachineCredentials(account)
 
 	require.Equal(t, "machine-cn", account.GetCredential("machine_id"))
-	require.Equal(t, "machine-cn", account.GetCredential("machine_token"))
-	require.Equal(t, "5", account.GetCredential("machine_type"))
+	require.NotContains(t, account.Credentials, "machine_token")
+	require.NotContains(t, account.Credentials, "machine_type")
 }
 
 func TestUpdateQoderDirectTokenAccountPreservesLegacyMachineFallback(t *testing.T) {
 	const accountID int64 = 1202
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
 		accountID: {
-			ID:          accountID,
-			Name:        "legacy-qoder",
-			Platform:    PlatformQoder,
-			Type:        AccountTypeCosy,
-			Status:      StatusActive,
-			Schedulable: true,
+			ID:       accountID,
+			Name:     "legacy-qoder",
+			Platform: PlatformQoder,
+			Type:     AccountTypeCosy,
+			Status:   StatusActive,
 			Credentials: map[string]any{
 				"security_oauth_token": "dt-token",
 				"machine_id":           "legacy-machine",
@@ -151,7 +173,6 @@ func TestUpdateQoderDirectTokenAccountPreservesLegacyMachineFallback(t *testing.
 	require.Equal(t, "legacy-machine", updated.GetCredential("machine_id"))
 	require.Empty(t, updated.GetCredential("machine_token"))
 	require.Empty(t, updated.GetCredential("machine_type"))
-	require.False(t, updated.IsSchedulable())
 }
 
 func TestValidateQoderCosyCredentialsAcceptsDirectTokenWithAID(t *testing.T) {
@@ -159,7 +180,6 @@ func TestValidateQoderCosyCredentialsAcceptsDirectTokenWithAID(t *testing.T) {
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
-			"site":                 "cn",
 			"security_oauth_token": "dt-token",
 			"machine_id":           "machine-1",
 			"aid":                  "aid-1",
@@ -174,7 +194,6 @@ func TestValidateQoderCosyCredentialsRejectsDirectTokenWithoutIdentity(t *testin
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
-			"site":                 "cn",
 			"security_oauth_token": "dt-token",
 			"machine_id":           "machine-1",
 		},
@@ -202,7 +221,7 @@ func TestValidateQoderCosyCredentialsRejectsMachineIDOnly(t *testing.T) {
 	account := &Account{
 		Platform:    PlatformQoder,
 		Type:        AccountTypeCosy,
-		Credentials: map[string]any{"site": "cn", "machine_id": "machine-1"},
+		Credentials: map[string]any{"machine_id": "machine-1"},
 	}
 
 	require.ErrorContains(t, ValidateQoderCosyCredentials(context.Background(), account), "pat or security_oauth_token")
@@ -233,7 +252,6 @@ func TestValidateQoderCosyCredentialsRejectsMachineIDWithAuthDir(t *testing.T) {
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
-			"site":       "cn",
 			"machine_id": "machine-1",
 			"auth_dir":   "/tmp/qoder-auth",
 		},
@@ -243,10 +261,10 @@ func TestValidateQoderCosyCredentialsRejectsMachineIDWithAuthDir(t *testing.T) {
 }
 
 func TestValidateQoderCosyCredentialsExchangesPAT(t *testing.T) {
-	old := qoderValidateCNPAT
-	defer func() { qoderValidateCNPAT = old }()
+	old := qoderValidatePAT
+	defer func() { qoderValidatePAT = old }()
 	calls := 0
-	qoderValidateCNPAT = func(ctx context.Context, account *Account, pat string, machine *qoder.MachineIdentity, _ qoder.RequestDoer) (*qoder.AuthIdentity, error) {
+	qoderValidatePAT = func(ctx context.Context, account *Account, pat string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
 		calls++
 		require.Equal(t, "pat-123", pat)
 		return &qoder.AuthIdentity{UID: "uid", SecurityOauthToken: "dt-token"}, nil
@@ -255,7 +273,7 @@ func TestValidateQoderCosyCredentialsExchangesPAT(t *testing.T) {
 	account := &Account{
 		Platform:    PlatformQoder,
 		Type:        AccountTypeCosy,
-		Credentials: map[string]any{"site": "cn", "pat": "pat-123"},
+		Credentials: map[string]any{"pat": "pat-123"},
 	}
 
 	require.NoError(t, ValidateQoderCosyCredentials(context.Background(), account))
@@ -265,7 +283,34 @@ func TestValidateQoderCosyCredentialsExchangesPAT(t *testing.T) {
 	require.Empty(t, account.GetCredential("machine_type"))
 }
 
-func TestUpdateLegacyQoderAccountRejectsSiteOnlyMigration(t *testing.T) {
+func TestValidateQoderCosyCredentialsDefersUnchangedPATExchangeForSiteEdit(t *testing.T) {
+	old := qoderValidatePAT
+	defer func() { qoderValidatePAT = old }()
+	qoderValidatePAT = func(context.Context, *Account, string, *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+		t.Fatal("站点编辑不应在保存阶段重新交换未变化的 PAT")
+		return nil, nil
+	}
+	account := &Account{
+		Platform:    PlatformQoder,
+		Type:        AccountTypeCosy,
+		Credentials: map[string]any{"site": "cn", "pat": "pat-123"},
+	}
+
+	err := validateQoderCosyCredentialsWithOptions(context.Background(), account, nil, nil, true)
+
+	require.NoError(t, err)
+	require.Empty(t, account.GetCredential("machine_id"))
+	require.Empty(t, account.GetCredential("machine_token"))
+	require.Empty(t, account.GetCredential("machine_type"))
+}
+
+func TestUpdateQoderPATAccountDefersCompatibilityCheckWhenSiteChanges(t *testing.T) {
+	old := qoderValidatePAT
+	defer func() { qoderValidatePAT = old }()
+	qoderValidatePAT = func(context.Context, *Account, string, *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+		t.Fatal("切换站点应保存原 PAT，并由后续连接测试判断兼容性")
+		return nil, nil
+	}
 	const accountID int64 = 1201
 	baseRepo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
 		accountID: {
@@ -281,72 +326,33 @@ func TestUpdateLegacyQoderAccountRejectsSiteOnlyMigration(t *testing.T) {
 	}}
 	svc := &adminServiceImpl{accountRepo: &upstreamBillingProbeAdminRepo{baseRepo}}
 
-	_, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
-		Credentials: map[string]any{"site": "cn"},
-	})
-
-	require.ErrorIs(t, err, ErrQoderCNReauthorizationRequired)
-	require.Equal(t, "global", baseRepo.accounts[accountID].GetCredential("site"))
-}
-
-func TestUpdateLegacyQoderAccountAcceptsFreshCNPAT(t *testing.T) {
-	old := qoderValidateCNPAT
-	defer func() { qoderValidateCNPAT = old }()
-	qoderValidateCNPAT = func(_ context.Context, _ *Account, pat string, machine *qoder.MachineIdentity, _ qoder.RequestDoer) (*qoder.AuthIdentity, error) {
-		require.Equal(t, "new-cn-pat", pat)
-		require.NotEmpty(t, machine.MachineID)
-		return &qoder.AuthIdentity{UID: "uid-cn", SecurityOauthToken: "token-cn"}, nil
-	}
-	const accountID int64 = 1203
-	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
-		accountID: {
-			ID:          accountID,
-			Platform:    PlatformQoder,
-			Type:        AccountTypeCosy,
-			Status:      StatusActive,
-			Credentials: map[string]any{"site": "global", "pat": "old-global-pat"},
-		},
-	}}
-	svc := &adminServiceImpl{accountRepo: &upstreamBillingProbeAdminRepo{repo}}
-
 	updated, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
-		Credentials: map[string]any{"site": "cn", "pat": "new-cn-pat"},
+		Credentials: map[string]any{"site": "cn"},
 	})
 
 	require.NoError(t, err)
 	require.Equal(t, "cn", updated.GetCredential("site"))
-	require.Equal(t, "new-cn-pat", updated.GetCredential("pat"))
-	require.Equal(t, updated.GetCredential("machine_id"), updated.GetCredential("machine_token"))
-	require.Equal(t, "5", updated.GetCredential("machine_type"))
+	require.Equal(t, "pat-123", updated.GetCredential("pat"))
+	require.Empty(t, updated.GetCredential("machine_id"))
 }
 
 func TestValidateQoderCosyCredentialsRejectsBadPAT(t *testing.T) {
-	old := qoderValidateCNPAT
-	defer func() { qoderValidateCNPAT = old }()
-	qoderValidateCNPAT = func(ctx context.Context, account *Account, pat string, machine *qoder.MachineIdentity, _ qoder.RequestDoer) (*qoder.AuthIdentity, error) {
+	old := qoderValidatePAT
+	defer func() { qoderValidatePAT = old }()
+	qoderValidatePAT = func(ctx context.Context, account *Account, pat string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
 		return nil, errors.New("bad pat")
 	}
 
 	account := &Account{
 		Platform:    PlatformQoder,
 		Type:        AccountTypeCosy,
-		Credentials: map[string]any{"site": "cn", "pat": "pat-123"},
+		Credentials: map[string]any{"pat": "pat-123"},
 	}
 
 	require.ErrorContains(t, ValidateQoderCosyCredentials(context.Background(), account), "bad pat")
 }
 
 func TestValidateQoderCosyCredentialsPATUsesAccountDoer(t *testing.T) {
-	old := qoderValidateCNPAT
-	defer func() { qoderValidateCNPAT = old }()
-	qoderValidateCNPAT = func(ctx context.Context, _ *Account, _ string, _ *qoder.MachineIdentity, doer qoder.RequestDoer) (*qoder.AuthIdentity, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://gateway.qoder.com.cn/test", nil)
-		require.NoError(t, err)
-		resp, err := doer(req)
-		require.NoError(t, err)
-		_ = resp.Body.Close()
-		return &qoder.AuthIdentity{UID: "uid-1", SecurityOauthToken: "dt-token"}, nil
-	}
 	upstream := &qoderValidationHTTPUpstreamStub{}
 	proxyID := int64(9)
 	account := &Account{
@@ -356,7 +362,7 @@ func TestValidateQoderCosyCredentialsPATUsesAccountDoer(t *testing.T) {
 		Concurrency: 5,
 		ProxyID:     &proxyID,
 		Proxy:       &Proxy{Protocol: "http", Host: "proxy.example.com", Port: 8080},
-		Credentials: map[string]any{"site": "cn", "pat": "pat-123"},
+		Credentials: map[string]any{"pat": "pat-123"},
 	}
 
 	err := validateQoderCosyCredentials(context.Background(), account, upstream, nil)
