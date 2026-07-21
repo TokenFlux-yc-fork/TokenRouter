@@ -1,6 +1,6 @@
 import { apiClient } from '../client'
 
-export type QoderSite = 'cn'
+export type QoderSite = 'global' | 'cn'
 
 export interface QoderAuthUrlResponse {
   auth_url: string

@@ -1,43 +1,18 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 )
 
-var ErrQoderCNReauthorizationRequired = errors.New("qoder credentials require Qoder CN reauthorization")
-
-// qoderSiteForAccount 只接受明确标记为 CN 的凭据，避免静默复用国际站 token。
+// qoderSiteForAccount 严格读取账号站点；旧账号缺失字段时默认国际站。
 func qoderSiteForAccount(account *Account) (qoder.Site, error) {
 	if account == nil {
-		return "", fmt.Errorf("qoder: account is nil")
+		return qoder.SiteGlobal, fmt.Errorf("qoder: account is nil")
 	}
-	site := strings.ToLower(strings.TrimSpace(account.GetCredential("site")))
-	if site == "" || site == string(qoder.SiteGlobal) {
-		return "", ErrQoderCNReauthorizationRequired
-	}
-	return qoder.ParseSite(site)
-}
-
-func qoderCNReauthorizationProvided(credentials map[string]any) bool {
-	if strings.ToLower(strings.TrimSpace(stringFromCredentialValue(credentials["site"]))) != string(qoder.SiteCN) {
-		return false
-	}
-	if strings.TrimSpace(stringFromCredentialValue(credentials["pat"])) != "" {
-		return true
-	}
-	if strings.ToLower(strings.TrimSpace(stringFromCredentialValue(credentials["refresh_mode"]))) != qoder.RefreshModeQoderCN20 {
-		return false
-	}
-	return strings.TrimSpace(stringFromCredentialValue(credentials["security_oauth_token"])) != "" &&
-		strings.TrimSpace(stringFromCredentialValue(credentials["machine_id"])) != "" &&
-		firstNonEmptyQoder(
-			stringFromCredentialValue(credentials["uid"]),
-			stringFromCredentialValue(credentials["aid"]),
-		) != ""
+	return qoder.ParseSite(account.GetCredential("site"))
 }
 
 // qoderProfileForAccount 返回账号站点对应的集中式协议 profile。
@@ -58,7 +33,7 @@ func qoderRefreshModeForAccount(account *Account) (string, error) {
 }
 
 // ensureQoderMachineCredentials 为新建 Qoder 账号补齐并持久化站点对应的稳定机器身份。
-// direct token 账号必须由调用方提供 machine_id。
+// direct token 账号必须由调用方提供 machine_id；国内站不生成额外机器字段。
 func ensureQoderMachineCredentials(account *Account) {
 	if account == nil {
 		return
@@ -74,35 +49,54 @@ func ensureQoderMachineCredentials(account *Account) {
 	}
 	site, err := qoderSiteForAccount(account)
 	if err != nil {
+		site = qoder.SiteGlobal
+	}
+	if site == qoder.SiteCN {
+		// 国内客户端只持久化 machine_id，并清理旧版本曾写入的随机机器字段。
+		delete(account.Credentials, "machine_token")
+		delete(account.Credentials, "machine_type")
+		if pat != "" && machineID == "" {
+			account.Credentials["machine_id"] = qoder.NewMachineForSite(site).MachineID
+		}
+		return
+	}
+	machine := qoder.NewMachineForSite(site)
+	if machineID != "" && strings.TrimSpace(account.GetCredential("machine_token")) != "" &&
+		strings.TrimSpace(account.GetCredential("machine_type")) != "" {
 		return
 	}
 	if pat != "" && machineID == "" {
-		machineID = qoder.NewMachineForSite(site).MachineID
-		account.Credentials["machine_id"] = machineID
+		account.Credentials["machine_id"] = machine.MachineID
 	}
-	if machineID != "" {
-		account.Credentials["machine_token"] = machineID
-		account.Credentials["machine_type"] = "5"
+	if strings.TrimSpace(account.GetCredential("machine_token")) == "" {
+		account.Credentials["machine_token"] = machine.MachineToken
+	}
+	if strings.TrimSpace(account.GetCredential("machine_type")) == "" {
+		account.Credentials["machine_type"] = machine.MachineType
 	}
 }
 
-// qoderMachineForAccount 读取持久化机器身份。
+// qoderMachineForAccount 读取持久化机器身份，并对旧账号使用兼容回退值。
 func qoderMachineForAccount(account *Account) *qoder.MachineIdentity {
 	if account == nil {
 		return qoder.NewMachine()
 	}
 	site, err := qoderSiteForAccount(account)
 	if err != nil {
-		return qoder.NewMachineForSite(qoder.SiteCN)
+		site = qoder.SiteGlobal
 	}
 	machineID := strings.TrimSpace(account.GetCredential("machine_id"))
 	if machineID == "" {
 		machineID = qoder.NewMachineForSite(site).MachineID
 	}
+	if site == qoder.SiteCN {
+		// 忽略旧版本曾保存的随机 token/type，保持官方国内客户端的空值语义。
+		return &qoder.MachineIdentity{MachineID: machineID}
+	}
 	return &qoder.MachineIdentity{
 		MachineID:    machineID,
-		MachineToken: machineID,
-		MachineType:  "5",
+		MachineToken: firstNonEmptyQoder(account.GetCredential("machine_token"), machineID),
+		MachineType:  firstNonEmptyQoder(account.GetCredential("machine_type"), "5"),
 	}
 }
 

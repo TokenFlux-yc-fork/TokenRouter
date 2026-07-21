@@ -51,26 +51,6 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
-  it('旧 Qoder 凭据显示需要重新授权', () => {
-    const wrapper = mount(AccountStatusIndicator, {
-      props: {
-        account: makeAccount({
-          platform: 'qoder',
-          type: 'cosy',
-          credentials: { site: 'global' }
-        })
-      },
-      global: {
-        stubs: {
-          Icon: true
-        }
-      }
-    })
-
-    expect(wrapper.find('.badge-warning').text())
-      .toBe('admin.accounts.status.reauthorizationRequired')
-  })
-
   it('Grok 账号额度限流时显示自动恢复时间而非临时不可调度', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

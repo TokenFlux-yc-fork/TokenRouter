@@ -153,7 +153,7 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
     wrapper.unmount()
   })
 
-  it('Qoder COSY 账号同时显示重授权和刷新 token 入口', () => {
+  it('Qoder COSY 账号显示刷新 token 但不显示重授权入口', () => {
     const account = makeAccount({
       platform: 'qoder',
       type: 'cosy',
@@ -166,11 +166,11 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
     })
     const body = getBodyText()
     expect(body).toContain('admin.accounts.refreshToken')
-    expect(body).toContain('admin.accounts.reAuthorize')
+    expect(body).not.toContain('admin.accounts.reAuthorize')
     wrapper.unmount()
   })
 
-  it('无 refresh_token 的 Qoder COSY 账号仍显示重授权入口', () => {
+  it('无 refresh_token 的 Qoder COSY 账号隐藏刷新 token 入口', () => {
     const account = makeAccount({
       platform: 'qoder',
       type: 'cosy',
@@ -181,9 +181,7 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
       props: { show: true, account, position },
       attachTo: document.body,
     })
-    const body = getBodyText()
-    expect(body).toContain('admin.accounts.reAuthorize')
-    expect(body).not.toContain('admin.accounts.refreshToken')
+    expect(getBodyText()).not.toContain('admin.accounts.refreshToken')
     wrapper.unmount()
   })
 
