@@ -954,7 +954,7 @@ func TestOpenAIResponses_RejectsMessageIDAsPreviousResponseID(t *testing.T) {
 	require.Contains(t, w.Body.String(), "previous_response_id must be a response.id")
 }
 
-func TestOpenAIResponses_HTTPContinuationPreviousResponseIDReachesRouting(t *testing.T) {
+func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	w := httptest.NewRecorder()
@@ -975,51 +975,15 @@ func TestOpenAIResponses_HTTPContinuationPreviousResponseIDReachesRouting(t *tes
 		Concurrency: 1,
 	})
 
-	cache := &concurrencyCacheMock{
-		acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
-			return false, errors.New("user slot unavailable")
-		},
-	}
-	h := newOpenAIHandlerForPreviousResponseIDValidation(t, cache)
-	h.Responses(c)
-
-	require.Equal(t, http.StatusServiceUnavailable, w.Code)
-	require.NotContains(t, w.Body.String(), "previous_response_id is only supported")
-}
-
-func TestOpenAIResponses_GrokHTTPContinuationPreviousResponseIDRemainsUnsupported(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(
-		`{"model":"grok-4.5","stream":false,"previous_response_id":"resp_123456","input":[{"type":"input_text","text":"hello"}]}`,
-	))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	groupID := int64(2)
-	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-		ID:      101,
-		GroupID: &groupID,
-		User:    &service.User{ID: 1},
-		Group: &service.Group{
-			ID:       groupID,
-			Platform: service.PlatformGrok,
-		},
-	})
-	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
-		UserID:      1,
-		Concurrency: 1,
-	})
-
 	h := newOpenAIHandlerForPreviousResponseIDValidation(t, nil)
 	h.Responses(c)
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Contains(t, w.Body.String(), "OpenAI Responses WebSocket v2")
+	require.Contains(t, w.Body.String(), "Responses WebSocket v2")
+	require.Contains(t, w.Body.String(), "previous_response_id")
 }
 
-func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceIncludesContinuationOption(t *testing.T) {
+func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceDoesNotSuggestPreviousResponseReuse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	w := httptest.NewRecorder()
@@ -1044,8 +1008,8 @@ func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceIncludesContinuationOptio
 	h.Responses(c)
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Contains(t, w.Body.String(), "call_id or previous_response_id")
-	require.NotContains(t, w.Body.String(), "Responses WebSocket v2")
+	require.Contains(t, w.Body.String(), "Responses WebSocket v2")
+	require.NotContains(t, w.Body.String(), "reuse previous_response_id")
 }
 
 func TestOpenAIResponsesWebSocket_SetsClientTransportWSWhenUpgradeValid(t *testing.T) {

@@ -23,7 +23,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestOpenAIGatewayService_Forward_HTTPContinuationBridgesToWSv2AndBindsSticky(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	type receivedPayload struct {
@@ -92,7 +92,6 @@ func TestOpenAIGatewayService_Forward_HTTPContinuationBridgesToWSv2AndBindsStick
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
-	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 	groupID := int64(1001)
 	c.Set("api_key", &APIKey{GroupID: &groupID})
 
@@ -141,7 +140,6 @@ func TestOpenAIGatewayService_Forward_HTTPContinuationBridgesToWSv2AndBindsStick
 		},
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
-			"openai_passthrough":              true,
 		},
 	}
 
@@ -155,10 +153,6 @@ func TestOpenAIGatewayService_Forward_HTTPContinuationBridgesToWSv2AndBindsStick
 	require.Equal(t, "resp_new_1", result.RequestID)
 	require.True(t, result.OpenAIWSMode)
 	require.False(t, gjson.GetBytes(upstream.lastBody, "model").Exists(), "WSv2 成功时不应回落 HTTP 上游")
-	decision, _ := c.Get("openai_ws_transport_decision")
-	reason, _ := c.Get("openai_ws_transport_reason")
-	require.Equal(t, string(OpenAIUpstreamTransportResponsesWebsocketV2), decision)
-	require.Equal(t, "http_previous_response_bridge", reason)
 
 	received := <-receivedCh
 	require.Equal(t, "response.create", received.Type)
