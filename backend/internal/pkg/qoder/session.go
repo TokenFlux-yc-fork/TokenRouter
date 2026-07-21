@@ -67,7 +67,6 @@ type SessionContext struct {
 	Machine       *MachineIdentity
 	Site          Site
 	ClientVersion string
-	DataPolicy    string
 }
 
 // BuildAuthPayloadJSON 将 AuthIdentity 转换为紧凑 JSON 字节。
@@ -77,13 +76,13 @@ func BuildAuthPayloadJSON(identity *AuthIdentity) ([]byte, error) {
 
 // BuildPayloadB64 构造 COSY header 使用的 base64 payload。
 func BuildPayloadB64(info, requestID string) (string, error) {
-	return BuildPayloadB64WithVersion(info, requestID, CNClientVersion)
+	return BuildPayloadB64WithVersion(info, requestID, GlobalClientVersion)
 }
 
 // BuildPayloadB64WithVersion 使用站点客户端版本构造 COSY header payload。
 func BuildPayloadB64WithVersion(info, requestID, clientVersion string) (string, error) {
 	if clientVersion == "" {
-		clientVersion = CNClientVersion
+		clientVersion = GlobalClientVersion
 	}
 	payload := map[string]string{
 		"cosyVersion": clientVersion,
@@ -129,7 +128,7 @@ func AESEncrypt(data, key []byte) ([]byte, error) {
 
 // NewSession 创建新的 COSY session 上下文。
 func NewSession(identity *AuthIdentity, machine *MachineIdentity) (*SessionContext, error) {
-	return NewSessionForSite(identity, machine, SiteCN)
+	return NewSessionForSite(identity, machine, SiteGlobal)
 }
 
 // NewSessionForSite 为指定站点创建新的 COSY session 上下文。
@@ -143,7 +142,7 @@ func NewSessionForSite(identity *AuthIdentity, machine *MachineIdentity, site Si
 
 // NewSessionWithKey 使用可选的显式临时 key 创建 COSY session。
 func NewSessionWithKey(identity *AuthIdentity, machine *MachineIdentity, tempKey []byte) (*SessionContext, error) {
-	return NewSessionForProfileWithKey(identity, machine, MustProfileForSite(SiteCN), tempKey)
+	return NewSessionForProfileWithKey(identity, machine, MustProfileForSite(SiteGlobal), tempKey)
 }
 
 // NewSessionForProfileWithKey 使用站点 profile 和可选临时 key 创建 COSY session。
@@ -181,7 +180,6 @@ func NewSessionForProfileWithKey(identity *AuthIdentity, machine *MachineIdentit
 		Machine:       machine,
 		Site:          normalizedProfile.Site,
 		ClientVersion: normalizedProfile.ClientVersion,
-		DataPolicy:    "agree",
 	}, nil
 }
 

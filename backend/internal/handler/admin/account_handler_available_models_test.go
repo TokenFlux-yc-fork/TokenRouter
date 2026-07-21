@@ -293,7 +293,7 @@ func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(
 	}, ids, "影子可用模型由 model_mapping 派生（非写死）")
 }
 
-func TestAccountHandlerGetAvailableModels_QoderMissingSiteUsesCNDefaults(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_QoderFallsBackToDefaults(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -322,7 +322,7 @@ func TestAccountHandlerGetAvailableModels_QoderMissingSiteUsesCNDefaults(t *test
 	for _, model := range resp.Data {
 		ids = append(ids, model.ID)
 	}
-	require.ElementsMatch(t, qoder.DefaultRequestModelIDs(), ids)
+	require.ElementsMatch(t, qoder.DefaultRequestModelIDsForSite(qoder.SiteGlobal), ids)
 	require.NotContains(t, ids, "ultimate")
 	require.NotContains(t, ids, "qmodel_latest")
 	require.NotContains(t, ids, "quest-ultimate")

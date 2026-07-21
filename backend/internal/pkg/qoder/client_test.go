@@ -59,19 +59,9 @@ func TestCNClientUsesGatewayEndpointVersionAndCanonicalSignaturePath(t *testing.
 	require.Equal(t, CNClientVersion, captured.Header.Get("Cosy-Version"))
 	require.Equal(t, "aarch64_darwin", captured.Header.Get("Cosy-Machineos"))
 	require.Equal(t, "mid-abc", captured.Header.Get("Cosy-Machineid"))
-	require.Equal(t, "mid-abc", captured.Header.Get("Cosy-Machinetoken"))
-	require.Equal(t, "5", captured.Header.Get("Cosy-Machinetype"))
-	require.NotContains(t, captured.Header, "Cosy-Machinecode")
-	require.Equal(t, "5", captured.Header.Get("Cosy-Clienttype"))
-	require.Equal(t, "agree", captured.Header.Get("Cosy-Data-Policy"))
-	require.Equal(t, "assistant", captured.Header.Get("Cosy-Scene"))
-	require.Equal(t, "cli", captured.Header.Get("Cosy-Business-Product"))
-	require.Equal(t, "agent", captured.Header.Get("Cosy-Business-Type"))
-	require.NotContains(t, captured.Header, "Cosy-Clientip")
-	require.NotContains(t, captured.Header, "Date")
-	require.NotContains(t, captured.Header, "Signature")
-	require.NotContains(t, captured.Header, "Appcode")
-	require.Regexp(t, `^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`, captured.Header.Get("traceparent"))
+	require.Equal(t, []string{""}, captured.Header.Values("Cosy-Machinetoken"))
+	require.Equal(t, []string{""}, captured.Header.Values("Cosy-Machinetype"))
+	require.Equal(t, []string{""}, captured.Header.Values("Cosy-Machinecode"))
 
 	authorization := strings.TrimPrefix(captured.Header.Get("Authorization"), "Bearer COSY.")
 	parts := strings.Split(authorization, ".")
@@ -167,7 +157,7 @@ func TestSignatureJSONRequestUsesAppcodeHeadersWithoutAuthorization(t *testing.T
 
 	require.NoError(t, err)
 	require.Equal(t, "1", captured.URL.Query().Get("Encode"))
-	require.Equal(t, "5", captured.Header.Get("Cosy-Clienttype"))
+	require.Equal(t, "0", captured.Header.Get("Cosy-Clienttype"))
 	require.NotEmpty(t, captured.Header.Get("Date"))
 	require.Equal(t, AppCode, captured.Header.Get("Appcode"))
 	require.NotEmpty(t, captured.Header.Get("Signature"))
@@ -188,9 +178,11 @@ func getHeaders(t *testing.T) http.Header {
 	return req.Header
 }
 
-func TestHeadersOmitClientIPForQoderCLICN(t *testing.T) {
+func TestHeadersClientIPIsMachineID(t *testing.T) {
 	h := getHeaders(t)
-	require.NotContains(t, h, "cosy-clientip")
+	if h.Get("cosy-clientip") != "mid-abc" {
+		t.Errorf("cosy-clientip = %q, want mid-abc", h.Get("cosy-clientip"))
+	}
 }
 
 func TestHeadersMachineTypeIs5(t *testing.T) {
@@ -200,29 +192,24 @@ func TestHeadersMachineTypeIs5(t *testing.T) {
 	}
 }
 
-func TestHeadersDeriveMachineTokenFromMachineID(t *testing.T) {
+func TestHeadersUsePersistedMachineToken(t *testing.T) {
 	h := getHeaders(t)
-	if h.Get("cosy-machinetoken") != "mid-abc" {
-		t.Errorf("cosy-machinetoken = %q, want mid-abc", h.Get("cosy-machinetoken"))
+	if h.Get("cosy-machinetoken") != "mytoken" {
+		t.Errorf("cosy-machinetoken = %q, want mytoken", h.Get("cosy-machinetoken"))
 	}
 }
 
-func TestHeadersUseSessionDataPolicy(t *testing.T) {
-	session := testSession()
-	session.DataPolicy = "DISAGREE"
-	client := NewClient("")
-	req, _ := http.NewRequest("POST", "https://gateway.qoder.com.cn/test", nil)
-	client.setHeaders(req, session, "/test", "encoded-body")
-	h := req.Header
+func TestHeadersDataPolicyIsDisagree(t *testing.T) {
+	h := getHeaders(t)
 	if h.Get("cosy-data-policy") != "disagree" {
 		t.Errorf("cosy-data-policy = %q, want disagree", h.Get("cosy-data-policy"))
 	}
 }
 
-func TestHeadersUseQoderCLICNVersion(t *testing.T) {
+func TestHeadersUseGlobalSiteVersion(t *testing.T) {
 	h := getHeaders(t)
-	if h.Get("cosy-version") != CNClientVersion {
-		t.Errorf("cosy-version = %q, want %s", h.Get("cosy-version"), CNClientVersion)
+	if h.Get("cosy-version") != GlobalClientVersion {
+		t.Errorf("cosy-version = %q, want %s", h.Get("cosy-version"), GlobalClientVersion)
 	}
 }
 
@@ -239,7 +226,7 @@ func TestHeadersIncludeMachineOSAndLegacyFallbacks(t *testing.T) {
 	require.Equal(t, "aarch64_darwin", req.Header.Get("cosy-machineos"))
 }
 
-func TestCNHeadersUseQoderCLICNWireIdentity(t *testing.T) {
+func TestCNHeadersIgnoreLegacyRandomMachineFields(t *testing.T) {
 	session := testSession()
 	session.Site = SiteCN
 	client := NewClientForProfile(MustProfileForSite(SiteCN))
@@ -249,15 +236,16 @@ func TestCNHeadersUseQoderCLICNWireIdentity(t *testing.T) {
 	client.setHeaders(req, session, "/test", "encoded-body")
 
 	require.Equal(t, "mid-abc", req.Header.Get("cosy-machineid"))
-	require.Equal(t, "mid-abc", req.Header.Get("cosy-machinetoken"))
-	require.Equal(t, "5", req.Header.Get("cosy-machinetype"))
-	require.NotContains(t, req.Header, "cosy-machinecode")
-	require.NotContains(t, req.Header, "cosy-clientip")
-	require.Equal(t, "5", req.Header.Get("cosy-clienttype"))
-	require.Equal(t, "agree", req.Header.Get("cosy-data-policy"))
-	require.Equal(t, "assistant", req.Header.Get("Cosy-Scene"))
-	require.Equal(t, "cli", req.Header.Get("Cosy-Business-Product"))
-	require.Equal(t, "agent", req.Header.Get("Cosy-Business-Type"))
+	require.Equal(t, []string{""}, req.Header.Values("cosy-machinetoken"))
+	require.Equal(t, []string{""}, req.Header.Values("cosy-machinetype"))
+	require.Equal(t, []string{""}, req.Header.Values("cosy-machinecode"))
+	require.Equal(t, "172.18.0.1", req.Header.Get("cosy-clientip"))
+	require.Equal(t, "0", req.Header.Get("cosy-clienttype"))
+	require.Equal(t, "DISAGREE", req.Header.Get("cosy-data-policy"))
+	require.Equal(t, []string{""}, req.Header.Values("cosy-organization-tags"))
+	require.NotContains(t, req.Header, "Cosy-Scene")
+	require.NotContains(t, req.Header, "Cosy-Business-Product")
+	require.NotContains(t, req.Header, "Cosy-Business-Type")
 }
 
 func TestHeadersOrganizationID(t *testing.T) {
@@ -267,9 +255,11 @@ func TestHeadersOrganizationID(t *testing.T) {
 	}
 }
 
-func TestHeadersOmitOrganizationTagsForQoderCLICN(t *testing.T) {
+func TestHeadersOrganizationTags(t *testing.T) {
 	h := getHeaders(t)
-	require.NotContains(t, h, "cosy-organization-tags")
+	if h.Get("cosy-organization-tags") != "Normal" {
+		t.Errorf("cosy-organization-tags = %q, want Normal", h.Get("cosy-organization-tags"))
+	}
 }
 
 func TestHeadersScene(t *testing.T) {

@@ -888,6 +888,43 @@
         </div>
       </div>
 
+      <!-- Qoder 站点选择，必须在登录方式之前冻结。 -->
+      <div v-if="form.platform === 'qoder'" class="space-y-2">
+        <label class="input-label">{{ t('admin.accounts.qoder.site.label') }}</label>
+        <div class="grid grid-cols-2 gap-2" role="group" :aria-label="t('admin.accounts.qoder.site.label')">
+          <button
+            type="button"
+            data-testid="create-qoder-site-global"
+            :disabled="submitting || isQoderOAuthAccountCreating"
+            :aria-pressed="qoderSite === 'global'"
+            @click="qoderSite = 'global'"
+            :class="[
+              'rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+              qoderSite === 'global'
+                ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-dark-500 dark:bg-dark-700 dark:text-gray-300'
+            ]"
+          >
+            {{ t('admin.accounts.qoder.site.global') }}
+          </button>
+          <button
+            type="button"
+            data-testid="create-qoder-site-cn"
+            :disabled="submitting || isQoderOAuthAccountCreating"
+            :aria-pressed="qoderSite === 'cn'"
+            @click="qoderSite = 'cn'"
+            :class="[
+              'rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+              qoderSite === 'cn'
+                ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-dark-500 dark:bg-dark-700 dark:text-gray-300'
+            ]"
+          >
+            {{ t('admin.accounts.qoder.site.cn') }}
+          </button>
+        </div>
+      </div>
+
       <!-- Qoder 账号类型选择 -->
       <div v-if="form.platform === 'qoder'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
@@ -3856,7 +3893,7 @@ import {
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
 import { useQoderOAuth } from '@/composables/useQoderOAuth'
-import type { QoderTokenInfo } from '@/api/admin/qoder'
+import type { QoderSite, QoderTokenInfo } from '@/api/admin/qoder'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
 import type {
   Proxy,
@@ -4211,6 +4248,7 @@ const mixedScheduling = ref(false) // For antigravity accounts: enable mixed sch
 const allowOverages = ref(false) // For antigravity accounts: enable AI Credits overages
 const antigravityAccountType = ref<'oauth' | 'upstream'>('oauth') // For antigravity: oauth or upstream
 const qoderAccountType = ref<'oauth' | 'manual'>('oauth')
+const qoderSite = ref<QoderSite>('global')
 const qoderPAT = ref('')
 const qoderSecurityOauthToken = ref('')
 const qoderMachineId = ref('')
@@ -4660,8 +4698,10 @@ const geminiHelpLinks = {
 }
 
 // Computed: current preset mappings based on platform
-const presetMappings = computed(() => getPresetMappingsByPlatform(form.platform))
-const qoderAvailableModels = computed(() => getModelsByPlatform('qoder'))
+const presetMappings = computed(() =>
+  getPresetMappingsByPlatform(form.platform, form.platform === 'qoder' ? qoderSite.value : undefined)
+)
+const qoderAvailableModels = computed(() => getModelsByPlatform('qoder', qoderSite.value))
 const tempUnschedPresets = computed(() => [
   {
     label: t('admin.accounts.tempUnschedulable.presets.overloadLabel'),
@@ -4873,6 +4913,7 @@ watch(
     if (newPlatform === 'qoder') {
       accountCategory.value = 'oauth-based'
       qoderAccountType.value = 'oauth'
+      qoderSite.value = 'global'
     } else {
       qoderAccountType.value = 'oauth'
       qoderPAT.value = ''
@@ -4940,6 +4981,15 @@ watch(
     grokOAuth.resetState()
   }
 )
+
+watch(qoderSite, (newSite, oldSite) => {
+  if (newSite === oldSite || form.platform !== 'qoder') return
+  // OAuth 会话冻结站点和代理；切站后必须销毁旧会话，手动输入保持不变。
+  stopQoderPolling()
+  closeQoderAuthPopup()
+  resetQoderOAuthCompletionState()
+  qoderOAuth.resetState()
+})
 
 // Gemini AI Studio OAuth availability (requires operator-configured OAuth client)
 watch(
@@ -5423,6 +5473,7 @@ const resetForm = () => {
   allowOverages.value = false
   antigravityAccountType.value = 'oauth'
   qoderAccountType.value = 'oauth'
+  qoderSite.value = 'global'
   qoderPAT.value = ''
   qoderSecurityOauthToken.value = ''
   qoderMachineId.value = ''
@@ -5843,7 +5894,7 @@ const handleSubmit = async () => {
       return
     }
     const credentials: Record<string, unknown> = {
-      site: 'cn',
+      site: qoderSite.value,
       refresh_mode: 'cosy'
     }
     if (qoderPAT.value.trim()) {
@@ -6031,14 +6082,17 @@ const resetQoderOAuthCompletionState = () => {
 
 interface QoderFlowContext {
   generation: number
+  site: QoderSite
 }
 
 const captureQoderFlowContext = (): QoderFlowContext => ({
-  generation: qoderFlowGeneration.value
+  generation: qoderFlowGeneration.value,
+  site: qoderSite.value
 })
 
 const isCurrentQoderFlow = (context: QoderFlowContext) =>
   context.generation === qoderFlowGeneration.value &&
+  context.site === qoderSite.value &&
   form.platform === 'qoder' &&
   props.show
 
@@ -6147,7 +6201,7 @@ const handleGenerateUrl = async () => {
       popup: authPopup
     }
     qoderAuthPopupLease = popupLease
-    const ok = await qoderOAuth.generateAuthUrl(form.proxy_id)
+    const ok = await qoderOAuth.generateAuthUrl(form.proxy_id, flowContext.site)
     if (!isCurrentQoderFlow(flowContext)) {
       closeQoderAuthPopup(popupLease)
       return

@@ -95,11 +95,10 @@ type qoderUsageHTTPUpstreamStub struct {
 
 func qoderUsageCredentials(token string) map[string]any {
 	return map[string]any{
-		"site":                 "cn",
 		"security_oauth_token": token,
 		"machine_id":           "machine-usage",
-		"machine_token":        "machine-usage",
-		"machine_type":         "5",
+		"machine_token":        "machine-token-usage",
+		"machine_type":         "machine-type-usage",
 		"uid":                  "uid-usage",
 		"organization_id":      "org-usage",
 	}
@@ -241,34 +240,23 @@ func TestAccountUsageService_QoderCNQuotaUsesSignedGatewayQueryAndParsesExtensio
 func TestAccountUsageService_QoderUsagePrefersPATBootstrapOverStoredSecurityToken(t *testing.T) {
 	t.Parallel()
 
-	upstream := &qoderUsageHTTPUpstreamStub{body: `{
+	upstream := &qoderUsageHTTPUpstreamStub{bodies: []string{
+		`{"id":"user-1","name":"Qoder User","userType":"teams","securityOauthToken":"fresh-token","refreshToken":"refresh-1"}`,
+		`{
 			"userType":"teams",
 			"usageType":"credits",
 			"totalUsagePercentage":1,
 			"isQuotaExceeded":false,
 			"expiresAt":1783875207000,
 			"userQuota":{"total":100,"used":1,"remaining":99,"percentage":1,"unit":"credits"}
-		}`}
-	provider := NewQoderTokenProvider()
-	exchangeCalls := 0
-	provider.exchangeCNPAT = func(_ context.Context, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error) {
-		exchangeCalls++
-		return &qoder.AuthIdentity{
-			UID:                "user-1",
-			AID:                "user-1",
-			UserType:           "teams",
-			OrganizationID:     "org-test",
-			SecurityOauthToken: "fresh-token",
-			RefreshToken:       "refresh-1",
-		}, time.Now().Add(time.Hour), nil
-	}
+		}`,
+	}}
 	repo := &accountUsageCodexProbeRepo{
 		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{{
 			ID:       5,
 			Platform: PlatformQoder,
 			Type:     AccountTypeCosy,
 			Credentials: map[string]any{
-				"site":                 "cn",
 				"pat":                  "pat-token",
 				"security_oauth_token": "stale-token",
 				"machine_id":           "machine-1",
@@ -278,12 +266,7 @@ func TestAccountUsageService_QoderUsagePrefersPATBootstrapOverStoredSecurityToke
 			},
 		}}},
 	}
-	svc := &AccountUsageService{
-		accountRepo:          repo,
-		cache:                NewUsageCache(),
-		httpUpstream:         upstream,
-		qoderSessionProvider: provider,
-	}
+	svc := &AccountUsageService{accountRepo: repo, cache: NewUsageCache(), httpUpstream: upstream}
 
 	usage, err := svc.GetUsage(context.Background(), 5)
 
@@ -293,11 +276,8 @@ func TestAccountUsageService_QoderUsagePrefersPATBootstrapOverStoredSecurityToke
 	if usage.QoderQuota == nil || usage.QoderQuota.UserQuota == nil || usage.QoderQuota.UserQuota.Used != 1 {
 		t.Fatalf("unexpected qoder quota: %#v", usage.QoderQuota)
 	}
-	if exchangeCalls != 1 {
-		t.Fatalf("PAT exchange calls = %d, want 1", exchangeCalls)
-	}
-	if got := atomic.LoadInt32(&upstream.calls); got != 1 {
-		t.Fatalf("upstream calls = %d, want quota usage only", got)
+	if got := atomic.LoadInt32(&upstream.calls); got != 2 {
+		t.Fatalf("upstream calls = %d, want PAT exchange + quota usage", got)
 	}
 	if got := upstream.req.Header.Get("Authorization"); !strings.HasPrefix(got, "Bearer COSY.") {
 		t.Fatalf("quota Authorization = %q, want signed COSY bearer", got)
@@ -327,7 +307,6 @@ func TestAccountUsageService_QoderUsageDoesNotReuseStoredTokenWhenPATBootstrapFa
 			Platform: PlatformQoder,
 			Type:     AccountTypeCosy,
 			Credentials: map[string]any{
-				"site":                 "cn",
 				"pat":                  "pat-token",
 				"security_oauth_token": "stored-token",
 				"machine_id":           "machine-1",
