@@ -216,7 +216,7 @@ func TestResolveRequestableModels_UnrestrictedAccountAddsDefaultsAndMappingSourc
 	require.NotContains(t, ids, "gpt-*")
 }
 
-func TestResolveRequestableModels_QoderUsesSchedulableAccountSiteUnion(t *testing.T) {
+func TestResolveRequestableModels_QoderUsesCNAccountsOnly(t *testing.T) {
 	groupID := int64(4121)
 	global := Account{
 		ID:          90,
@@ -238,10 +238,8 @@ func TestResolveRequestableModels_QoderUsesSchedulableAccountSiteUnion(t *testin
 		return RequestableModelIDs(result.Models)
 	}
 
-	globalIDs := resolve(global)
-	require.Contains(t, globalIDs, "claude-opus-4-6")
-	require.NotContains(t, globalIDs, "qwen3.6-flash")
-	require.NotContains(t, globalIDs, "minimax-m2.7")
+	legacyIDs := resolve(global)
+	require.Empty(t, legacyIDs)
 
 	cnIDs := resolve(cn)
 	require.Contains(t, cnIDs, "qwen3.6-flash")
@@ -250,10 +248,10 @@ func TestResolveRequestableModels_QoderUsesSchedulableAccountSiteUnion(t *testin
 	require.NotContains(t, cnIDs, "minimax-m3")
 
 	mixedIDs := resolve(global, cn)
-	require.Contains(t, mixedIDs, "claude-opus-4-6")
 	require.Contains(t, mixedIDs, "qwen3.6-flash")
-	require.Contains(t, mixedIDs, "minimax-m3")
 	require.Contains(t, mixedIDs, "minimax-m2.7")
+	require.NotContains(t, mixedIDs, "claude-opus-4-6")
+	require.NotContains(t, mixedIDs, "minimax-m3")
 
 	cn.Credentials["model_mapping"] = map[string]any{"claude-opus-4-6": "ultimate"}
 	require.Contains(t, resolve(cn), "claude-opus-4-6")
@@ -526,7 +524,14 @@ func TestResolveRequestableModels_QoderRequiresEffectivePricing(t *testing.T) {
 			{Platform: PlatformQoder, Models: []string{"qoder-*"}, InputPrice: &effectivePrice},
 		},
 	}
-	account := Account{ID: 69, Platform: PlatformQoder}
+	account := Account{
+		ID:       69,
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site": "cn",
+		},
+	}
 	svc := &GatewayService{
 		accountRepo:    &modelsListAccountRepoStub{byGroup: map[int64][]Account{groupID: {account}}},
 		channelService: newRequestableModelsChannelService(groupID, PlatformQoder, channel),

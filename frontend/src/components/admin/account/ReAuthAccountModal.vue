@@ -20,9 +20,11 @@
                   ? 'from-blue-500 to-blue-600'
                   : isAntigravity
                     ? 'from-purple-500 to-purple-600'
-                    : isGrok
-                      ? 'from-zinc-700 to-zinc-900'
-                      : 'from-orange-500 to-orange-600'
+                    : isQoder
+                      ? 'from-cyan-500 to-cyan-600'
+                      : isGrok
+                        ? 'from-zinc-700 to-zinc-900'
+                        : 'from-orange-500 to-orange-600'
             ]"
           >
             <Icon name="sparkles" size="md" class="text-white" />
@@ -39,9 +41,11 @@
                     ? t('admin.accounts.geminiAccount')
                     : isAntigravity
                       ? t('admin.accounts.antigravityAccount')
-                      : isGrok
-                        ? t('admin.accounts.grokAccount')
-                        : t('admin.accounts.claudeCodeAccount')
+                      : isQoder
+                        ? t('admin.accounts.qoderAccount')
+                        : isGrok
+                          ? t('admin.accounts.grokAccount')
+                          : t('admin.accounts.claudeCodeAccount')
               }}
             </span>
           </div>
@@ -132,7 +136,7 @@
         :show-cookie-option="isAnthropic"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
-        :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isAntigravity ? 'antigravity' : isGrok ? 'grok' : 'anthropic'"
+        :platform="isOpenAI ? 'openai' : isGemini ? 'gemini' : isAntigravity ? 'antigravity' : isQoder ? 'qoder' : isGrok ? 'grok' : 'anthropic'"
         :show-project-id="isGemini && geminiOAuthType === 'code_assist'"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
@@ -196,6 +200,7 @@ import {
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useGeminiOAuth } from '@/composables/useGeminiOAuth'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
+import { useQoderOAuth } from '@/composables/useQoderOAuth'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
 import type { Account } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -232,6 +237,7 @@ const claudeOAuth = useAccountOAuth()
 const openaiOAuth = useOpenAIOAuth()
 const geminiOAuth = useGeminiOAuth()
 const antigravityOAuth = useAntigravityOAuth()
+const qoderOAuth = useQoderOAuth()
 const grokOAuth = useGrokOAuth()
 
 // Refs
@@ -247,6 +253,7 @@ const isOpenAILike = computed(() => isOpenAI.value)
 const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
+const isQoder = computed(() => props.account?.platform === 'qoder')
 const isGrok = computed(() => props.account?.platform === 'grok')
 
 // Computed - current OAuth state based on platform
@@ -254,6 +261,7 @@ const currentAuthUrl = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.authUrl.value
   if (isGemini.value) return geminiOAuth.authUrl.value
   if (isAntigravity.value) return antigravityOAuth.authUrl.value
+  if (isQoder.value) return qoderOAuth.authUrl.value
   if (isGrok.value) return grokOAuth.authUrl.value
   return claudeOAuth.authUrl.value
 })
@@ -261,6 +269,7 @@ const currentSessionId = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.sessionId.value
   if (isGemini.value) return geminiOAuth.sessionId.value
   if (isAntigravity.value) return antigravityOAuth.sessionId.value
+  if (isQoder.value) return qoderOAuth.sessionId.value
   if (isGrok.value) return grokOAuth.sessionId.value
   return claudeOAuth.sessionId.value
 })
@@ -268,6 +277,7 @@ const currentLoading = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.loading.value
   if (isGemini.value) return geminiOAuth.loading.value
   if (isAntigravity.value) return antigravityOAuth.loading.value
+  if (isQoder.value) return qoderOAuth.loading.value || qoderOAuth.polling.value
   if (isGrok.value) return grokOAuth.loading.value
   return claudeOAuth.loading.value
 })
@@ -275,6 +285,7 @@ const currentError = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.error.value
   if (isGemini.value) return geminiOAuth.error.value
   if (isAntigravity.value) return antigravityOAuth.error.value
+  if (isQoder.value) return qoderOAuth.error.value
   if (isGrok.value) return grokOAuth.error.value
   return claudeOAuth.error.value
 })
@@ -282,14 +293,14 @@ const currentError = computed(() => {
 // Computed
 const isManualInputMethod = computed(() => {
   // OpenAI/Gemini/Antigravity always use manual input (no cookie auth option)
-  return isOpenAILike.value || isGemini.value || isAntigravity.value || isGrok.value || oauthFlowRef.value?.inputMethod === 'manual'
+  return isOpenAILike.value || isGemini.value || isAntigravity.value || isQoder.value || isGrok.value || oauthFlowRef.value?.inputMethod === 'manual'
 })
 
 const canExchangeCode = computed(() => {
   const authCode = oauthFlowRef.value?.authCode || ''
   const sessionId = currentSessionId.value
   const loading = currentLoading.value
-  return authCode.trim() && sessionId && !loading
+  return (isQoder.value || authCode.trim()) && sessionId && !loading
 })
 
 // Watchers
@@ -327,6 +338,7 @@ const resetState = () => {
   openaiOAuth.resetState()
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
+  qoderOAuth.resetState()
   grokOAuth.resetState()
   oauthFlowRef.value?.reset()
 }
@@ -347,6 +359,8 @@ const handleGenerateUrl = async () => {
     await geminiOAuth.generateAuthUrl(props.account.proxy_id, projectId, geminiOAuthType.value, tierId)
   } else if (isAntigravity.value) {
     await antigravityOAuth.generateAuthUrl(props.account.proxy_id)
+  } else if (isQoder.value) {
+    await qoderOAuth.generateAuthUrl(props.account.proxy_id)
   } else if (isGrok.value) {
     await grokOAuth.generateAuthUrl(props.account.proxy_id)
   } else {
@@ -358,9 +372,35 @@ const handleExchangeCode = async () => {
   if (!props.account) return
 
   const authCode = oauthFlowRef.value?.authCode || ''
-  if (!authCode.trim()) return
+  if (!isQoder.value && !authCode.trim()) return
 
-  if (isOpenAILike.value) {
+  if (isQoder.value) {
+    const sessionId = qoderOAuth.sessionId.value
+    const state = qoderOAuth.state.value
+    if (!sessionId || !state) return
+
+    const result = await qoderOAuth.pollAuthorization({ sessionId, state })
+    if (!result) return
+    if (result.status !== 'completed' || !result.token_info) {
+      appStore.showInfo(t('admin.accounts.oauth.qoder.authorizationPending'))
+      return
+    }
+
+    const credentials = qoderOAuth.buildCredentials(result.token_info)
+    try {
+      await adminAPI.accounts.update(props.account.id, {
+        type: 'cosy',
+        credentials
+      })
+      const updatedAccount = await adminAPI.accounts.clearError(props.account.id)
+      appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+      emit('reauthorized', updatedAccount)
+      handleClose()
+    } catch (error: any) {
+      qoderOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+      appStore.showError(qoderOAuth.error.value)
+    }
+  } else if (isOpenAILike.value) {
     // OpenAI OAuth flow
     const oauthClient = openaiOAuth
     const sessionId = oauthClient.sessionId.value
@@ -543,7 +583,7 @@ const handleExchangeCode = async () => {
 }
 
 const handleCookieAuth = async (sessionKey: string) => {
-  if (!props.account || isOpenAILike.value) return
+  if (!props.account || isOpenAILike.value || isQoder.value) return
 
   claudeOAuth.loading.value = true
   claudeOAuth.error.value = ''

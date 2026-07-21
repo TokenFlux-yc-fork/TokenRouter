@@ -31,7 +31,8 @@ func TestQoderOAuthHandlerGenerateAuthURL(t *testing.T) {
 	require.Equal(t, float64(0), resp["code"])
 	data, ok := resp["data"].(map[string]any)
 	require.True(t, ok)
-	require.Contains(t, data["auth_url"], "https://qoder.com/device/selectAccounts")
+	require.Contains(t, data["auth_url"], "https://qoder.com.cn/device/selectAccounts")
+	require.Equal(t, "cn", data["site"])
 	require.NotEmpty(t, data["session_id"])
 	require.NotEmpty(t, data["state"])
 	require.NotZero(t, data["expires_in"])
@@ -55,7 +56,7 @@ func TestQoderOAuthHandlerExchangeCodeValidatesRequest(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "SessionID")
 }
 
-func TestQoderOAuthHandlerGenerateAuthURLAcceptsCNAndRejectsUnknownSite(t *testing.T) {
+func TestQoderOAuthHandlerGenerateAuthURLAcceptsCNAndRejectsLegacyOrUnknownSite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	svc := service.NewQoderOAuthService(nil)
@@ -70,6 +71,13 @@ func TestQoderOAuthHandlerGenerateAuthURLAcceptsCNAndRejectsUnknownSite(t *testi
 	require.Equal(t, http.StatusOK, cnRecorder.Code)
 	require.Contains(t, cnRecorder.Body.String(), "qoder.com.cn")
 	require.Contains(t, cnRecorder.Body.String(), `"site":"cn"`)
+
+	globalRecorder := httptest.NewRecorder()
+	globalRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/qoder/oauth/auth-url", bytes.NewBufferString(`{"site":"global"}`))
+	globalRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(globalRecorder, globalRequest)
+	require.Equal(t, http.StatusBadRequest, globalRecorder.Code)
+	require.Contains(t, globalRecorder.Body.String(), "Qoder CN")
 
 	invalidRecorder := httptest.NewRecorder()
 	invalidRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/qoder/oauth/auth-url", bytes.NewBufferString(`{"site":"invalid"}`))

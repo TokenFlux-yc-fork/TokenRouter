@@ -299,6 +299,7 @@ export default {
         limited: '限流',
         rateLimited: '限流中',
         overloaded: '过载中',
+        reauthorizationRequired: '需要重新授权',
         tempUnschedulable: '临时不可调度',
         quotaExceeded: '配额超限',
         unschedulable: '不可调度',
@@ -1083,13 +1084,13 @@ export default {
           oauthOnlyHint: '首版 Grok 支持仅包含 OAuth 订阅的 Responses API 文本/推理转发。'
         },
         qoder: {
-          title: 'Qoder 账户授权',
-          followSteps: '请按照以下步骤完成 Qoder 账户授权：',
+          title: 'Qoder CN 账户授权',
+          followSteps: '请按照以下步骤完成 Qoder CN 账户授权：',
           step1GenerateUrl: '生成授权链接',
           generateAuthUrl: '生成授权链接',
           step2OpenUrl: '在浏览器中打开链接并完成授权',
-          openUrlDesc: '请在新标签页中打开授权链接，选择 Qoder 账号并完成授权。',
-          importantNotice: 'Qoder 使用设备授权流程。本页面会打开 Qoder 授权窗口并自动检查完成状态；这个流程通常不会出现 localhost 回调链接。',
+          openUrlDesc: '请在新标签页中打开授权链接，选择 Qoder CN 账号并完成授权。',
+          importantNotice: 'Qoder CN 使用设备授权流程，这个流程通常不会出现 localhost 回调链接。',
           step3EnterCode: '完成授权',
           authCodeDesc: '浏览器授权完成后，本页面会自动完成。若自动检查被中断，可以点击完成授权重新检查设备授权状态。',
           authCode: '手动回调输入（可选）',
@@ -1098,6 +1099,7 @@ export default {
           failedToGenerateUrl: '生成 Qoder 授权链接失败',
           missingExchangeParams: '缺少 session_id / state',
           failedToExchangeCode: 'Qoder 授权检查失败',
+          authorizationPending: 'Qoder CN 授权尚未完成。',
           popupBlocked: '浏览器拦截了 Qoder 授权弹窗，请使用打开链接按钮继续授权。'
         },
         // Gemini specific
@@ -1316,18 +1318,13 @@ export default {
       openaiAccount: 'OpenAI 账号',
       geminiAccount: 'Gemini 账号',
       antigravityAccount: 'Antigravity 账号',
-      qoderAccount: 'Qoder 账号',
+      qoderAccount: 'Qoder CN 账号',
       grokAccount: 'Grok 账号',
       qoder: {
-        site: {
-          label: 'Qoder 站点',
-          global: '国际站',
-          cn: '国内站',
-          changeWarning: '凭据可能不跨站通用，请保存后执行连接测试。'
-        },
+        reauthorizationRequired: '该账号仍使用旧 Qoder 凭据，必须通过 Qoder CN 重新授权后才能参与调度。',
         accountType: {
           oauthTitle: '授权链接',
-          oauthDesc: '推荐：浏览器完成 Qoder 登录授权。',
+          oauthDesc: '推荐：浏览器完成 Qoder CN 登录授权。',
           manualTitle: '手动凭证',
           manualDesc: '导入 PAT，或导入已有 token 与 machine_id。'
         },

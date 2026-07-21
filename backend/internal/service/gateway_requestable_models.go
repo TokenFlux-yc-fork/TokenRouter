@@ -190,28 +190,25 @@ func mergeRequestableModelCandidates(baseModels []string, accounts []Account, ch
 	}
 
 	hasUnrestrictedAccount := false
-	hasUnrestrictedQoderGlobal := false
-	hasUnrestrictedQoderCN := false
+	hasUnrestrictedQoder := false
 	for i := range accounts {
 		account := &accounts[i]
+		if platform == PlatformQoder && account.Platform == PlatformQoder {
+			if _, err := qoderSiteForAccount(account); err != nil {
+				continue
+			}
+		}
 		appendModels(sortedModelMappingSources(account.GetModelMapping())...)
 		if accountHasUnrestrictedModelScope(account) {
 			hasUnrestrictedAccount = true
 			if platform == PlatformQoder && account.Platform == PlatformQoder {
-				if site, err := qoderSiteForAccount(account); err == nil && site == qoder.SiteCN {
-					hasUnrestrictedQoderCN = true
-				} else {
-					hasUnrestrictedQoderGlobal = true
-				}
+				hasUnrestrictedQoder = true
 			}
 		}
 	}
 	if hasUnrestrictedAccount {
 		if platform == PlatformQoder {
-			if hasUnrestrictedQoderGlobal {
-				appendModels(qoder.DefaultRequestModelIDsForSite(qoder.SiteGlobal)...)
-			}
-			if hasUnrestrictedQoderCN {
+			if hasUnrestrictedQoder {
 				appendModels(qoder.DefaultRequestModelIDsForSite(qoder.SiteCN)...)
 			}
 		} else {

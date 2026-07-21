@@ -255,7 +255,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(payload.type).toBe('cosy')
     expect(payload.credentials.model_mapping).toBeUndefined()
     expect(payload.credentials.model_whitelist).toBeUndefined()
-    expect(payload.credentials.site).toBe('global')
+    expect(payload.credentials.site).toBe('cn')
     expect(payload.credentials.refresh_mode).toBe('cosy')
   })
 
@@ -288,16 +288,17 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(payload.platform).toBe('qoder')
     expect(payload.type).toBe('cosy')
     expect(payload.credentials).toMatchObject({ pat: 'pat-123' })
-    expect(payload.credentials.site).toBe('global')
+    expect(payload.credentials.site).toBe('cn')
     expect(payload.credentials.refresh_mode).toBe('cosy')
     expect(payload.credentials.security_oauth_token).toBeUndefined()
     expect(payload.credentials.machine_id).toBeUndefined()
   })
 
-  it('switches to the China site while preserving manual credentials', async () => {
+  it('creates manual credentials for the China site without a site selector', async () => {
     const wrapper = mountModal()
     await fillQoderManualForm(wrapper)
-    await wrapper.get('[data-testid="create-qoder-site-cn"]').trigger('click')
+    expect(wrapper.find('[data-testid="create-qoder-site-global"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="create-qoder-site-cn"]').exists()).toBe(false)
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
 
@@ -310,7 +311,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     })
   })
 
-  it('locks the selected site while a manual account creation request is pending', async () => {
+  it('keeps site selection unavailable while a manual account creation request is pending', async () => {
     const deferred = createDeferred<Record<string, never>>()
     createAccountMock.mockReturnValueOnce(deferred.promise)
     const wrapper = mountModal()
@@ -319,12 +320,8 @@ describe('CreateAccountModal Qoder model restriction', () => {
     await wrapper.get('form#create-account-form').trigger('submit.prevent')
     await flushPromises()
 
-    const globalButton = wrapper.get('[data-testid="create-qoder-site-global"]')
-    const cnButton = wrapper.get('[data-testid="create-qoder-site-cn"]')
-    expect(globalButton.attributes('disabled')).toBeDefined()
-    expect(cnButton.attributes('disabled')).toBeDefined()
-    await cnButton.trigger('click')
-    expect(globalButton.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="create-qoder-site-global"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="create-qoder-site-cn"]').exists()).toBe(false)
     expect(createAccountMock).toHaveBeenCalledTimes(1)
 
     deferred.resolve({})
@@ -371,7 +368,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(payload.credentials.model_whitelist).toEqual([])
   })
 
-  it('discards a generated OAuth session after returning and switching sites', async () => {
+  it('discards a generated OAuth session after returning to the account form', async () => {
     const deferred = createDeferred<{
       auth_url: string
       session_id: string
@@ -384,10 +381,9 @@ describe('CreateAccountModal Qoder model restriction', () => {
     const wrapper = mountModal()
     await openQoderOAuthStep(wrapper)
     await wrapper.get('[data-testid="generate-qoder-auth-url"]').trigger('click')
-    expect(generateQoderAuthUrlMock).toHaveBeenCalledWith({ site: 'global' })
+    expect(generateQoderAuthUrlMock).toHaveBeenCalledWith({ site: 'cn' })
 
     await findButtonByText(wrapper, 'common.back').trigger('click')
-    await wrapper.get('[data-testid="create-qoder-site-cn"]').trigger('click')
     deferred.resolve({
       auth_url: 'https://qoder.com/old-session',
       session_id: 'old-session',
@@ -402,7 +398,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     wrapper.unmount()
   })
 
-  it('does not create an account when an exchange completes after switching sites', async () => {
+  it('does not create an account when an exchange completes after returning', async () => {
     generateQoderAuthUrlMock.mockResolvedValueOnce({
       auth_url: 'https://qoder.com/device',
       session_id: 'global-session',
@@ -413,7 +409,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     const deferred = createDeferred<{
       security_oauth_token: string
       machine_id: string
-      site: 'global'
+      site: 'cn'
     }>()
     exchangeQoderCodeMock.mockReturnValueOnce(deferred.promise)
 
@@ -425,11 +421,10 @@ describe('CreateAccountModal Qoder model restriction', () => {
     expect(exchangeQoderCodeMock).toHaveBeenCalledTimes(1)
 
     await findButtonByText(wrapper, 'common.back').trigger('click')
-    await wrapper.get('[data-testid="create-qoder-site-cn"]').trigger('click')
     deferred.resolve({
-      security_oauth_token: 'old-global-token',
+      security_oauth_token: 'old-cn-token',
       machine_id: 'old-machine',
-      site: 'global'
+      site: 'cn'
     })
     await flushPromises()
 
@@ -437,7 +432,7 @@ describe('CreateAccountModal Qoder model restriction', () => {
     wrapper.unmount()
   })
 
-  it('keeps site switching and duplicate exchange disabled while account creation is pending', async () => {
+  it('keeps navigation and duplicate exchange disabled while account creation is pending', async () => {
     generateQoderAuthUrlMock.mockResolvedValueOnce({
       auth_url: 'https://qoder.com/device',
       session_id: 'global-session',
@@ -446,9 +441,9 @@ describe('CreateAccountModal Qoder model restriction', () => {
       interval: 2
     })
     exchangeQoderCodeMock.mockResolvedValue({
-      security_oauth_token: 'global-token',
-      machine_id: 'global-machine',
-      site: 'global'
+      security_oauth_token: 'cn-token',
+      machine_id: 'cn-machine',
+      site: 'cn'
     })
     const createDeferredRequest = createDeferred<Record<string, never>>()
     createAccountMock.mockReturnValueOnce(createDeferredRequest.promise)
@@ -486,9 +481,9 @@ describe('CreateAccountModal Qoder model restriction', () => {
       interval: 2
     })
     exchangeQoderCodeMock.mockResolvedValueOnce({
-      security_oauth_token: 'global-token',
-      machine_id: 'global-machine',
-      site: 'global'
+      security_oauth_token: 'cn-token',
+      machine_id: 'cn-machine',
+      site: 'cn'
     })
     const createDeferredRequest = createDeferred<Record<string, never>>()
     createAccountMock.mockReturnValueOnce(createDeferredRequest.promise)
@@ -526,9 +521,9 @@ describe('CreateAccountModal Qoder model restriction', () => {
       interval: 2
     })
     exchangeQoderCodeMock.mockResolvedValue({
-      security_oauth_token: 'global-token',
-      machine_id: 'global-machine',
-      site: 'global'
+      security_oauth_token: 'cn-token',
+      machine_id: 'cn-machine',
+      site: 'cn'
     })
     createAccountMock
       .mockRejectedValueOnce(new Error('create failed'))
@@ -562,9 +557,9 @@ describe('CreateAccountModal Qoder model restriction', () => {
       interval: 2
     })
     exchangeQoderCodeMock.mockResolvedValue({
-      security_oauth_token: 'global-token',
-      machine_id: 'global-machine',
-      site: 'global'
+      security_oauth_token: 'cn-token',
+      machine_id: 'cn-machine',
+      site: 'cn'
     })
 
     const wrapper = mountModal()

@@ -215,7 +215,7 @@ type QoderTokenInfo struct {
 }
 
 func (s *QoderOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64) (*QoderAuthURLResult, error) {
-	return s.GenerateAuthURLForSite(ctx, qoder.SiteGlobal, proxyID)
+	return s.GenerateAuthURLForSite(ctx, qoder.SiteCN, proxyID)
 }
 
 // GenerateAuthURLForSite 为指定站点创建并冻结 OAuth 会话。
@@ -236,9 +236,11 @@ func (s *QoderOAuthService) GenerateAuthURLForSite(ctx context.Context, site qod
 		return nil, err
 	}
 
-	// 国内站必须复用授权 URL 中的 UUID machine_id，并保持其余机器字段为空。
+	// 国内站必须复用授权 URL 中的 UUID machine_id。
 	machine := qoder.NewMachineForSite(profile.Site)
 	machine.MachineID = req.MachineID
+	machine.MachineToken = req.MachineID
+	machine.MachineType = "5"
 	session := &qoderOAuthSession{
 		State:        state,
 		Nonce:        req.Nonce,
@@ -328,6 +330,9 @@ func (s *QoderOAuthService) completeSession(ctx context.Context, sessionID, stat
 }
 
 func (s *QoderOAuthService) completeSessionOnce(ctx context.Context, session *qoderOAuthSession) (*QoderTokenInfo, bool, error) {
+	if session == nil || session.Site != qoder.SiteCN {
+		return nil, false, ErrQoderCNReauthorizationRequired
+	}
 	client, err := s.clientFactory(session.Profile, session.ProxyURL)
 	if err != nil {
 		return nil, false, err
@@ -342,42 +347,32 @@ func (s *QoderOAuthService) completeSessionOnce(ctx context.Context, session *qo
 	}
 
 	accessToken := tokenResp.AccessTokenValue()
-	if session.Site == qoder.SiteCN {
-		expiresAt, validateErr := tokenResp.ValidateQoderCN20(time.Now())
-		if validateErr != nil {
-			return nil, false, validateErr
-		}
-		userInfo, userErr := client.GetUserInfo(ctx, accessToken)
-		if userErr != nil {
-			return nil, false, userErr
-		}
-		completer, ok := client.(qoderCN20OAuthCompleter)
-		if !ok {
-			return nil, false, errors.New("qoder CN OAuth client does not support status completion")
-		}
-		identity, completedExpiry, completeErr := completer.CompleteQoderCN20Identity(ctx, tokenResp, userInfo, session.Machine)
-		if completeErr != nil {
-			return nil, false, completeErr
-		}
-		if !completedExpiry.IsZero() {
-			expiresAt = completedExpiry
-		}
-		// status 是国内身份主数据；仅在缺少组织字段时使用 OpenAPI tags 补充。
-		organizationLookupUID := firstNonEmptyQoder(tokenResp.UserID, tokenResp.ID)
-		if userInfo != nil {
-			organizationLookupUID = firstNonEmptyQoder(userInfo.UserID, userInfo.ID, organizationLookupUID)
-		}
-		orgErr := populateQoderOrganizationForUID(ctx, client, accessToken, organizationLookupUID, identity)
-		return buildQoderTokenInfoForSite(identity, session.Machine, qoder.SiteCN, qoder.RefreshModeQoderCN20, expiresAt, nil, orgErr), false, nil
+	expiresAt, validateErr := tokenResp.ValidateQoderCN20(time.Now())
+	if validateErr != nil {
+		return nil, false, validateErr
 	}
 	userInfo, userErr := client.GetUserInfo(ctx, accessToken)
 	if userErr != nil {
-		userInfo = &qoder.UserInfo{ID: tokenResp.UserID}
+		return nil, false, userErr
 	}
-	identity := qoder.BuildIdentityFromDeviceToken(userInfo, tokenResp)
-	orgErr := populateQoderOrganization(ctx, client, accessToken, identity)
-	expiresAt := tokenResp.ExpiryTime(time.Now())
-	return buildQoderTokenInfoForSite(identity, session.Machine, qoder.SiteGlobal, qoder.RefreshModeCosy, expiresAt, userErr, orgErr), false, nil
+	completer, ok := client.(qoderCN20OAuthCompleter)
+	if !ok {
+		return nil, false, errors.New("qoder CN OAuth client does not support status completion")
+	}
+	identity, completedExpiry, completeErr := completer.CompleteQoderCN20Identity(ctx, tokenResp, userInfo, session.Machine)
+	if completeErr != nil {
+		return nil, false, completeErr
+	}
+	if !completedExpiry.IsZero() {
+		expiresAt = completedExpiry
+	}
+	// status 是国内身份主数据；仅在缺少组织字段时使用 OpenAPI tags 补充。
+	organizationLookupUID := firstNonEmptyQoder(tokenResp.UserID, tokenResp.ID)
+	if userInfo != nil {
+		organizationLookupUID = firstNonEmptyQoder(userInfo.UserID, userInfo.ID, organizationLookupUID)
+	}
+	orgErr := populateQoderOrganizationForUID(ctx, client, accessToken, organizationLookupUID, identity)
+	return buildQoderTokenInfoForSite(identity, session.Machine, qoder.SiteCN, qoder.RefreshModeQoderCN20, expiresAt, nil, orgErr), false, nil
 }
 
 func normalizeQoderExchangeInput(input *QoderExchangeCodeInput) error {
@@ -491,7 +486,7 @@ func populateQoderOrganizationForUID(ctx context.Context, client qoderOAuthClien
 }
 
 func buildQoderTokenInfo(identity *qoder.AuthIdentity, machine *qoder.MachineIdentity, userErr error, orgErr error) *QoderTokenInfo {
-	return buildQoderTokenInfoForSite(identity, machine, qoder.SiteGlobal, qoder.RefreshModeCosy, time.Time{}, userErr, orgErr)
+	return buildQoderTokenInfoForSite(identity, machine, qoder.SiteCN, qoder.RefreshModeQoderCN20, time.Time{}, userErr, orgErr)
 }
 
 func buildQoderTokenInfoForSite(

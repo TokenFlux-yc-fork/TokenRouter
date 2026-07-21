@@ -161,6 +161,14 @@ func (a *Account) IsSchedulable() bool {
 	if !a.IsActive() || !a.Schedulable {
 		return false
 	}
+	if a.IsQoder() {
+		if !a.IsQoderCosy() {
+			return false
+		}
+		if _, err := qoderSiteForAccount(a); err != nil {
+			return false
+		}
+	}
 	now := time.Now()
 	if a.AutoPauseOnExpired && a.ExpiresAt != nil && !now.Before(*a.ExpiresAt) {
 		return false
@@ -892,13 +900,16 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 	}
 	whitelist, _ := resolveFinalModelWhitelist(a.Platform, a.Credentials, mapping)
 	if a.Platform == PlatformQoder {
+		site, err := qoderSiteForAccount(a)
+		if err != nil {
+			return false
+		}
 		mappedModel, matched := a.ResolveMappedModel(requestedModel)
 		if matched {
 			// 显式账号 mapping 优先于站点默认模型限制。
 			return isModelInFinalWhitelist(a.Platform, mappedModel, whitelist)
 		}
-		site, err := qoderSiteForAccount(a)
-		if err != nil || !qoder.ModelCompatibleWithSite(site, requestedModel) {
+		if !qoder.ModelCompatibleWithSite(site, requestedModel) {
 			return false
 		}
 		return isModelInFinalWhitelist(a.Platform, requestedModel, whitelist)

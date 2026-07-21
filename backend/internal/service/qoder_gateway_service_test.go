@@ -212,17 +212,27 @@ func TestBuildQoderPayloadFromChatCompletions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "auto", modelKey)
 	require.Equal(t, true, payload["stream"])
-	require.Equal(t, "personal_standard", payload["aliyun_user_type"])
+	require.Equal(t, "", payload["aliyun_user_type"])
+	require.Equal(t, "qoderclicn", payload["session_type"])
+	require.Equal(t, "be terse", payload["system"])
+	require.NotContains(t, payload, "image_urls")
+	require.NotContains(t, payload, "code_language")
+	require.NotContains(t, payload, "chat_prompt")
 	parameters, _ := payload["parameters"].(map[string]any)
 	modelConfig, _ := payload["model_config"].(map[string]any)
 	chatContext, _ := payload["chat_context"].(map[string]any)
-	chatText, _ := chatContext["text"].(map[string]any)
 	require.Equal(t, 123, parameters["max_tokens"])
 	require.Equal(t, "auto", modelConfig["key"])
-	require.Equal(t, "hello", chatText["text"])
+	require.Equal(t, "hello", chatContext["text"])
+	extra := chatContext["extra"].(map[string]any)
+	require.Equal(t, "hello", extra["originalContent"])
 	business, ok := payload["business"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, qoder.GlobalClientVersion, business["version"])
+	require.Equal(t, "cli", business["product"])
+	require.Equal(t, "agent", business["type"])
+	require.Equal(t, qoder.CNClientVersion, business["version"])
+	require.Equal(t, "start", business["stage"])
+	require.Equal(t, "hello", business["name"])
 
 	messagesRaw, ok := payload["messages"].([]any)
 	require.True(t, ok)
@@ -235,7 +245,7 @@ func TestBuildQoderPayloadFromChatCompletions(t *testing.T) {
 	secondMsg, ok := messages[1].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "user", secondMsg["role"])
-	require.Equal(t, "", secondMsg["content"])
+	require.Equal(t, "hello", secondMsg["content"])
 	userContents, ok := secondMsg["contents"].([]any)
 	require.True(t, ok)
 	firstContent, ok := userContents[0].(map[string]any)
@@ -426,7 +436,7 @@ func TestBuildQoderPayloadAddsCacheControlToLastEligibleTextBlock(t *testing.T) 
 
 func TestBuildQoderPayloadFromAnthropicMessages(t *testing.T) {
 	body := []byte(`{
-		"model":"claude-opus-4-6",
+		"model":"qwen3.7-plus",
 		"max_tokens":456,
 		"system":[{"type":"text","text":"system one"},{"type":"text","text":"system two"}],
 		"messages":[
@@ -436,15 +446,15 @@ func TestBuildQoderPayloadFromAnthropicMessages(t *testing.T) {
 
 	payload, modelKey, err := BuildQoderPayloadFromAnthropicMessages(body, "personal_standard")
 	require.NoError(t, err)
-	require.Equal(t, "ultimate", modelKey)
+	require.Equal(t, "qmodel", modelKey)
 	require.Equal(t, 456, payload["parameters"].(map[string]any)["max_tokens"])
-	require.Equal(t, "ultimate", payload["model_config"].(map[string]any)["key"])
+	require.Equal(t, "qmodel", payload["model_config"].(map[string]any)["key"])
 
 	messages := payload["messages"].([]any)
 	require.Len(t, messages, 3)
 	require.Equal(t, "system", messages[0].(map[string]any)["role"])
 	require.Equal(t, "system one\nsystem two", messages[0].(map[string]any)["content"])
-	require.Equal(t, "", messages[1].(map[string]any)["content"])
+	require.Equal(t, "hello", messages[1].(map[string]any)["content"])
 	userContents := messages[1].(map[string]any)["contents"].([]any)
 	require.Equal(t, "hello", userContents[0].(map[string]any)["text"])
 	toolResult := messages[2].(map[string]any)
@@ -613,10 +623,9 @@ func TestQoderConversationKeyPrefersMetadataOverClaudeCodeStableSeed(t *testing.
 	require.NotContains(t, key, "stable_seed")
 }
 
-func TestResolveQoderModelUsesOpus46AliasForUltimate(t *testing.T) {
-
-	info := resolveQoderModel("claude-opus-4-6")
-	require.Equal(t, "ultimate", info.Key)
+func TestResolveQoderModelUsesQwen37PlusAlias(t *testing.T) {
+	info := resolveQoderModel("qwen3.7-plus")
+	require.Equal(t, "qmodel", info.Key)
 	require.Equal(t, "system", info.Source)
 
 	legacy := resolveQoderModel("claude-opus-4-5")
@@ -626,12 +635,11 @@ func TestResolveQoderModelUsesOpus46AliasForUltimate(t *testing.T) {
 	require.Equal(t, "gpt-5-codex", codex.Key)
 }
 
-func TestResolveQoderModelUsesKimiK3Alias(t *testing.T) {
-	// Qoder 1.15.0 新增的 Kimi-K3 必须解析到独立的 latest 路由。
-	info := resolveQoderModel("kimi-k3")
-	require.Equal(t, "kmodel_latest", info.Key)
+func TestResolveQoderModelUsesKimiK27CodeAlias(t *testing.T) {
+	info := resolveQoderModel("kimi-k2.7-code")
+	require.Equal(t, "kmodel", info.Key)
 	require.Equal(t, "system", info.Source)
-	require.Equal(t, "Kimi-K3", info.DisplayName)
+	require.Equal(t, "Kimi-K2.7-Code", info.DisplayName)
 }
 
 func TestResolveQoderModelUsesGLM52RouteKey(t *testing.T) {
@@ -662,6 +670,7 @@ func TestQoderGatewayAppliesAccountModelMapping(t *testing.T) {
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
+			"site": "cn",
 			"model_mapping": map[string]any{
 				"claude-opus-4-6": "ultimate",
 			},
@@ -777,7 +786,7 @@ func TestQoderGatewayChatCompletionsReusesSessionAndSendsFullReplay(t *testing.T
 	require.Equal(t, "user", secondMessages[1].(map[string]any)["role"])
 	require.Equal(t, "assistant", secondMessages[2].(map[string]any)["role"])
 	require.Equal(t, "user", secondMessages[3].(map[string]any)["role"])
-	require.Equal(t, "next", second["chat_context"].(map[string]any)["text"].(map[string]any)["text"])
+	require.Equal(t, "next", qoderPayloadPromptForTest(t, second))
 }
 
 func TestQoderGatewayChatCompletionsWithoutSessionDoesNotReuseByFirstText(t *testing.T) {
@@ -1824,7 +1833,7 @@ func TestQoderGatewayClaudeCodeContextWithoutSessionUsesStablePrefixKey(t *testi
 	require.Equal(t, "user", messages[1].(map[string]any)["role"])
 	require.Equal(t, "assistant", messages[2].(map[string]any)["role"])
 	require.Equal(t, "user", messages[3].(map[string]any)["role"])
-	require.Equal(t, "continue", second["chat_context"].(map[string]any)["text"].(map[string]any)["text"])
+	require.Equal(t, "continue", qoderPayloadPromptForTest(t, second))
 }
 
 func TestQoderGatewayDoesNotCommitConversationOnUpstreamFailure(t *testing.T) {
@@ -2121,7 +2130,7 @@ func TestQoderGatewayAnthropicMetadataSessionWinsOverChangingHeader(t *testing.T
 	require.Equal(t, "user", messages[0].(map[string]any)["role"])
 	require.Equal(t, "assistant", messages[1].(map[string]any)["role"])
 	require.Equal(t, "user", messages[2].(map[string]any)["role"])
-	require.Equal(t, "continue", second["chat_context"].(map[string]any)["text"].(map[string]any)["text"])
+	require.Equal(t, "continue", qoderPayloadPromptForTest(t, second))
 }
 
 func TestQoderGatewayClaudeCodeUsesExplicitHeaderSessionBeforeStableSeed(t *testing.T) {
@@ -2197,7 +2206,7 @@ func TestQoderGatewayClaudeCodeUsesMetadataSessionBeforeStableSeed(t *testing.T)
 	require.Equal(t, "user", messages[1].(map[string]any)["role"])
 	require.Equal(t, "assistant", messages[2].(map[string]any)["role"])
 	require.Equal(t, "user", messages[3].(map[string]any)["role"])
-	require.Equal(t, "continue", second["chat_context"].(map[string]any)["text"].(map[string]any)["text"])
+	require.Equal(t, "continue", qoderPayloadPromptForTest(t, second))
 
 	metadata2 := `{"device_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","account_uuid":"","session_id":"66666666-7777-8888-9999-aaaaaaaaaaaa"}`
 	other := qoderForwardMessagesForTest(t, svc, account, "", []byte(`{
@@ -2256,7 +2265,7 @@ func TestQoderGatewayClaudeCodeIgnoresVolatileBillingCCHForSystemReuse(t *testin
 	require.Equal(t, "user", messages[3].(map[string]any)["role"])
 }
 
-func TestQoderGatewayClaudeCodeUltimateStablePromptCacheKeyReportsCacheRead(t *testing.T) {
+func TestQoderGatewayClaudeCodeQwenStablePromptCacheKeyReportsCacheRead(t *testing.T) {
 	account, svc, client := newQoderGatewayForwardTestService()
 	largeTools := qoderLargeToolsJSONForTest()
 	system1 := "x-anthropic-billing-header: cc_version=2.1.177.19c; cc_entrypoint=sdk-cli; cch=29156;\n" +
@@ -2266,16 +2275,16 @@ func TestQoderGatewayClaudeCodeUltimateStablePromptCacheKeyReportsCacheRead(t *t
 		"You are a Claude agent, built on Anthropic's Claude Agent SDK.\n" +
 		"Stable Claude Code system body."
 	firstBody := []byte(`{
-		"model":"claude-opus-4-6",
-		"prompt_cache_key":"ultimate-cache-hit-session",
+		"model":"qwen3.7-plus",
+		"prompt_cache_key":"qwen-cache-hit-session",
 		"system":` + strconv.Quote(system1) + `,
 		"messages":[{"role":"user","content":"inspect"}],
 		"tools":` + largeTools + `,
 		"stream":false
 	}`)
 	secondBody := []byte(`{
-		"model":"claude-opus-4-6",
-		"prompt_cache_key":"ultimate-cache-hit-session",
+		"model":"qwen3.7-plus",
+		"prompt_cache_key":"qwen-cache-hit-session",
 		"system":` + strconv.Quote(system2) + `,
 		"messages":[
 			{"role":"user","content":"inspect"},
@@ -2290,16 +2299,16 @@ func TestQoderGatewayClaudeCodeUltimateStablePromptCacheKeyReportsCacheRead(t *t
 		"data: {\"body\":\"[DONE]\"}\n\n"
 	firstResult := qoderForwardMessagesResultForTest(t, svc, account, firstBody, qoderHeader("User-Agent", "claude-cli/2.1.177 (external, sdk-cli)"))
 	firstPayload := qoderLastUpstreamPayloadForTest(t, client)
-	require.Equal(t, "ultimate", firstResult.UpstreamModel)
+	require.Equal(t, "qmodel", firstResult.UpstreamModel)
 	require.Equal(t, 1200, firstResult.Usage.InputTokens)
-	require.Equal(t, "ultimate", client.headers["x-model-key"])
+	require.Equal(t, "qmodel", client.headers["x-model-key"])
 
 	client.body = "data: {\"body\":\"{\\\"usage\\\":{\\\"prompt_tokens\\\":1500,\\\"completion_tokens\\\":33,\\\"total_tokens\\\":1533,\\\"prompt_tokens_details\\\":{\\\"cached_tokens\\\":1400,\\\"cacheable_tokens\\\":100}}}\"}\n\n" +
 		"data: {\"body\":\"[DONE]\"}\n\n"
 	secondResult, secondResponse := qoderForwardMessagesResultAndBodyForTest(t, svc, account, secondBody, qoderHeader("User-Agent", "claude-cli/2.1.177 (external, sdk-cli)"))
 	secondPayload := qoderLastUpstreamPayloadForTest(t, client)
 
-	require.Equal(t, "ultimate", secondResult.UpstreamModel)
+	require.Equal(t, "qmodel", secondResult.UpstreamModel)
 	require.Equal(t, firstPayload["session_id"], secondPayload["session_id"])
 	require.Equal(t, 100, secondResult.Usage.InputTokens)
 	require.Equal(t, 1400, secondResult.Usage.CacheReadInputTokens)
@@ -3989,6 +3998,7 @@ func TestQoderGatewayRefreshAccountSessionPersistsCredentialsAndInvalidatesCache
 		Type:     AccountTypeCosy,
 		Status:   StatusActive,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
@@ -4010,7 +4020,7 @@ func TestQoderGatewayRefreshAccountSessionPersistsCredentialsAndInvalidatesCache
 		},
 	}
 	refresher := NewQoderTokenRefresher(nil)
-	refresher.refreshSession = func(_ context.Context, refreshToken, securityOauthToken string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+	refresher.refreshCNCosy = func(_ context.Context, refreshToken, securityOauthToken, _, _ string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
 		require.Equal(t, "old-refresh", refreshToken)
 		require.Equal(t, "old-token", securityOauthToken)
 		require.Equal(t, "machine-1", machine.MachineID)
@@ -4072,6 +4082,7 @@ func TestQoderGatewayRefreshAccountSessionIgnoresNonAuthCredentialDrift(t *testi
 		Type:     AccountTypeCosy,
 		Status:   StatusActive,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
@@ -4086,7 +4097,7 @@ func TestQoderGatewayRefreshAccountSessionIgnoresNonAuthCredentialDrift(t *testi
 		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{freshAccount}},
 	}
 	refresher := NewQoderTokenRefresher(nil)
-	refresher.refreshSession = func(_ context.Context, refreshToken, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+	refresher.refreshCNCosy = func(_ context.Context, refreshToken, _ string, _, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
 		require.Equal(t, "old-refresh", refreshToken)
 		return &qoder.AuthIdentity{
 			UID:                "user-1",
@@ -4122,6 +4133,7 @@ func TestQoderGatewayRefreshAccountSessionRecoversRotatedRefreshTokenRace(t *tes
 		Type:     AccountTypeCosy,
 		Status:   StatusActive,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
@@ -4130,6 +4142,7 @@ func TestQoderGatewayRefreshAccountSessionRecoversRotatedRefreshTokenRace(t *tes
 	}
 	racedAccount := account
 	racedAccount.Credentials = map[string]any{
+		"site":                 "cn",
 		"security_oauth_token": "new-token",
 		"refresh_token":        "new-refresh",
 		"machine_id":           "machine-1",
@@ -4142,7 +4155,7 @@ func TestQoderGatewayRefreshAccountSessionRecoversRotatedRefreshTokenRace(t *tes
 		raceAccount: &racedAccount,
 	}
 	refresher := NewQoderTokenRefresher(nil)
-	refresher.refreshSession = func(_ context.Context, refreshToken, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+	refresher.refreshCNCosy = func(_ context.Context, refreshToken, _ string, _, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
 		require.Equal(t, "old-refresh", refreshToken)
 		return nil, errors.New("invalid_grant: refresh token has already been used")
 	}
@@ -4170,6 +4183,7 @@ func TestQoderGatewayRefreshAccountSessionWaitsForLockHolderRotation(t *testing.
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
@@ -4179,6 +4193,7 @@ func TestQoderGatewayRefreshAccountSessionWaitsForLockHolderRotation(t *testing.
 	}
 	rotatedAccount := account
 	rotatedAccount.Credentials = map[string]any{
+		"site":                 "cn",
 		"security_oauth_token": "new-token",
 		"refresh_token":        "new-refresh",
 		"machine_id":           "machine-1",
@@ -4224,6 +4239,7 @@ func TestQoderGatewayRefreshAccountSessionLockHeldReturnsRefreshInProgressWithou
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "old-token",
 			"refresh_token":        "old-refresh",
 			"machine_id":           "machine-1",
@@ -4264,6 +4280,7 @@ func TestQoderGatewayRefreshExecutorNeedsRefreshUsesFailedCredentialSnapshot(t *
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "failed-token",
 			"refresh_token":        "failed-refresh",
 			"machine_id":           "machine-1",
@@ -4317,16 +4334,17 @@ func TestQoderGatewayForwardChatCompletionsHonorsCanceledContext(t *testing.T) {
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
-			"pat": "pat-token",
+			"site": "cn",
+			"pat":  "pat-token",
 		},
 	}
 	provider := NewQoderTokenProvider()
-	provider.exchangePAT = func(ctx context.Context, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+	provider.exchangeCNPAT = func(ctx context.Context, _ string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error) {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, time.Time{}, ctx.Err()
 		default:
-			return &qoder.AuthIdentity{SecurityOauthToken: "token", UID: "uid"}, nil
+			return &qoder.AuthIdentity{SecurityOauthToken: "token", UID: "uid"}, time.Now().Add(time.Hour), nil
 		}
 	}
 	svc := &QoderGatewayService{tokenProvider: provider}
@@ -4801,8 +4819,7 @@ func qoderWrappedErrorSSELineForTest(t *testing.T, statusCode int, inner map[str
 func qoderPayloadPromptForTest(t *testing.T, payload map[string]any) string {
 	t.Helper()
 	chatContext := payload["chat_context"].(map[string]any)
-	text := chatContext["text"].(map[string]any)
-	return text["text"].(string)
+	return chatContext["text"].(string)
 }
 
 func qoderPayloadMessageTextForTest(msg map[string]any) string {
@@ -4831,7 +4848,7 @@ func newQoderGatewayForwardTestService() (*Account, *QoderGatewayService, *qoder
 		Name:        "qoder",
 		Platform:    PlatformQoder,
 		Type:        AccountTypeCosy,
-		Credentials: map[string]any{},
+		Credentials: map[string]any{"site": "cn"},
 	}
 	client := &qoderAccountTestClientStub{
 		body: "data: {\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"OK\\\"}}]}\"}\n\n" +

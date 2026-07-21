@@ -17,7 +17,6 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-type qoderPATExchanger func(ctx context.Context, pat string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error)
 type qoderCNPATExchanger func(ctx context.Context, pat string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error)
 type qoderOrganizationTagsGetter func(ctx context.Context, token, uid string) (*qoder.OrganizationTags, error)
 
@@ -53,7 +52,6 @@ type QoderTokenProvider struct {
 	accountStates       map[int64]qoderSessionAccountState
 	sessionBuildGroup   singleflight.Group
 	sessionBuildTimeout time.Duration
-	exchangePAT         qoderPATExchanger
 	exchangeCNPAT       qoderCNPATExchanger
 	getOrgTags          qoderOrganizationTagsGetter
 	httpUpstream        HTTPUpstream
@@ -85,6 +83,9 @@ func (p *QoderTokenProvider) GetSession(ctx context.Context, account *Account) (
 	}
 	if account.Platform != PlatformQoder || account.Type != AccountTypeCosy {
 		return nil, errors.New("not a qoder cosy account")
+	}
+	if _, err := qoderSiteForAccount(account); err != nil {
+		return nil, err
 	}
 
 	accountSnapshot := snapshotQoderSessionAccount(account)
@@ -322,31 +323,20 @@ func (p *QoderTokenProvider) buildSession(ctx context.Context, account *Account)
 	}
 	if pat != "" {
 		machine := qoderMachineForAccount(account)
-		var identity *qoder.AuthIdentity
-		var expiresAt time.Time
-		if site == qoder.SiteCN {
-			exchangePAT := p.exchangeCNPAT
-			if exchangePAT == nil {
-				exchangePAT = p.defaultExchangeCNPAT(account)
-			}
-			identity, expiresAt, err = exchangePAT(ctx, pat, machine)
-		} else {
-			exchangePAT := p.exchangePAT
-			if exchangePAT == nil {
-				exchangePAT = p.defaultExchangePAT(account)
-			}
-			identity, err = exchangePAT(ctx, pat, machine)
+		exchangePAT := p.exchangeCNPAT
+		if exchangePAT == nil {
+			exchangePAT = p.defaultExchangeCNPAT(account)
 		}
+		identity, expiresAt, err := exchangePAT(ctx, pat, machine)
 		if err != nil {
 			// PAT exchange 失败通常是永久错误（无效凭据），不跳过缓存
 			return nil, time.Time{}, fmt.Errorf("qoder pat exchange: %w", err)
 		}
 		applyQoderAccountIdentityMetadata(identity, account)
-		// populateOrganizationFromAPI 在 session 创建前调用，避免缓存后并发修改 identity
-		if site == qoder.SiteGlobal {
-			p.populateOrganizationFromAPI(ctx, account, identity)
-		}
 		session, sessionErr := qoder.NewSessionForSite(identity, machine, site)
+		if session != nil {
+			applyQoderSessionDataPolicy(session, account)
+		}
 		return session, expiresAt, sessionErr
 	}
 
@@ -371,16 +361,13 @@ func (p *QoderTokenProvider) buildSession(ctx context.Context, account *Account)
 		p.populateOrganizationFromAPI(ctx, account, identity)
 		machine := qoderMachineForAccount(account)
 		session, sessionErr := qoder.NewSessionForSite(identity, machine, site)
+		if session != nil {
+			applyQoderSessionDataPolicy(session, account)
+		}
 		return session, time.Time{}, sessionErr
 	}
 
 	return nil, time.Time{}, errors.New("qoder credentials require pat or security_oauth_token+machine_id")
-}
-
-func (p *QoderTokenProvider) defaultExchangePAT(account *Account) qoderPATExchanger {
-	return func(ctx context.Context, pat string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
-		return qoder.ExchangePATContext(ctx, pat, machine, "", newQoderRequestDoer(account, p.httpUpstream, p.tlsFPProfileService))
-	}
 }
 
 func (p *QoderTokenProvider) defaultExchangeCNPAT(account *Account) qoderCNPATExchanger {
@@ -390,6 +377,15 @@ func (p *QoderTokenProvider) defaultExchangeCNPAT(account *Account) qoderCNPATEx
 			return nil, time.Time{}, err
 		}
 		return qoder.ExchangeQoderCN20PATContext(ctx, pat, machine, profile, newQoderRequestDoer(account, p.httpUpstream, p.tlsFPProfileService))
+	}
+}
+
+func applyQoderSessionDataPolicy(session *qoder.SessionContext, account *Account) {
+	if session == nil || account == nil {
+		return
+	}
+	if policy := strings.TrimSpace(account.GetCredential("data_policy")); policy != "" {
+		session.DataPolicy = policy
 	}
 }
 

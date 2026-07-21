@@ -53,7 +53,7 @@ describe('useQoderOAuth', () => {
     })
 
     const oauth = useQoderOAuth()
-    const ok = await oauth.generateAuthUrl(7, 'cn')
+    const ok = await oauth.generateAuthUrl(7)
 
     expect(ok).toBe(true)
     expect(adminAPI.qoder.generateAuthUrl).toHaveBeenCalledWith({ proxy_id: 7, site: 'cn' })
@@ -74,7 +74,7 @@ describe('useQoderOAuth', () => {
     vi.mocked(adminAPI.qoder.generateAuthUrl).mockReturnValueOnce(deferred.promise)
 
     const oauth = useQoderOAuth()
-    const pending = oauth.generateAuthUrl(7, 'global')
+    const pending = oauth.generateAuthUrl(7)
     oauth.resetState()
     deferred.resolve({
       auth_url: 'https://qoder.com/old-session',
@@ -195,5 +195,16 @@ describe('useQoderOAuth', () => {
       expires_at: '2026-07-20T12:00:00Z',
       extra: { email: 'user@example.com' }
     })
+  })
+
+  it('defaults incomplete token metadata to the CN profile', () => {
+    const oauth = useQoderOAuth()
+    const credentials = oauth.buildCredentials({
+      security_oauth_token: 'access-token',
+      machine_id: 'machine-id'
+    })
+
+    expect(credentials.site).toBe('cn')
+    expect(credentials.refresh_mode).toBe('qodercn20')
   })
 })

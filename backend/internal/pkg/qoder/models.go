@@ -10,25 +10,6 @@ type Model struct {
 	CreatedAt   string `json:"created_at"`
 }
 
-// globalModels 是国际站当前客户端展示的稳定模型快照。
-var globalModels = []Model{
-	{ID: "claude-opus-4-6", Type: "model", DisplayName: "Claude Opus 4.6", CreatedAt: ""},
-	{ID: "auto", Type: "model", DisplayName: "Qoder Auto", CreatedAt: ""},
-	{ID: "performance", Type: "model", DisplayName: "Qoder Performance", CreatedAt: ""},
-	{ID: "efficient", Type: "model", DisplayName: "Qoder Efficient", CreatedAt: ""},
-	{ID: "lite", Type: "model", DisplayName: "Qoder Lite", CreatedAt: ""},
-	{ID: "qwen3.8-max-preview", Type: "model", DisplayName: "Qwen3.8-Max-Preview", CreatedAt: ""},
-	{ID: "qwen3.7-max", Type: "model", DisplayName: "Qwen3.7-Max", CreatedAt: ""},
-	{ID: "qwen3.7-plus", Type: "model", DisplayName: "Qwen3.7-Plus", CreatedAt: ""},
-	// Kimi-K3 与 Kimi-K2.7-Code 是 Qoder 当前同时提供的两个独立模型。
-	{ID: "kimi-k3", Type: "model", DisplayName: "Kimi-K3", CreatedAt: ""},
-	{ID: "kimi-k2.7-code", Type: "model", DisplayName: "Kimi-K2.7-Code", CreatedAt: ""},
-	{ID: "glm-5.2", Type: "model", DisplayName: "GLM-5.2", CreatedAt: ""},
-	{ID: "deepseek-v4-pro", Type: "model", DisplayName: "DeepSeek-V4-Pro", CreatedAt: ""},
-	{ID: "deepseek-v4-flash", Type: "model", DisplayName: "DeepSeek-V4-Flash", CreatedAt: ""},
-	{ID: "minimax-m3", Type: "model", DisplayName: "MiniMax-M3", CreatedAt: ""},
-}
-
 // cnModels 是国内站当前客户端展示的稳定模型快照。
 var cnModels = []Model{
 	{ID: "auto", Type: "model", DisplayName: "Qoder Auto", CreatedAt: ""},
@@ -43,8 +24,8 @@ var cnModels = []Model{
 	{ID: "minimax-m2.7", Type: "model", DisplayName: "MiniMax-M2.7", CreatedAt: ""},
 }
 
-// globalAliases 与 cnAliases 固化公开模型 ID 到内部 route key 的站点映射。
-var globalAliases = map[string]string{
+// legacyGlobalAliases 仅用于识别并拒绝不属于国内站的旧公开 alias/route key。
+var legacyGlobalAliases = map[string]string{
 	"claude-opus-4-6":     "ultimate",
 	"auto":                "auto",
 	"performance":         "performance",
@@ -74,26 +55,24 @@ var cnAliases = map[string]string{
 	"minimax-m2.7":        "mmodel",
 }
 
-// DefaultModels 是无账号上下文使用的两站稳定并集，国际站模型排在前面。
-var DefaultModels = unionModels(globalModels, cnModels)
+// DefaultModels 是 qoderclicn 当前稳定模型快照。
+var DefaultModels = append([]Model(nil), cnModels...)
 
 // DefaultModelsForSite 返回指定站点的模型快照副本。
 func DefaultModelsForSite(site Site) []Model {
-	models := globalModels
-	if site == SiteCN {
-		models = cnModels
+	if site != SiteCN {
+		return nil
 	}
-	return append([]Model(nil), models...)
+	return append([]Model(nil), cnModels...)
 }
 
 // AliasesForSite 返回指定站点公开 alias 到内部 route key 的副本。
 func AliasesForSite(site Site) map[string]string {
-	aliases := globalAliases
-	if site == SiteCN {
-		aliases = cnAliases
+	if site != SiteCN {
+		return nil
 	}
-	out := make(map[string]string, len(aliases))
-	for alias, route := range aliases {
+	out := make(map[string]string, len(cnAliases))
+	for alias, route := range cnAliases {
 		out[alias] = route
 	}
 	return out
@@ -101,11 +80,10 @@ func AliasesForSite(site Site) map[string]string {
 
 // AliasForSite 解析指定站点的公开 alias。
 func AliasForSite(site Site, model string) (string, bool) {
-	aliases := globalAliases
-	if site == SiteCN {
-		aliases = cnAliases
+	if site != SiteCN {
+		return "", false
 	}
-	route, ok := aliases[model]
+	route, ok := cnAliases[model]
 	return route, ok
 }
 
@@ -113,6 +91,9 @@ func AliasForSite(site Site, model string) (string, bool) {
 // 未知 raw key 保持透传，因此返回 true。
 func ModelCompatibleWithSite(site Site, model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
+	if site != SiteCN {
+		return false
+	}
 	if _, ok := AliasForSite(site, model); ok {
 		return true
 	}
@@ -131,13 +112,13 @@ func ModelCompatibleWithSite(site Site, model string) bool {
 }
 
 func isKnownPublicAlias(model string) bool {
-	_, global := globalAliases[model]
+	_, global := legacyGlobalAliases[model]
 	_, cn := cnAliases[model]
 	return global || cn
 }
 
 func isKnownRouteKey(model string) bool {
-	for _, aliases := range []map[string]string{globalAliases, cnAliases} {
+	for _, aliases := range []map[string]string{legacyGlobalAliases, cnAliases} {
 		for _, route := range aliases {
 			if route == model {
 				return true
@@ -145,21 +126,6 @@ func isKnownRouteKey(model string) bool {
 		}
 	}
 	return false
-}
-
-func unionModels(groups ...[]Model) []Model {
-	seen := make(map[string]struct{})
-	var models []Model
-	for _, group := range groups {
-		for _, model := range group {
-			if _, ok := seen[model.ID]; ok {
-				continue
-			}
-			seen[model.ID] = struct{}{}
-			models = append(models, model)
-		}
-	}
-	return models
 }
 
 // DefaultRequestModelIDsForSite 返回指定站点的公开模型 ID。
@@ -172,7 +138,7 @@ func DefaultRequestModelIDsForSite(site Site) []string {
 	return ids
 }
 
-// DefaultRequestModelIDs 返回无账号上下文使用的两站模型并集。
+// DefaultRequestModelIDs 返回 Qoder CN 默认公开模型。
 func DefaultRequestModelIDs() []string {
 	ids := make([]string, 0, len(DefaultModels))
 	for _, model := range DefaultModels {

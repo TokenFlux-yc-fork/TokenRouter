@@ -533,8 +533,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
-	originalQoderSite, originalQoderSiteErr := qoderSiteForAccount(account)
-	originalQoderPAT := strings.TrimSpace(account.GetCredential("pat"))
+	originalQoderNeedsReauthorization := false
+	if account.IsQoderCosy() {
+		_, siteErr := qoderSiteForAccount(account)
+		originalQoderNeedsReauthorization = errors.Is(siteErr, ErrQoderCNReauthorizationRequired)
+	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -715,15 +718,27 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
-	deferQoderPATValidation := false
-	if account.IsQoder() && originalQoderSiteErr == nil && originalQoderPAT != "" && originalQoderPAT == strings.TrimSpace(account.GetCredential("pat")) {
-		if currentSite, siteErr := qoderSiteForAccount(account); siteErr == nil {
-			deferQoderPATValidation = currentSite != originalQoderSite
+	skipQoderValidation := false
+	if account.IsQoderCosy() {
+		_, siteErr := qoderSiteForAccount(account)
+		switch {
+		case siteErr == nil:
+			if originalQoderNeedsReauthorization && !qoderCNReauthorizationProvided(input.Credentials) {
+				return nil, fmt.Errorf("%w: submit new Qoder CN OAuth or PAT credentials", ErrQoderCNReauthorizationRequired)
+			}
+			ensureQoderMachineCredentials(account)
+		case originalQoderNeedsReauthorization && errors.Is(siteErr, ErrQoderCNReauthorizationRequired):
+			// Metadata edits may preserve the legacy record; it remains unschedulable until reauthorized.
+			skipQoderValidation = true
+		default:
+			return nil, siteErr
 		}
 	}
 	s.attachAccountProxyForValidation(ctx, account)
-	if err := validateQoderCosyCredentialsWithOptions(ctx, account, s.httpUpstream, s.tlsFPProfileService, deferQoderPATValidation); err != nil {
-		return nil, err
+	if !skipQoderValidation {
+		if err := validateQoderCosyCredentials(ctx, account, s.httpUpstream, s.tlsFPProfileService); err != nil {
+			return nil, err
+		}
 	}
 	probeEnabledAppliedAtomically := false
 	if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {

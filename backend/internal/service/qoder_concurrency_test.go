@@ -85,6 +85,7 @@ func TestQoderTokenProviderConcurrent(t *testing.T) {
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "test_oauth_token",
 			"machine_id":           "test_machine_id",
 			"uid":                  "test_uid",
@@ -333,6 +334,7 @@ func TestQoderTokenProviderInvalidateRace(t *testing.T) {
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "token_999",
 			"machine_id":           "machine_999",
 			"aid":                  "aid_999",
