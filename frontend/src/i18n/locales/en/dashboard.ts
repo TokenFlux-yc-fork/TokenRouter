@@ -488,7 +488,7 @@ affiliate: {
       columns: {
         email: 'Email',
         username: 'Username',
-        rebate: 'Rebate',
+        rebate: 'Rebate ({unitName})',
         joinedAt: 'Joined At'
       }
     },

@@ -67,6 +67,17 @@
       </div>
     </template>
 
+    <!-- 支付渠道已受理，等待异步终态。 -->
+    <template v-else-if="isProcessing">
+      <div class="card p-6">
+        <div class="flex flex-col items-center space-y-4 py-6 text-center">
+          <div class="h-10 w-10 animate-spin rounded-full border-4 border-cyan-500 border-t-transparent"></div>
+          <p class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.result.processing') }}</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.result.processingHint') }}</p>
+        </div>
+      </div>
+    </template>
+
     <!-- ═══ Active States: QR or Popup waiting ═══ -->
 
     <!-- QR Code Mode -->
@@ -163,6 +174,7 @@ const qrCanvas = ref<HTMLCanvasElement | null>(null)
 const qrUrl = ref('')
 const remainingSeconds = ref(0)
 const cancelling = ref(false)
+const isProcessing = ref(false)
 const paidOrder = ref<PaymentOrder | null>(null)
 const paymentCurrency = computed(() => normalizePaymentCurrency(paidOrder.value?.currency || props.currency))
 const localeCode = computed(() => {
@@ -179,9 +191,12 @@ const outcome = ref<PaymentOutcome | null>(null)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+let pollIntervalMs = 0
 let verifyAttempts = 0
 let lastVerifyAt = 0
 
+const PENDING_POLL_INTERVAL_MS = 3000
+const PROCESSING_POLL_INTERVAL_MS = 15000
 const VERIFY_RETRY_INTERVAL_MS = 15000
 const VERIFY_RETRY_MAX_ATTEMPTS = 6
 
@@ -271,7 +286,7 @@ async function pollStatus() {
   pollInFlight = true
   try {
     // Stripe 直接查上游；微信在本地仍 pending 时再节流补查，避免漏回调导致一直等待。
-    const upstreamOutTradeNo = upstreamVerificationOutTradeNo()
+    const upstreamOutTradeNo = isProcessing.value ? '' : upstreamVerificationOutTradeNo()
     let order = upstreamOutTradeNo && props.paymentType === 'stripe'
       ? await verifyOrderWithUpstream(upstreamOutTradeNo)
       : await paymentStore.pollOrderStatus(props.orderId)
@@ -286,6 +301,10 @@ async function pollStatus() {
 
 function applyResolvedOrderStatus(order: PaymentOrder | null): boolean {
   if (!order) return false
+  if (order.status === 'PROCESSING') {
+    enterProcessingState()
+    return true
+  }
   if (isSuccessStatus(order.status)) {
     cleanup()
     paidOrder.value = order
@@ -302,6 +321,15 @@ function applyResolvedOrderStatus(order: PaymentOrder | null): boolean {
     return true
   }
   return false
+}
+
+function enterProcessingState() {
+  isProcessing.value = true
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  startPolling(PROCESSING_POLL_INTERVAL_MS)
 }
 
 async function verifyOrderWithUpstream(outTradeNo: string): Promise<PaymentOrder | null> {
@@ -335,12 +363,22 @@ async function tryRecoverPendingWxpayOrder(order: PaymentOrder | null): Promise<
 }
 
 function startCountdown(seconds: number) {
+  if (isProcessing.value) return
   remainingSeconds.value = Math.max(0, seconds)
-  if (remainingSeconds.value <= 0) { setOutcome('expired'); return }
+  if (remainingSeconds.value <= 0) {
+    void pollStatus()
+    return
+  }
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
   countdownTimer = setInterval(() => {
+    if (isProcessing.value) return
     remainingSeconds.value--
-    if (remainingSeconds.value <= 0) { setOutcome('expired'); cleanup() }
+    if (remainingSeconds.value <= 0) {
+      remainingSeconds.value = 0
+      if (countdownTimer) clearInterval(countdownTimer)
+      countdownTimer = null
+      void pollStatus()
+    }
   }, 1000)
 }
 
@@ -374,16 +412,19 @@ function handleDone() { cleanup(); emit('done') }
 function cleanup() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+  pollIntervalMs = 0
 }
 
-function startPolling() {
-  if (!pollTimer) {
-    pollTimer = setInterval(pollStatus, 3000)
-  }
+function startPolling(intervalMs = PENDING_POLL_INTERVAL_MS) {
+  if (pollTimer && pollIntervalMs === intervalMs) return
+  if (pollTimer) clearInterval(pollTimer)
+  pollIntervalMs = intervalMs
+  pollTimer = setInterval(pollStatus, intervalMs)
 }
 
 // Initialize on mount
 qrUrl.value = props.qrCode
+isProcessing.value = false
 verifyAttempts = 0
 lastVerifyAt = 0
 let seconds = 30 * 60

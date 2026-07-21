@@ -52,8 +52,9 @@ func TestEncodeNotStandardBase64(t *testing.T) {
 
 func TestSignCenterRequest(t *testing.T) {
 	sig := SignCenterRequest("test_date")
-	if len(sig) != 32 {
-		t.Errorf("signature length = %d, want 32", len(sig))
+	const expected = "d97838794e12bb6a4402dd55f14d2f8e"
+	if sig != expected {
+		t.Errorf("signature = %q, want %q", sig, expected)
 	}
 }
 
@@ -301,13 +302,18 @@ func TestDefaultModels(t *testing.T) {
 		"performance",
 		"efficient",
 		"lite",
+		"qwen3.8-max-preview",
 		"qwen3.7-max",
 		"qwen3.7-plus",
+		// 验证新增路由会通过默认模型接口对外展示。
+		"kimi-k3",
+		"kimi-k2.7-code",
+		"glm-5.2",
 		"deepseek-v4-pro",
 		"deepseek-v4-flash",
-		"glm-5.2",
-		"kimi-k2.7-code",
 		"minimax-m3",
+		"qwen3.6-flash",
+		"minimax-m2.7",
 	}
 	if len(ids) != len(want) {
 		t.Fatalf("default model count = %d, want %d", len(ids), len(want))
@@ -831,6 +837,38 @@ func TestRedactSensitiveTextPreservesQoderNumericErrorCodes(t *testing.T) {
 			}
 			if strings.Contains(redacted, "secret") {
 				t.Fatalf("secret leaked: %q", redacted)
+			}
+		})
+	}
+}
+
+func TestRedactSensitiveTextRedactsCNAccessToken(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "JSON 字段",
+			input: `{"token":"cn-json-secret","message":"invalid"}`,
+		},
+		{
+			name:  "非结构化等号字段",
+			input: `token=cn-plain-secret message=invalid`,
+		},
+		{
+			name:  "非结构化冒号字段",
+			input: `token: cn-colon-secret`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redacted := RedactSensitiveText(tt.input)
+			if strings.Contains(redacted, "secret") {
+				t.Fatalf("secret leaked: %q", redacted)
+			}
+			if !strings.Contains(redacted, "***") {
+				t.Fatalf("redacted = %q, want redaction marker", redacted)
 			}
 		})
 	}

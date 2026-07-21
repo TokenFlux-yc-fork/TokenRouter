@@ -594,6 +594,8 @@ describe('UseKeyModal', () => {
       'deepseek-v4-pro',
       'deepseek-v4-flash',
       'glm-5.2',
+      // 新旧 Kimi 路由需要同时出现在生成的 OpenCode 配置中。
+      'kimi-k3',
       'kimi-k2.7-code',
       'minimax-m3'
     ]
@@ -603,5 +605,6 @@ describe('UseKeyModal', () => {
     }
     expect(qoderProvider.models['deepseek-v4-pro'].name).toBe('DeepSeek-V4-Pro')
     expect(qoderProvider.models['glm-5.2'].name).toBe('GLM-5.2')
+    expect(qoderProvider.models['kimi-k3'].name).toBe('Kimi-K3')
   })
 })

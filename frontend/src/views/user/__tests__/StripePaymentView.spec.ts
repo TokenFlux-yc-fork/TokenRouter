@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 
 const routeState = vi.hoisted(() => ({
@@ -118,6 +118,10 @@ describe('StripePaymentView', () => {
     window.localStorage.clear()
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('本地恢复快照缺失时使用订单接口返回的 Stripe 币种展示金额', async () => {
     getOrder.mockResolvedValue({
       data: orderFactory({ currency: 'HKD', pay_amount: 103 }),
@@ -130,5 +134,44 @@ describe('StripePaymentView', () => {
     expect(getOrder).toHaveBeenCalledWith(42)
     expect(loadStripe).toHaveBeenCalledWith('pk_test')
     expect(wrapper.text()).toContain(formatPaymentAmount(103, 'HKD', 'zh-CN'))
+  })
+
+  it('订单进入处理中后改为每 15 秒查询本地状态', async () => {
+    vi.useFakeTimers()
+    routeState.query = {
+      order_id: '42',
+      client_secret: 'pi_secret_42',
+      method: 'wechat_pay',
+    }
+    getOrder.mockResolvedValue({ data: orderFactory() })
+    stripeInstance.confirmWechatPayPayment.mockResolvedValue({
+      paymentIntent: {
+        status: 'requires_action',
+        next_action: {
+          wechat_pay_display_qr_code: { image_data_url: 'data:image/png;base64,qr' },
+        },
+      },
+    })
+    paymentStore.pollOrderStatus
+      .mockResolvedValueOnce(orderFactory({ status: 'PROCESSING' }))
+      .mockResolvedValueOnce(orderFactory({ status: 'COMPLETED' }))
+
+    const wrapper = mountView()
+    await flushPromises()
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(paymentStore.pollOrderStatus).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('payment.result.processing')
+
+    await vi.advanceTimersByTimeAsync(14999)
+    expect(paymentStore.pollOrderStatus).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(paymentStore.pollOrderStatus).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('payment.result.success')
+
+    wrapper.unmount()
   })
 })

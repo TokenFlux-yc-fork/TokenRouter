@@ -60,11 +60,13 @@ type MachineIdentity struct {
 
 // SessionContext 保存 COSY 请求需要的加密 session 参数。
 type SessionContext struct {
-	TempKey  []byte
-	CosyKey  string
-	Info     string
-	Identity *AuthIdentity
-	Machine  *MachineIdentity
+	TempKey       []byte
+	CosyKey       string
+	Info          string
+	Identity      *AuthIdentity
+	Machine       *MachineIdentity
+	Site          Site
+	ClientVersion string
 }
 
 // BuildAuthPayloadJSON 将 AuthIdentity 转换为紧凑 JSON 字节。
@@ -74,8 +76,16 @@ func BuildAuthPayloadJSON(identity *AuthIdentity) ([]byte, error) {
 
 // BuildPayloadB64 构造 COSY header 使用的 base64 payload。
 func BuildPayloadB64(info, requestID string) (string, error) {
+	return BuildPayloadB64WithVersion(info, requestID, GlobalClientVersion)
+}
+
+// BuildPayloadB64WithVersion 使用站点客户端版本构造 COSY header payload。
+func BuildPayloadB64WithVersion(info, requestID, clientVersion string) (string, error) {
+	if clientVersion == "" {
+		clientVersion = GlobalClientVersion
+	}
 	payload := map[string]string{
-		"cosyVersion": "1.0.20",
+		"cosyVersion": clientVersion,
 		"ideVersion":  "",
 		"info":        info,
 		"requestId":   requestID,
@@ -118,11 +128,29 @@ func AESEncrypt(data, key []byte) ([]byte, error) {
 
 // NewSession 创建新的 COSY session 上下文。
 func NewSession(identity *AuthIdentity, machine *MachineIdentity) (*SessionContext, error) {
-	return NewSessionWithKey(identity, machine, nil)
+	return NewSessionForSite(identity, machine, SiteGlobal)
+}
+
+// NewSessionForSite 为指定站点创建新的 COSY session 上下文。
+func NewSessionForSite(identity *AuthIdentity, machine *MachineIdentity, site Site) (*SessionContext, error) {
+	profile, err := ProfileForSite(site)
+	if err != nil {
+		return nil, err
+	}
+	return NewSessionForProfileWithKey(identity, machine, profile, nil)
 }
 
 // NewSessionWithKey 使用可选的显式临时 key 创建 COSY session。
 func NewSessionWithKey(identity *AuthIdentity, machine *MachineIdentity, tempKey []byte) (*SessionContext, error) {
+	return NewSessionForProfileWithKey(identity, machine, MustProfileForSite(SiteGlobal), tempKey)
+}
+
+// NewSessionForProfileWithKey 使用站点 profile 和可选临时 key 创建 COSY session。
+func NewSessionForProfileWithKey(identity *AuthIdentity, machine *MachineIdentity, profile Profile, tempKey []byte) (*SessionContext, error) {
+	normalizedProfile, err := NormalizeProfile(profile)
+	if err != nil {
+		return nil, err
+	}
 	if tempKey == nil {
 		tempKey = []byte(RandomHex(16))
 	}
@@ -145,11 +173,13 @@ func NewSessionWithKey(identity *AuthIdentity, machine *MachineIdentity, tempKey
 	info := base64.StdEncoding.EncodeToString(encryptedInfo)
 
 	return &SessionContext{
-		TempKey:  tempKey,
-		CosyKey:  cosyKey,
-		Info:     info,
-		Identity: identity,
-		Machine:  machine,
+		TempKey:       tempKey,
+		CosyKey:       cosyKey,
+		Info:          info,
+		Identity:      identity,
+		Machine:       machine,
+		Site:          normalizedProfile.Site,
+		ClientVersion: normalizedProfile.ClientVersion,
 	}, nil
 }
 

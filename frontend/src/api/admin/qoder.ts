@@ -1,15 +1,19 @@
 import { apiClient } from '../client'
 
+export type QoderSite = 'global' | 'cn'
+
 export interface QoderAuthUrlResponse {
   auth_url: string
   session_id: string
   state: string
   expires_in?: number
   interval?: number
+  site?: QoderSite
 }
 
 export interface QoderAuthUrlRequest {
   proxy_id?: number
+  site?: QoderSite
 }
 
 export interface QoderExchangeCodeRequest {
@@ -17,7 +21,6 @@ export interface QoderExchangeCodeRequest {
   state: string
   code?: string
   callback_url?: string
-  proxy_id?: number
 }
 
 export interface QoderTokenInfo {
@@ -32,6 +35,9 @@ export interface QoderTokenInfo {
   organization_name?: string
   name?: string
   user_type?: string
+  site?: QoderSite
+  refresh_mode?: 'cosy' | 'qodercn20'
+  expires_at?: string
   extra?: Record<string, unknown>
   [key: string]: unknown
 }
@@ -39,7 +45,6 @@ export interface QoderTokenInfo {
 export interface QoderPollRequest {
   session_id: string
   state: string
-  proxy_id?: number
 }
 
 export interface QoderPollResponse {

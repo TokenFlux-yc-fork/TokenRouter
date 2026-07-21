@@ -200,6 +200,7 @@ const columns = computed<Column[]>(() => [
 const statusFilterOptions = computed(() => [
   { value: '', label: t('payment.admin.allStatuses') },
   { value: 'PENDING', label: t('payment.status.pending') },
+  { value: 'PROCESSING', label: t('payment.status.processing') },
   { value: 'PAID', label: t('payment.status.paid') },
   { value: 'COMPLETED', label: t('payment.status.completed') },
   { value: 'EXPIRED', label: t('payment.status.expired') },

@@ -50,6 +50,7 @@ vi.mock('@/composables/useClipboard', () => ({
 
 vi.mock('@/composables/useBalanceDisplay', () => ({
   useBalanceDisplay: () => ({
+    balanceUnitName: { value: '推理积分' },
     formatBalanceAmount,
   }),
 }))
@@ -142,5 +143,33 @@ describe('AffiliateView', () => {
 
     expect(transferAffiliateQuota).toHaveBeenCalledOnce()
     expect(showSuccess).toHaveBeenCalledWith('affiliate.transfer.success:积分200.00')
+  })
+
+  it('keeps long invite values shrinkable while copy buttons remain visible and functional', async () => {
+    const longCode = 'INVITE-' + 'X'.repeat(120)
+    getAffiliateDetail.mockResolvedValueOnce({ ...affiliateDetail, aff_code: longCode })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="affiliate-code-row"]').classes()).toContain('min-w-0')
+    expect(wrapper.get('[data-testid="affiliate-link-row"]').classes()).toContain('min-w-0')
+    expect(wrapper.get('[data-testid="affiliate-code"]').classes()).toEqual(
+      expect.arrayContaining(['min-w-0', 'truncate']),
+    )
+    expect(wrapper.get('[data-testid="affiliate-link"]').classes()).toEqual(
+      expect.arrayContaining(['min-w-0', 'truncate']),
+    )
+    expect(wrapper.get('[data-testid="affiliate-copy-code"]').classes()).toContain('flex-shrink-0')
+    expect(wrapper.get('[data-testid="affiliate-copy-link"]').classes()).toContain('flex-shrink-0')
+
+    await wrapper.get('[data-testid="affiliate-copy-code"]').trigger('click')
+    await wrapper.get('[data-testid="affiliate-copy-link"]').trigger('click')
+
+    expect(copyToClipboard).toHaveBeenNthCalledWith(1, longCode, 'affiliate.codeCopied')
+    expect(copyToClipboard).toHaveBeenNthCalledWith(
+      2,
+      `${window.location.origin}/register?aff=${encodeURIComponent(longCode)}`,
+      'affiliate.linkCopied',
+    )
   })
 })

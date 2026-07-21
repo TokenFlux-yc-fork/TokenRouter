@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
-	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -55,23 +54,12 @@ func (s *GatewayService) ForwardAsResponses(
 	anthropicReq.Stream = true
 	reqStream := true
 
-	// 4. Model mapping
-	mappedModel := originalModel
+	// 4. 模型映射：渠道映射已由 handler 写入 body，此处继续执行账号映射和平台规范化。
+	mappedModel := resolveAccountUpstreamModel(ctx, account, originalModel)
+	if mappedModel == "" {
+		mappedModel = originalModel
+	}
 	reasoningEffort := ExtractResponsesReasoningEffortFromBody(body)
-	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
-		mappedModel = account.GetMappedModel(originalModel)
-	}
-	if mappedModel == originalModel && account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
-		normalized := normalizeVertexAnthropicModelID(claude.NormalizeModelID(originalModel))
-		if normalized != originalModel {
-			mappedModel = normalized
-		}
-	} else if mappedModel == originalModel && account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
-		normalized := claude.NormalizeModelID(originalModel)
-		if normalized != originalModel {
-			mappedModel = normalized
-		}
-	}
 	// 国产模型没有显式 effort 档位时，thinking 启用后补默认展示值。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 	anthropicReq.Model = mappedModel

@@ -281,20 +281,14 @@ func TestGatewayServiceRecordUsage_QoderUsesStandardRequestedModelPricing(t *tes
 	require.Zero(t, billingRepo.lastCmd.AccountQuotaCost)
 }
 
-func TestGatewayServiceRecordUsage_QoderChannelMappedStandardRequestedModelUsesStandardPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderChannelMappedBasisDoesNotUseRequestedStandardPricing(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
 
 	usage := ClaudeUsage{InputTokens: 1200, OutputTokens: 300}
-	expectedCost, err := svc.billingService.CalculateCost("gpt-5.4", UsageTokens{
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
-	}, 1)
-	require.NoError(t, err)
-
 	groupID := int64(42)
-	err = svc.RecordUsage(context.Background(), &RecordUsageInput{
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
 			RequestID:     "qoder_channel_mapped_standard_requested_model_pricing",
 			Usage:         usage,
@@ -320,22 +314,17 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedStandardRequestedModelUsesS
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, expectedCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.True(t, usageRepo.lastLog.ActualCost > 0)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, expectedCost.ActualCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderChannelMappedStandardRequestedImageUsesStandardPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderChannelMappedImageBasisDoesNotUseRequestedStandardPricing(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
-
-	expectedCost := svc.billingService.CalculateImageCost("gpt-image-1", ImageBillingSize1K, 2, nil, 1)
-	require.NotNil(t, expectedCost)
-	require.True(t, expectedCost.ActualCost > 0)
 
 	groupID := int64(43)
 	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
@@ -366,11 +355,11 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedStandardRequestedImageUsesS
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
 	require.Equal(t, 2, usageRepo.lastLog.ImageCount)
-	require.InDelta(t, expectedCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, expectedCost.ActualCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
 func TestGatewayServiceRecordUsage_QoderChannelMappedCustomAliasImageWithoutManualPricingUsesZeroCost(t *testing.T) {
@@ -414,7 +403,7 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedCustomAliasImageWithoutManu
 	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderRequestedBillingSourceFallsBackToChannelMappedManualPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderRequestedBasisDoesNotFallBackToChannelMappedPricing(t *testing.T) {
 	groupID := int64(45)
 	inputPrice := 0.01
 	outputPrice := 0.02
@@ -436,7 +425,6 @@ func TestGatewayServiceRecordUsage_QoderRequestedBillingSourceFallsBackToChannel
 	svc.resolver = NewModelPricingResolver(channelService, svc.billingService)
 
 	usage := ClaudeUsage{InputTokens: 100, OutputTokens: 200}
-	expectedCost := float64(usage.InputTokens)*inputPrice + float64(usage.OutputTokens)*outputPrice
 	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
 			RequestID:     "qoder_requested_source_channel_mapped_manual_pricing",
@@ -463,11 +451,11 @@ func TestGatewayServiceRecordUsage_QoderRequestedBillingSourceFallsBackToChannel
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, expectedCost, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, expectedCost, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, expectedCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
 func TestGatewayServiceRecordUsage_QoderRequestedBillingSourceCustomImageMappedRouteKeyUsesZeroCost(t *testing.T) {
@@ -598,7 +586,7 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedRouteKeyWithoutManualPricin
 	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderChannelMappedRouteKeyUsesOriginalAliasManualPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderChannelMappedBasisDoesNotUseOriginalAliasPricing(t *testing.T) {
 	groupID := int64(902)
 	inputPrice := 0.01
 	outputPrice := 0.02
@@ -646,14 +634,14 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedRouteKeyUsesOriginalAliasMa
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, 18.0, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, 18.0, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, 18.0, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderRequestedAliasManualPricingOverridesRouteKeyManualPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderChannelMappedBasisUsesRouteKeyPricing(t *testing.T) {
 	groupID := int64(902)
 	aliasInputPrice := 0.01
 	aliasOutputPrice := 0.02
@@ -682,6 +670,7 @@ func TestGatewayServiceRecordUsage_QoderRequestedAliasManualPricingOverridesRout
 	svc.resolver = NewModelPricingResolver(channelService, svc.billingService)
 
 	usage := ClaudeUsage{InputTokens: 1200, OutputTokens: 300}
+	expectedCost := float64(usage.InputTokens)*routeInputPrice + float64(usage.OutputTokens)*routeOutputPrice
 	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
 			RequestID:     "qoder_alias_price_over_route_price",
@@ -708,14 +697,14 @@ func TestGatewayServiceRecordUsage_QoderRequestedAliasManualPricingOverridesRout
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, 18.0, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, 18.0, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, expectedCost, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, expectedCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, 18.0, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.InDelta(t, expectedCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
 }
 
-func TestGatewayServiceRecordUsage_QoderDefaultAliasFallsBackToRouteKeyManualPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderImplicitRequestedBasisDoesNotInferRouteKeyPricing(t *testing.T) {
 	groupID := int64(902)
 	inputPrice := 0.01
 	outputPrice := 0.02
@@ -758,14 +747,14 @@ func TestGatewayServiceRecordUsage_QoderDefaultAliasFallsBackToRouteKeyManualPri
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, 18.0, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, 18.0, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, 18.0, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderBlankRouteKeyPricingDoesNotMaskOriginalAliasManualPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderChannelMappedBlankRouteKeyDoesNotUseOriginalAliasPricing(t *testing.T) {
 	groupID := int64(902)
 	inputPrice := 0.01
 	outputPrice := 0.02
@@ -820,14 +809,14 @@ func TestGatewayServiceRecordUsage_QoderBlankRouteKeyPricingDoesNotMaskOriginalA
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, 18.0, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, 18.0, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, 18.0, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderChannelMappedCustomAliasPartialManualPricingZerosMissingFields(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderChannelMappedBasisIgnoresRequestedCustomPartialPricing(t *testing.T) {
 	groupID := int64(902)
 	inputPrice := 0.01
 	cache := newEmptyChannelCache()
@@ -847,7 +836,6 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedCustomAliasPartialManualPri
 	svc.resolver = NewModelPricingResolver(channelService, svc.billingService)
 
 	usage := ClaudeUsage{InputTokens: 100, OutputTokens: 100000}
-	expectedCost := float64(usage.InputTokens) * inputPrice
 
 	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
@@ -875,14 +863,14 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedCustomAliasPartialManualPri
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, expectedCost, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, expectedCost, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, expectedCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderChannelMappedStandardModelPartialManualPricingKeepsBaseFields(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderChannelMappedBasisIgnoresRequestedStandardPartialPricing(t *testing.T) {
 	groupID := int64(902)
 	inputPrice := 0.01
 	cache := newEmptyChannelCache()
@@ -902,11 +890,7 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedStandardModelPartialManualP
 	svc.resolver = NewModelPricingResolver(channelService, svc.billingService)
 
 	usage := ClaudeUsage{InputTokens: 100, OutputTokens: 100000}
-	basePricing, err := svc.billingService.GetModelPricing("gpt-5.4")
-	require.NoError(t, err)
-	expectedCost := float64(usage.InputTokens)*inputPrice + float64(usage.OutputTokens)*basePricing.OutputPricePerToken
-
-	err = svc.RecordUsage(context.Background(), &RecordUsageInput{
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
 			RequestID:     "qoder_channel_mapped_standard_model_partial_pricing",
 			Usage:         usage,
@@ -932,11 +916,11 @@ func TestGatewayServiceRecordUsage_QoderChannelMappedStandardModelPartialManualP
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, expectedCost, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, expectedCost, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, expectedCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
 func TestGatewayServiceRecordUsage_QoderAccountMappedCustomAliasPartialManualPricingZerosMissingFields(t *testing.T) {
@@ -1069,20 +1053,14 @@ func TestGatewayServiceRecordUsage_QoderAccountMappedCustomImageAliasWithoutManu
 	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderUpstreamBillingSourceStandardRequestedModelUsesStandardPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderUpstreamBasisDoesNotUseRequestedStandardPricing(t *testing.T) {
 	groupID := int64(902)
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
 
 	usage := ClaudeUsage{InputTokens: 1200, OutputTokens: 300}
-	expectedCost, err := svc.billingService.CalculateCost("gpt-5.4-mini", UsageTokens{
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
-	}, 1)
-	require.NoError(t, err)
-
-	err = svc.RecordUsage(context.Background(), &RecordUsageInput{
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
 			RequestID:     "qoder_upstream_billing_source_route_key",
 			Usage:         usage,
@@ -1108,23 +1086,30 @@ func TestGatewayServiceRecordUsage_QoderUpstreamBillingSourceStandardRequestedMo
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.InDelta(t, expectedCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, usageRepo.lastLog.TotalCost)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.InDelta(t, expectedCost.ActualCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
+	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
 }
 
-func TestGatewayServiceRecordUsage_QoderManualOnlyRequestedModelDoesNotUseStandardUpstreamPricing(t *testing.T) {
+func TestGatewayServiceRecordUsage_QoderUpstreamBasisUsesStandardUpstreamPricing(t *testing.T) {
 	groupID := int64(902)
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
 
-	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+	usage := ClaudeUsage{InputTokens: 1200, OutputTokens: 300}
+	expectedCost, err := svc.billingService.CalculateCost("gpt-5.4-mini", UsageTokens{
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+	}, 1)
+	require.NoError(t, err)
+
+	err = svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
 			RequestID:     "qoder_manual_only_requested_standard_upstream",
-			Usage:         ClaudeUsage{InputTokens: 1200, OutputTokens: 300},
+			Usage:         usage,
 			Model:         "qwen3.7-plus",
 			UpstreamModel: "gpt-5.4-mini",
 			Duration:      time.Second,
@@ -1147,11 +1132,11 @@ func TestGatewayServiceRecordUsage_QoderManualOnlyRequestedModelDoesNotUseStanda
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
 	require.NotNil(t, usageRepo.lastLog)
-	require.Zero(t, usageRepo.lastLog.TotalCost)
-	require.Zero(t, usageRepo.lastLog.ActualCost)
+	require.InDelta(t, expectedCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.Zero(t, billingRepo.lastCmd.BillableAmountUSD)
+	require.InDelta(t, expectedCost.ActualCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
 }
 
 func TestGatewayServiceRecordUsage_QoderChannelMappedAccountStatsUsesOriginalAliasRule(t *testing.T) {

@@ -555,13 +555,19 @@ func TestSyncPricingModels_QoderUsesDefaultAliases(t *testing.T) {
 		"performance",
 		"efficient",
 		"lite",
+		"qwen3.8-max-preview",
 		"qwen3.7-max",
 		"qwen3.7-plus",
+		// 定价同步接口需要包含 Qoder 新增的 Kimi-K3 alias。
+		"kimi-k3",
+		"kimi-k2.7-code",
+		"glm-5.2",
 		"deepseek-v4-pro",
 		"deepseek-v4-flash",
-		"glm-5.2",
-		"kimi-k2.7-code",
 		"minimax-m3",
+		// 无账号上下文时需要在国际站模型后追加国内站独有模型。
+		"qwen3.6-flash",
+		"minimax-m2.7",
 	}, body.Data.Models)
 	require.NotContains(t, body.Data.Models, "ultimate")
 }

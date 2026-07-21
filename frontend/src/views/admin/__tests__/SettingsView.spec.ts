@@ -1386,6 +1386,42 @@ describe("admin SettingsView payment visible method controls", () => {
     );
   });
 
+  it("loads and submits the OpenAI OAuth import default Codex image tool policy", async () => {
+    getOpenAIOAuthImportDefaults.mockResolvedValueOnce({
+      credentials: { model_whitelist: ["gpt-5.2"] },
+      extra: {
+        codex_image_generation_explicit_tool_policy: "strip",
+        codex_image_generation_bridge: false,
+        codex_image_generation_bridge_enabled: true,
+      },
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    const blockButton = wrapper.get(
+      '[data-testid="openai-oauth-default-codex-image-tool-block"]',
+    );
+    expect(blockButton.attributes("aria-checked")).toBe("true");
+
+    await wrapper
+      .get('[data-testid="openai-oauth-default-codex-image-tool-enabled"]')
+      .trigger("click");
+
+    const defaultsCard = wrapper.get("#openai-oauth-import-defaults");
+    const saveButton = defaultsCard
+      .findAll("button")
+      .find((node) => node.text() === "common.save");
+    expect(saveButton).toBeDefined();
+    await saveButton?.trigger("click");
+    await flushPromises();
+
+    const extra = updateOpenAIOAuthImportDefaults.mock.calls[0]?.[0]?.extra;
+    expect(extra?.codex_image_generation_bridge).toBe(true);
+    expect(extra).not.toHaveProperty("codex_image_generation_bridge_enabled");
+    expect(extra).not.toHaveProperty("codex_image_generation_explicit_tool_policy");
+  });
+
   it("renders and submits OpenAI OAuth import default auto-pause and Claude Code allow settings", async () => {
     getOpenAIOAuthImportDefaults.mockResolvedValueOnce({
       credentials: { model_whitelist: ["gpt-5.2"] },

@@ -27,9 +27,13 @@ func newTestBillingServiceForResolver() *BillingService {
 
 func TestQoderAliasRequiresManualPricingIsCaseInsensitive(t *testing.T) {
 	require.True(t, QoderAliasRequiresManualPricing("CLAUDE-OPUS-4-6"))
+	// 当前公开 alias 对应的原始 route key 仍必须使用 Qoder 手工定价。
+	require.True(t, QoderAliasRequiresManualPricing("ULTIMATE"))
 	require.True(t, QoderAliasRequiresManualPricing("QMODEL"))
-	require.True(t, QoderAliasRequiresManualPricing("GMODEL"))
-	require.True(t, QoderAliasRequiresManualPricing("Q35MODEL"))
+	require.True(t, QoderAliasRequiresManualPricing("GM51MODEL"))
+	// 已移除兼容表中的历史 route key 不再按当前 Qoder alias 处理。
+	require.False(t, QoderAliasRequiresManualPricing("GMODEL"))
+	require.False(t, QoderAliasRequiresManualPricing("Q35MODEL"))
 }
 
 func TestResolve_NoGroupID(t *testing.T) {

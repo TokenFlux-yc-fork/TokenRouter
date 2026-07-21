@@ -198,6 +198,87 @@ func TestQoderTokenRefresherRefreshRequiresMachineID(t *testing.T) {
 	require.ErrorContains(t, err, "machine_id")
 }
 
+func TestQoderTokenRefresherRoutesCN20RefreshAndPersistsExpiry(t *testing.T) {
+	refresher := NewQoderTokenRefresher(nil)
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+	refresher.refreshCN20 = func(_ context.Context, refreshToken string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error) {
+		require.Equal(t, "cn-refresh", refreshToken)
+		require.Equal(t, "machine-1", machine.MachineID)
+		require.Empty(t, machine.MachineToken)
+		require.Empty(t, machine.MachineType)
+		return &qoder.AuthIdentity{
+			UID:                "uid-1",
+			AID:                "aid-1",
+			SecurityOauthToken: "new-cosy-token",
+			RefreshToken:       "rotated-cn-refresh",
+			UserType:           "personal_standard",
+		}, expiresAt, nil
+	}
+	account := &Account{
+		ID:       20,
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site":                 "cn",
+			"refresh_mode":         qoder.RefreshModeQoderCN20,
+			"security_oauth_token": "old-cosy-token",
+			"refresh_token":        "cn-refresh",
+			"machine_id":           "machine-1",
+			"machine_token":        "legacy-machine-token",
+			"machine_type":         "legacy-machine-type",
+			"uid":                  "uid-1",
+		},
+	}
+
+	credentials, err := refresher.Refresh(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "new-cosy-token", credentials["security_oauth_token"])
+	require.Equal(t, "rotated-cn-refresh", credentials["refresh_token"])
+	require.Equal(t, "cn", credentials["site"])
+	require.Equal(t, qoder.RefreshModeQoderCN20, credentials["refresh_mode"])
+	require.Equal(t, expiresAt.Format(time.RFC3339), credentials["expires_at"])
+	require.NotContains(t, credentials, "machine_token")
+	require.NotContains(t, credentials, "machine_type")
+}
+
+func TestQoderTokenRefresherRoutesCNManualCosyRefresh(t *testing.T) {
+	refresher := NewQoderTokenRefresher(nil)
+	refresher.refreshCNCosy = func(_ context.Context, refreshToken, securityToken, userID, organizationID string, _ *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+		require.Equal(t, "cosy-refresh", refreshToken)
+		require.Equal(t, "old-token", securityToken)
+		require.Equal(t, "uid-1", userID)
+		require.Equal(t, "org-1", organizationID)
+		return &qoder.AuthIdentity{
+			UID:                "uid-1",
+			AID:                "uid-1",
+			OrganizationID:     "org-1",
+			SecurityOauthToken: "new-token",
+			RefreshToken:       "new-cosy-refresh",
+		}, nil
+	}
+	account := &Account{
+		ID:       21,
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site":                 "cn",
+			"refresh_mode":         qoder.RefreshModeCosy,
+			"security_oauth_token": "old-token",
+			"refresh_token":        "cosy-refresh",
+			"machine_id":           "machine-1",
+			"uid":                  "uid-1",
+			"organization_id":      "org-1",
+		},
+	}
+
+	credentials, err := refresher.Refresh(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "new-token", credentials["security_oauth_token"])
+	require.Equal(t, "new-cosy-refresh", credentials["refresh_token"])
+	require.Equal(t, qoder.RefreshModeCosy, credentials["refresh_mode"])
+	require.NotContains(t, credentials, "expires_at")
+}
+
 func TestQoderTokenRefresherRefreshWrapsError(t *testing.T) {
 	refresher := NewQoderTokenRefresher(nil)
 	refresher.refreshSession = func(context.Context, string, string, *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {

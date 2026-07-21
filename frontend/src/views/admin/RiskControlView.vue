@@ -1722,8 +1722,11 @@ const keywordNotice = computed<KeywordNoticeView>(() => {
 
 const resultOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('admin.riskControl.result.all') },
-  { value: 'hit', label: t('admin.riskControl.result.hit') },
-  { value: 'blocked', label: t('admin.riskControl.result.blocked') },
+  { value: 'hit', label: t('admin.riskControl.result.hitNotBlocked') },
+  // 各类拦截使用独立查询值，避免普通拦截筛选混入哈希或关键词拦截。
+  { value: 'block', label: t('admin.riskControl.result.blocked') },
+  { value: 'keyword_block', label: t('admin.riskControl.result.keywordBlocked') },
+  { value: 'hash_block', label: t('admin.riskControl.result.hashBlocked') },
   { value: 'pass', label: t('admin.riskControl.result.pass') },
   { value: 'error', label: t('admin.riskControl.result.error') },
 ])
@@ -2673,6 +2676,7 @@ function modeDescription(mode: ModerationMode): string {
 
 function resultLabel(row: ContentModerationLog): string {
   if (row.action === 'keyword_block') return t('admin.riskControl.action.keywordBlock')
+  if (row.action === 'hash_block') return t('admin.riskControl.action.hashBlock')
   if (row.action === 'block') return t('admin.riskControl.action.block')
   if (row.action === 'error' || row.error) return t('admin.riskControl.action.error')
   if (row.flagged) return t('admin.riskControl.result.hit')
@@ -2681,6 +2685,7 @@ function resultLabel(row: ContentModerationLog): string {
 
 function resultBadgeClass(row: ContentModerationLog): string {
   if (row.action === 'keyword_block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  if (row.action === 'hash_block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'

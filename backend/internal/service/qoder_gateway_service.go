@@ -58,7 +58,7 @@ var qoderClaudeBillingCCHRe = regexp.MustCompile(`(x-anthropic-billing-header:[^
 var ErrQoderRefreshInProgress = errors.New("qoder refresh in progress")
 
 // defaultQoderModelAliases 将兜底的 TokenRouter 请求侧 alias 映射到 Qoder API key。
-// 已配置 model_mapping 的 Qoder 账号以账号配置为准，此表仅作为兼容和默认展示面。
+// 已配置 model_mapping 的 Qoder 账号以账号配置为准，此表仅作为兜底路由和默认展示面。
 var defaultQoderModelAliases = map[string]qoderModelInfo{
 	// 通过加密 reasoning metadata 确认该路由为 Claude Opus 4.6。
 	"claude-opus-4-6": {Key: "ultimate", Source: "system", Provider: "Claude", Notes: "Confirmed Claude Opus 4.6 via encrypted reasoning metadata.", DisplayName: "Claude Opus 4.6"},
@@ -70,25 +70,18 @@ var defaultQoderModelAliases = map[string]qoderModelInfo{
 	// Qoder lite tier 尚未验证，观测结果不完全一致。
 	"lite": {Key: "lite", Source: "system", Provider: "Qoder", Notes: "Unverified Qoder lite tier; observations are mixed.", DisplayName: "Qoder Lite"},
 	// Qoder UI 暴露的是这些供应商模型名，这里把可读公开 alias 映射到内部 route key。
-	"qwen3.7-max":       {Key: "qmodel_latest", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.7-Max.", DisplayName: "Qwen3.7-Max"},
-	"qwen3.7-plus":      {Key: "qmodel", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.7-Plus.", DisplayName: "Qwen3.7-Plus"},
-	"deepseek-v4-pro":   {Key: "dmodel", Source: "system", Provider: "DeepSeek", Notes: "Qoder UI model name DeepSeek-V4-Pro.", DisplayName: "DeepSeek-V4-Pro"},
-	"deepseek-v4-flash": {Key: "dfmodel", Source: "system", Provider: "DeepSeek", Notes: "Qoder UI model name DeepSeek-V4-Flash.", DisplayName: "DeepSeek-V4-Flash"},
-	"glm-5.2":           {Key: "gm51model", Source: "system", Provider: "GLM", Notes: "Qoder UI model name GLM-5.2.", DisplayName: "GLM-5.2"},
-	"kimi-k2.7-code":    {Key: "kmodel", Source: "system", Provider: "Kimi", Notes: "Qoder UI model name Kimi-K2.7-Code.", DisplayName: "Kimi-K2.7-Code"},
-	"minimax-m3":        {Key: "mmodel", Source: "system", Provider: "MiniMax", Notes: "Qoder UI model name MiniMax-M3.", DisplayName: "MiniMax-M3"},
-}
-
-var qoderCompatModelAliases = map[string]qoderModelInfo{
-	// 仅用于兼容：已有配置可能仍保存 Qoder 原始 key。
-	"ultimate": {Key: "ultimate", Source: "system", Provider: "Claude", Notes: "Compatibility alias for Qoder ultimate; expose claude-opus-4-6 instead.", DisplayName: "Claude Opus 4.6"},
-	// 仅用于兼容：Qoder CLI 默认不再列出这些路由，但旧配置可能仍引用它们。
-	"qwen3.5-plus": {Key: "q35model", Source: "system", Provider: "Qwen", Notes: "Compatibility alias for old Qoder Qwen3.5-Plus display name.", DisplayName: "Qwen3.5-Plus"},
-	"glm-5":        {Key: "gmodel", Source: "system", Provider: "GLM", Notes: "Compatibility alias for old Qoder GLM-5 display name.", DisplayName: "GLM-5"},
-	// 仅用于兼容：Qoder 将 GLM 展示名从 GLM-5.1 改为 GLM-5.2，但保留 gm51model。
-	"glm-5.1": {Key: "gm51model", Source: "system", Provider: "GLM", Notes: "Compatibility alias for old Qoder GLM-5.1 display name; expose glm-5.2 instead.", DisplayName: "GLM-5.2"},
-	// 仅用于兼容：继续解析旧推断的 Kimi 标签，但默认展示 kimi-k2.7-code。
-	"kimi-k2.6": {Key: "kmodel", Source: "system", Provider: "Kimi", Notes: "Compatibility alias for old Qoder Kimi display name; expose kimi-k2.7-code instead.", DisplayName: "Kimi-K2.7-Code"},
+	"qwen3.8-max-preview": {Key: "qmodel_preview", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.8-Max-Preview.", DisplayName: "Qwen3.8-Max-Preview"},
+	"qwen3.7-max":         {Key: "qmodel_latest", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.7-Max.", DisplayName: "Qwen3.7-Max"},
+	"qwen3.7-plus":        {Key: "qmodel", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.7-Plus.", DisplayName: "Qwen3.7-Plus"},
+	"qwen3.6-flash":       {Key: "q36fmodel", Source: "system", Provider: "Qwen", Notes: "Qoder CN UI model name Qwen3.6-Flash.", DisplayName: "Qwen3.6-Flash"},
+	"deepseek-v4-pro":     {Key: "dmodel", Source: "system", Provider: "DeepSeek", Notes: "Qoder UI model name DeepSeek-V4-Pro.", DisplayName: "DeepSeek-V4-Pro"},
+	"deepseek-v4-flash":   {Key: "dfmodel", Source: "system", Provider: "DeepSeek", Notes: "Qoder UI model name DeepSeek-V4-Flash.", DisplayName: "DeepSeek-V4-Flash"},
+	"glm-5.2":             {Key: "gm51model", Source: "system", Provider: "GLM", Notes: "Qoder UI model name GLM-5.2.", DisplayName: "GLM-5.2"},
+	// Qoder 1.15.0 起同时展示 Kimi-K3 与 Kimi-K2.7-Code，两者使用不同路由 key。
+	"kimi-k3":        {Key: "kmodel_latest", Source: "system", Provider: "Kimi", Notes: "Qoder UI model name Kimi-K3.", DisplayName: "Kimi-K3"},
+	"kimi-k2.7-code": {Key: "kmodel", Source: "system", Provider: "Kimi", Notes: "Qoder UI model name Kimi-K2.7-Code.", DisplayName: "Kimi-K2.7-Code"},
+	"minimax-m3":     {Key: "mmodel", Source: "system", Provider: "MiniMax", Notes: "Qoder UI model name MiniMax-M3.", DisplayName: "MiniMax-M3"},
+	"minimax-m2.7":   {Key: "mmodel", Source: "system", Provider: "MiniMax", Notes: "Qoder CN UI model name MiniMax-M2.7.", DisplayName: "MiniMax-M2.7"},
 }
 
 type qoderModelInfo struct {
@@ -395,6 +388,7 @@ type qoderPayloadBuildResult struct {
 
 type qoderPayloadRequest struct {
 	model           string
+	site            qoder.Site
 	system          string
 	messages        []qoderMessage
 	tools           []any
@@ -434,6 +428,10 @@ func (s *QoderGatewayService) buildQoderPayloadFromAnthropicMessages(c *gin.Cont
 
 func (s *QoderGatewayService) buildQoderPayloadWithConversation(c *gin.Context, account *Account, protocol string, request qoderPayloadRequest) qoderPayloadBuildResult {
 	request.userType = qoderUserType(account)
+	request.site = qoder.SiteGlobal
+	if site, err := qoderSiteForAccount(account); err == nil {
+		request.site = site
+	}
 	store := s.qoderConversationStore()
 	key, keySource := qoderConversationKey(c, account, protocol, request)
 	plan := store.planWithOptions(key, request.system, request.tools, request.messages, qoderConversationPlanOptions{
@@ -485,9 +483,9 @@ func (s *QoderGatewayService) openQoderStream(ctx context.Context, account *Acco
 	if err != nil {
 		return nil, fmt.Errorf("get qoder session: %w", err)
 	}
-	client := s.client
-	if client == nil {
-		client = qoder.NewClient(qoder.APIBaseURL)
+	client, err := qoderStreamClientForAccount(s.client, account)
+	if err != nil {
+		return nil, err
 	}
 
 	headers := map[string]string{
@@ -550,16 +548,22 @@ func (s *QoderGatewayService) RefreshAccountSession(ctx context.Context, account
 		return s.waitForQoderLockedRefresh(ctx, account, failedCredentialsHash)
 	}
 
-	if s.tokenProvider != nil && (result == nil || result.Refreshed || result.Account != nil) {
-		s.tokenProvider.Invalidate(account.ID)
-	}
 	if result != nil && result.Account != nil {
+		if s.tokenProvider != nil {
+			s.tokenProvider.InvalidateAccount(result.Account)
+		}
 		return result.Account, nil
 	}
 	if s.accountRepo != nil {
 		if fresh, err := s.accountRepo.GetByID(ctx, account.ID); err == nil && fresh != nil {
+			if s.tokenProvider != nil {
+				s.tokenProvider.InvalidateAccount(fresh)
+			}
 			return fresh, nil
 		}
+	}
+	if s.tokenProvider != nil && (result == nil || result.Refreshed) {
+		s.tokenProvider.Invalidate(account.ID)
 	}
 	return account, nil
 }
@@ -581,7 +585,7 @@ func (s *QoderGatewayService) waitForQoderLockedRefresh(ctx context.Context, acc
 		}
 		if qoderRefreshCredentialsHash(fresh.Credentials) != failedCredentialsHash {
 			if s.tokenProvider != nil {
-				s.tokenProvider.Invalidate(account.ID)
+				s.tokenProvider.InvalidateAccount(fresh)
 			}
 			return fresh, true, nil
 		}
@@ -698,11 +702,17 @@ func applyQoderAccountModelMapping(account *Account, body []byte) []byte {
 }
 
 func BuildQoderPayloadFromChatCompletions(body []byte, userType string) (map[string]any, string, error) {
+	return BuildQoderPayloadFromChatCompletionsForSite(body, userType, qoder.SiteGlobal)
+}
+
+// BuildQoderPayloadFromChatCompletionsForSite 按账号站点解析默认模型 alias。
+func BuildQoderPayloadFromChatCompletionsForSite(body []byte, userType string, site qoder.Site) (map[string]any, string, error) {
 	request, err := parseQoderChatCompletionsPayload(body)
 	if err != nil {
 		return nil, "", err
 	}
 	request.userType = userType
+	request.site = site
 	payload, modelKey := buildQoderPayloadWithOptions(request, "", request.messages, true, true)
 	return payload, modelKey, nil
 }
@@ -1639,7 +1649,7 @@ func qoderSessionIDForConversation(key, systemFingerprint, toolsFingerprint stri
 }
 
 func buildQoderPayloadWithOptions(request qoderPayloadRequest, sessionID string, messages []qoderMessage, includeSystem bool, includeTools bool) (map[string]any, string) {
-	modelInfo := resolveQoderModel(request.model)
+	modelInfo := resolveQoderModelForSite(request.site, request.model)
 	userType := request.userType
 	if strings.TrimSpace(userType) == "" {
 		userType = "personal_standard"
@@ -1675,7 +1685,7 @@ func buildQoderPayloadWithOptions(request qoderPayloadRequest, sessionID string,
 	extraOriginalContent["text"] = prompt
 	payload["business"] = map[string]any{
 		"product":  "cli",
-		"version":  "1.0.20",
+		"version":  qoder.MustProfileForSite(request.site).ClientVersion,
 		"type":     "agent",
 		"stage":    "init",
 		"id":       uuid.NewString(),
@@ -5232,7 +5242,11 @@ func openAIUsageChunk(id, model string, usage ClaudeUsage, totalTokens int, usag
 }
 
 func resolveQoderModel(model string) qoderModelInfo {
-	if info, ok := lookupQoderModelAlias(strings.TrimSpace(model)); ok {
+	return resolveQoderModelForSite(qoder.SiteGlobal, model)
+}
+
+func resolveQoderModelForSite(site qoder.Site, model string) qoderModelInfo {
+	if info, ok := lookupQoderModelAliasForSite(site, strings.TrimSpace(model)); ok {
 		return info
 	}
 	return qoderModelInfo{Key: strings.TrimSpace(model), Source: "system"}

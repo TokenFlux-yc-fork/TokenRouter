@@ -1,5 +1,7 @@
 package qoder
 
+import "strings"
+
 // Model 表示暴露给管理端和模型选择 API 的 Qoder 模型。
 type Model struct {
 	ID          string `json:"id"`
@@ -8,23 +10,169 @@ type Model struct {
 	CreatedAt   string `json:"created_at"`
 }
 
-// DefaultModels 仅作为请求侧模型 alias 的兜底列表。
-// 配置了 model_mapping 的 Qoder 账号以 mapping key 作为展示和请求模型列表。
-var DefaultModels = []Model{
+// globalModels 是国际站当前客户端展示的稳定模型快照。
+var globalModels = []Model{
 	{ID: "claude-opus-4-6", Type: "model", DisplayName: "Claude Opus 4.6", CreatedAt: ""},
 	{ID: "auto", Type: "model", DisplayName: "Qoder Auto", CreatedAt: ""},
 	{ID: "performance", Type: "model", DisplayName: "Qoder Performance", CreatedAt: ""},
 	{ID: "efficient", Type: "model", DisplayName: "Qoder Efficient", CreatedAt: ""},
 	{ID: "lite", Type: "model", DisplayName: "Qoder Lite", CreatedAt: ""},
+	{ID: "qwen3.8-max-preview", Type: "model", DisplayName: "Qwen3.8-Max-Preview", CreatedAt: ""},
 	{ID: "qwen3.7-max", Type: "model", DisplayName: "Qwen3.7-Max", CreatedAt: ""},
 	{ID: "qwen3.7-plus", Type: "model", DisplayName: "Qwen3.7-Plus", CreatedAt: ""},
+	// Kimi-K3 与 Kimi-K2.7-Code 是 Qoder 当前同时提供的两个独立模型。
+	{ID: "kimi-k3", Type: "model", DisplayName: "Kimi-K3", CreatedAt: ""},
+	{ID: "kimi-k2.7-code", Type: "model", DisplayName: "Kimi-K2.7-Code", CreatedAt: ""},
+	{ID: "glm-5.2", Type: "model", DisplayName: "GLM-5.2", CreatedAt: ""},
+	{ID: "deepseek-v4-pro", Type: "model", DisplayName: "DeepSeek-V4-Pro", CreatedAt: ""},
+	{ID: "deepseek-v4-flash", Type: "model", DisplayName: "DeepSeek-V4-Flash", CreatedAt: ""},
+	{ID: "minimax-m3", Type: "model", DisplayName: "MiniMax-M3", CreatedAt: ""},
+}
+
+// cnModels 是国内站当前客户端展示的稳定模型快照。
+var cnModels = []Model{
+	{ID: "auto", Type: "model", DisplayName: "Qoder Auto", CreatedAt: ""},
+	{ID: "qwen3.8-max-preview", Type: "model", DisplayName: "Qwen3.8-Max-Preview", CreatedAt: ""},
+	{ID: "qwen3.7-max", Type: "model", DisplayName: "Qwen3.7-Max", CreatedAt: ""},
+	{ID: "qwen3.7-plus", Type: "model", DisplayName: "Qwen3.7-Plus", CreatedAt: ""},
+	{ID: "qwen3.6-flash", Type: "model", DisplayName: "Qwen3.6-Flash", CreatedAt: ""},
 	{ID: "deepseek-v4-pro", Type: "model", DisplayName: "DeepSeek-V4-Pro", CreatedAt: ""},
 	{ID: "deepseek-v4-flash", Type: "model", DisplayName: "DeepSeek-V4-Flash", CreatedAt: ""},
 	{ID: "glm-5.2", Type: "model", DisplayName: "GLM-5.2", CreatedAt: ""},
 	{ID: "kimi-k2.7-code", Type: "model", DisplayName: "Kimi-K2.7-Code", CreatedAt: ""},
-	{ID: "minimax-m3", Type: "model", DisplayName: "MiniMax-M3", CreatedAt: ""},
+	{ID: "minimax-m2.7", Type: "model", DisplayName: "MiniMax-M2.7", CreatedAt: ""},
 }
 
+// globalAliases 与 cnAliases 固化公开模型 ID 到内部 route key 的站点映射。
+var globalAliases = map[string]string{
+	"claude-opus-4-6":     "ultimate",
+	"auto":                "auto",
+	"performance":         "performance",
+	"efficient":           "efficient",
+	"lite":                "lite",
+	"qwen3.8-max-preview": "qmodel_preview",
+	"qwen3.7-max":         "qmodel_latest",
+	"qwen3.7-plus":        "qmodel",
+	"kimi-k3":             "kmodel_latest",
+	"kimi-k2.7-code":      "kmodel",
+	"glm-5.2":             "gm51model",
+	"deepseek-v4-pro":     "dmodel",
+	"deepseek-v4-flash":   "dfmodel",
+	"minimax-m3":          "mmodel",
+}
+
+var cnAliases = map[string]string{
+	"auto":                "auto",
+	"qwen3.8-max-preview": "qmodel_preview",
+	"qwen3.7-max":         "qmodel_latest",
+	"qwen3.7-plus":        "qmodel",
+	"qwen3.6-flash":       "q36fmodel",
+	"deepseek-v4-pro":     "dmodel",
+	"deepseek-v4-flash":   "dfmodel",
+	"glm-5.2":             "gm51model",
+	"kimi-k2.7-code":      "kmodel",
+	"minimax-m2.7":        "mmodel",
+}
+
+// DefaultModels 是无账号上下文使用的两站稳定并集，国际站模型排在前面。
+var DefaultModels = unionModels(globalModels, cnModels)
+
+// DefaultModelsForSite 返回指定站点的模型快照副本。
+func DefaultModelsForSite(site Site) []Model {
+	models := globalModels
+	if site == SiteCN {
+		models = cnModels
+	}
+	return append([]Model(nil), models...)
+}
+
+// AliasesForSite 返回指定站点公开 alias 到内部 route key 的副本。
+func AliasesForSite(site Site) map[string]string {
+	aliases := globalAliases
+	if site == SiteCN {
+		aliases = cnAliases
+	}
+	out := make(map[string]string, len(aliases))
+	for alias, route := range aliases {
+		out[alias] = route
+	}
+	return out
+}
+
+// AliasForSite 解析指定站点的公开 alias。
+func AliasForSite(site Site, model string) (string, bool) {
+	aliases := globalAliases
+	if site == SiteCN {
+		aliases = cnAliases
+	}
+	route, ok := aliases[model]
+	return route, ok
+}
+
+// ModelCompatibleWithSite 判断已知 alias 或 route key 是否能由指定站点处理。
+// 未知 raw key 保持透传，因此返回 true。
+func ModelCompatibleWithSite(site Site, model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if _, ok := AliasForSite(site, model); ok {
+		return true
+	}
+	if isKnownPublicAlias(model) {
+		return false
+	}
+	if !isKnownRouteKey(model) {
+		return true
+	}
+	for _, route := range AliasesForSite(site) {
+		if route == model {
+			return true
+		}
+	}
+	return false
+}
+
+func isKnownPublicAlias(model string) bool {
+	_, global := globalAliases[model]
+	_, cn := cnAliases[model]
+	return global || cn
+}
+
+func isKnownRouteKey(model string) bool {
+	for _, aliases := range []map[string]string{globalAliases, cnAliases} {
+		for _, route := range aliases {
+			if route == model {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func unionModels(groups ...[]Model) []Model {
+	seen := make(map[string]struct{})
+	var models []Model
+	for _, group := range groups {
+		for _, model := range group {
+			if _, ok := seen[model.ID]; ok {
+				continue
+			}
+			seen[model.ID] = struct{}{}
+			models = append(models, model)
+		}
+	}
+	return models
+}
+
+// DefaultRequestModelIDsForSite 返回指定站点的公开模型 ID。
+func DefaultRequestModelIDsForSite(site Site) []string {
+	models := DefaultModelsForSite(site)
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ID)
+	}
+	return ids
+}
+
+// DefaultRequestModelIDs 返回无账号上下文使用的两站模型并集。
 func DefaultRequestModelIDs() []string {
 	ids := make([]string, 0, len(DefaultModels))
 	for _, model := range DefaultModels {

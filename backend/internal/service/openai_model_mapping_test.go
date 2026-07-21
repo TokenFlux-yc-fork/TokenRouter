@@ -48,11 +48,11 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			expectedModel:  "gpt6",
 		},
 		{
-			name: "account exact mapping overrides messages dispatch model",
+			name: "account exact mapping runs after messages dispatch model",
 			account: &Account{
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{
-						"claude-fable-5": "gpt-5.5",
+						"gpt-5.6-sol": "gpt-5.5",
 					},
 				},
 			},
@@ -61,11 +61,11 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			expectedModel:               "gpt-5.5",
 		},
 		{
-			name: "account wildcard mapping overrides messages dispatch model",
+			name: "account wildcard mapping runs after messages dispatch model",
 			account: &Account{
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{
-						"claude-*": "gpt-5.4",
+						"gpt-*": "gpt-5.4",
 					},
 				},
 			},
@@ -74,17 +74,17 @@ func TestResolveOpenAIForwardModel(t *testing.T) {
 			expectedModel:               "gpt-5.4",
 		},
 		{
-			name: "account passthrough mapping overrides messages dispatch model",
+			name: "account passthrough mapping runs after messages dispatch model",
 			account: &Account{
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{
-						"claude-fable-5": "claude-fable-5",
+						"gpt-5.6-sol": "gpt-5.6-sol",
 					},
 				},
 			},
 			requestedModel:              "claude-fable-5",
 			messagesDispatchMappedModel: "gpt-5.6-sol",
-			expectedModel:               "claude-fable-5",
+			expectedModel:               "gpt-5.6-sol",
 		},
 		{
 			name: "ordinary codex spark request keeps requested model",
@@ -217,6 +217,108 @@ func TestResolveOpenAICompactForwardModel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := resolveOpenAICompactForwardModel(tt.account, tt.model); got != tt.expectedModel {
 				t.Fatalf("resolveOpenAICompactForwardModel(...) = %q, want %q", got, tt.expectedModel)
+			}
+		})
+	}
+}
+
+// TestResolveOpenAIAccountUpstreamModelForRequestMatchesForwardModes 验证限制检查与真实转发使用同一模型解析顺序。
+func TestResolveOpenAIAccountUpstreamModelForRequestMatchesForwardModes(t *testing.T) {
+	tests := []struct {
+		name             string
+		account          *Account
+		model            string
+		requireCompact   bool
+		allowPassthrough bool
+		want             string
+	}{
+		{
+			name:    "OAuth 普通请求执行模型归一化",
+			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			model:   "gpt-5.6",
+			want:    "gpt-5.6-sol",
+		},
+		{
+			name: "OAuth 账号映射后执行模型归一化",
+			account: &Account{
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{"client-alias": "gpt-5.4-high"},
+				},
+			},
+			model: "client-alias",
+			want:  "gpt-5.4",
+		},
+		{
+			name: "compact 专属映射优先于 OAuth 归一化",
+			account: &Account{
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Credentials: map[string]any{
+					"compact_model_mapping": map[string]any{"gpt-5.6": "gpt-5.6-openai-compact"},
+				},
+			},
+			model:          "gpt-5.6",
+			requireCompact: true,
+			want:           "gpt-5.6-openai-compact",
+		},
+		{
+			name:           "compact 未映射时继续执行 OAuth 归一化",
+			account:        &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			model:          "gpt-5.6",
+			requireCompact: true,
+			want:           "gpt-5.6-sol",
+		},
+		{
+			name: "自动透传忽略普通账号映射",
+			account: &Account{
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Extra:    map[string]any{"openai_passthrough": true},
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{"client-alias": "gpt-5.5"},
+				},
+			},
+			model:            "client-alias",
+			allowPassthrough: true,
+			want:             "client-alias",
+		},
+		{
+			name: "自动透传仍执行 compact 专属映射",
+			account: &Account{
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Extra:    map[string]any{"openai_passthrough": true},
+				Credentials: map[string]any{
+					"model_mapping":         map[string]any{"client-alias": "gpt-5.5"},
+					"compact_model_mapping": map[string]any{"client-alias": "gpt-5.5-openai-compact"},
+				},
+			},
+			model:            "client-alias",
+			requireCompact:   true,
+			allowPassthrough: true,
+			want:             "gpt-5.5-openai-compact",
+		},
+		{
+			name: "非 Responses 入口不套用自动透传规则",
+			account: &Account{
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Extra:    map[string]any{"openai_passthrough": true},
+				Credentials: map[string]any{
+					"model_mapping": map[string]any{"client-alias": "gpt-5.4-high"},
+				},
+			},
+			model: "client-alias",
+			want:  "gpt-5.4",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveOpenAIAccountUpstreamModelForRequest(tt.account, tt.model, tt.requireCompact, tt.allowPassthrough); got != tt.want {
+				t.Fatalf("resolveOpenAIAccountUpstreamModelForRequest(...) = %q, want %q", got, tt.want)
 			}
 		})
 	}

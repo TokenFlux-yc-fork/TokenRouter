@@ -266,6 +266,8 @@ function buildQoderAccount() {
     credentials: {
       security_oauth_token: 'redacted',
       machine_id: 'machine',
+      site: 'global',
+      refresh_mode: 'cosy',
       model_mapping: {
         'claude-opus-4-6': 'ultimate',
         auto: 'auto'
@@ -354,6 +356,24 @@ describe('EditAccountModal', () => {
     getSettingsMock.mockResolvedValue({ account_quota_notify_enabled: false })
     getWebSearchEmulationConfigMock.mockResolvedValue({ enabled: false, providers: [] })
     listTLSProfilesMock.mockResolvedValue([])
+  })
+
+  it('renders the shared account model rule copy', async () => {
+    const account = buildAccount()
+    account.credentials.model_whitelist = []
+    const wrapper = mountModal(account)
+
+    expect(wrapper.text()).toContain('admin.accounts.modelRestriction')
+    expect(wrapper.text()).toContain('admin.accounts.modelWhitelist')
+    expect(wrapper.text()).toContain('admin.accounts.modelRestrictionCombinedHint')
+    expect(wrapper.text()).toContain('admin.accounts.supportsAllModels')
+
+    const mappingButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('admin.accounts.modelMapping'))
+    expect(mappingButton).toBeTruthy()
+    await mappingButton!.trigger('click')
+    expect(wrapper.text()).toContain('admin.accounts.mapRequestModels')
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
@@ -955,6 +975,25 @@ describe('EditAccountModal', () => {
     })
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_whitelist).toEqual([])
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.security_oauth_token).toBe('redacted')
+  })
+
+  it('switches Qoder site without deleting credentials or model mappings', async () => {
+    const account = buildQoderAccount()
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="edit-qoder-site-cn"]').trigger('click')
+    expect(wrapper.text()).toContain('admin.accounts.qoder.site.changeWarning')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials.site).toBe('cn')
+    expect(credentials.refresh_mode).toBe('cosy')
+    expect(credentials.security_oauth_token).toBe('redacted')
+    expect(credentials.model_mapping).toEqual({
+      'claude-opus-4-6': 'ultimate',
+      auto: 'auto'
+    })
   })
 
   it('does not persist generated Qoder model mappings on unrelated edits', async () => {

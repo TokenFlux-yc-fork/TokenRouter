@@ -70,7 +70,7 @@ func TestModelMarketplaceQoderNonManualOnlyModelUsesStandardPricing(t *testing.T
 	}
 }
 
-func TestModelMarketplaceQoderChannelMappedStandardModelUsesStandardPricing(t *testing.T) {
+func TestModelMarketplaceQoderChannelMappedBasisDoesNotUseRequestedStandardPricing(t *testing.T) {
 	groupID := int64(902)
 	cache := newEmptyChannelCache()
 	cache.mappingByGroupModel[channelModelKey{groupID: groupID, platform: PlatformQoder, model: "gpt-5.4"}] = "qmodel"
@@ -89,13 +89,13 @@ func TestModelMarketplaceQoderChannelMappedStandardModelUsesStandardPricing(t *t
 
 	pricing := svc.getPublicModelDisplayPricing(context.Background(), group, "gpt-5.4", nil)
 
-	if pricing.PricingMode != "token" || pricing.PriceStatus != "priced" || len(pricing.ContextIntervals) == 0 {
-		t.Fatalf("Qoder channel-mapped standard model pricing = (%q, %q, intervals=%d), want standard context pricing",
+	if pricing.PricingMode != "unknown" || pricing.PriceStatus != "unpriced" {
+		t.Fatalf("Qoder channel-mapped pricing = (%q, %q, intervals=%d), want unknown/unpriced",
 			pricing.PricingMode, pricing.PriceStatus, len(pricing.ContextIntervals))
 	}
 }
 
-func TestModelMarketplaceQoderUpstreamRouteKeySourceUsesStandardRequestedPricing(t *testing.T) {
+func TestModelMarketplaceQoderUpstreamBasisDoesNotUseRequestedStandardPricing(t *testing.T) {
 	groupID := int64(902)
 	cache := newEmptyChannelCache()
 	cache.mappingByGroupModel[channelModelKey{groupID: groupID, platform: PlatformQoder, model: "gpt-5.4-mini"}] = "qmodel"
@@ -114,8 +114,8 @@ func TestModelMarketplaceQoderUpstreamRouteKeySourceUsesStandardRequestedPricing
 
 	pricing := svc.getPublicModelDisplayPricing(context.Background(), group, "gpt-5.4-mini", nil)
 
-	if pricing.PricingMode != "token" || pricing.PriceStatus != "priced" || pricing.InputPricePerToken <= 0 || pricing.OutputPricePerToken <= 0 {
-		t.Fatalf("Qoder upstream route-key source pricing = (%q, %q, %g, %g), want standard requested-model pricing",
+	if pricing.PricingMode != "unknown" || pricing.PriceStatus != "unpriced" {
+		t.Fatalf("Qoder upstream route-key source pricing = (%q, %q, %g, %g), want unknown/unpriced",
 			pricing.PricingMode, pricing.PriceStatus, pricing.InputPricePerToken, pricing.OutputPricePerToken)
 	}
 }
@@ -319,7 +319,7 @@ func TestModelMarketplaceQoderBlankRouteKeyPricingShowsAliasManualPricing(t *tes
 	}
 }
 
-func TestModelMarketplaceQoderDefaultAliasUsesRouteKeyManualPricing(t *testing.T) {
+func TestModelMarketplaceQoderRequestedBasisDoesNotInferRouteKeyPricing(t *testing.T) {
 	groupID := int64(902)
 	inputPrice := 0.01
 	outputPrice := 0.02
@@ -344,8 +344,8 @@ func TestModelMarketplaceQoderDefaultAliasUsesRouteKeyManualPricing(t *testing.T
 
 	pricing := svc.getPublicModelDisplayPricing(context.Background(), group, "qwen3.7-plus", nil)
 
-	if pricing.InputPricePerToken != inputPrice || pricing.OutputPricePerToken != outputPrice {
-		t.Fatalf("Qoder route key display price = (%g, %g), want (%g, %g)", pricing.InputPricePerToken, pricing.OutputPricePerToken, inputPrice, outputPrice)
+	if pricing.PricingMode != "unknown" || pricing.PriceStatus != "unpriced" {
+		t.Fatalf("Qoder requested-basis display price = (%q, %q), want unknown/unpriced", pricing.PricingMode, pricing.PriceStatus)
 	}
 }
 
@@ -359,7 +359,7 @@ func TestModelMarketplaceQoderAccountMappedCustomModelUsesRouteKeyManualPricing(
 		InputPrice:  &inputPrice,
 		OutputPrice: &outputPrice,
 	}
-	cache.channelByGroupID[groupID] = &Channel{ID: groupID, Status: StatusActive}
+	cache.channelByGroupID[groupID] = &Channel{ID: groupID, Status: StatusActive, BillingModelSource: BillingModelSourceUpstream}
 	cache.groupPlatform[groupID] = PlatformQoder
 	cache.loadedAt = time.Now()
 	channelService := &ChannelService{}
@@ -388,10 +388,17 @@ func TestModelMarketplaceQoderAccountMappedCustomModelUsesRouteKeyManualPricing(
 
 	models := svc.listPublicModelsForGroup(context.Background(), group)
 
-	if len(models) != 1 || models[0].ID != "custom-qoder-model" {
-		t.Fatalf("Qoder account-mapped marketplace models = %#v, want custom-qoder-model only", models)
+	var customModel *ModelMarketplaceModel
+	for i := range models {
+		if models[i].ID == "custom-qoder-model" {
+			customModel = &models[i]
+			break
+		}
 	}
-	pricing := models[0].Pricing
+	if customModel == nil {
+		t.Fatalf("Qoder account-mapped marketplace models = %#v, want custom-qoder-model", models)
+	}
+	pricing := customModel.Pricing
 	if pricing.InputPricePerToken != inputPrice || pricing.OutputPricePerToken != outputPrice {
 		t.Fatalf("Qoder account-mapped route key display price = (%g, %g), want (%g, %g)", pricing.InputPricePerToken, pricing.OutputPricePerToken, inputPrice, outputPrice)
 	}
@@ -549,6 +556,91 @@ func TestModelMarketplaceQoderOmitsOfficialPriceDiscount(t *testing.T) {
 		if model.Pricing.PriceStatus != "unpriced" {
 			t.Fatalf("Qoder model %s price status = %q, want unpriced", model.ID, model.Pricing.PriceStatus)
 		}
+	}
+}
+
+func TestModelMarketplaceListPublicPrefetchesAccountsOnce(t *testing.T) {
+	groups := []Group{
+		{ID: 4101, Name: "OpenAI A", Platform: PlatformOpenAI, Status: StatusActive, RateMultiplier: 1, ActiveAccountCount: 1},
+		{ID: 4102, Name: "OpenAI B", Platform: PlatformOpenAI, Status: StatusActive, RateMultiplier: 1, ActiveAccountCount: 1},
+	}
+	accounts := []Account{
+		{
+			ID:       5101,
+			Platform: PlatformOpenAI,
+			GroupIDs: []int64{4101},
+			AccountGroups: []AccountGroup{{
+				AccountID: 5101,
+				GroupID:   4101,
+				Priority:  1,
+			}},
+			Credentials: map[string]any{
+				"model_mapping":   map[string]any{"client-a": "upstream-a"},
+				"model_whitelist": []any{"upstream-a"},
+			},
+		},
+		{
+			ID:       5102,
+			Platform: PlatformOpenAI,
+			GroupIDs: []int64{4102},
+			AccountGroups: []AccountGroup{{
+				AccountID: 5102,
+				GroupID:   4102,
+				Priority:  1,
+			}},
+			Credentials: map[string]any{
+				"model_mapping":   map[string]any{"client-b": "upstream-b"},
+				"model_whitelist": []any{"upstream-b"},
+			},
+		},
+	}
+	accountRepo := &modelsListAccountRepoStub{
+		all: accounts,
+		byGroup: map[int64][]Account{
+			4101: {accounts[0]},
+			4102: {accounts[1]},
+		},
+	}
+	gatewayService := &GatewayService{accountRepo: accountRepo}
+	service := NewModelMarketplaceService(
+		&marketplaceGroupRepoStub{groups: groups},
+		nil,
+		gatewayService,
+		NewBillingService(nil, nil),
+		nil,
+		nil,
+		nil,
+	)
+
+	result, err := service.ListPublic(context.Background())
+	if err != nil {
+		t.Fatalf("ListPublic returned error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("ListPublic returned %d groups, want 2", len(result))
+	}
+	if accountRepo.listAllCalls.Load() != 1 || accountRepo.listByGroupCalls.Load() != 0 {
+		t.Fatalf("account queries = all:%d by_group:%d, want all:1 by_group:0", accountRepo.listAllCalls.Load(), accountRepo.listByGroupCalls.Load())
+	}
+	groupAModels := make(map[string]struct{}, len(result[0].Models))
+	for _, model := range result[0].Models {
+		groupAModels[model.ID] = struct{}{}
+	}
+	groupBModels := make(map[string]struct{}, len(result[1].Models))
+	for _, model := range result[1].Models {
+		groupBModels[model.ID] = struct{}{}
+	}
+	if _, ok := groupAModels["client-a"]; !ok {
+		t.Fatalf("group A models = %#v, want client-a", result[0].Models)
+	}
+	if _, leaked := groupAModels["client-b"]; leaked {
+		t.Fatalf("group A models = %#v, must not contain client-b", result[0].Models)
+	}
+	if _, ok := groupBModels["client-b"]; !ok {
+		t.Fatalf("group B models = %#v, want client-b", result[1].Models)
+	}
+	if _, leaked := groupBModels["client-a"]; leaked {
+		t.Fatalf("group B models = %#v, must not contain client-a", result[1].Models)
 	}
 }
 

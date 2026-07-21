@@ -1,6 +1,6 @@
 # Asynchronous Image Tasks
 
-Asynchronous image tasks let clients submit long-running OpenAI-compatible image requests without keeping one HTTP connection open. This avoids proxy/CDN response timeouts such as Cloudflare 524 while preserving the existing image routing, billing, moderation, concurrency, and failover behavior.
+Asynchronous image tasks let clients submit long-running OpenAI-compatible image requests without keeping one HTTP connection open. OpenAI and Grok image generations or edits can be submitted to `/v1/images/generations/async` or `/v1/images/edits/async`, then polled through `/v1/images/tasks/{task_id}`. This avoids proxy/CDN response timeouts such as Cloudflare 524 while preserving the existing image routing, billing, moderation, concurrency, and failover behavior.
 
 ## Endpoints
 

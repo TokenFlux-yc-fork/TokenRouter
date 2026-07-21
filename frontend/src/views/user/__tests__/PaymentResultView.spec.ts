@@ -213,6 +213,35 @@ describe('PaymentResultView', () => {
     expect(wrapper.text()).not.toContain('payment.result.failed')
   })
 
+  it('polls processing orders locally every fifteen seconds until they succeed', async () => {
+    vi.useFakeTimers()
+    routeState.query = { resume_token: 'resume-processing' }
+    resolveOrderPublicByResumeToken
+      .mockResolvedValueOnce({ data: orderFactory('PROCESSING') })
+      .mockResolvedValueOnce({ data: orderFactory('COMPLETED') })
+
+    const wrapper = mount(PaymentResultView, {
+      global: {
+        stubs: {
+          OrderStatusBadge: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('payment.result.processing')
+
+    await vi.advanceTimersByTimeAsync(14999)
+    await flushPromises()
+    expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(resolveOrderPublicByResumeToken).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('payment.result.success')
+  })
+
   it('prefers the public resume-token result over a stale restored DB snapshot', async () => {
     routeState.query = {
       resume_token: 'resume-authoritative',

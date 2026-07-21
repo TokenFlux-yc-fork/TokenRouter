@@ -60,9 +60,10 @@ func (s *GatewayService) DiagnoseModelAvailabilityForPlatform(
 	}
 
 	diag := ModelAvailabilityDiagnosis{}
+	routingModel := s.channelMappedModelForGroup(ctx, groupID, requestedModel)
 	for i := range accounts {
 		diag.HasAccountsInPool = true
-		if s.isModelSupportedByAccountWithContext(ctx, &accounts[i], requestedModel) {
+		if s.isRoutingModelSupportedByAccountWithContext(ctx, &accounts[i], routingModel) {
 			diag.HasModelSupport = true
 			return diag
 		}

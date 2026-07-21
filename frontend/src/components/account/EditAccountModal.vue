@@ -26,6 +26,44 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <!-- 编辑站点只改路由上下文，不擅自改写令牌来源。 -->
+      <div v-if="isQoderCosyAccount" class="space-y-2">
+        <label class="input-label">{{ t('admin.accounts.qoder.site.label') }}</label>
+        <div class="grid grid-cols-2 gap-2" role="group" :aria-label="t('admin.accounts.qoder.site.label')">
+          <button
+            type="button"
+            data-testid="edit-qoder-site-global"
+            :aria-pressed="qoderSite === 'global'"
+            @click="qoderSite = 'global'"
+            :class="[
+              'rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
+              qoderSite === 'global'
+                ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-dark-500 dark:bg-dark-700 dark:text-gray-300'
+            ]"
+          >
+            {{ t('admin.accounts.qoder.site.global') }}
+          </button>
+          <button
+            type="button"
+            data-testid="edit-qoder-site-cn"
+            :aria-pressed="qoderSite === 'cn'"
+            @click="qoderSite = 'cn'"
+            :class="[
+              'rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
+              qoderSite === 'cn'
+                ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
+                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-dark-500 dark:bg-dark-700 dark:text-gray-300'
+            ]"
+          >
+            {{ t('admin.accounts.qoder.site.cn') }}
+          </button>
+        </div>
+        <p v-if="qoderSiteChanged" class="text-xs text-amber-600 dark:text-amber-400">
+          {{ t('admin.accounts.qoder.site.changeWarning') }}
+        </p>
+      </div>
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div>
@@ -561,6 +599,7 @@
               :model-value="allowedModels"
               :platform="account?.platform || 'anthropic'"
               :account-id="account?.id"
+              :models="isQoderCosyAccount ? qoderAvailableModels : undefined"
               @update:modelValue="setAllowedModels"
             />
             <p class="text-xs text-gray-500 dark:text-gray-400">
@@ -1461,59 +1500,7 @@
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
-        <div class="overflow-hidden rounded-lg border border-sky-100 bg-sky-50/60 shadow-sm dark:border-sky-900/50 dark:bg-sky-950/20">
-          <div class="flex items-start gap-3 px-4 py-3">
-            <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white text-sky-600 shadow-sm ring-1 ring-sky-100 dark:bg-dark-800 dark:text-sky-300 dark:ring-sky-900/60">
-              <Icon name="sparkles" size="sm" />
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <label class="input-label mb-0">{{ t('admin.accounts.openai.codexImageTool') }}</label>
-                <span
-                  class="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                  :class="codexImageToolBadgeClass"
-                >
-                  {{ codexImageToolBadgeLabel }}
-                </span>
-              </div>
-              <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
-                {{ t('admin.accounts.openai.codexImageToolDesc') }}
-              </p>
-            </div>
-          </div>
-          <div class="border-t border-sky-100 bg-white/70 p-2 dark:border-sky-900/50 dark:bg-dark-800/70">
-            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <button
-                v-for="option in codexImageToolOptions"
-                :key="option.value"
-                type="button"
-                :data-testid="`codex-image-tool-${option.value}`"
-                @click="codexImageToolMode = option.value"
-                :class="[
-                  'group flex min-h-[62px] items-start gap-2 rounded-md border px-3 py-2 text-left transition-all',
-                  codexImageToolMode === option.value
-                    ? option.selectedCardClass
-                    : 'border-transparent bg-transparent text-slate-600 hover:border-gray-200 hover:bg-gray-50 dark:text-slate-300 dark:hover:border-dark-500 dark:hover:bg-dark-700'
-                ]"
-              >
-                <span
-                  :class="[
-                    'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors',
-                    codexImageToolMode === option.value
-                      ? option.selectedDotClass
-                      : 'border-gray-300 text-transparent group-hover:border-gray-400 dark:border-dark-500'
-                  ]"
-                >
-                  <Icon name="check" size="xs" :stroke-width="2" />
-                </span>
-                <span class="min-w-0">
-                  <span class="block text-sm font-medium">{{ option.label }}</span>
-                  <span class="mt-0.5 block text-xs leading-4 text-slate-500 dark:text-slate-400">{{ option.description }}</span>
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
+        <CodexImageToolModeSelector v-model="codexImageToolMode" />
       </div>
 
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
@@ -2613,6 +2600,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import CodexImageToolModeSelector from '@/components/account/CodexImageToolModeSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
@@ -2635,6 +2623,11 @@ import {
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import {
+  applyCodexImageToolMode,
+  readCodexImageToolMode,
+  type CodexImageToolMode
+} from '@/utils/codexImageToolMode'
+import {
   VERTEX_LOCATION_OPTIONS,
   groupedAccountSelectOptions
 } from '@/constants/account'
@@ -2650,12 +2643,14 @@ import {
 } from '@/utils/openaiWsMode'
 import {
   getPresetMappingsByPlatform,
+  getModelsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
   buildPersistedModelRestriction,
   splitQoderPersistedModelRestriction,
   splitPersistedModelRestriction,
-  isValidWildcardPattern
+  isValidWildcardPattern,
+  type QoderSite
 } from '@/composables/useModelWhitelist'
 
 interface Props {
@@ -2730,6 +2725,7 @@ const qoderModelRestrictionConfigured = ref(false)
 const qoderModelRestrictionTouched = ref(false)
 const qoderModelWhitelistConfigured = ref(false)
 const qoderModelWhitelistTouched = ref(false)
+const qoderSite = ref<QoderSite>('global')
 const DEFAULT_POOL_MODE_RETRY_COUNT = 3
 const MAX_POOL_MODE_RETRY_COUNT = 10
 const DEFAULT_POOL_MODE_RETRY_STATUS_CODES = [401, 403, 429]
@@ -2866,7 +2862,6 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyAllowClaudeCodeEnabled = ref(false)
 const openAIOAuthClientPolicy = ref<OpenAIOAuthClientPolicy>('any')
-type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
@@ -2903,6 +2898,12 @@ const supportsTLSFingerprint = (account: Account | null | undefined) => {
 const isQoderCosyAccount = computed(() =>
   props.account?.platform === 'qoder' && props.account?.type === 'cosy'
 )
+const originalQoderSite = computed<QoderSite>(() => {
+  const credentials = props.account?.credentials as Record<string, unknown> | undefined
+  return credentials?.site === 'cn' ? 'cn' : 'global'
+})
+const qoderSiteChanged = computed(() => isQoderCosyAccount.value && qoderSite.value !== originalQoderSite.value)
+const qoderAvailableModels = computed(() => getModelsByPlatform('qoder', qoderSite.value))
 const supportsOAuthLikeModelRestriction = computed(() =>
   (props.account?.platform === 'openai' && props.account?.type === 'oauth') ||
   (props.account?.platform === 'grok' && props.account?.type === 'oauth') ||
@@ -2958,66 +2959,6 @@ const openaiResponsesWebSocketV2Mode = computed({
 const openAIWSModeConcurrencyHintKey = computed(() =>
   resolveOpenAIWSModeConcurrencyHintKey(openaiResponsesWebSocketV2Mode.value)
 )
-const codexImageToolOptions = computed<Array<{
-  value: CodexImageToolMode
-  label: string
-  description: string
-  selectedCardClass: string
-  selectedDotClass: string
-}>>(() => [
-  {
-    value: 'inherit',
-    label: t('admin.accounts.openai.codexImageToolInherit'),
-    description: t('admin.accounts.openai.codexImageToolInheritDesc'),
-    selectedCardClass: 'border-sky-300 bg-sky-50 text-sky-900 shadow-sm ring-1 ring-sky-200 dark:border-sky-700 dark:bg-sky-900/25 dark:text-sky-100 dark:ring-sky-800',
-    selectedDotClass: 'border-sky-500 bg-sky-500 text-white'
-  },
-  {
-    value: 'enabled',
-    label: t('admin.accounts.openai.codexImageToolEnabled'),
-    description: t('admin.accounts.openai.codexImageToolEnabledDesc'),
-    selectedCardClass: 'border-emerald-300 bg-emerald-50 text-emerald-900 shadow-sm ring-1 ring-emerald-200 dark:border-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-100 dark:ring-emerald-800',
-    selectedDotClass: 'border-emerald-500 bg-emerald-500 text-white'
-  },
-  {
-    value: 'disabled',
-    label: t('admin.accounts.openai.codexImageToolDisabled'),
-    description: t('admin.accounts.openai.codexImageToolDisabledDesc'),
-    selectedCardClass: 'border-amber-300 bg-amber-50 text-amber-900 shadow-sm ring-1 ring-amber-200 dark:border-amber-700 dark:bg-amber-900/25 dark:text-amber-100 dark:ring-amber-800',
-    selectedDotClass: 'border-amber-500 bg-amber-500 text-white'
-  },
-  {
-    value: 'block',
-    label: t('admin.accounts.openai.codexImageToolBlock'),
-    description: t('admin.accounts.openai.codexImageToolBlockDesc'),
-    selectedCardClass: 'border-rose-300 bg-rose-50 text-rose-900 shadow-sm ring-1 ring-rose-200 dark:border-rose-700 dark:bg-rose-900/25 dark:text-rose-100 dark:ring-rose-800',
-    selectedDotClass: 'border-rose-500 bg-rose-500 text-white'
-  }
-])
-const codexImageToolBadgeLabel = computed(() => {
-  switch (codexImageToolMode.value) {
-    case 'enabled':
-      return t('admin.accounts.openai.codexImageToolBadgeEnabled')
-    case 'disabled':
-      return t('admin.accounts.openai.codexImageToolBadgeDisabled')
-    case 'block':
-      return t('admin.accounts.openai.codexImageToolBadgeBlock')
-    default:
-      return t('admin.accounts.openai.codexImageToolBadgeInherit')
-  }
-})
-const codexImageToolBadgeClass = computed(() => {
-  switch (codexImageToolMode.value) {
-    case 'enabled':
-      return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-    case 'disabled':
-      return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-    case 'block':
-      return 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
-    default:
-      return 'bg-slate-100 text-slate-600 dark:bg-dark-600 dark:text-slate-300'
-  }
-})
 const openAICompactModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.compactModeAuto') },
   { value: 'force_on', label: t('admin.accounts.openai.compactModeForceOn') },
@@ -3156,7 +3097,12 @@ const openAICompactStatusKey = computed(() => {
 })
 
 // Computed: current preset mappings based on platform
-const presetMappings = computed(() => getPresetMappingsByPlatform(props.account?.platform || 'anthropic'))
+const presetMappings = computed(() =>
+  getPresetMappingsByPlatform(
+    props.account?.platform || 'anthropic',
+    isQoderCosyAccount.value ? qoderSite.value : undefined
+  )
+)
 const tempUnschedPresets = computed(() => [
   {
     label: t('admin.accounts.tempUnschedulable.presets.overloadLabel'),
@@ -3364,6 +3310,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load intercept warmup requests setting (applies to all account types)
   const credentials = newAccount.credentials as Record<string, unknown> | undefined
+  qoderSite.value = newAccount.platform === 'qoder' && credentials?.site === 'cn' ? 'cn' : 'global'
   interceptWarmupRequests.value = credentials?.intercept_warmup_requests === true
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
@@ -3416,16 +3363,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         openAIResponsesMode.value = 'auto'
       }
     }
-    const codexImageGenerationBridgeValue = typeof extra?.codex_image_generation_bridge === 'boolean'
-      ? extra.codex_image_generation_bridge
-      : extra?.codex_image_generation_bridge_enabled
-    if (extra?.codex_image_generation_explicit_tool_policy === 'strip') {
-      codexImageToolMode.value = 'block'
-    } else if (codexImageGenerationBridgeValue === true) {
-      codexImageToolMode.value = 'enabled'
-    } else if (codexImageGenerationBridgeValue === false) {
-      codexImageToolMode.value = 'disabled'
-    }
+    codexImageToolMode.value = readCodexImageToolMode(extra)
     openaiOAuthResponsesWebSocketV2Mode.value = resolveOpenAIWSModeFromExtra(extra, {
       modeKey: 'openai_oauth_responses_websockets_v2_mode',
       enabledKey: 'openai_oauth_responses_websockets_v2_enabled',
@@ -4486,6 +4424,7 @@ const handleSubmit = async () => {
 
       if (props.account.platform === 'qoder') {
         applyQoderModelRestriction(newCredentials)
+        newCredentials.site = qoderSite.value
       } else if (props.account.platform === 'openai') {
         applyOpenAIModelMappingCredentials(newCredentials)
       } else {
@@ -4761,21 +4700,7 @@ const handleSubmit = async () => {
 			delete newExtra.auto_pause_7d_disabled
 		}
 
-		delete newExtra.codex_image_generation_bridge_enabled
-      switch (codexImageToolMode.value) {
-        case 'enabled':
-        case 'disabled':
-          newExtra.codex_image_generation_bridge = codexImageToolMode.value === 'enabled'
-          delete newExtra.codex_image_generation_explicit_tool_policy
-          break
-        case 'block':
-          newExtra.codex_image_generation_explicit_tool_policy = 'strip'
-          delete newExtra.codex_image_generation_bridge
-          break
-        default:
-          delete newExtra.codex_image_generation_bridge
-          delete newExtra.codex_image_generation_explicit_tool_policy
-      }
+      applyCodexImageToolMode(newExtra, codexImageToolMode.value)
 
       if (props.account.type === 'oauth') {
         newExtra.openai_oauth_client_policy = openAIOAuthClientPolicy.value

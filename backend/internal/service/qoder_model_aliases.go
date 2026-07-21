@@ -1,13 +1,25 @@
 package service
 
-import "strings"
+import (
+	"strings"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
+)
+
+// lookupQoderModelAlias 仅解析当前公开 alias，未命中的模型由调用方原样透传。
 func lookupQoderModelAlias(model string) (qoderModelInfo, bool) {
 	model = normalizeQoderAliasModel(model)
-	if info, ok := defaultQoderModelAliases[model]; ok {
-		return info, true
+	info, ok := defaultQoderModelAliases[model]
+	return info, ok
+}
+
+// lookupQoderModelAliasForSite 只解析账号站点实际支持的公开 alias。
+func lookupQoderModelAliasForSite(site qoder.Site, model string) (qoderModelInfo, bool) {
+	model = normalizeQoderAliasModel(model)
+	if _, ok := qoder.AliasForSite(site, model); !ok {
+		return qoderModelInfo{}, false
 	}
-	info, ok := qoderCompatModelAliases[model]
+	info, ok := defaultQoderModelAliases[model]
 	return info, ok
 }
 
@@ -19,11 +31,7 @@ func isQoderAliasBillingModel(model string) bool {
 	if _, ok := defaultQoderModelAliases[model]; ok {
 		return true
 	}
-	if _, ok := qoderCompatModelAliases[model]; ok {
-		return true
-	}
-	return isQoderAliasRouteKey(model, defaultQoderModelAliases) ||
-		isQoderAliasRouteKey(model, qoderCompatModelAliases)
+	return isQoderAliasRouteKey(model, defaultQoderModelAliases)
 }
 
 func isQoderAliasRouteKey(model string, aliases map[string]qoderModelInfo) bool {

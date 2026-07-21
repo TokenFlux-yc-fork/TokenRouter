@@ -25,11 +25,15 @@
       </div>
     </div>
 
-    <!-- Progress bar row -->
+    <!-- 进度条行 -->
     <div class="flex items-center gap-1">
-      <!-- Label badge (fixed width for alignment) -->
+      <!-- 标签保持固定宽度，让同一单元格内的多行进度条对齐。 -->
       <span
-        :class="['w-[32px] shrink-0 rounded px-1 text-center text-[10px] font-medium', labelClass]"
+        :class="[
+          wideLabel ? 'w-[48px]' : 'w-[32px]',
+          'shrink-0 whitespace-nowrap rounded px-1 text-center text-[10px] font-medium',
+          labelClass
+        ]"
       >
         {{ label }}
       </span>
@@ -71,6 +75,7 @@ const props = defineProps<{
   windowStats?: WindowStats | null
   showNowWhenIdle?: boolean
   remainingCapacity?: boolean
+  wideLabel?: boolean
 }>()
 
 const { t } = useI18n()

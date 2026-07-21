@@ -141,3 +141,33 @@ func TestAsyncImageHandlerDisabledReturns404(t *testing.T) {
 	// 未创建或持久化任何任务。
 	require.Empty(t, store.tasks)
 }
+
+// TestAsyncImageHandlerValidateRequestUsesChannelMappedModel 验证异步图片提交按渠道模型 C 校验模型族。
+func TestAsyncImageHandlerValidateRequestUsesChannelMappedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	groupID := int64(4350)
+	channelService := newGatewayModelsChannelServiceForTest(groupID, service.PlatformOpenAI, service.Channel{
+		ID:     4350,
+		Status: service.StatusActive,
+		ModelMapping: map[string]map[string]string{
+			service.PlatformOpenAI: {
+				"draw-alias":  "gpt-image-1",
+				"gpt-image-2": "gpt-5.4",
+			},
+		},
+	})
+	h := &AsyncImageHandler{openAI: newOpenAIImageChatRejectionHandlerWithChannel(t, channelService)}
+
+	validate := func(model string) error {
+		body := []byte(`{"model":"` + model + `","prompt":"draw a cat"}`)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations/async", strings.NewReader(string(body)))
+		c.Request.Header.Set("Content-Type", "application/json")
+		setImageChatTestAuthForGroup(c, groupID)
+		return h.validateRequest(c, service.PlatformOpenAI, body)
+	}
+
+	require.NoError(t, validate("draw-alias"))
+	require.ErrorContains(t, validate("gpt-image-2"), `images endpoint requires an image model, got "gpt-5.4"`)
+}

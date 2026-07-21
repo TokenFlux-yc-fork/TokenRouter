@@ -99,6 +99,32 @@ func TestOpenAIHandleStreamingAwareError_JSONEscaping(t *testing.T) {
 	}
 }
 
+// TestHandleGroupSelectionBusinessError 验证客户端策略拒绝不会被误报为服务不可用。
+func TestHandleGroupSelectionBusinessError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	var status int
+	var errType string
+	var message string
+	handled := handleGroupSelectionBusinessError(
+		c,
+		fmt.Errorf("select account: %w", service.ErrClaudeCodeOnly),
+		false,
+		func(gotStatus int, gotErrType string, gotMessage string, _ bool) {
+			status = gotStatus
+			errType = gotErrType
+			message = gotMessage
+		},
+	)
+
+	require.True(t, handled)
+	require.Equal(t, http.StatusForbidden, status)
+	require.Equal(t, "permission_error", errType)
+	require.Equal(t, service.ErrClaudeCodeOnly.Error(), message)
+}
+
 func TestOpenAIForwardSucceededForScheduling(t *testing.T) {
 	require.True(t, openAIForwardSucceededForScheduling(nil))
 	require.True(t, openAIForwardSucceededForScheduling(&service.OpenAIForwardResult{}))
@@ -742,6 +768,22 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(apiKey, "gpt-5.4"))
 		require.Equal(t, "gpt-5.3-codex", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-sonnet-4-5-20250929"))
 	})
+}
+
+func TestResolveOpenAIMessagesAccountLayerModel_ChannelMappingPrecedesGroupDispatch(t *testing.T) {
+	apiKey := &service.APIKey{
+		Group: &service.Group{
+			MessagesDispatchModelConfig: service.OpenAIMessagesDispatchModelConfig{
+				ExactModelMappings: map[string]string{
+					"channel-model": "dispatch-model",
+				},
+			},
+		},
+	}
+
+	require.Equal(t, "dispatch-model", resolveOpenAIMessagesAccountLayerModel(apiKey, "channel-model"))
+	require.Equal(t, "client-alias", resolveOpenAIMessagesAccountLayerModel(apiKey, "client-alias"))
+	require.Equal(t, "gpt-5.4", resolveOpenAIMessagesAccountLayerModel(apiKey, "gpt-5.4-high"))
 }
 
 func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {

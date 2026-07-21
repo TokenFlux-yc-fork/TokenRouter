@@ -354,6 +354,84 @@ func TestOpenAIGatewayService_SelectAccountByPreviousResponseID_CapabilityMismat
 	require.Equal(t, account.ID, boundAccountID)
 }
 
+// TestOpenAIGatewayService_SelectAccountByPreviousResponseIDUsesResolvedRoutingModel 验证响应链粘性检查不会把 D 重新解析成 C。
+func TestOpenAIGatewayService_SelectAccountByPreviousResponseIDUsesResolvedRoutingModel(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	t.Cleanup(resetOpenAIAdvancedSchedulerSettingCacheForTest)
+
+	ctx := context.Background()
+	groupID := int64(26)
+	price := 0.01
+	channel := Channel{
+		ID:                 78,
+		Status:             StatusActive,
+		RestrictModels:     true,
+		BillingModelSource: BillingModelSourceUpstream,
+		ModelMapping: map[string]map[string]string{
+			PlatformOpenAI: {"client-alias": "channel-model"},
+		},
+		ModelPricing: []ChannelModelPricing{{
+			Platform:   PlatformOpenAI,
+			Models:     []string{"allowed-upstream"},
+			InputPrice: &price,
+		}},
+	}
+	account := Account{
+		ID:          32,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"channel-model":  "blocked-upstream",
+				"dispatch-model": "allowed-upstream",
+			},
+			"model_whitelist": []any{"blocked-upstream", "allowed-upstream"},
+		},
+		Extra: map[string]any{
+			"openai_apikey_responses_websockets_v2_enabled": true,
+		},
+	}
+	cache := &stubGatewayCache{}
+	store := NewOpenAIWSStateStore(cache)
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{account}},
+		cache:              cache,
+		cfg:                newOpenAIWSV2TestConfig(),
+		channelService:     newRequestableModelsChannelService(groupID, PlatformOpenAI, channel),
+		concurrencyService: NewConcurrencyService(stubConcurrencyCache{}),
+		openaiWSStateStore: store,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+	}
+
+	require.NoError(t, store.BindResponseAccount(ctx, groupID, "resp_dispatch_model", account.ID, time.Hour))
+	selection, _, err := svc.SelectAccountWithSchedulerForCapabilityAndRoutingModel(
+		ctx,
+		&groupID,
+		"resp_dispatch_model",
+		"",
+		"client-alias",
+		"dispatch-model",
+		nil,
+		OpenAIUpstreamTransportResponsesWebsocketV2,
+		OpenAIEndpointCapabilityChatCompletions,
+		false,
+		false,
+		false,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, account.ID, selection.Account.ID)
+	require.Equal(t, "allowed-upstream", resolveOpenAIAccountUpstreamModelForRequest(selection.Account, "dispatch-model", false, false))
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
 func newOpenAIWSV2TestConfig() *config.Config {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.Enabled = true

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -106,6 +107,11 @@ func TestQoderTokenProviderConcurrent(t *testing.T) {
 			for j := 0; j < numRequestsPerGoroutine; j++ {
 				session, err := provider.GetSession(ctx, account)
 				if err != nil {
+					// 与显式 Invalidate 竞争的旧世代构建必须被丢弃，这是预期的安全结果。
+					if errors.Is(err, errQoderSessionBuildInvalidated) {
+						successCount.Store(workerID*1000+j, true)
+						continue
+					}
 					t.Logf("worker %d request %d failed: %v", workerID, j, err)
 					continue
 				}

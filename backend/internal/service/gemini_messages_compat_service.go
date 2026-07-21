@@ -626,10 +626,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	}
 
 	originalModel := req.Model
-	mappedModel := req.Model
-	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
-		mappedModel = account.GetMappedModel(req.Model)
-	}
+	// 所有 Gemini 账号类型都执行账号模型映射，OAuth 也必须与调度和可见模型解析保持一致。
+	mappedModel := resolveAccountMappedModelForForward(account, req.Model)
 
 	geminiReq, err := convertClaudeMessagesToGeminiGenerateContent(body)
 	if err != nil {
@@ -1181,10 +1179,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	// `thoughtSignature` to avoid frequent INVALID_ARGUMENT 400s.
 	body = ensureGeminiFunctionCallThoughtSignatures(body)
 
-	mappedModel := originalModel
-	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
-		mappedModel = account.GetMappedModel(originalModel)
-	}
+	// 渠道映射后的模型进入账号后统一解析为最终上游模型，不按凭据类型跳过。
+	mappedModel := resolveAccountMappedModelForForward(account, originalModel)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

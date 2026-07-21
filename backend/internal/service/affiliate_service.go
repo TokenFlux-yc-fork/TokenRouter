@@ -165,6 +165,9 @@ type AffiliateRebateRecord struct {
 	InviteeUsername string    `json:"invitee_username"`
 	OrderAmount     float64   `json:"order_amount"`
 	PayAmount       float64   `json:"pay_amount"`
+	OrderType       string    `json:"order_type"`
+	OrderCurrency   string    `json:"order_currency"` // 订阅套餐标价币种，余额订单为空
+	PayCurrency     string    `json:"pay_currency"`   // 支付渠道实际扣款币种
 	RebateAmount    float64   `json:"rebate_amount"`
 	PaymentType     string    `json:"payment_type"`
 	OrderStatus     string    `json:"order_status"`
@@ -309,15 +312,17 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 	return nil
 }
 
-func (s *AffiliateService) AccrueInviteRebate(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64) (float64, error) {
-	return s.AccrueInviteRebateForOrder(ctx, inviteeUserID, baseRechargeAmount, nil)
+// AccrueInviteRebate 按被邀请人本次实际获得的推理积分计提返利。
+func (s *AffiliateService) AccrueInviteRebate(ctx context.Context, inviteeUserID int64, purchasedPoints float64) (float64, error) {
+	return s.AccrueInviteRebateForOrder(ctx, inviteeUserID, purchasedPoints, nil)
 }
 
-func (s *AffiliateService) AccrueInviteRebateForOrder(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64, sourceOrderID *int64) (float64, error) {
+// AccrueInviteRebateForOrder 按订单购买积分计提返利，并关联来源订单保证幂等。
+func (s *AffiliateService) AccrueInviteRebateForOrder(ctx context.Context, inviteeUserID int64, purchasedPoints float64, sourceOrderID *int64) (float64, error) {
 	if s == nil || s.repo == nil {
 		return 0, nil
 	}
-	if inviteeUserID <= 0 || baseRechargeAmount <= 0 || math.IsNaN(baseRechargeAmount) || math.IsInf(baseRechargeAmount, 0) {
+	if inviteeUserID <= 0 || purchasedPoints <= 0 || math.IsNaN(purchasedPoints) || math.IsInf(purchasedPoints, 0) {
 		return 0, nil
 	}
 	// 总开关关闭时，新充值不再产生返利
@@ -348,12 +353,12 @@ func (s *AffiliateService) AccrueInviteRebateForOrder(ctx context.Context, invit
 	}
 
 	rebateRatePercent := s.resolveRebateRatePercent(ctx, inviterSummary)
-	rebate := roundTo(baseRechargeAmount*(rebateRatePercent/100), 8)
+	rebate := roundTo(purchasedPoints*(rebateRatePercent/100), 8)
 	if rebate <= 0 {
 		return 0, nil
 	}
 
-	// 单人上限检查：精确截断到剩余额度
+	// 单人上限与返利结果使用相同的推理积分单位，精确截断到剩余额度。
 	if s.settingService != nil {
 		if perInviteeCap := s.settingService.GetAffiliateRebatePerInviteeCap(ctx); perInviteeCap > 0 {
 			existing, err := s.repo.GetAccruedRebateFromInvitee(ctx, *inviteeSummary.InviterID, inviteeUserID)

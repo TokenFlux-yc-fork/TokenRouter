@@ -32,7 +32,7 @@ const (
 	AffiliateRebateFreezeHoursMax       = 720   // 最大 30 天
 	AffiliateRebateDurationDaysDefault  = 0     // 0 表示永久有效
 	AffiliateRebateDurationDaysMax      = 3650  // 约 10 年
-	AffiliateRebatePerInviteeCapDefault = 0.0   // 0 表示无上限
+	AffiliateRebatePerInviteeCapDefault = 0.0   // 推理积分上限，0 表示无上限
 	AdminRechargeRebateEnabledDefault   = false // 管理员充值默认不产生返利
 )
 
@@ -143,7 +143,7 @@ const (
 	SettingKeyAffiliateRebateRate              = "affiliate_rebate_rate"               // 邀请返利比例（百分比）
 	SettingKeyAffiliateRebateFreezeHours       = "affiliate_rebate_freeze_hours"       // 返利冻结期（小时，0=不冻结）
 	SettingKeyAffiliateRebateDurationDays      = "affiliate_rebate_duration_days"      // 返利有效期（天，0=永久）
-	SettingKeyAffiliateRebatePerInviteeCap     = "affiliate_rebate_per_invitee_cap"    // 单个被邀请人的累计返利上限（0=无上限）
+	SettingKeyAffiliateRebatePerInviteeCap     = "affiliate_rebate_per_invitee_cap"    // 单个被邀请人的累计返利积分上限（0=无上限）
 	SettingKeyAffiliateAdminRechargeEnabled    = "affiliate_admin_recharge_enabled"    // 管理员充值是否产生返利
 	SettingKeyRiskControlEnabled               = "risk_control_enabled"                // 是否启用风控中心入口与内容审计链路
 	SettingKeyCyberSessionBlockEnabled         = "cyber_session_block_enabled"         // cyber_policy 命中后的会话本地屏蔽开关

@@ -47,3 +47,58 @@ func TestOpenAIGatewayHandlerImages_DisabledGroupRejectsBeforeScheduling(t *test
 	require.Equal(t, "permission_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
 	require.Contains(t, rec.Body.String(), service.ImageGenerationPermissionMessage())
 }
+
+// TestOpenAIGatewayHandlerImagesValidatesChannelMappedModel 验证同步 Images 入口在渠道映射后校验模型族。
+func TestOpenAIGatewayHandlerImagesValidatesChannelMappedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	groupID := int64(112)
+	channelService := newGatewayModelsChannelServiceForTest(groupID, service.PlatformOpenAI, service.Channel{
+		ID:     112,
+		Status: service.StatusActive,
+		ModelMapping: map[string]map[string]string{
+			service.PlatformOpenAI: {
+				"draw-alias":  "gpt-image-1",
+				"gpt-image-2": "gpt-5.4",
+			},
+		},
+	})
+
+	tests := []struct {
+		name       string
+		model      string
+		allowImage bool
+		wantStatus int
+		wantText   string
+	}{
+		{name: "普通别名映射为生图模型", model: "draw-alias", wantStatus: http.StatusForbidden, wantText: service.ImageGenerationPermissionMessage()},
+		{name: "生图别名映射为普通模型", model: "gpt-image-2", allowImage: true, wantStatus: http.StatusBadRequest, wantText: `got "gpt-5.4"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(`{"model":"` + tt.model + `","prompt":"draw"}`)
+			req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = req
+			apiKey := &service.APIKey{
+				ID:      223,
+				GroupID: &groupID,
+				Group: &service.Group{
+					ID:                   groupID,
+					Platform:             service.PlatformOpenAI,
+					AllowImageGeneration: tt.allowImage,
+				},
+				User: &service.User{ID: 334},
+			}
+			c.Set(string(middleware2.ContextKeyAPIKey), apiKey)
+			c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 334, Concurrency: 1})
+
+			newOpenAIImageChatRejectionHandlerWithChannel(t, channelService).Images(c)
+
+			require.Equal(t, tt.wantStatus, rec.Code)
+			require.Contains(t, gjson.GetBytes(rec.Body.Bytes(), "error.message").String(), tt.wantText)
+		})
+	}
+}

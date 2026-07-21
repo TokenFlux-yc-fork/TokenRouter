@@ -889,14 +889,24 @@ func (s *OpenAIGatewayService) resolveOpenAIFastModeDecision(
 
 	candidateTier := normTier
 	policy := apiKeyFastModePolicyFromContext(ctx)
-	keyPolicySupported := policy != APIKeyFastModePolicyFollowRequest && s.openAIAPIKeyFastModeSupported(ctx, account, model)
+	keyPolicyApplicable := false
+	switch policy {
+	case APIKeyFastModePolicyForceOn:
+		keyPolicyApplicable = s.openAIAPIKeyFastModeForceOnSupported(ctx, account, model)
+	case APIKeyFastModePolicyForceOff:
+		// 强制关闭只净化真正代表 Fast 的 priority，不依赖定价文件中的能力标记。
+		keyPolicyApplicable = account != nil && account.IsOpenAI()
+	}
 	candidateChanged := false
-	if keyPolicySupported {
+	if keyPolicyApplicable {
 		switch policy {
 		case APIKeyFastModePolicyForceOn:
 			candidateTier = OpenAIFastTierPriority
 		case APIKeyFastModePolicyForceOff:
-			candidateTier = ""
+			// flex 是低优先级模式，auto/default/scale 也是官方合法 tier，均需保留。
+			if normTier == OpenAIFastTierPriority {
+				candidateTier = ""
+			}
 		}
 		candidateChanged = candidateTier != normTier
 	}
@@ -910,7 +920,7 @@ func (s *OpenAIGatewayService) resolveOpenAIFastModeDecision(
 		}
 		return openAIFastModeDecision{Tier: candidateTier}
 	}
-	if policy == APIKeyFastModePolicyForceOff && keyPolicySupported {
+	if policy == APIKeyFastModePolicyForceOff && keyPolicyApplicable && normTier == OpenAIFastTierPriority {
 		return openAIFastModeDecision{DeleteField: hasField}
 	}
 	return openAIFastModeDecision{}

@@ -426,17 +426,17 @@ affiliates: {
         user: 'User',
         affCode: 'Invite Code',
         order: 'Order',
-        totalRebate: 'Total Rebate',
+        totalRebate: 'Total Rebate ({unitName})',
         orderAmount: 'Top-up Amount',
         payAmount: 'Paid Amount',
-        rebateAmount: 'Rebate Amount',
+        rebateAmount: 'Rebate ({unitName})',
         paymentType: 'Payment Method',
         orderStatus: 'Order Status',
-        transferAmount: 'Transfer Amount',
-        balanceAfter: 'Balance After',
-        availableQuotaAfter: 'Available After',
-        frozenQuotaAfter: 'Frozen After',
-        historyQuotaAfter: 'Historical Rebate After',
+        transferAmount: 'Transferred ({unitName})',
+        balanceAfter: 'Balance After ({unitName})',
+        availableQuotaAfter: 'Available After ({unitName})',
+        frozenQuotaAfter: 'Frozen After ({unitName})',
+        historyQuotaAfter: 'Historical Rebate After ({unitName})',
         invitedAt: 'Invited At',
         rebatedAt: 'Rebated At',
         transferredAt: 'Transferred At'
@@ -447,8 +447,8 @@ affiliates: {
         rebateRate: 'Rebate Rate',
         invitedCount: 'Invited Users',
         rebatedInviteeCount: 'Rebated Invitees',
-        availableQuota: 'Available Quota',
-        historyQuota: 'Historical Rebate'
+        availableQuota: 'Available Rebate ({unitName})',
+        historyQuota: 'Historical Rebate ({unitName})'
       }
     },
 // Users

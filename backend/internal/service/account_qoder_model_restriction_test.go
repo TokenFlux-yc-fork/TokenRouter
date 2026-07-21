@@ -118,3 +118,21 @@ func TestAccountGetConfiguredRequestModels_QoderMappingWhitelistSemantics(t *tes
 	}
 	require.Equal(t, []string{"claude-opus-4-6", "glm-5.2"}, whitelistOnly.GetConfiguredRequestModels())
 }
+
+func TestAccountIsModelSupported_QoderSiteCompatibility(t *testing.T) {
+	global := &Account{Platform: PlatformQoder, Credentials: map[string]any{"site": "global"}}
+	cn := &Account{Platform: PlatformQoder, Credentials: map[string]any{"site": "cn"}}
+
+	require.True(t, global.IsModelSupported("claude-opus-4-6"))
+	require.False(t, cn.IsModelSupported("claude-opus-4-6"))
+	require.False(t, global.IsModelSupported("qwen3.6-flash"))
+	require.True(t, cn.IsModelSupported("qwen3.6-flash"))
+	require.False(t, global.IsModelSupported("q36fmodel"))
+	require.True(t, cn.IsModelSupported("q36fmodel"))
+	require.True(t, global.IsModelSupported("mmodel"))
+	require.True(t, cn.IsModelSupported("mmodel"))
+	require.True(t, global.IsModelSupported("unknown-raw-key"))
+
+	cn.Credentials["model_mapping"] = map[string]any{"claude-opus-4-6": "ultimate"}
+	require.True(t, cn.IsModelSupported("claude-opus-4-6"), "显式账号 mapping 应覆盖站点默认限制")
+}

@@ -92,6 +92,10 @@ type qoderAccountTestSessionProvider interface {
 	GetSession(ctx context.Context, account *Account) (*qoder.SessionContext, error)
 }
 
+type qoderAccountTestSessionInvalidator interface {
+	Invalidate(accountID int64)
+}
+
 type qoderAccountTestOAuthClient interface {
 	GetUserInfo(ctx context.Context, token string) (*qoder.UserInfo, error)
 }
@@ -1352,9 +1356,18 @@ func (s *AccountTestService) testQoderAccountConnection(c *gin.Context, account 
 	if sessionProvider == nil {
 		sessionProvider = NewQoderTokenProvider()
 	}
+	if strings.TrimSpace(account.GetCredential("pat")) != "" {
+		if invalidator, ok := sessionProvider.(qoderAccountTestSessionInvalidator); ok {
+			invalidator.Invalidate(account.ID)
+		}
+	}
 	session, err := sessionProvider.GetSession(ctx, account)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Qoder session failed: %s", err.Error()))
+	}
+	site, err := qoderSiteForAccount(account)
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
 	}
 
 	requestBody, err := json.Marshal(map[string]any{
@@ -1367,7 +1380,7 @@ func (s *AccountTestService) testQoderAccountConnection(c *gin.Context, account 
 		return s.sendErrorAndEnd(c, "Failed to encode Qoder test payload")
 	}
 	requestBody = applyQoderAccountModelMapping(account, requestBody)
-	payload, modelKey, err := BuildQoderPayloadFromChatCompletions(requestBody, qoderUserType(account))
+	payload, modelKey, err := BuildQoderPayloadFromChatCompletionsForSite(requestBody, qoderUserType(account), site)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build Qoder test payload: %s", err.Error()))
 	}
@@ -1383,14 +1396,16 @@ func (s *AccountTestService) testQoderAccountConnection(c *gin.Context, account 
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
-	if err := s.probeQoderUserInfo(ctx, account, session); err != nil {
-		return s.sendErrorAndEnd(c, err.Error())
+	if site == qoder.SiteGlobal {
+		if err := s.probeQoderUserInfo(ctx, account, session); err != nil {
+			return s.sendErrorAndEnd(c, err.Error())
+		}
 	}
 	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过 Qoder COSY 测试连接"})
 
-	client := s.qoderClient
-	if client == nil {
-		client = qoder.NewClient(qoder.APIBaseURL)
+	client, err := qoderStreamClientForAccount(s.qoderClient, account)
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
 	}
 	headers := map[string]string{
 		"x-model-key":    modelKey,
@@ -1447,14 +1462,18 @@ func (s *AccountTestService) probeQoderUserInfo(ctx context.Context, account *Ac
 }
 
 func (s *AccountTestService) getQoderUserInfoForAccount(ctx context.Context, account *Account, token string) (*qoder.UserInfo, error) {
+	profile, err := qoderProfileForAccount(account)
+	if err != nil {
+		return nil, err
+	}
 	if doer := newQoderRequestDoer(account, s.httpUpstream, s.tlsFPProfileService); doer != nil {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, qoder.OpenAPIBaseURL+qoder.UserInfoPath, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, profile.OpenAPIBaseURL+qoder.UserInfoPath, nil)
 		if err != nil {
 			return nil, fmt.Errorf("qoder: create userinfo request: %w", err)
 		}
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
-		req.Header.Set("User-Agent", "Go-http-client/2.0")
+		req.Header.Set("User-Agent", profile.OpenAPIUserAgent())
 
 		resp, err := doer(req)
 		if err != nil {
@@ -1473,7 +1492,7 @@ func (s *AccountTestService) getQoderUserInfoForAccount(ctx context.Context, acc
 		}
 		return &info, nil
 	}
-	return qoder.NewOAuthClient(qoder.OpenAPIBaseURL, nil).GetUserInfo(ctx, token)
+	return qoder.NewOAuthClientForProfile(profile, nil).GetUserInfo(ctx, token)
 }
 
 // testAntigravityAccountConnection tests an Antigravity account's connection

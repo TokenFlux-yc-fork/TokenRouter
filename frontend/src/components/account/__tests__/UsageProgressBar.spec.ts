@@ -146,4 +146,20 @@ describe('UsageProgressBar', () => {
     expect(wrapper.get('.h-1\\.5 > div').attributes('style')).toContain('width: 100%')
     expect(wrapper.get('.h-1\\.5 > div').classes()).toContain('bg-red-500')
   })
+
+  it('宽标签模式为 Credits 预留固定空间，避免与进度条重叠', () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: 'Credits',
+        utilization: 0,
+        wideLabel: true,
+        color: 'indigo'
+      }
+    })
+
+    const label = wrapper.get('span')
+    expect(label.classes()).toContain('w-[48px]')
+    expect(label.classes()).toContain('whitespace-nowrap')
+    expect(label.classes()).not.toContain('w-[32px]')
+  })
 })

@@ -54,3 +54,27 @@ func TestQoderOAuthHandlerExchangeCodeValidatesRequest(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "SessionID")
 }
+
+func TestQoderOAuthHandlerGenerateAuthURLAcceptsCNAndRejectsUnknownSite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	svc := service.NewQoderOAuthService(nil)
+	defer svc.Stop()
+	handler := NewQoderOAuthHandler(svc)
+	router.POST("/api/v1/admin/qoder/oauth/auth-url", handler.GenerateAuthURL)
+
+	cnRecorder := httptest.NewRecorder()
+	cnRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/qoder/oauth/auth-url", bytes.NewBufferString(`{"site":"cn"}`))
+	cnRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(cnRecorder, cnRequest)
+	require.Equal(t, http.StatusOK, cnRecorder.Code)
+	require.Contains(t, cnRecorder.Body.String(), "qoder.com.cn")
+	require.Contains(t, cnRecorder.Body.String(), `"site":"cn"`)
+
+	invalidRecorder := httptest.NewRecorder()
+	invalidRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/qoder/oauth/auth-url", bytes.NewBufferString(`{"site":"invalid"}`))
+	invalidRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(invalidRecorder, invalidRequest)
+	require.Equal(t, http.StatusBadRequest, invalidRecorder.Code)
+	require.Contains(t, invalidRecorder.Body.String(), "unsupported site")
+}

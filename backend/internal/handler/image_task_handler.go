@@ -145,8 +145,18 @@ func (h *AsyncImageHandler) validateRequest(c *gin.Context, platform string, bod
 		}
 		return nil
 	}
-	parsed, err := h.openAI.gatewayService.ParseOpenAIImagesRequest(c, body)
+	parsed, err := h.openAI.gatewayService.ParseOpenAIImagesRequestForRouting(c, body)
 	if err != nil {
+		return err
+	}
+	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
+	var groupID *int64
+	if apiKey != nil {
+		groupID = apiKey.GroupID
+	}
+	// 异步提交必须与真正执行时使用同一条 R -> C 校验链，避免提前拒绝渠道别名。
+	mapping, _ := h.openAI.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), groupID, parsed.Model)
+	if err := parsed.ValidateRoutingModel(openAIChannelMappedModel(parsed.Model, mapping)); err != nil {
 		return err
 	}
 	if parsed.Stream {

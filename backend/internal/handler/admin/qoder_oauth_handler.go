@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/response"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
@@ -16,6 +17,7 @@ func NewQoderOAuthHandler(qoderOAuthService *service.QoderOAuthService) *QoderOA
 
 type QoderGenerateAuthURLRequest struct {
 	ProxyID *int64 `json:"proxy_id"`
+	Site    string `json:"site"`
 }
 
 // GenerateAuthURL 生成 Qoder 浏览器授权 URL。
@@ -27,7 +29,12 @@ func (h *QoderOAuthHandler) GenerateAuthURL(c *gin.Context) {
 		return
 	}
 
-	result, err := h.qoderOAuthService.GenerateAuthURL(c.Request.Context(), req.ProxyID)
+	site, err := qoder.ParseSite(req.Site)
+	if err != nil {
+		response.BadRequest(c, "请求无效: "+err.Error())
+		return
+	}
+	result, err := h.qoderOAuthService.GenerateAuthURLForSite(c.Request.Context(), site, req.ProxyID)
 	if err != nil {
 		response.InternalError(c, "生成授权链接失败: "+err.Error())
 		return

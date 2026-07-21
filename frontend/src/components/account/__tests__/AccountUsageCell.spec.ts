@@ -718,8 +718,14 @@ describe('AccountUsageCell', () => {
 	  global: {
 	    stubs: {
 	      UsageProgressBar: {
-	        props: ['label', 'utilization', 'resetsAt', 'color'],
-	        template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}</div>'
+	        props: {
+	          label: String,
+	          utilization: Number,
+	          resetsAt: String,
+	          color: String,
+	          wideLabel: Boolean
+	        },
+	        template: '<div class="usage-bar">{{ label }}|{{ utilization }}|{{ resetsAt }}|{{ wideLabel }}</div>'
 	      },
 	      AccountQuotaInfo: true
 	    }
@@ -729,7 +735,7 @@ describe('AccountUsageCell', () => {
 	await flushPromises()
 
 	expect(getUsage).toHaveBeenCalledWith(5001)
-	expect(wrapper.text()).toContain('Qoder|0|2099-03-07T12:00:00Z')
+	expect(wrapper.text()).toContain('Credits|0|2099-03-07T12:00:00Z|true')
 	expect(wrapper.text()).toContain('0/0 credits')
 	expect(wrapper.text()).toContain('exceeded')
 	expect(wrapper.text()).toContain('cached')
@@ -742,7 +748,7 @@ describe('AccountUsageCell', () => {
 	await flushPromises()
 
 	expect(getUsage).toHaveBeenCalledWith(5001, 'active', true)
-	expect(wrapper.text()).toContain('Qoder|10|2099-04-07T12:00:00Z')
+	expect(wrapper.text()).toContain('Credits|10|2099-04-07T12:00:00Z|true')
 	expect(wrapper.text()).toContain('10/100 credits')
   })
 

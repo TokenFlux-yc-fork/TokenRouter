@@ -11,7 +11,7 @@
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div class="card p-5">
             <p class="flex items-center gap-1.5 text-sm text-gray-500 dark:text-dark-400">
-              <Icon name="dollar" size="sm" class="text-primary-500" />
+              <Icon name="gift" size="sm" class="text-primary-500" />
               {{ t('affiliate.stats.rebateRate') }}
             </p>
             <p class="mt-2 text-2xl font-semibold text-primary-600 dark:text-primary-400">
@@ -48,23 +48,24 @@
           <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('affiliate.title') }}</h3>
           <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.description') }}</p>
 
-          <div class="mt-5 grid gap-4 md:grid-cols-2">
-            <div class="space-y-2">
+          <!-- flex 子项默认的固有最小宽度会撑开移动端网格，逐层允许收缩后再由文本省略接管。 -->
+          <div class="mt-5 grid min-w-0 gap-4 md:grid-cols-2">
+            <div class="min-w-0 space-y-2">
               <p class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('affiliate.yourCode') }}</p>
-              <div class="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-700 dark:bg-dark-900">
-                <code class="flex-1 truncate text-sm font-semibold text-gray-900 dark:text-white">{{ detail.aff_code }}</code>
-                <button class="btn btn-secondary btn-sm" @click="copyCode">
+              <div data-testid="affiliate-code-row" class="flex min-w-0 items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-700 dark:bg-dark-900">
+                <code data-testid="affiliate-code" class="min-w-0 flex-1 truncate text-sm font-semibold text-gray-900 dark:text-white">{{ detail.aff_code }}</code>
+                <button data-testid="affiliate-copy-code" class="btn btn-secondary btn-sm flex-shrink-0" @click="copyCode">
                   <Icon name="copy" size="sm" />
                   <span>{{ t('affiliate.copyCode') }}</span>
                 </button>
               </div>
             </div>
 
-            <div class="space-y-2">
+            <div class="min-w-0 space-y-2">
               <p class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('affiliate.inviteLink') }}</p>
-              <div class="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-700 dark:bg-dark-900">
-                <code class="flex-1 truncate text-sm text-gray-700 dark:text-gray-300">{{ inviteLink }}</code>
-                <button class="btn btn-secondary btn-sm" @click="copyInviteLink">
+              <div data-testid="affiliate-link-row" class="flex min-w-0 items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-700 dark:bg-dark-900">
+                <code data-testid="affiliate-link" class="min-w-0 flex-1 truncate text-sm text-gray-700 dark:text-gray-300">{{ inviteLink }}</code>
+                <button data-testid="affiliate-copy-link" class="btn btn-secondary btn-sm flex-shrink-0" @click="copyInviteLink">
                   <Icon name="copy" size="sm" />
                   <span>{{ t('affiliate.copyLink') }}</span>
                 </button>
@@ -95,7 +96,7 @@
               @click="transferQuota"
             >
               <Icon v-if="transferring" name="refresh" size="sm" class="animate-spin" />
-              <Icon v-else name="dollar" size="sm" />
+              <Icon v-else name="swap" size="sm" />
               <span>{{ transferring ? t('affiliate.transfer.transferring') : t('affiliate.transfer.button') }}</span>
             </button>
           </div>
@@ -115,7 +116,7 @@
                 <tr class="border-b border-gray-200 text-gray-500 dark:border-dark-700 dark:text-dark-400">
                   <th class="px-3 py-2 font-medium">{{ t('affiliate.invitees.columns.email') }}</th>
                   <th class="px-3 py-2 font-medium">{{ t('affiliate.invitees.columns.username') }}</th>
-                  <th class="px-3 py-2 font-medium text-right">{{ t('affiliate.invitees.columns.rebate') }}</th>
+                  <th class="px-3 py-2 font-medium text-right">{{ t('affiliate.invitees.columns.rebate', { unitName: balanceUnitName }) }}</th>
                   <th class="px-3 py-2 font-medium">{{ t('affiliate.invitees.columns.joinedAt') }}</th>
                 </tr>
               </thead>
@@ -157,7 +158,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const { copyToClipboard } = useClipboard()
-const { formatBalanceAmount } = useBalanceDisplay()
+const { balanceUnitName, formatBalanceAmount } = useBalanceDisplay()
 
 const loading = ref(true)
 const transferring = ref(false)

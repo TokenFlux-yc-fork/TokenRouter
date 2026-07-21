@@ -426,17 +426,17 @@ affiliates: {
         user: '用户',
         affCode: '邀请码',
         order: '订单',
-        totalRebate: '累计返利',
+        totalRebate: '累计返利（{unitName}）',
         orderAmount: '充值金额',
         payAmount: '支付金额',
-        rebateAmount: '返利金额',
+        rebateAmount: '返利（{unitName}）',
         paymentType: '支付方式',
         orderStatus: '订单状态',
-        transferAmount: '提取金额',
-        balanceAfter: '提取后余额',
-        availableQuotaAfter: '提取后可提',
-        frozenQuotaAfter: '提取后冻结',
-        historyQuotaAfter: '提取后历史返利',
+        transferAmount: '转入额度（{unitName}）',
+        balanceAfter: '转入后余额（{unitName}）',
+        availableQuotaAfter: '转入后可提（{unitName}）',
+        frozenQuotaAfter: '转入后冻结（{unitName}）',
+        historyQuotaAfter: '转入后历史返利（{unitName}）',
         invitedAt: '邀请时间',
         rebatedAt: '返利时间',
         transferredAt: '提取时间'
@@ -447,8 +447,8 @@ affiliates: {
         rebateRate: '返利比例',
         invitedCount: '邀请人数',
         rebatedInviteeCount: '已产生返利人数',
-        availableQuota: '可提余额',
-        historyQuota: '历史返利'
+        availableQuota: '可提返利（{unitName}）',
+        historyQuota: '历史返利（{unitName}）'
       }
     },
 // Users Management

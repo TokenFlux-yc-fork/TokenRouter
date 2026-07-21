@@ -2,8 +2,16 @@
   <BaseDialog :show="show" :title="dialogTitle" width="narrow" @close="handleClose">
     <!-- QR Code + Polling State -->
     <div v-if="!success" class="flex flex-col items-center space-y-4">
+      <!-- 支付渠道已受理，等待异步终态。 -->
+      <template v-if="processing">
+        <div class="flex flex-col items-center py-4 text-center">
+          <div class="h-10 w-10 animate-spin rounded-full border-4 border-cyan-500 border-t-transparent"></div>
+          <p class="mt-4 text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.result.processing') }}</p>
+          <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ t('payment.result.processingHint') }}</p>
+        </div>
+      </template>
       <!-- QR Code mode -->
-      <template v-if="qrUrl">
+      <template v-else-if="qrUrl">
         <div class="rounded-2xl bg-white p-4 shadow-sm dark:bg-dark-800">
           <canvas ref="qrCanvas" class="mx-auto"></canvas>
         </div>
@@ -22,10 +30,10 @@
         </div>
       </template>
       <!-- Countdown -->
-      <div v-if="expired" class="text-center">
+      <div v-if="!processing && expired" class="text-center">
         <p class="text-lg font-medium text-red-500">{{ t('payment.qr.expired') }}</p>
       </div>
-      <div v-else class="text-center">
+      <div v-else-if="!processing" class="text-center">
         <p class="text-sm text-gray-500 dark:text-gray-400">{{ qrUrl ? t('payment.qr.expiresIn') : '' }}</p>
         <p class="mt-1 text-2xl font-bold tabular-nums text-gray-900 dark:text-white">{{ countdownDisplay }}</p>
         <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">{{ t('payment.qr.waitingPayment') }}</p>
@@ -56,7 +64,7 @@
     </div>
     <template #footer>
       <div class="flex justify-end gap-3">
-        <button v-if="!success && !expired" class="btn btn-secondary" :disabled="cancelling" @click="handleCancel">
+        <button v-if="!success && !expired && !processing" class="btn btn-secondary" :disabled="cancelling" @click="handleCancel">
           {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
         </button>
         <button v-if="success" class="btn btn-primary" @click="handleDone">
@@ -111,15 +119,19 @@ const qrCanvas = ref<HTMLCanvasElement | null>(null)
 const qrUrl = ref('')
 const remainingSeconds = ref(0)
 const expired = ref(false)
+const processing = ref(false)
 const cancelling = ref(false)
 const success = ref(false)
 const paidOrder = ref<PaymentOrder | null>(null)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+let pollIntervalMs = 0
 let verifyAttempts = 0
 let lastVerifyAt = 0
 
+const PENDING_POLL_INTERVAL_MS = 3000
+const PROCESSING_POLL_INTERVAL_MS = 15000
 const VERIFY_RETRY_INTERVAL_MS = 15000
 const VERIFY_RETRY_MAX_ATTEMPTS = 6
 
@@ -128,6 +140,7 @@ const isWxpay = computed(() => isBuiltInWxpayMethod(props.paymentType))
 
 const dialogTitle = computed(() => {
   if (success.value) return t('payment.result.success')
+  if (processing.value) return t('payment.result.processing')
   if (!qrUrl.value) return t('payment.qr.payInNewWindow')
   if (isAlipay.value) return t('payment.qr.scanAlipay')
   if (isWxpay.value) return t('payment.qr.scanWxpay')
@@ -205,7 +218,9 @@ async function pollStatus() {
   let order = await paymentStore.pollOrderStatus(props.orderId)
   if (!order) return
   order = await tryRecoverPendingOrder(order)
-  if (order.status === 'COMPLETED' || order.status === 'PAID') {
+  if (order.status === 'PROCESSING') {
+    enterProcessingState()
+  } else if (order.status === 'COMPLETED' || order.status === 'PAID' || order.status === 'RECHARGING') {
     cleanup()
     paidOrder.value = order
     success.value = true
@@ -214,6 +229,15 @@ async function pollStatus() {
     cleanup()
     expired.value = true
   }
+}
+
+function enterProcessingState() {
+  processing.value = true
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  startPolling(PROCESSING_POLL_INTERVAL_MS)
 }
 
 async function tryRecoverPendingOrder(order: PaymentOrder): Promise<PaymentOrder> {
@@ -237,16 +261,20 @@ async function tryRecoverPendingOrder(order: PaymentOrder): Promise<PaymentOrder
 }
 
 function startCountdown(seconds: number) {
+  if (processing.value) return
   remainingSeconds.value = Math.max(0, seconds)
   if (remainingSeconds.value <= 0) {
-    expired.value = true
+    void pollStatus()
     return
   }
   countdownTimer = setInterval(() => {
+    if (processing.value) return
     remainingSeconds.value--
     if (remainingSeconds.value <= 0) {
-      expired.value = true
-      cleanup()
+      remainingSeconds.value = 0
+      if (countdownTimer) clearInterval(countdownTimer)
+      countdownTimer = null
+      void pollStatus()
     }
   }, 1000)
 }
@@ -278,6 +306,14 @@ function handleDone() {
 function cleanup() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+  pollIntervalMs = 0
+}
+
+function startPolling(intervalMs = PENDING_POLL_INTERVAL_MS) {
+  if (pollTimer && pollIntervalMs === intervalMs) return
+  if (pollTimer) clearInterval(pollTimer)
+  pollIntervalMs = intervalMs
+  pollTimer = setInterval(pollStatus, intervalMs)
 }
 
 function init() {
@@ -285,6 +321,7 @@ function init() {
   success.value = false
   paidOrder.value = null
   expired.value = false
+  processing.value = false
   cancelling.value = false
   qrUrl.value = props.qrCode
   verifyAttempts = 0
@@ -296,7 +333,7 @@ function init() {
     seconds = Math.floor((expiresAt.getTime() - Date.now()) / 1000)
   }
   startCountdown(seconds)
-  pollTimer = setInterval(pollStatus, 3000)
+  startPolling()
   renderQR()
 }
 

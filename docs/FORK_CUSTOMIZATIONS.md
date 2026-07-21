@@ -14,6 +14,18 @@ The initial statuses below describe production `v0.1.227` at
 `55015979bfaa522caf2f23e34647054cefd3dc47`, before the first `yc/main`
 upstream merge.
 
+## Upstream Review: v0.1.230
+
+- Upstream target: `2ab21e0feb3c000909013650f8d9661ecceeb847`.
+- Reviewed range: `c791f44c93d60821564b0ed6f87c49896739331f..2ab21e0feb3c000909013650f8d9661ecceeb847`.
+- No active customization is fully upstreamed in this range; all rows remain
+  `local`.
+- Upstream channel-model routing is combined with the fork behavior: scheduler
+  reporting uses the routed model, Responses Lite validation errors remain
+  excluded from account health, and WebSocket HTTP-bridge retries carry the
+  routed model into every retry.
+- `go test ./internal/handler ./internal/service` passes on the combined tree.
+
 ## Active Customizations
 
 | ID | Behavior | Source commits | Main paths | Status | Verification |

@@ -2497,16 +2497,22 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// 处理 Qoder COSY 账号。
 	if account.IsQoder() {
+		site, err := qoder.ParseSite(account.GetCredential("site"))
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		defaultModels := qoder.DefaultModelsForSite(site)
 		requestModels := account.GetConfiguredRequestModels()
 		if len(requestModels) == 0 {
-			response.Success(c, qoder.DefaultModels)
+			response.Success(c, defaultModels)
 			return
 		}
 
 		var models []qoder.Model
 		for _, requestedModel := range requestModels {
 			var found bool
-			for _, dm := range qoder.DefaultModels {
+			for _, dm := range defaultModels {
 				if dm.ID == requestedModel {
 					models = append(models, dm)
 					found = true

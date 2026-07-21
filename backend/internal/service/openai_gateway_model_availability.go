@@ -23,6 +23,25 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 	if requestedModel == "" {
 		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
 	}
+	routingModel := s.resolveChannelRoutingModel(ctx, groupID, requestedModel)
+	return s.DiagnoseRoutingModelAvailabilityForPlatform(ctx, groupID, routingModel, platform)
+}
+
+// DiagnoseRoutingModelAvailabilityForPlatform 直接诊断已经完成渠道及分组映射的账号层模型。
+// Messages 错误路径使用该入口，避免把 D 再次当作客户端模型执行渠道映射。
+func (s *OpenAIGatewayService) DiagnoseRoutingModelAvailabilityForPlatform(
+	ctx context.Context,
+	groupID *int64,
+	routingModel string,
+	platform string,
+) ModelAvailabilityDiagnosis {
+	if s == nil {
+		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
+	}
+	routingModel = strings.TrimSpace(routingModel)
+	if routingModel == "" {
+		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
+	}
 
 	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
 	if err != nil {
@@ -35,7 +54,7 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 		diag.HasAccountsInPool = true
 		// 与账号选择时的候选过滤保持一致：空 model_mapping 表示允许全部模型；
 		// 否则必须命中显式映射或通配符映射。
-		if accounts[i].IsModelSupported(requestedModel) {
+		if openAIAccountSupportsRoutingModel(ctx, &accounts[i], routingModel) {
 			diag.HasModelSupport = true
 			return diag
 		}

@@ -223,6 +223,7 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 			SetPlanSnapshot(domain.SubscriptionPlanSnapshot{
 				Name:            plan.Name,
 				Price:           plan.Price,
+				Currency:        plan.Currency,
 				ValidityDays:    psComputeValidityDays(plan.ValidityDays, plan.ValidityUnit),
 				DailyLimitUSD:   plan.DailyLimitUsd,
 				WeeklyLimitUSD:  plan.WeeklyLimitUsd,
@@ -263,7 +264,10 @@ func (s *PaymentService) checkPendingLimit(ctx context.Context, tx *dbent.Tx, us
 	if max <= 0 {
 		max = defaultMaxPendingOrders
 	}
-	c, err := tx.PaymentOrder.Query().Where(paymentorder.UserIDEQ(userID), paymentorder.StatusEQ(OrderStatusPending)).Count(ctx)
+	c, err := tx.PaymentOrder.Query().Where(
+		paymentorder.UserIDEQ(userID),
+		paymentorder.StatusIn(OrderStatusPending, OrderStatusProcessing),
+	).Count(ctx)
 	if err != nil {
 		return fmt.Errorf("count pending orders: %w", err)
 	}
@@ -479,20 +483,9 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 		return nil, classifyCreatePaymentError(req, sel.ProviderKey, err)
 	}
 	sanitizeCreatePaymentResponseDetails(pr)
-	_, err = s.entClient.PaymentOrder.UpdateOneID(order.ID).
-		SetNillablePaymentTradeNo(psNilIfEmpty(pr.TradeNo)).
-		SetNillablePayURL(psNilIfEmpty(pr.PayURL)).
-		SetNillableQrCode(psNilIfEmpty(pr.QRCode)).
-		SetNillableProviderInstanceID(psNilIfEmpty(sel.InstanceID)).
-		SetNillableProviderKey(psNilIfEmpty(sel.ProviderKey)).
-		SetNillablePaymentCustomerID(psNilIfEmpty(pr.CustomerID)).
-		SetNillablePaymentInvoiceID(psNilIfEmpty(pr.InvoiceID)).
-		SetNillablePaymentInvoiceURL(psNilIfEmpty(pr.InvoiceURL)).
-		SetNillablePaymentInvoicePdfURL(psNilIfEmpty(pr.InvoicePDF)).
-		SetNillablePaymentInvoiceStatus(psNilIfEmpty(pr.InvoiceStatus)).
-		Save(ctx)
+	order, err = s.persistCreatePaymentResponse(ctx, order.ID, sel, pr)
 	if err != nil {
-		return nil, fmt.Errorf("update order with payment details: %w", err)
+		return nil, err
 	}
 	s.writeAuditLog(ctx, order.ID, "ORDER_CREATED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
 		"paymentAmount":  req.Amount,
@@ -509,6 +502,32 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	resp := buildCreateOrderResponse(order, req, payAmount, sel, pr, resultType)
 	resp.ResumeToken = resumeToken
 	return resp, nil
+}
+
+// persistCreatePaymentResponse 将渠道实际返回的支付详情和有效期同步到本地订单。
+func (s *PaymentService) persistCreatePaymentResponse(ctx context.Context, orderID int64, sel *payment.InstanceSelection, pr *payment.CreatePaymentResponse) (*dbent.PaymentOrder, error) {
+	if pr == nil {
+		return nil, fmt.Errorf("payment provider returned an empty create response")
+	}
+	orderUpdate := s.entClient.PaymentOrder.UpdateOneID(orderID).
+		SetNillablePaymentTradeNo(psNilIfEmpty(pr.TradeNo)).
+		SetNillablePayURL(psNilIfEmpty(pr.PayURL)).
+		SetNillableQrCode(psNilIfEmpty(pr.QRCode)).
+		SetNillableProviderInstanceID(psNilIfEmpty(sel.InstanceID)).
+		SetNillableProviderKey(psNilIfEmpty(sel.ProviderKey)).
+		SetNillablePaymentCustomerID(psNilIfEmpty(pr.CustomerID)).
+		SetNillablePaymentInvoiceID(psNilIfEmpty(pr.InvoiceID)).
+		SetNillablePaymentInvoiceURL(psNilIfEmpty(pr.InvoiceURL)).
+		SetNillablePaymentInvoicePdfURL(psNilIfEmpty(pr.InvoicePDF)).
+		SetNillablePaymentInvoiceStatus(psNilIfEmpty(pr.InvoiceStatus))
+	if !pr.ExpiresAt.IsZero() {
+		orderUpdate = orderUpdate.SetExpiresAt(pr.ExpiresAt)
+	}
+	order, err := orderUpdate.Save(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("update order with payment details: %w", err)
+	}
+	return order, nil
 }
 
 // sanitizeCreatePaymentResponseDetails 清理所有将写入 PostgreSQL text 字段的支付响应值。

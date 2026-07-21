@@ -15,16 +15,23 @@ import (
 )
 
 type fakeQoderOAuthClient struct {
-	token       *qoder.DeviceTokenResponse
-	ready       bool
-	pollErr     error
-	pollCalls   int
-	userInfo    *qoder.UserInfo
-	userErr     error
-	orgTags     *qoder.OrganizationTags
-	orgErr      error
-	gotNonce    string
-	gotVerifier string
+	token             *qoder.DeviceTokenResponse
+	ready             bool
+	pollErr           error
+	pollCalls         int
+	userInfo          *qoder.UserInfo
+	userErr           error
+	orgTags           *qoder.OrganizationTags
+	orgErr            error
+	orgCalls          int
+	gotOrgUID         string
+	gotNonce          string
+	gotVerifier       string
+	completedIdentity *qoder.AuthIdentity
+	completedExpiry   time.Time
+	completionErr     error
+	completionCalls   int
+	completedMachine  *qoder.MachineIdentity
 }
 
 type blockingQoderOAuthClient struct {
@@ -49,10 +56,29 @@ func (f *fakeQoderOAuthClient) GetUserInfo(ctx context.Context, token string) (*
 }
 
 func (f *fakeQoderOAuthClient) GetOrganizationTags(ctx context.Context, token, uid string) (*qoder.OrganizationTags, error) {
+	f.orgCalls++
+	f.gotOrgUID = uid
 	if f.orgErr != nil {
 		return nil, f.orgErr
 	}
 	return f.orgTags, nil
+}
+
+func (f *fakeQoderOAuthClient) CompleteQoderCN20Identity(
+	_ context.Context,
+	_ *qoder.DeviceTokenResponse,
+	_ *qoder.UserInfo,
+	machine *qoder.MachineIdentity,
+) (*qoder.AuthIdentity, time.Time, error) {
+	f.completionCalls++
+	if machine != nil {
+		f.completedMachine = &qoder.MachineIdentity{
+			MachineID:    machine.MachineID,
+			MachineToken: machine.MachineToken,
+			MachineType:  machine.MachineType,
+		}
+	}
+	return f.completedIdentity, f.completedExpiry, f.completionErr
 }
 
 func (f *blockingQoderOAuthClient) PollDeviceToken(ctx context.Context, nonce, verifier string) (*qoder.DeviceTokenResponse, bool, error) {
@@ -102,6 +128,123 @@ func TestQoderOAuthServiceGenerateAuthURLCreatesSession(t *testing.T) {
 	require.Equal(t, session.Machine.MachineID, authURL.Query().Get("machine_id"))
 }
 
+func TestQoderOAuthServiceCNFreezesSiteAndIgnoresPollProxyOverride(t *testing.T) {
+	svc := NewQoderOAuthService(nil)
+	defer svc.Stop()
+	expiresAt := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	client := &fakeQoderOAuthClient{
+		ready: true,
+		token: &qoder.DeviceTokenResponse{
+			Token:        "openapi-access",
+			RefreshToken: "openapi-refresh",
+			UserID:       "user-1",
+			ExpiresIn:    3600,
+		},
+		userInfo: &qoder.UserInfo{UserID: "user-1", UserName: "CN User"},
+		completedIdentity: &qoder.AuthIdentity{
+			UID:                "cosy-uid",
+			AID:                "cosy-aid",
+			OrganizationID:     "status-org",
+			OrganizationName:   "Status Org",
+			SecurityOauthToken: "cosy-token",
+			RefreshToken:       "openapi-refresh",
+			UserType:           "personal_standard",
+		},
+		orgTags: &qoder.OrganizationTags{
+			OrganizationID:   "tags-org",
+			OrganizationName: "Tags Org",
+		},
+		completedExpiry: expiresAt,
+	}
+	var capturedProfile qoder.Profile
+	var capturedProxy string
+	svc.clientFactory = func(profile qoder.Profile, proxyURL string) (qoderOAuthClient, error) {
+		capturedProfile = profile
+		capturedProxy = proxyURL
+		return client, nil
+	}
+
+	result, err := svc.GenerateAuthURLForSite(context.Background(), qoder.SiteCN, nil)
+	require.NoError(t, err)
+	require.Equal(t, "cn", result.Site)
+	parsed, err := url.Parse(result.AuthURL)
+	require.NoError(t, err)
+	require.Equal(t, "qoder.com.cn", parsed.Host)
+	require.Equal(t, qoder.CNOAuthClientID, parsed.Query().Get("client_id"))
+	require.NotContains(t, parsed.Query().Get("nonce"), "-")
+	require.Len(t, parsed.Query().Get("machine_id"), 36)
+	session, ok := svc.sessionStore.Get(result.SessionID)
+	require.True(t, ok)
+	require.Empty(t, session.Machine.MachineToken)
+	require.Empty(t, session.Machine.MachineType)
+
+	ignoredProxyID := int64(9999)
+	completed, err := svc.Poll(context.Background(), result.SessionID, result.State, &ignoredProxyID)
+	require.NoError(t, err)
+	require.Equal(t, "completed", completed.Status)
+	require.Equal(t, qoder.SiteCN, capturedProfile.Site)
+	require.Empty(t, capturedProxy)
+	require.Equal(t, 1, client.completionCalls)
+	require.Equal(t, "cosy-token", completed.TokenInfo.SecurityOauthToken)
+	require.Equal(t, "cn", completed.TokenInfo.Site)
+	require.Equal(t, qoder.RefreshModeQoderCN20, completed.TokenInfo.RefreshMode)
+	require.Equal(t, expiresAt.Format(time.RFC3339), completed.TokenInfo.ExpiresAt)
+	require.Equal(t, "status-org", completed.TokenInfo.OrganizationID)
+	require.Equal(t, "Status Org", completed.TokenInfo.OrganizationName)
+	require.Zero(t, client.orgCalls)
+	require.NotNil(t, client.completedMachine)
+	require.Equal(t, parsed.Query().Get("machine_id"), client.completedMachine.MachineID)
+	require.Empty(t, client.completedMachine.MachineToken)
+	require.Empty(t, client.completedMachine.MachineType)
+	require.Empty(t, completed.TokenInfo.MachineToken)
+	require.Empty(t, completed.TokenInfo.MachineType)
+
+	credentials := svc.BuildAccountCredentials(completed.TokenInfo)
+	require.Equal(t, "cn", credentials["site"])
+	require.Equal(t, qoder.RefreshModeQoderCN20, credentials["refresh_mode"])
+	require.Equal(t, expiresAt.Format(time.RFC3339), credentials["expires_at"])
+	require.NotContains(t, credentials, "machine_token")
+	require.NotContains(t, credentials, "machine_type")
+}
+
+func TestQoderOAuthServiceCNUsesOrganizationTagsAsStatusFallback(t *testing.T) {
+	svc := NewQoderOAuthService(nil)
+	defer svc.Stop()
+	client := &fakeQoderOAuthClient{
+		ready: true,
+		token: &qoder.DeviceTokenResponse{
+			Token:        "openapi-access",
+			RefreshToken: "openapi-refresh",
+			UserID:       "user-1",
+			ExpiresIn:    3600,
+		},
+		userInfo: &qoder.UserInfo{UserID: "user-1", UserName: "CN User"},
+		completedIdentity: &qoder.AuthIdentity{
+			UID:                "cosy-uid",
+			AID:                "cosy-aid",
+			SecurityOauthToken: "cosy-token",
+			RefreshToken:       "openapi-refresh",
+		},
+		completedExpiry: time.Now().Add(time.Hour),
+		orgTags: &qoder.OrganizationTags{
+			OrganizationID:   "tags-org",
+			OrganizationName: "Tags Org",
+		},
+	}
+	svc.clientFactory = func(_ qoder.Profile, _ string) (qoderOAuthClient, error) {
+		return client, nil
+	}
+
+	result, err := svc.GenerateAuthURLForSite(context.Background(), qoder.SiteCN, nil)
+	require.NoError(t, err)
+	completed, err := svc.Poll(context.Background(), result.SessionID, result.State, nil)
+	require.NoError(t, err)
+	require.Equal(t, "tags-org", completed.TokenInfo.OrganizationID)
+	require.Equal(t, "Tags Org", completed.TokenInfo.OrganizationName)
+	require.Equal(t, 1, client.orgCalls)
+	require.Equal(t, "user-1", client.gotOrgUID)
+}
+
 func TestQoderOAuthServiceExchangeRejectsInvalidSessionState(t *testing.T) {
 	svc := NewQoderOAuthService(nil)
 	defer svc.Stop()
@@ -125,7 +268,7 @@ func TestQoderOAuthServiceExchangePendingKeepsSession(t *testing.T) {
 	svc := NewQoderOAuthService(nil)
 	defer svc.Stop()
 	client := &fakeQoderOAuthClient{ready: false}
-	svc.clientFactory = func(proxyURL string) (qoderOAuthClient, error) {
+	svc.clientFactory = func(_ qoder.Profile, proxyURL string) (qoderOAuthClient, error) {
 		return client, nil
 	}
 
@@ -148,13 +291,15 @@ func TestQoderOAuthServiceExchangePendingKeepsSession(t *testing.T) {
 func TestQoderOAuthServiceExchangeParsesCallbackURLAndBuildsUsableCredentials(t *testing.T) {
 	svc := NewQoderOAuthService(nil)
 	defer svc.Stop()
-	svc.clientFactory = func(proxyURL string) (qoderOAuthClient, error) {
+	expiresAt := time.Unix(1_893_456_000, 0).UTC()
+	svc.clientFactory = func(_ qoder.Profile, proxyURL string) (qoderOAuthClient, error) {
 		return &fakeQoderOAuthClient{
 			ready: true,
 			token: &qoder.DeviceTokenResponse{
 				Token:        "security-token",
 				RefreshToken: "refresh-token",
 				UserID:       "user-from-token",
+				ExpiresAt:    qoder.FlexibleInt64(expiresAt.Unix()),
 			},
 			userInfo: &qoder.UserInfo{
 				ID:       "user-from-info",
@@ -187,6 +332,9 @@ func TestQoderOAuthServiceExchangeParsesCallbackURLAndBuildsUsableCredentials(t 
 	require.Equal(t, "Qoder Org", tokenInfo.OrganizationName)
 	require.Equal(t, "Qoder User", tokenInfo.Name)
 	require.Equal(t, "personal_pro", tokenInfo.UserType)
+	require.Equal(t, "global", tokenInfo.Site)
+	require.Equal(t, qoder.RefreshModeCosy, tokenInfo.RefreshMode)
+	require.Equal(t, expiresAt.Format(time.RFC3339), tokenInfo.ExpiresAt)
 	require.Equal(t, authMachineID, tokenInfo.MachineID)
 	require.NotEmpty(t, tokenInfo.MachineToken)
 	require.NotEmpty(t, tokenInfo.MachineType)
@@ -200,6 +348,7 @@ func TestQoderOAuthServiceExchangeParsesCallbackURLAndBuildsUsableCredentials(t 
 	require.Equal(t, tokenInfo.MachineID, credentials["machine_id"])
 	require.Equal(t, "org-from-tags", credentials["organization_id"])
 	require.Equal(t, "Qoder Org", credentials["organization_name"])
+	require.Equal(t, expiresAt.Format(time.RFC3339), credentials["expires_at"])
 
 	provider := NewQoderTokenProvider()
 	session, err := provider.GetSession(context.Background(), &Account{
@@ -221,7 +370,7 @@ func TestQoderOAuthServicePollReturnsPendingAndCompleted(t *testing.T) {
 	svc := NewQoderOAuthService(nil)
 	defer svc.Stop()
 	client := &fakeQoderOAuthClient{ready: false}
-	svc.clientFactory = func(proxyURL string) (qoderOAuthClient, error) {
+	svc.clientFactory = func(_ qoder.Profile, proxyURL string) (qoderOAuthClient, error) {
 		return client, nil
 	}
 
@@ -266,7 +415,7 @@ func TestQoderOAuthServiceCompletedSessionIsIdempotent(t *testing.T) {
 		},
 		userInfo: &qoder.UserInfo{ID: "user-1", Name: "Qoder User"},
 	}
-	svc.clientFactory = func(proxyURL string) (qoderOAuthClient, error) {
+	svc.clientFactory = func(_ qoder.Profile, proxyURL string) (qoderOAuthClient, error) {
 		return client, nil
 	}
 
@@ -294,7 +443,7 @@ func TestQoderOAuthServiceConcurrentCompletionReusesSingleResult(t *testing.T) {
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	svc.clientFactory = func(proxyURL string) (qoderOAuthClient, error) {
+	svc.clientFactory = func(_ qoder.Profile, proxyURL string) (qoderOAuthClient, error) {
 		return client, nil
 	}
 

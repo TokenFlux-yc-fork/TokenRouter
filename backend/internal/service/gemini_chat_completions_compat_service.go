@@ -82,10 +82,8 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		return nil, s.writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 	}
 
-	mappedModel := req.Model
-	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
-		mappedModel = account.GetMappedModel(req.Model)
-	}
+	// Chat Completions 兼容入口同样遵循 C -> U，OAuth 账号不能绕过账号映射。
+	mappedModel := resolveAccountMappedModelForForward(account, req.Model)
 
 	geminiReq, err := convertClaudeMessagesToGeminiGenerateContent(claudeBody)
 	if err != nil {

@@ -43,7 +43,7 @@ func TestResolveAccountUpstreamModel_Antigravity(t *testing.T) {
 		Platform: PlatformAntigravity,
 	}
 	// Antigravity 平台使用 DefaultAntigravityModelMapping
-	got := resolveAccountUpstreamModel(account, "claude-sonnet-4-6")
+	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-6")
 	require.Equal(t, "claude-sonnet-4-6", got)
 }
 
@@ -52,7 +52,7 @@ func TestResolveAccountUpstreamModel_Antigravity_Unsupported(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAntigravity,
 	}
-	got := resolveAccountUpstreamModel(account, "totally-unknown-model")
+	got := resolveAccountUpstreamModel(context.Background(), account, "totally-unknown-model")
 	require.Equal(t, "", got, "unsupported model should return empty")
 }
 
@@ -61,8 +61,45 @@ func TestResolveAccountUpstreamModel_NonAntigravity(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAnthropic,
 	}
-	got := resolveAccountUpstreamModel(account, "claude-sonnet-4-6")
+	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-6")
 	require.Equal(t, "claude-sonnet-4-6", got, "no mapping = passthrough")
+}
+
+func TestResolveAccountUpstreamModel_AnthropicOAuthAppliesMappingBeforeNormalization(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"client-alias": "claude-sonnet-4-5"},
+		},
+	}
+
+	got := resolveAccountUpstreamModel(context.Background(), account, "client-alias")
+	require.Equal(t, "claude-sonnet-4-5-20250929", got)
+}
+
+func TestResolveAccountUpstreamModel_BedrockUsesRegionalFinalModel(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeBedrock,
+		Credentials: map[string]any{
+			"aws_region": "us-east-1",
+		},
+	}
+
+	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-5")
+	require.Equal(t, "us.anthropic.claude-sonnet-4-5-20250929-v1:0", got)
+}
+
+func TestResolveAccountUpstreamModel_AntigravityUsesThinkingContext(t *testing.T) {
+	t.Parallel()
+	account := &Account{Platform: PlatformAntigravity}
+	ctx := WithThinkingEnabled(context.Background(), true, false)
+
+	got := resolveAccountUpstreamModel(ctx, account, "claude-sonnet-4-5")
+	require.Equal(t, "claude-sonnet-4-5-thinking", got)
 }
 
 func TestIsModelSupportedByAccountWithContext_QoderUsesChannelMappedAccountLayerModel(t *testing.T) {
@@ -165,7 +202,7 @@ func TestCheckChannelPricingRestriction_ChannelMapped_Allowed(t *testing.T) {
 		"mapped model claude-sonnet-4-6 IS in pricing → allowed")
 }
 
-func TestCheckChannelPricingRestriction_QoderBlankRouteKeyAllowsPricedRequestedAlias(t *testing.T) {
+func TestCheckChannelPricingRestriction_QoderChannelMappedBasisRejectsBlankRouteKey(t *testing.T) {
 	t.Parallel()
 	price := 1e-6
 	ch := Channel{
@@ -186,8 +223,8 @@ func TestCheckChannelPricingRestriction_QoderBlankRouteKeyAllowsPricedRequestedA
 	svc := &GatewayService{channelService: channelSvc}
 
 	gid := int64(10)
-	require.False(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "qwen3.7-plus"),
-		"Qoder restriction should follow pricing precedence: priced requested alias is allowed even if mapped route key row is blank")
+	require.True(t, svc.checkChannelPricingRestriction(context.Background(), &gid, "qwen3.7-plus"),
+		"Qoder 渠道映射依据只能检查 C，不能用 R 的有效价格放行空价格 route key")
 }
 
 func TestCheckChannelPricingRestriction_Requested_Restricted(t *testing.T) {
@@ -356,7 +393,7 @@ func TestIsUpstreamModelRestrictedByChannel_AppliesChannelMappingBeforeAccountMa
 		"upstream restriction should check the final model after channel mapping and account mapping")
 }
 
-func TestIsUpstreamModelRestrictedByChannel_QoderPricedRequestedAliasAllowsBlankUpstream(t *testing.T) {
+func TestIsUpstreamModelRestrictedByChannel_QoderUpstreamBasisRejectsBlankUpstream(t *testing.T) {
 	t.Parallel()
 	price := 1e-6
 	ch := Channel{
@@ -377,8 +414,8 @@ func TestIsUpstreamModelRestrictedByChannel_QoderPricedRequestedAliasAllowsBlank
 	svc := &GatewayService{channelService: channelSvc}
 	account := &Account{Platform: PlatformQoder}
 
-	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "qwen3.7-plus"),
-		"Qoder upstream restriction should allow a request when the requested alias has effective manual pricing")
+	require.True(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "qwen3.7-plus"),
+		"Qoder upstream 依据只能检查 U，不能用 R 的有效价格放行空价格上游模型")
 }
 
 func TestIsUpstreamModelRestrictedByChannel_UnsupportedModel(t *testing.T) {

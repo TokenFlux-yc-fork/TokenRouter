@@ -14,7 +14,7 @@ const expiryCheckTimeout = 30 * time.Second
 
 const (
 	paymentOrderExpiryLeaderLockKey = "payment:order:expiry:leader"
-	// 锁存活时间需覆盖支付状态同步与超时关闭两个阶段，避免任务中途失去主实例身份。
+	// 锁存活时间需覆盖支付状态同步、履约补偿与超时关闭阶段，避免任务中途失去主实例身份。
 	paymentOrderExpiryLeaderLockTTL = 3 * time.Minute
 )
 
@@ -96,6 +96,24 @@ func (s *PaymentOrderExpiryService) runOnce() {
 		slog.Warn("[PaymentOrderExpiry] failed to reconcile pending wxpay orders", "error", err)
 	} else if recovered > 0 {
 		slog.Info("[PaymentOrderExpiry] reconciled paid wxpay orders", "count", recovered)
+	}
+
+	processingCtx, processingCancel := context.WithTimeout(context.Background(), expiryCheckTimeout)
+	processingRecovered, err := s.paymentSvc.ReconcileProcessingOrders(processingCtx)
+	processingCancel()
+	if err != nil {
+		slog.Warn("[PaymentOrderExpiry] failed to reconcile processing payment orders", "error", err)
+	} else if processingRecovered > 0 {
+		slog.Info("[PaymentOrderExpiry] reconciled paid processing orders", "count", processingRecovered)
+	}
+
+	fulfillmentCtx, fulfillmentCancel := context.WithTimeout(context.Background(), expiryCheckTimeout)
+	fulfillmentRecovered, err := s.paymentSvc.ReconcilePaidFulfillmentOrders(fulfillmentCtx)
+	fulfillmentCancel()
+	if err != nil {
+		slog.Warn("[PaymentOrderExpiry] failed to reconcile paid order fulfillment", "error", err)
+	} else if fulfillmentRecovered > 0 {
+		slog.Info("[PaymentOrderExpiry] reconciled paid order fulfillment", "count", fulfillmentRecovered)
 	}
 
 	expireCtx, cancel := context.WithTimeout(context.Background(), expiryCheckTimeout)

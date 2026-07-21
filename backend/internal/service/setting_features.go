@@ -131,7 +131,7 @@ func (s *SettingService) GetAffiliateRebateDurationDays(ctx context.Context) int
 	return days
 }
 
-// GetAffiliateRebatePerInviteeCap 返回单个被邀请人的累计返利上限，0 表示无上限。
+// GetAffiliateRebatePerInviteeCap 返回单个被邀请人的累计返利积分上限，0 表示无上限。
 func (s *SettingService) GetAffiliateRebatePerInviteeCap(ctx context.Context) float64 {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyAffiliateRebatePerInviteeCap)
 	if err != nil {

@@ -220,6 +220,9 @@ func TestBuildQoderPayloadFromChatCompletions(t *testing.T) {
 	require.Equal(t, 123, parameters["max_tokens"])
 	require.Equal(t, "auto", modelConfig["key"])
 	require.Equal(t, "hello", chatText["text"])
+	business, ok := payload["business"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, qoder.GlobalClientVersion, business["version"])
 
 	messagesRaw, ok := payload["messages"].([]any)
 	require.True(t, ok)
@@ -245,6 +248,21 @@ func TestBuildQoderPayloadFromChatCompletions(t *testing.T) {
 	tools, ok := payload["tools"].([]any)
 	require.True(t, ok)
 	require.Len(t, tools, 1)
+}
+
+func TestBuildQoderPayloadUsesCNModelAndClientVersion(t *testing.T) {
+	body := []byte(`{
+		"model":"qwen3.6-flash",
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	payload, modelKey, err := BuildQoderPayloadFromChatCompletionsForSite(body, "personal_standard", qoder.SiteCN)
+
+	require.NoError(t, err)
+	require.Equal(t, "q36fmodel", modelKey)
+	business, ok := payload["business"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, qoder.CNClientVersion, business["version"])
 }
 
 func TestBuildQoderPayloadUserSystemReplacesBuiltInSystem(t *testing.T) {
@@ -606,6 +624,32 @@ func TestResolveQoderModelUsesOpus46AliasForUltimate(t *testing.T) {
 
 	codex := resolveQoderModel("gpt-5-codex")
 	require.Equal(t, "gpt-5-codex", codex.Key)
+}
+
+func TestResolveQoderModelUsesKimiK3Alias(t *testing.T) {
+	// Qoder 1.15.0 新增的 Kimi-K3 必须解析到独立的 latest 路由。
+	info := resolveQoderModel("kimi-k3")
+	require.Equal(t, "kmodel_latest", info.Key)
+	require.Equal(t, "system", info.Source)
+	require.Equal(t, "Kimi-K3", info.DisplayName)
+}
+
+func TestResolveQoderModelUsesGLM52RouteKey(t *testing.T) {
+	// Qoder 1.15 当前将 GLM-5.2 展示名绑定到保留的 gm51model 路由 key。
+	info := resolveQoderModel("glm-5.2")
+	require.Equal(t, "gm51model", info.Key)
+	require.Equal(t, "system", info.Source)
+	require.Equal(t, "GLM-5.2", info.DisplayName)
+}
+
+func TestResolveQoderModelDoesNotTranslateRemovedCompatibilityAliases(t *testing.T) {
+	// 原兼容表中的名称应进入透传路径，不再附加兼容映射元数据。
+	for _, model := range []string{"ultimate", "qwen3.5-plus", "glm-5", "glm-5.1", "kimi-k2.6"} {
+		info := resolveQoderModel(model)
+		require.Equal(t, model, info.Key)
+		require.Equal(t, "system", info.Source)
+		require.Empty(t, info.DisplayName)
+	}
 }
 
 func TestQoderGatewayAppliesAccountModelMapping(t *testing.T) {

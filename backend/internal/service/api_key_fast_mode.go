@@ -25,6 +25,18 @@ func apiKeyFastModePolicyFromContext(ctx context.Context) string {
 	return policy
 }
 
+// withAPIKeyFastModePolicy 将刷新后的单 Key 策略覆盖到派生请求上下文中。
+func withAPIKeyFastModePolicy(ctx context.Context, policy string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	normalized, ok := NormalizeAPIKeyFastModePolicy(strings.TrimSpace(policy))
+	if !ok {
+		normalized = APIKeyFastModePolicyFollowRequest
+	}
+	return context.WithValue(ctx, ctxkey.APIKeyFastModePolicy, normalized)
+}
+
 // apiKeyFastModePricingModel 优先使用入口记录的用户可见模型，确保能力判断与分组定价一致。
 func apiKeyFastModePricingModel(ctx context.Context, fallback string) string {
 	if ctx != nil {
@@ -35,9 +47,9 @@ func apiKeyFastModePricingModel(ctx context.Context, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-// apiKeyFastModeSupported 按当前有效分组和模型定价判断 Fast 能力。
-// 缺少分组、解析器或定价结果时按不支持处理，避免 Key 配置误改上游请求。
-func apiKeyFastModeSupported(ctx context.Context, resolver *ModelPricingResolver, model string) bool {
+// apiKeyFastModeForceOnSupported 按当前有效分组和模型定价判断 Fast 强制开启能力。
+// 缺少分组、解析器或定价结果时按不支持处理，避免 Key 配置误向上游注入 Fast。
+func apiKeyFastModeForceOnSupported(ctx context.Context, resolver *ModelPricingResolver, model string) bool {
 	if ctx == nil || resolver == nil || resolver.billingService == nil {
 		return false
 	}
@@ -53,16 +65,16 @@ func apiKeyFastModeSupported(ctx context.Context, resolver *ModelPricingResolver
 	return resolved != nil && resolved.SupportsServiceTier
 }
 
-// openAIAPIKeyFastModeSupported 将单 Key 策略限制到 OpenAI 原生适配器。
-func (s *OpenAIGatewayService) openAIAPIKeyFastModeSupported(ctx context.Context, account *Account, model string) bool {
-	return account != nil && account.IsOpenAI() && apiKeyFastModeSupported(ctx, s.resolver, model)
+// openAIAPIKeyFastModeForceOnSupported 将单 Key Fast 强制开启限制到 OpenAI 原生适配器。
+func (s *OpenAIGatewayService) openAIAPIKeyFastModeForceOnSupported(ctx context.Context, account *Account, model string) bool {
+	return account != nil && account.IsOpenAI() && apiKeyFastModeForceOnSupported(ctx, s.resolver, model)
 }
 
-// claudeAPIKeyFastModeSupported 将 Claude Fast 限制到 Anthropic API Key 直连适配器。
-// Bedrock、Vertex 和 OAuth/Setup Token 路径不会应用单 Key Fast 策略。
-func (s *GatewayService) claudeAPIKeyFastModeSupported(ctx context.Context, account *Account, model string) bool {
+// claudeAPIKeyFastModeForceOnSupported 将 Claude Fast 强制开启限制到 Anthropic API Key 直连适配器。
+// Bedrock、Vertex 和 OAuth/Setup Token 路径不会由单 Key 策略注入 Fast。
+func (s *GatewayService) claudeAPIKeyFastModeForceOnSupported(ctx context.Context, account *Account, model string) bool {
 	return account != nil && account.IsAnthropic() && account.Type == AccountTypeAPIKey &&
-		apiKeyFastModeSupported(ctx, s.resolver, model)
+		apiKeyFastModeForceOnSupported(ctx, s.resolver, model)
 }
 
 // addAnthropicBetaToken 在保留其它 beta 的同时补齐指定 token。
@@ -86,22 +98,41 @@ func (s *GatewayService) applyClaudeAPIKeyFastMode(
 	body []byte,
 	headers http.Header,
 ) ([]byte, http.Header, error) {
-	if !s.claudeAPIKeyFastModeSupported(ctx, account, model) {
+	policy := apiKeyFastModePolicyFromContext(ctx)
+	// 强制关闭只删除客户端已有的 Fast 标记，不能被易滞后的定价能力元数据阻断。
+	if policy == APIKeyFastModePolicyForceOff {
+		if account == nil || !account.IsAnthropic() {
+			return body, headers, nil
+		}
+		if headers == nil {
+			headers = make(http.Header)
+		}
+		updated := body
+		if strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "speed").String()), "fast") {
+			var err error
+			updated, err = sjson.DeleteBytes(body, "speed")
+			if err != nil {
+				return body, headers, fmt.Errorf("remove Claude fast speed: %w", err)
+			}
+		}
+		cloned := headers.Clone()
+		fastOnly := map[string]struct{}{claude.BetaFastMode: {}}
+		setHeaderRaw(cloned, "anthropic-beta", stripBetaTokensWithSet(getHeaderRaw(cloned, "anthropic-beta"), fastOnly))
+		return updated, cloned, nil
+	}
+
+	if !s.claudeAPIKeyFastModeForceOnSupported(ctx, account, model) {
 		return body, headers, nil
 	}
 	if headers == nil {
 		headers = make(http.Header)
 	}
 
-	policy := apiKeyFastModePolicyFromContext(ctx)
 	fastRequested := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "speed").String()), "fast") ||
 		containsBetaToken(getHeaderRaw(headers, "anthropic-beta"), claude.BetaFastMode)
 	shouldFast := fastRequested
-	switch policy {
-	case APIKeyFastModePolicyForceOn:
+	if policy == APIKeyFastModePolicyForceOn {
 		shouldFast = true
-	case APIKeyFastModePolicyForceOff:
-		shouldFast = false
 	}
 
 	if shouldFast {
@@ -114,19 +145,5 @@ func (s *GatewayService) applyClaudeAPIKeyFastMode(
 		return updated, cloned, nil
 	}
 
-	if policy != APIKeyFastModePolicyForceOff {
-		return body, headers, nil
-	}
-	updated := body
-	if strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "speed").String()), "fast") {
-		var err error
-		updated, err = sjson.DeleteBytes(body, "speed")
-		if err != nil {
-			return body, headers, fmt.Errorf("remove Claude fast speed: %w", err)
-		}
-	}
-	cloned := headers.Clone()
-	fastOnly := map[string]struct{}{claude.BetaFastMode: {}}
-	setHeaderRaw(cloned, "anthropic-beta", stripBetaTokensWithSet(getHeaderRaw(cloned, "anthropic-beta"), fastOnly))
-	return updated, cloned, nil
+	return body, headers, nil
 }

@@ -5,11 +5,13 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -969,6 +971,8 @@ func TestIsNonRetryableRefreshError(t *testing.T) {
 		{name: "invalid_scope", err: errors.New("invalid_scope: requested scope is not allowed"), expected: true},
 		{name: "invalid_grant_with_desc", err: errors.New("Error: invalid_grant - token revoked"), expected: true},
 		{name: "case_insensitive", err: errors.New("INVALID_GRANT"), expected: true},
+		{name: "qoder_refresh_unauthorized", err: fmt.Errorf("refresh failed: %w", &qoder.OpenAPIError{Operation: "token refresh", StatusCode: 401}), expected: true},
+		{name: "qoder_refresh_upstream_failure", err: &qoder.OpenAPIError{Operation: "token refresh", StatusCode: 503}, expected: false},
 	}
 
 	for _, tt := range tests {
@@ -977,6 +981,11 @@ func TestIsNonRetryableRefreshError(t *testing.T) {
 			require.Equal(t, tt.expected, result)
 		})
 	}
+	require.False(t, isSharedProviderRefreshError(&qoder.OpenAPIError{
+		Operation:  "token refresh",
+		StatusCode: 400,
+		Message:    "invalid_scope",
+	}))
 }
 
 // ========== Path A (refreshAPI) 测试用例 ==========

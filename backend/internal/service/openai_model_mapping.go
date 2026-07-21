@@ -2,23 +2,19 @@ package service
 
 import "strings"
 
-// resolveOpenAIForwardModel 解析 OpenAI 兼容转发使用的模型。
-// messagesDispatchMappedModel 是调用方已为 /v1/messages 解析的显式调度结果；
-// 普通 OpenAI 请求必须传空，避免将分组配置作为通用模型兜底。
+// resolveOpenAIForwardModel 解析 OpenAI 兼容转发使用的最终模型。
+// messagesDispatchMappedModel 是渠道映射后再执行分组映射得到的账号层模型 D；
+// 非空时账号映射必须以 D 为输入，普通 OpenAI 请求必须传空。
 func resolveOpenAIForwardModel(account *Account, requestedModel, messagesDispatchMappedModel string) string {
 	messagesDispatchMappedModel = strings.TrimSpace(messagesDispatchMappedModel)
+	accountLayerModel := requestedModel
+	if messagesDispatchMappedModel != "" {
+		accountLayerModel = messagesDispatchMappedModel
+	}
 	if account == nil {
-		if messagesDispatchMappedModel != "" {
-			return messagesDispatchMappedModel
-		}
-		return requestedModel
+		return accountLayerModel
 	}
-
-	mappedModel, matched := account.ResolveMappedModel(requestedModel)
-	if !matched && messagesDispatchMappedModel != "" {
-		return messagesDispatchMappedModel
-	}
-	return mappedModel
+	return account.GetMappedModel(accountLayerModel)
 }
 
 // openAIOAuthForeignModelPrefixes 列出明确属于其他厂商家族的模型名前缀。

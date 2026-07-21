@@ -3336,3 +3336,97 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityWai
 	require.Equal(t, int64(38011), selection.WaitPlan.AccountID)
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 }
+
+func TestOpenAIGatewayService_MessagesRoutingModelUsesFullMappingChain(t *testing.T) {
+	for _, advancedScheduler := range []bool{false, true} {
+		name := "旧版调度"
+		if advancedScheduler {
+			name = "高级调度"
+		}
+		t.Run(name, func(t *testing.T) {
+			resetOpenAIAdvancedSchedulerSettingCacheForTest()
+			t.Cleanup(resetOpenAIAdvancedSchedulerSettingCacheForTest)
+
+			groupID := int64(4211)
+			price := 0.01
+			channel := Channel{
+				ID:                 77,
+				Status:             StatusActive,
+				RestrictModels:     true,
+				BillingModelSource: BillingModelSourceUpstream,
+				ModelMapping: map[string]map[string]string{
+					PlatformOpenAI: {"client-alias": "channel-model"},
+				},
+				ModelPricing: []ChannelModelPricing{{
+					Platform:   PlatformOpenAI,
+					Models:     []string{"allowed-upstream"},
+					InputPrice: &price,
+				}},
+			}
+			accounts := []Account{
+				{
+					ID:          42111,
+					Platform:    PlatformOpenAI,
+					Type:        AccountTypeAPIKey,
+					Status:      StatusActive,
+					Schedulable: true,
+					Concurrency: 1,
+					Priority:    0,
+					Credentials: map[string]any{
+						"model_mapping":   map[string]any{"channel-model": "blocked-upstream"},
+						"model_whitelist": []any{"blocked-upstream"},
+					},
+				},
+				{
+					ID:          42112,
+					Platform:    PlatformOpenAI,
+					Type:        AccountTypeAPIKey,
+					Status:      StatusActive,
+					Schedulable: true,
+					Concurrency: 1,
+					Priority:    1,
+					Credentials: map[string]any{
+						"model_mapping":   map[string]any{"dispatch-model": "allowed-upstream"},
+						"model_whitelist": []any{"allowed-upstream"},
+					},
+				},
+			}
+			cfg := &config.Config{}
+			cfg.Gateway.Scheduling.LoadBatchEnabled = false
+			cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"sticky": 42111}}
+			svc := &OpenAIGatewayService{
+				accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
+				cache:              cache,
+				cfg:                cfg,
+				channelService:     newRequestableModelsChannelService(groupID, PlatformOpenAI, channel),
+				concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+			}
+			if advancedScheduler {
+				svc.rateLimitService = newOpenAIAdvancedSchedulerRateLimitService("true")
+			}
+
+			selection, _, err := svc.SelectAccountWithSchedulerForCapabilityAndRoutingModel(
+				context.Background(),
+				&groupID,
+				"",
+				"sticky",
+				"client-alias",
+				"dispatch-model",
+				nil,
+				OpenAIUpstreamTransportAny,
+				OpenAIEndpointCapabilityChatCompletions,
+				false,
+				false,
+				true,
+			)
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			require.NotNil(t, selection.Account)
+			require.Equal(t, int64(42112), selection.Account.ID)
+			require.Equal(t, "allowed-upstream", resolveOpenAIForwardModel(selection.Account, "channel-model", "dispatch-model"))
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+		})
+	}
+}

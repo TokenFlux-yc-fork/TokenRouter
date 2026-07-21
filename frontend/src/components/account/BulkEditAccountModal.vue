@@ -82,6 +82,37 @@
         </div>
       </div>
 
+      <!-- OpenAI Codex 图片工具策略 -->
+      <div
+        v-if="allOpenAIPassthroughCapable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="mb-3 flex items-center justify-end gap-2">
+          <label
+            class="text-sm text-gray-700 dark:text-gray-300"
+            for="bulk-edit-codex-image-tool-enabled"
+          >
+            {{ t('admin.accounts.bulkEdit.applyField') }}
+          </label>
+          <input
+            v-model="enableCodexImageToolMode"
+            id="bulk-edit-codex-image-tool-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-codex-image-tool"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-codex-image-tool"
+          :class="!enableCodexImageToolMode && 'pointer-events-none opacity-50'"
+        >
+          <CodexImageToolModeSelector
+            v-model="codexImageToolMode"
+            test-id-prefix="bulk-edit-codex-image-tool"
+          />
+        </div>
+      </div>
+
       <!-- Base URL (API Key only) -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1437,6 +1468,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import CodexImageToolModeSelector from '@/components/account/CodexImageToolModeSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import Icon from '@/components/icons/Icon.vue'
 import {
@@ -1466,6 +1498,10 @@ import {
   resolveOpenAIWSModeConcurrencyHintKey
 } from '@/utils/openaiWsMode'
 import type { OpenAIWSMode } from '@/utils/openaiWsMode'
+import {
+  applyCodexImageToolMode,
+  type CodexImageToolMode
+} from '@/utils/codexImageToolMode'
 interface Props {
   show: boolean
   accountIds: number[]
@@ -1616,6 +1652,7 @@ const enableRateMultiplier = ref(false)
 const enableStatus = ref(false)
 const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
+const enableCodexImageToolMode = ref(false)
 const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
 const enableCodexCLIOnly = ref(false)
@@ -1651,6 +1688,7 @@ const rateMultiplier = ref(1)
 const status = ref<'active' | 'inactive'>('active')
 const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
+const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openAIOAuthClientPolicy = ref<OpenAIOAuthClientPolicy>('any')
@@ -2045,6 +2083,11 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     }
   }
 
+  if (enableCodexImageToolMode.value) {
+    const extra = ensureExtra()
+    applyCodexImageToolMode(extra, codexImageToolMode.value, 'null')
+  }
+
   if (enableModelRestriction.value && !isOpenAIModelRestrictionDisabled.value) {
     // Antigravity 账号仍使用 mapping-only 语义，批量修改不能给它写入普通账号的独立白名单字段。
     if (targetSelectedPlatforms.value.length === 1 && targetSelectedPlatforms.value[0] === 'antigravity') {
@@ -2240,6 +2283,7 @@ const handleSubmit = async () => {
   const hasAnyFieldEnabled =
     enableBaseUrl.value ||
     enableOpenAIPassthrough.value ||
+    enableCodexImageToolMode.value ||
     enableModelRestriction.value ||
     enableCustomErrorCodes.value ||
     enableInterceptWarmup.value ||
@@ -2385,6 +2429,7 @@ const resetBulkEditFormState = () => {
   enableStatus.value = false
   enableGroups.value = false
   enableOpenAIPassthrough.value = false
+  enableCodexImageToolMode.value = false
   enableOpenAIWSMode.value = false
   enableOpenAIAPIKeyWSMode.value = false
   enableCodexCLIOnly.value = false
@@ -2400,6 +2445,7 @@ const resetBulkEditFormState = () => {
 
   baseUrl.value = ''
   openaiPassthroughEnabled.value = false
+  codexImageToolMode.value = 'inherit'
   resetModelRestrictionDraft()
   selectedErrorCodes.value = []
   customErrorCodeInput.value = null

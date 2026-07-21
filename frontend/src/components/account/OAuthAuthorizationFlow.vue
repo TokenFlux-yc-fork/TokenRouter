@@ -783,7 +783,8 @@
                   </div>
                   <button
                     type="button"
-                    class="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400"
+                    :disabled="loading"
+                    class="text-xs text-blue-600 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-blue-400"
                     @click="handleRegenerate"
                   >
                     <Icon name="refresh" size="xs" class="mr-1 inline" />

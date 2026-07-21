@@ -1192,46 +1192,15 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		return nil
 	}
 
-	// Filter by platform if specified
-	if platform != "" {
-		filtered := make([]Account, 0)
-		for _, acc := range accounts {
-			if acc.Platform == platform {
-				filtered = append(filtered, acc)
-			}
-		}
-		accounts = filtered
-	}
-
-	// Collect unique configured request models from all accounts
-	modelSet := make(map[string]struct{})
-	hasAnyConfiguredModels := false
-
-	for _, acc := range accounts {
-		requestModels := acc.GetConfiguredRequestModels()
-		if len(requestModels) > 0 {
-			hasAnyConfiguredModels = true
-			for _, model := range requestModels {
-				modelSet[model] = struct{}{}
-			}
-		}
-	}
-
-	// If no account has explicit model scope, return nil (use default)
-	if !hasAnyConfiguredModels {
+	models := configuredRequestModelsFromAccounts(accounts, platform)
+	// 没有账号显式模型范围时返回 nil，由调用方使用平台默认模型。
+	if len(models) == 0 {
 		if s.modelsListCache != nil {
 			s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
 			modelsListCacheStoreTotal.Add(1)
 		}
 		return nil
 	}
-
-	// Convert to slice
-	models := make([]string, 0, len(modelSet))
-	for model := range modelSet {
-		models = append(models, model)
-	}
-	sort.Strings(models)
 
 	if s.modelsListCache != nil {
 		s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)
@@ -1407,27 +1376,6 @@ func (s *GatewayService) qoderCanUseDefaultImagePricing(model string) bool {
 	return s != nil && s.billingService != nil && hasExplicitImagePricing(s.billingService.getRawModelPricing(model))
 }
 
-func (s *GatewayService) qoderRestrictionHasEffectivePricing(ctx context.Context, groupID int64, models ...string) bool {
-	if s == nil || s.channelService == nil || s.channelService.GetGroupPlatform(ctx, groupID) != PlatformQoder {
-		return false
-	}
-	seen := map[string]struct{}{}
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			continue
-		}
-		if _, ok := seen[model]; ok {
-			continue
-		}
-		seen[model] = struct{}{}
-		if pricing := s.channelService.GetEffectiveChannelModelPricing(ctx, groupID, model); pricing != nil && pricing.HasEffectivePricing() {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *GatewayService) resolveChannelPricingForUsage(
 	ctx context.Context,
 	billingModel string,
@@ -1439,7 +1387,7 @@ func (s *GatewayService) resolveChannelPricingForUsage(
 	account *Account,
 ) (*ResolvedPricing, string) {
 	if isQoderBillingContext(account, apiKey) {
-		return s.resolveQoderChannelPricingForUsage(ctx, billingModel, requestedModel, channelMappedModel, baseModelHint, apiKey)
+		return s.resolveQoderChannelPricingForUsage(ctx, billingModel, apiKey)
 	}
 	if resolved := s.resolveChannelPricingWithBaseHint(ctx, billingModel, baseModelHint, apiKey); resolved != nil {
 		return resolved, billingModel
@@ -1462,52 +1410,15 @@ func (s *GatewayService) resolveChannelPricingWithBaseHint(ctx context.Context, 
 func (s *GatewayService) resolveQoderChannelPricingForUsage(
 	ctx context.Context,
 	billingModel string,
-	requestedModel string,
-	channelMappedModel string,
-	baseModelHint string,
 	apiKey *APIKey,
 ) (*ResolvedPricing, string) {
-	type pricingCandidate struct {
-		model string
-		hint  string
+	// Qoder 必须严格按渠道选定的计费模型匹配，不能跨 R/C/U 寻找其他价格行。
+	billingModel = strings.TrimSpace(billingModel)
+	resolved := s.resolveChannelPricingWithBaseHint(ctx, billingModel, "", apiKey)
+	if resolved != nil && resolved.HasEffectiveChannelPricing() {
+		return resolved, billingModel
 	}
-	candidates := make([]pricingCandidate, 0, 4)
-	seen := make(map[string]struct{}, 4)
-	addCandidate := func(model, hint string) {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			return
-		}
-		if _, ok := seen[model]; ok {
-			return
-		}
-		seen[model] = struct{}{}
-		candidates = append(candidates, pricingCandidate{model: model, hint: strings.TrimSpace(hint)})
-	}
-
-	// Qoder 的同一次请求可能同时存在公开/自定义请求 alias、渠道 route key、
-	// 计费模型和最终上游 route key。手工定价先按用户可见 alias 顺序解析；
-	// 空价格行表示“未配置”，不能遮蔽后续真正有效的手工价格。
-	channelMappedModel = strings.TrimSpace(channelMappedModel)
-	aliasHint := strings.TrimSpace(channelMappedModel)
-	if aliasHint == "" {
-		aliasHint = strings.TrimSpace(baseModelHint)
-	}
-	if aliasHint == "" {
-		aliasHint = strings.TrimSpace(billingModel)
-	}
-	addCandidate(requestedModel, aliasHint)
-	addCandidate(channelMappedModel, baseModelHint)
-	addCandidate(billingModel, baseModelHint)
-	addCandidate(baseModelHint, "")
-
-	for _, candidate := range candidates {
-		resolved := s.resolveChannelPricingWithBaseHint(ctx, candidate.model, candidate.hint, apiKey)
-		if resolved != nil && resolved.HasEffectiveChannelPricing() {
-			return resolved, candidate.model
-		}
-	}
-	return nil, strings.TrimSpace(billingModel)
+	return nil, billingModel
 }
 
 // ObserveData 解析单条 SSE data 行，并交给 ObserveEvent 更新快照。
@@ -1814,28 +1725,6 @@ func qoderAliasRequiresManualPricingInContext(account *Account, apiKey *APIKey, 
 		return false
 	}
 	return qoderAliasRequiresManualPricingAny(models...)
-}
-
-func qoderDefaultPricingCandidates(billingModel string, requestedModel string, _ string) []string {
-	candidates := make([]string, 0, 2)
-	seen := make(map[string]struct{}, 2)
-	add := func(model string) {
-		model = strings.TrimSpace(model)
-		if model == "" || qoderAliasRequiresManualPricingAny(model) {
-			return
-		}
-		if _, ok := seen[model]; ok {
-			return
-		}
-		seen[model] = struct{}{}
-		candidates = append(candidates, model)
-	}
-	if qoderAliasRequiresManualPricingAny(requestedModel) {
-		return candidates
-	}
-	add(requestedModel)
-	add(billingModel)
-	return candidates
 }
 
 func qoderKnownDefaultImagePricingModel(model string) bool {

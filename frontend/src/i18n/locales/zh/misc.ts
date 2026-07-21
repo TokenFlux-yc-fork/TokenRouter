@@ -419,6 +419,7 @@ marketplace: {
     },
     status: {
       pending: '待支付',
+      processing: '支付处理中',
       paid: '已支付',
       recharging: '充值中',
       completed: '已完成',

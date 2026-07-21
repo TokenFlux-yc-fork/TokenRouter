@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/tidwall/gjson"
 
@@ -26,7 +25,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		if reqModel := parsed.Model; reqModel != "" {
-			if mappedModel := account.GetMappedModel(reqModel); mappedModel != reqModel {
+			if mappedModel := resolveAccountUpstreamModel(ctx, account, reqModel); mappedModel != reqModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
 				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s)", reqModel, mappedModel, account.Name)
 			}
@@ -40,6 +39,13 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return nil
 	}
 
+	// Antigravity/Qoder 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
+	// 返回 nil 避免 handler 层记录为错误，也不设置 ops 上游错误上下文。
+	if account.Platform == PlatformAntigravity || account.Platform == PlatformQoder {
+		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for this platform")
+		return nil
+	}
+
 	body := parsed.Body.Bytes()
 	replaceBody := func(next []byte) error {
 		if err := parsed.ReplaceBody(next); err != nil {
@@ -49,6 +55,20 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return nil
 	}
 	reqModel := parsed.Model
+
+	// count_tokens 与 messages 主路径共用账号映射和平台规范化顺序，确保真正发送的模型与调度结果一致。
+	if reqModel != "" {
+		upstreamModel := resolveAccountUpstreamModel(ctx, account, reqModel)
+		if upstreamModel != "" && upstreamModel != reqModel {
+			originalReqModel := reqModel
+			if err := replaceBody(s.replaceModelInBody(body, upstreamModel)); err != nil {
+				return err
+			}
+			reqModel = upstreamModel
+			parsed.Model = upstreamModel
+			logger.LegacyPrintf("service.gateway", "CountTokens final model applied: %s -> %s (account: %s)", originalReqModel, upstreamModel, account.Name)
+		}
+	}
 
 	// Pre-filter: strip empty text blocks to prevent upstream 400.
 	if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
@@ -77,43 +97,6 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			if err := replaceBody(applyToolsLastCacheBreakpoint(body)); err != nil {
 				return err
 			}
-		}
-	}
-
-	// Antigravity/Qoder 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
-	// 返回 nil 避免 handler 层记录为错误，也不设置 ops 上游错误上下文。
-	if account.Platform == PlatformAntigravity || account.Platform == PlatformQoder {
-		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for this platform")
-		return nil
-	}
-
-	// 应用模型映射：
-	// - APIKey 账号：使用账号级别的显式映射（如果配置），否则透传原始模型名
-	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
-	if reqModel != "" {
-		mappedModel := reqModel
-		mappingSource := ""
-		if account.Type == AccountTypeAPIKey {
-			mappedModel = account.GetMappedModel(reqModel)
-			if mappedModel != reqModel {
-				mappingSource = "account"
-			}
-		}
-		if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
-			normalized := claude.NormalizeModelID(reqModel)
-			if normalized != reqModel {
-				mappedModel = normalized
-				mappingSource = "prefix"
-			}
-		}
-		if mappedModel != reqModel {
-			originalReqModel := reqModel
-			if err := replaceBody(s.replaceModelInBody(body, mappedModel)); err != nil {
-				return err
-			}
-			reqModel = mappedModel
-			parsed.Model = mappedModel
-			logger.LegacyPrintf("service.gateway", "CountTokens model mapping applied: %s -> %s (account: %s, source=%s)", originalReqModel, mappedModel, account.Name, mappingSource)
 		}
 	}
 

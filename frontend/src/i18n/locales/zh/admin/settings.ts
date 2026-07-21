@@ -59,19 +59,19 @@ dataSharing: {
         },
         affiliate: {
           title: '邀请返利',
-          description: '老用户邀请新用户注册，新用户充值后老用户按比例获得返利额度。',
+          description: '老用户邀请新用户注册，新用户购买推理积分后，老用户按实际购买积分数获得返利积分。',
           enabled: '启用邀请返利',
           enabledHint: '关闭后隐藏邀请返利入口，注册时不再绑定邀请码，新充值不再产生返利。',
           adminRechargeRebate: '管理员充值参与返利',
           adminRechargeRebateHint: '开启后，通过“用户管理 > 充值”增加的余额会产生邀请返利；设置余额和扣款不参与返利。',
           rebateRate: '全局返利比例',
-          rebateRateHint: '充值后返给邀请人的默认比例，0-100，例如 10 表示返利 10%。',
+          rebateRateHint: '按被邀请人实际购买的推理积分数计算，0-100。例如购买 1,000 积分且比例为 20%，返利 200 积分。',
           freezeHours: '返利冻结期（小时）',
           freezeHoursDesc: '新产生的返利在冻结期内不可转出。0 = 不冻结。',
           durationDays: '返利有效期（天）',
           durationDaysDesc: '被邀请用户注册后多少天内的充值产生返利。0 = 永久有效。',
-          perInviteeCap: '单人返利上限',
-          perInviteeCapDesc: '每个被邀请用户最多产生的返利总额。0 = 无上限。'
+          perInviteeCap: '单人返利上限（{unitName}）',
+          perInviteeCapDesc: '每个被邀请用户最多产生的返利积分总量，单位与余额一致。0 = 无上限。'
         },
       },
       registration: {

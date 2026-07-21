@@ -33,23 +33,58 @@ type paymentFulfillmentLease struct {
 // --- Payment Notification & Fulfillment ---
 
 func (s *PaymentService) HandlePaymentNotification(ctx context.Context, n *payment.PaymentNotification, pk string) error {
-	if n.Status != payment.NotificationStatusSuccess {
+	if n == nil {
 		return nil
 	}
-	// Look up order by out_trade_no (the external order ID we sent to the provider)
-	order, err := s.entClient.PaymentOrder.Query().Where(paymentorder.OutTradeNo(n.OrderID)).Only(ctx)
-	if err != nil {
-		// Fallback only for true legacy "sub2_N" DB-ID payloads when the
-		// current out_trade_no lookup genuinely did not find an order.
-		if oid, ok := parseLegacyPaymentOrderID(n.OrderID, err); ok {
-			return s.confirmPayment(ctx, oid, n.TradeNo, n.Amount, pk, n.Metadata)
-		}
-		if dbent.IsNotFound(err) {
-			return fmt.Errorf("%w: out_trade_no=%s", ErrOrderNotFound, n.OrderID)
-		}
-		return fmt.Errorf("lookup order failed for out_trade_no %s: %w", n.OrderID, err)
+	// 本次只让 Stripe 的异步失败事件改变订单状态，其他渠道维持原有忽略语义。
+	if n.Status == payment.ProviderStatusFailed && payment.GetBasePaymentType(pk) != payment.TypeStripe {
+		return nil
 	}
-	return s.confirmPayment(ctx, order.ID, n.TradeNo, n.Amount, pk, n.Metadata)
+	switch n.Status {
+	case payment.NotificationStatusSuccess, payment.NotificationStatusPaid, payment.ProviderStatusProcessing, payment.ProviderStatusFailed:
+	default:
+		return nil
+	}
+
+	order, err := s.findPaymentNotificationOrder(ctx, n.OrderID)
+	if err != nil {
+		return err
+	}
+	if err := s.validatePaymentNotificationOrder(ctx, order, pk, n.TradeNo, n.Metadata); err != nil {
+		return err
+	}
+
+	switch n.Status {
+	case payment.NotificationStatusSuccess, payment.NotificationStatusPaid:
+		return s.confirmPayment(ctx, order, n.TradeNo, n.Amount, pk, n.Metadata)
+	case payment.ProviderStatusProcessing:
+		return s.markPaymentProcessing(ctx, order, n.TradeNo, pk, n.Metadata)
+	case payment.ProviderStatusFailed:
+		return s.markPaymentFailed(ctx, order, n.TradeNo, pk)
+	default:
+		return nil
+	}
+}
+
+func (s *PaymentService) findPaymentNotificationOrder(ctx context.Context, orderID string) (*dbent.PaymentOrder, error) {
+	// 优先按发送给渠道的外部订单号查询，旧版 sub2_N 载荷仅在确实未命中时回退。
+	order, err := s.entClient.PaymentOrder.Query().Where(paymentorder.OutTradeNo(orderID)).Only(ctx)
+	if err == nil {
+		return order, nil
+	}
+	if !dbent.IsNotFound(err) {
+		return nil, fmt.Errorf("lookup order failed for out_trade_no %s: %w", orderID, err)
+	}
+	if oid, ok := parseLegacyPaymentOrderID(orderID, err); ok {
+		order, getErr := s.entClient.PaymentOrder.Get(ctx, oid)
+		if getErr == nil {
+			return order, nil
+		}
+		if !dbent.IsNotFound(getErr) {
+			return nil, fmt.Errorf("lookup legacy payment order %d: %w", oid, getErr)
+		}
+	}
+	return nil, fmt.Errorf("%w: out_trade_no=%s", ErrOrderNotFound, orderID)
 }
 
 func parseLegacyPaymentOrderID(orderID string, lookupErr error) (int64, bool) {
@@ -71,12 +106,7 @@ func parseLegacyPaymentOrderID(orderID string, lookupErr error) (int64, bool) {
 	return oid, true
 }
 
-func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo string, paid float64, pk string, metadata map[string]string) error {
-	o, err := s.entClient.PaymentOrder.Get(ctx, oid)
-	if err != nil {
-		slog.Error("order not found", "orderID", oid)
-		return nil
-	}
+func (s *PaymentService) validatePaymentNotificationOrder(ctx context.Context, o *dbent.PaymentOrder, pk, tradeNo string, metadata map[string]string) error {
 	instanceProviderKey := ""
 	if inst, instErr := s.getOrderProviderInstance(ctx, o); instErr == nil && inst != nil {
 		instanceProviderKey = inst.ProviderKey
@@ -97,6 +127,10 @@ func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo 
 		})
 		return err
 	}
+	return nil
+}
+
+func (s *PaymentService) confirmPayment(ctx context.Context, o *dbent.PaymentOrder, tradeNo string, paid float64, pk string, metadata map[string]string) error {
 	if !isValidProviderAmount(paid) {
 		s.writeAuditLog(ctx, o.ID, "PAYMENT_INVALID_AMOUNT", pk, map[string]any{
 			"expected": o.PayAmount,
@@ -110,6 +144,83 @@ func (s *PaymentService) confirmPayment(ctx context.Context, oid int64, tradeNo 
 		return fmt.Errorf("amount mismatch: expected %s, got %s", strconv.FormatFloat(o.PayAmount, 'f', -1, 64), strconv.FormatFloat(paid, 'f', -1, 64))
 	}
 	return s.toPaid(ctx, o, tradeNo, paid, pk, metadata)
+}
+
+func (s *PaymentService) markPaymentProcessing(ctx context.Context, o *dbent.PaymentOrder, tradeNo, pk string, metadata map[string]string) error {
+	if o.Status != OrderStatusPending {
+		return nil
+	}
+	update := s.entClient.PaymentOrder.Update().Where(
+		paymentorder.IDEQ(o.ID),
+		paymentorder.StatusEQ(OrderStatusPending),
+	).SetStatus(OrderStatusProcessing).ClearFailedAt().ClearFailedReason()
+	processingTradeNo := strings.TrimSpace(tradeNo)
+	if payment.GetBasePaymentType(pk) == payment.TypeStripe && metadata != nil {
+		if sessionID := strings.TrimSpace(metadata["checkout_session_id"]); strings.HasPrefix(sessionID, "cs_") {
+			processingTradeNo = sessionID
+		}
+	}
+	if processingTradeNo != "" {
+		update = update.SetPaymentTradeNo(processingTradeNo)
+	}
+	if metadata != nil {
+		if value := strings.TrimSpace(metadata["invoice_id"]); value != "" {
+			update = update.SetPaymentInvoiceID(value)
+		}
+		if value := strings.TrimSpace(metadata["invoice_url"]); value != "" {
+			update = update.SetPaymentInvoiceURL(value)
+		}
+		if value := strings.TrimSpace(metadata["invoice_pdf"]); value != "" {
+			update = update.SetPaymentInvoicePdfURL(value)
+		}
+		if value := strings.TrimSpace(metadata["invoice_status"]); value != "" {
+			update = update.SetPaymentInvoiceStatus(value)
+		}
+	}
+	updated, err := update.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("update to PROCESSING: %w", err)
+	}
+	if updated > 0 {
+		s.writeAuditLog(ctx, o.ID, "PAYMENT_PROCESSING", pk, map[string]any{
+			"previous_status": o.Status,
+			"tradeNo":         processingTradeNo,
+		})
+	}
+	return nil
+}
+
+func (s *PaymentService) markPaymentFailed(ctx context.Context, o *dbent.PaymentOrder, tradeNo, pk string) error {
+	for attempts := 0; attempts < 3; attempts++ {
+		previousStatus := o.Status
+		if previousStatus != OrderStatusPending && previousStatus != OrderStatusProcessing {
+			return nil
+		}
+		now := time.Now()
+		update := s.entClient.PaymentOrder.Update().Where(
+			paymentorder.IDEQ(o.ID),
+			paymentorder.StatusEQ(previousStatus),
+		).SetStatus(OrderStatusExpired).SetFailedAt(now).SetFailedReason("payment provider reported failure")
+		if strings.TrimSpace(tradeNo) != "" {
+			update = update.SetPaymentTradeNo(strings.TrimSpace(tradeNo))
+		}
+		updated, err := update.Save(ctx)
+		if err != nil {
+			return fmt.Errorf("update payment failure: %w", err)
+		}
+		if updated > 0 {
+			s.writeAuditLog(ctx, o.ID, "PAYMENT_FAILED", pk, map[string]any{
+				"previous_status": previousStatus,
+				"tradeNo":         tradeNo,
+			})
+			return nil
+		}
+		o, err = s.entClient.PaymentOrder.Get(ctx, o.ID)
+		if err != nil {
+			return fmt.Errorf("reload payment order after failure race: %w", err)
+		}
+	}
+	return fmt.Errorf("payment order %d status kept changing while recording failure", o.ID)
 }
 
 func paymentAmountToleranceForCurrency(currency string) float64 {
@@ -144,89 +255,73 @@ func expectedNotificationProviderKey(registry *payment.Registry, orderPaymentTyp
 }
 
 func (s *PaymentService) toPaid(ctx context.Context, o *dbent.PaymentOrder, tradeNo string, paid float64, pk string, metadata map[string]string) error {
-	previousStatus := o.Status
-	now := time.Now()
-	grace := now.Add(-paymentGraceMinutes * time.Minute)
 	if payment.GetBasePaymentType(pk) == payment.TypeStripe &&
 		strings.HasPrefix(strings.TrimSpace(tradeNo), "in_") &&
 		strings.HasPrefix(strings.TrimSpace(o.PaymentTradeNo), "pi_") {
 		tradeNo = o.PaymentTradeNo
 	}
-	update := s.entClient.PaymentOrder.Update().Where(
-		paymentorder.IDEQ(o.ID),
-		paymentorder.Or(
-			paymentorder.StatusEQ(OrderStatusPending),
-			paymentorder.StatusEQ(OrderStatusCancelled),
-			paymentorder.And(
-				paymentorder.StatusEQ(OrderStatusExpired),
-				paymentorder.UpdatedAtGTE(grace),
-			),
-		),
-	).SetStatus(OrderStatusPaid).SetPayAmount(paid).SetPaymentTradeNo(tradeNo).SetPaidAt(now).ClearFailedAt().ClearFailedReason()
-	if metadata != nil {
-		if strings.TrimSpace(metadata["invoice_id"]) != "" {
-			update = update.SetPaymentInvoiceID(metadata["invoice_id"])
+	for attempts := 0; attempts < 5; attempts++ {
+		previousStatus := o.Status
+		switch previousStatus {
+		case OrderStatusPending, OrderStatusProcessing, OrderStatusExpired, OrderStatusCancelled:
+			now := time.Now()
+			update := s.entClient.PaymentOrder.Update().Where(
+				paymentorder.IDEQ(o.ID),
+				paymentorder.StatusEQ(previousStatus),
+			).SetStatus(OrderStatusPaid).SetPayAmount(paid).SetPaidAt(now).ClearFailedAt().ClearFailedReason()
+			if strings.TrimSpace(tradeNo) != "" {
+				update = update.SetPaymentTradeNo(strings.TrimSpace(tradeNo))
+			}
+			if metadata != nil {
+				if value := strings.TrimSpace(metadata["invoice_id"]); value != "" {
+					update = update.SetPaymentInvoiceID(value)
+				}
+				if value := strings.TrimSpace(metadata["invoice_url"]); value != "" {
+					update = update.SetPaymentInvoiceURL(value)
+				}
+				if value := strings.TrimSpace(metadata["invoice_pdf"]); value != "" {
+					update = update.SetPaymentInvoicePdfURL(value)
+				}
+				if value := strings.TrimSpace(metadata["invoice_status"]); value != "" {
+					update = update.SetPaymentInvoiceStatus(value)
+				}
+			}
+			updated, err := update.Save(ctx)
+			if err != nil {
+				return fmt.Errorf("update to PAID: %w", err)
+			}
+			if updated == 0 {
+				o, err = s.entClient.PaymentOrder.Get(ctx, o.ID)
+				if err != nil {
+					return fmt.Errorf("reload payment order after success race: %w", err)
+				}
+				continue
+			}
+			if previousStatus != OrderStatusPending {
+				slog.Info("order recovered from payment success",
+					"orderID", o.ID,
+					"previousStatus", previousStatus,
+					"tradeNo", tradeNo,
+					"provider", pk,
+				)
+				s.writeAuditLog(ctx, o.ID, "ORDER_RECOVERED", pk, map[string]any{
+					"previous_status": previousStatus,
+					"tradeNo":         tradeNo,
+					"paidAmount":      paid,
+					"reason":          "payment success recovered order from " + previousStatus,
+				})
+			}
+			s.writeAuditLog(ctx, o.ID, "ORDER_PAID", pk, map[string]any{"tradeNo": tradeNo, "paidAmount": paid})
+			return s.executeFulfillment(ctx, o.ID)
+		case OrderStatusFailed, OrderStatusPaid, OrderStatusRecharging:
+			return s.executeFulfillment(ctx, o.ID)
+		case OrderStatusCompleted, OrderStatusRefunded:
+			return nil
+		default:
+			return nil
 		}
-		if strings.TrimSpace(metadata["invoice_url"]) != "" {
-			update = update.SetPaymentInvoiceURL(metadata["invoice_url"])
-		}
-		if strings.TrimSpace(metadata["invoice_pdf"]) != "" {
-			update = update.SetPaymentInvoicePdfURL(metadata["invoice_pdf"])
-		}
-		if strings.TrimSpace(metadata["invoice_status"]) != "" {
-			update = update.SetPaymentInvoiceStatus(metadata["invoice_status"])
-		}
 	}
-	c, err := update.Save(ctx)
-	if err != nil {
-		return fmt.Errorf("update to PAID: %w", err)
-	}
-	if c == 0 {
-		return s.alreadyProcessed(ctx, o)
-	}
-	if previousStatus == OrderStatusCancelled || previousStatus == OrderStatusExpired {
-		slog.Info("order recovered from webhook payment success",
-			"orderID", o.ID,
-			"previousStatus", previousStatus,
-			"tradeNo", tradeNo,
-			"provider", pk,
-		)
-		s.writeAuditLog(ctx, o.ID, "ORDER_RECOVERED", pk, map[string]any{
-			"previous_status": previousStatus,
-			"tradeNo":         tradeNo,
-			"paidAmount":      paid,
-			"reason":          "webhook payment success received after order " + previousStatus,
-		})
-	}
-	s.writeAuditLog(ctx, o.ID, "ORDER_PAID", pk, map[string]any{"tradeNo": tradeNo, "paidAmount": paid})
-	return s.executeFulfillment(ctx, o.ID)
-}
-
-func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentOrder) error {
-	cur, err := s.entClient.PaymentOrder.Get(ctx, o.ID)
-	if err != nil {
-		return nil
-	}
-	switch cur.Status {
-	case OrderStatusCompleted, OrderStatusRefunded:
-		return nil
-	case OrderStatusFailed, OrderStatusPaid, OrderStatusRecharging:
-		return s.executeFulfillment(ctx, o.ID)
-	case OrderStatusExpired:
-		slog.Warn("webhook payment success for expired order beyond grace period",
-			"orderID", o.ID,
-			"status", cur.Status,
-			"updatedAt", cur.UpdatedAt,
-		)
-		s.writeAuditLog(ctx, o.ID, "PAYMENT_AFTER_EXPIRY", "system", map[string]any{
-			"status":    cur.Status,
-			"updatedAt": cur.UpdatedAt,
-			"reason":    "payment arrived after expiry grace period",
-		})
-		return nil
-	default:
-		return nil
-	}
+	return fmt.Errorf("payment order %d status kept changing while recording success", o.ID)
 }
 
 func (s *PaymentService) executeFulfillment(ctx context.Context, oid int64) error {
@@ -557,8 +652,8 @@ func (s *PaymentService) hasAuditLog(ctx context.Context, orderID int64, action 
 }
 
 func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *dbent.PaymentOrder) error {
-	baseAmount := affiliateRebateBaseAmount(o)
-	if o == nil || baseAmount <= 0 {
+	basePoints := affiliateRebateBasePoints(o)
+	if o == nil || basePoints <= 0 {
 		return nil
 	}
 	if s.affiliateService == nil || !s.affiliateService.IsEnabled(ctx) {
@@ -575,7 +670,7 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 	defer func() { _ = tx.Rollback() }()
 
 	txCtx := dbent.NewTxContext(ctx, tx)
-	claimed, err := s.tryClaimAffiliateRebateAudit(txCtx, tx.Client(), o.ID, baseAmount)
+	claimed, err := s.tryClaimAffiliateRebateAudit(txCtx, tx.Client(), o.ID, basePoints)
 	if err != nil {
 		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
 			"error": err.Error(),
@@ -587,7 +682,7 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 	}
 
 	sourceOrderID := o.ID
-	rebateAmount, err := s.affiliateService.AccrueInviteRebateForOrder(txCtx, o.UserID, baseAmount, &sourceOrderID)
+	rebateAmount, err := s.affiliateService.AccrueInviteRebateForOrder(txCtx, o.UserID, basePoints, &sourceOrderID)
 	if err != nil {
 		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
 			"error": err.Error(),
@@ -597,7 +692,7 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 
 	if rebateAmount <= 0 {
 		if err := s.updateClaimedAffiliateRebateAudit(txCtx, tx.Client(), o.ID, "AFFILIATE_REBATE_SKIPPED", map[string]any{
-			"baseAmount": baseAmount,
+			"baseAmount": basePoints,
 			"reason":     "no inviter bound or rebate amount <= 0",
 		}); err != nil {
 			s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
@@ -615,7 +710,7 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 	}
 
 	if err := s.updateClaimedAffiliateRebateAudit(txCtx, tx.Client(), o.ID, "AFFILIATE_REBATE_APPLIED", map[string]any{
-		"baseAmount":   baseAmount,
+		"baseAmount":   basePoints,
 		"rebateAmount": rebateAmount,
 	}); err != nil {
 		s.writeAuditLog(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{
@@ -633,25 +728,22 @@ func (s *PaymentService) applyAffiliateRebateForOrder(ctx context.Context, o *db
 	return nil
 }
 
-func affiliateRebateBaseAmount(o *dbent.PaymentOrder) float64 {
-	if o == nil {
+// affiliateRebateBasePoints 只返回订单实际购买的推理积分，绝不使用支付金额兜底。
+func affiliateRebateBasePoints(o *dbent.PaymentOrder) float64 {
+	points, ok := paymentOrderPurchasedReasoningPoints(o)
+	if !ok {
 		return 0
 	}
-	switch o.OrderType {
-	case payment.OrderTypeBalance, payment.OrderTypeSubscription:
-		return o.Amount
-	default:
-		return 0
-	}
+	return points
 }
 
-func (s *PaymentService) tryClaimAffiliateRebateAudit(ctx context.Context, client *dbent.Client, orderID int64, baseAmount float64) (bool, error) {
+func (s *PaymentService) tryClaimAffiliateRebateAudit(ctx context.Context, client *dbent.Client, orderID int64, basePoints float64) (bool, error) {
 	if client == nil {
 		return false, errors.New("nil payment client")
 	}
 	oid := strconv.FormatInt(orderID, 10)
 	detail, _ := json.Marshal(map[string]any{
-		"baseAmount": baseAmount,
+		"baseAmount": basePoints,
 		"status":     "reserved",
 	})
 	query, args := buildAffiliateRebateAuditClaimQuery(client, oid, string(detail))

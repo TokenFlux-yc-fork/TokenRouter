@@ -493,7 +493,7 @@ affiliate: {
       columns: {
         email: '邮箱',
         username: '用户名',
-        rebate: '返利明细',
+        rebate: '返利明细（{unitName}）',
         joinedAt: '注册时间'
       }
     },

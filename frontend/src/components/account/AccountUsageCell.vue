@@ -431,9 +431,10 @@
           {{ usageErrorLabel }}
         </div>
         <UsageProgressBar
-          label="Qoder"
+          label="Credits"
           :utilization="qoderQuotaUsageBar.utilization"
           :resets-at="qoderQuotaUsageBar.resetsAt"
+          wide-label
           color="indigo"
         />
         <div class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">

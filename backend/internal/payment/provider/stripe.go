@@ -19,6 +19,7 @@ const (
 	stripeEventPaymentSuccess         = "payment_intent.succeeded"
 	stripeEventPaymentFailed          = "payment_intent.payment_failed"
 	stripeEventCheckoutDone           = "checkout.session.completed"
+	stripeEventCheckoutExpired        = "checkout.session.expired"
 	stripeEventCheckoutAsyncSucceeded = "checkout.session.async_payment_succeeded"
 	stripeEventCheckoutAsyncFailed    = "checkout.session.async_payment_failed"
 	stripeEventInvoicePaid            = "invoice.paid"
@@ -128,6 +129,7 @@ func (s *Stripe) CreatePayment(ctx context.Context, req payment.CreatePaymentReq
 		InvoicePDF:    doc.InvoicePDF,
 		InvoiceStatus: doc.InvoiceStatus,
 		Currency:      currency,
+		ExpiresAt:     stripeCheckoutSessionExpiresAt(checkoutSession),
 	}, nil
 }
 
@@ -152,9 +154,7 @@ func buildStripeCheckoutSessionCreateParams(customerID string, req payment.Creat
 			string(stripe.CheckoutSessionBillingAddressCollectionAuto),
 		),
 	}
-	if expiresAt := stripeCheckoutExpiresAt(req.ExpiresAt); expiresAt > 0 {
-		params.ExpiresAt = stripe.Int64(expiresAt)
-	}
+	params.ExpiresAt = stripe.Int64(stripeCheckoutExpiresAt(req.ExpiresAt))
 	// Checkout 不传 payment_method_types，让 Stripe Dashboard 的动态支付方式决定 Alipay/Link/微信/卡片展示。
 	params.AddExpand("customer")
 	params.AddExpand("invoice")
@@ -218,19 +218,27 @@ func stripeCheckoutReturnURL(returnURL string, status string) string {
 }
 
 func stripeCheckoutExpiresAt(expiresAt time.Time) int64 {
-	if expiresAt.IsZero() {
-		return 0
+	return stripeCheckoutExpiresAtAt(expiresAt, time.Now())
+}
+
+func stripeCheckoutExpiresAtAt(expiresAt time.Time, now time.Time) int64 {
+	// 额外预留一分钟创建耗时，确保请求到达 Stripe 时仍满足最短三十分钟限制。
+	minExpiresAt := now.Add(31 * time.Minute)
+	if expiresAt.IsZero() || expiresAt.Before(minExpiresAt) {
+		return minExpiresAt.Unix()
 	}
-	// Checkout Session 只允许 30 分钟到 24 小时的过期时间，过近时使用 Stripe 默认值。
-	minExpiresAt := time.Now().Add(30 * time.Minute)
-	if !expiresAt.After(minExpiresAt) {
-		return 0
-	}
-	maxExpiresAt := time.Now().Add(24 * time.Hour)
+	maxExpiresAt := now.Add(24 * time.Hour)
 	if expiresAt.After(maxExpiresAt) {
 		return maxExpiresAt.Unix()
 	}
 	return expiresAt.Unix()
+}
+
+func stripeCheckoutSessionExpiresAt(session *stripe.CheckoutSession) time.Time {
+	if session == nil || session.ExpiresAt <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(session.ExpiresAt, 0).UTC()
 }
 
 func stripePaymentMetadata(orderID string, instanceID string) map[string]string {
@@ -261,6 +269,8 @@ func (s *Stripe) QueryOrder(ctx context.Context, tradeNo string) (*payment.Query
 	switch pi.Status {
 	case stripe.PaymentIntentStatusSucceeded:
 		status = payment.ProviderStatusPaid
+	case stripe.PaymentIntentStatusProcessing:
+		status = payment.ProviderStatusProcessing
 	case stripe.PaymentIntentStatusCanceled:
 		status = payment.ProviderStatusFailed
 	}
@@ -286,12 +296,7 @@ func (s *Stripe) queryCheckoutSession(ctx context.Context, sessionID string) (*p
 		return nil, fmt.Errorf("stripe query checkout session: %w", err)
 	}
 
-	status := payment.ProviderStatusPending
-	if session.PaymentStatus == stripe.CheckoutSessionPaymentStatusPaid {
-		status = payment.ProviderStatusPaid
-	} else if session.Status == stripe.CheckoutSessionStatusExpired {
-		status = payment.ProviderStatusFailed
-	}
+	status := stripeCheckoutProviderStatus(session)
 
 	currency := stripeIntentCurrency(session.Currency, s.currency())
 	tradeNo := stripeCheckoutTradeNo(session)
@@ -304,6 +309,50 @@ func (s *Stripe) queryCheckoutSession(ctx context.Context, sessionID string) (*p
 		Amount:   payment.MinorUnitToAmount(session.AmountTotal, currency),
 		Metadata: stripeCheckoutMetadata(session, currency),
 	}, nil
+}
+
+func stripeCheckoutProviderStatus(session *stripe.CheckoutSession) string {
+	if session == nil {
+		return payment.ProviderStatusPending
+	}
+	if session.PaymentStatus == stripe.CheckoutSessionPaymentStatusPaid {
+		return payment.ProviderStatusPaid
+	}
+	if session.PaymentIntent != nil && session.PaymentIntent.Status == stripe.PaymentIntentStatusSucceeded {
+		return payment.ProviderStatusPaid
+	}
+	if session.Invoice != nil && session.Invoice.Status == stripe.InvoiceStatusPaid {
+		return payment.ProviderStatusPaid
+	}
+	if session.Status == stripe.CheckoutSessionStatusExpired {
+		return payment.ProviderStatusFailed
+	}
+	if session.Status == stripe.CheckoutSessionStatusComplete && session.PaymentStatus == stripe.CheckoutSessionPaymentStatusUnpaid {
+		if stripeCheckoutCompletedPaymentFailed(session) {
+			return payment.ProviderStatusFailed
+		}
+		return payment.ProviderStatusProcessing
+	}
+	return payment.ProviderStatusPending
+}
+
+func stripeCheckoutCompletedPaymentFailed(session *stripe.CheckoutSession) bool {
+	if session == nil || session.Status != stripe.CheckoutSessionStatusComplete {
+		return false
+	}
+	if session.PaymentIntent != nil {
+		switch session.PaymentIntent.Status {
+		case stripe.PaymentIntentStatusCanceled, stripe.PaymentIntentStatusRequiresPaymentMethod:
+			return true
+		}
+	}
+	if session.Invoice != nil {
+		switch session.Invoice.Status {
+		case stripe.InvoiceStatusVoid, stripe.InvoiceStatusUncollectible:
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Stripe) queryInvoice(ctx context.Context, invoiceID string) (*payment.QueryOrderResponse, error) {
@@ -366,22 +415,29 @@ func (s *Stripe) VerifyNotification(_ context.Context, rawBody string, headers m
 	if err != nil {
 		return nil, fmt.Errorf("stripe verify notification: %w", err)
 	}
+	return parseStripeEvent(&event, rawBody)
+}
 
+func parseStripeEvent(event *stripe.Event, rawBody string) (*payment.PaymentNotification, error) {
+	if event == nil {
+		return nil, nil
+	}
 	switch event.Type {
 	case stripeEventCheckoutDone:
-		return parseStripeCheckoutSession(&event, payment.ProviderStatusSuccess, rawBody)
+		return parseStripeCheckoutSession(event, payment.ProviderStatusProcessing, rawBody)
+	case stripeEventCheckoutExpired:
+		return parseStripeCheckoutSession(event, payment.ProviderStatusFailed, rawBody)
 	case stripeEventCheckoutAsyncSucceeded:
-		return parseStripeCheckoutSession(&event, payment.ProviderStatusSuccess, rawBody)
+		return parseStripeCheckoutSession(event, payment.ProviderStatusSuccess, rawBody)
 	case stripeEventCheckoutAsyncFailed:
-		return parseStripeCheckoutSession(&event, payment.ProviderStatusFailed, rawBody)
+		return parseStripeCheckoutSession(event, payment.ProviderStatusFailed, rawBody)
 	case stripeEventInvoicePaid:
-		return parseStripeInvoice(&event, payment.ProviderStatusSuccess, rawBody)
-	case stripeEventInvoiceFailed:
-		return parseStripeInvoice(&event, payment.ProviderStatusFailed, rawBody)
+		return parseStripeInvoice(event, payment.ProviderStatusSuccess, rawBody)
 	case stripeEventPaymentSuccess:
-		return parseStripePaymentIntent(&event, payment.ProviderStatusSuccess, rawBody)
-	case stripeEventPaymentFailed:
-		return parseStripePaymentIntent(&event, payment.ProviderStatusFailed, rawBody)
+		return parseStripePaymentIntent(event, payment.ProviderStatusSuccess, rawBody)
+	case stripeEventInvoiceFailed, stripeEventPaymentFailed:
+		// 这两个事件只代表一次付款尝试失败，Checkout 仍可能允许用户重试。
+		return nil, nil
 	}
 
 	return nil, nil
@@ -397,7 +453,17 @@ func parseStripeCheckoutSession(event *stripe.Event, status string, rawBody stri
 	if tradeNo == "" {
 		tradeNo = session.ID
 	}
-	// completed 事件可能只是用户完成了 Checkout；异步支付到账前不能发放订单。
+	if status == payment.ProviderStatusProcessing {
+		// completed 事件必须明确为 paid 或 unpaid，其他状态不改变本地订单。
+		switch session.PaymentStatus {
+		case stripe.CheckoutSessionPaymentStatusPaid:
+			status = payment.ProviderStatusSuccess
+		case stripe.CheckoutSessionPaymentStatusUnpaid:
+		default:
+			return nil, nil
+		}
+	}
+	// 成功事件若携带未付款状态则拒绝履约，防止异常或不完整载荷提前发放。
 	if status == payment.ProviderStatusSuccess && session.PaymentStatus != stripe.CheckoutSessionPaymentStatusPaid {
 		return nil, nil
 	}
@@ -705,6 +771,9 @@ func stripeCheckoutMetadata(session *stripe.CheckoutSession, currency string) ma
 	}
 	if session == nil {
 		return metadata
+	}
+	if sessionID := strings.TrimSpace(session.ID); sessionID != "" {
+		metadata["checkout_session_id"] = sessionID
 	}
 	if doc := stripeCheckoutInvoiceDocument(session); doc != nil {
 		if strings.TrimSpace(doc.InvoiceID) != "" {

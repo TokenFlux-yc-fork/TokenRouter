@@ -11,6 +11,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 	"github.com/TokenFlux/TokenRouter/internal/util/logredact"
 )
 
@@ -1422,6 +1423,10 @@ func isSharedProviderRefreshError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var qoderOpenAPIErr *qoder.OpenAPIError
+	if errors.As(err, &qoderOpenAPIErr) && qoderOpenAPIErr.InvalidCredentials() {
+		return false
+	}
 	msg := strings.ToLower(err.Error())
 	for _, needle := range []string{
 		"invalid_client",
@@ -1442,6 +1447,10 @@ func isSharedProviderRefreshError(err error) bool {
 func isNonRetryableRefreshError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var qoderOpenAPIErr *qoder.OpenAPIError
+	if errors.As(err, &qoderOpenAPIErr) && qoderOpenAPIErr.InvalidCredentials() {
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	nonRetryable := []string{

@@ -10,6 +10,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/geminicli"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 )
 
 const groupModelUnsupportedAvailableModelsLimit = 20
@@ -68,6 +69,8 @@ func defaultRequestModelIDsForPlatform(platform string) []string {
 		return ids
 	case PlatformQoder:
 		return qoder.DefaultRequestModelIDs()
+	case PlatformGrok:
+		return xai.DefaultModelIDs()
 	default:
 		return claude.DefaultModelIDs()
 	}
@@ -84,7 +87,15 @@ func availableRequestModelsFromAccounts(accounts []Account, platform string) []s
 		}
 		requestModels := acc.GetConfiguredRequestModels()
 		if len(requestModels) == 0 {
-			for _, model := range defaultRequestModelIDsForPlatform(platform) {
+			defaultModels := defaultRequestModelIDsForPlatform(platform)
+			if platform == PlatformQoder {
+				site, err := qoderSiteForAccount(acc)
+				if err != nil {
+					continue
+				}
+				defaultModels = qoder.DefaultRequestModelIDsForSite(site)
+			}
+			for _, model := range defaultModels {
 				if model = strings.TrimSpace(model); model != "" {
 					modelSet[model] = struct{}{}
 				}
@@ -93,7 +104,7 @@ func availableRequestModelsFromAccounts(accounts []Account, platform string) []s
 		}
 		hasConfiguredModels = true
 		for _, model := range requestModels {
-			if model = strings.TrimSpace(model); model != "" {
+			if model = strings.TrimSpace(model); model != "" && (platform != PlatformQoder || acc.IsModelSupported(model)) {
 				modelSet[model] = struct{}{}
 			}
 		}

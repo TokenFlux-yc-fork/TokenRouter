@@ -146,6 +146,7 @@ const returnInfo = ref<ReturnInfo | null>(null)
 const SUCCESS_STATUSES = new Set(['COMPLETED', 'PAID', 'RECHARGING'])
 const PENDING_STATUSES = new Set(['PENDING', 'CREATED', 'WAITING', 'PROCESSING'])
 const STATUS_REFRESH_INTERVAL_MS = 2000
+const PROCESSING_REFRESH_INTERVAL_MS = 15000
 const STATUS_REFRESH_MAX_ATTEMPTS = 15
 
 let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null
@@ -331,7 +332,8 @@ function clearRecoverySnapshotForTerminalStatus(status: string | null | undefine
 
 function scheduleStatusRefresh(refreshOrder: (() => Promise<PaymentResultOrder | null>) | null): void {
   clearStatusRefreshTimer()
-  if (!refreshOrder || !isPending.value || refreshAttempts.value >= STATUS_REFRESH_MAX_ATTEMPTS) {
+  const processing = normalizeOrderStatus(order.value?.status) === 'PROCESSING'
+  if (!refreshOrder || !isPending.value || (!processing && refreshAttempts.value >= STATUS_REFRESH_MAX_ATTEMPTS)) {
     return
   }
 
@@ -346,7 +348,7 @@ function scheduleStatusRefresh(refreshOrder: (() => Promise<PaymentResultOrder |
     if (isPendingStatus(order.value?.status)) {
       scheduleStatusRefresh(refreshOrder)
     }
-  }, STATUS_REFRESH_INTERVAL_MS)
+  }, processing ? PROCESSING_REFRESH_INTERVAL_MS : STATUS_REFRESH_INTERVAL_MS)
 }
 
 function formatOrderAmount(amount: number, orderType: string): string {

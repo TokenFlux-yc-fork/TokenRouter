@@ -393,14 +393,16 @@ func (s *OpenAIGatewayService) SelectAccountByPreviousResponseID(
 	excludedIDs map[int64]struct{},
 	requireCompact bool,
 ) (*AccountSelectionResult, error) {
-	return s.selectAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, requestedModel, excludedIDs, "", requireCompact)
+	routingModel := s.resolveChannelRoutingModel(ctx, groupID, requestedModel)
+	return s.selectAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, routingModel, excludedIDs, "", requireCompact)
 }
 
+// selectAccountByPreviousResponseIDForCapability 使用已完成渠道及分组映射的账号层模型校验响应链账号。
 func (s *OpenAIGatewayService) selectAccountByPreviousResponseIDForCapability(
 	ctx context.Context,
 	groupID *int64,
 	previousResponseID string,
-	requestedModel string,
+	routingModel string,
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
@@ -408,7 +410,15 @@ func (s *OpenAIGatewayService) selectAccountByPreviousResponseIDForCapability(
 	if s == nil {
 		return nil, nil
 	}
-	accountID, account, responseID, store := s.resolveAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
+	accountID, account, responseID, store := s.resolveAccountByPreviousResponseIDForCapability(
+		ctx,
+		groupID,
+		previousResponseID,
+		routingModel,
+		excludedIDs,
+		requiredCapability,
+		requireCompact,
+	)
 	if accountID <= 0 || account == nil || store == nil {
 		return nil, nil
 	}
@@ -443,25 +453,34 @@ func (s *OpenAIGatewayService) selectAccountByPreviousResponseIDForCapability(
 	return nil, nil
 }
 
-// ResolveAccountIDByPreviousResponseIDForScheduler 解析可继续承载指定响应链的账号。
+// ResolveAccountIDByPreviousResponseIDForScheduler 使用账号层模型解析可继续承载指定响应链的账号。
 func (s *OpenAIGatewayService) ResolveAccountIDByPreviousResponseIDForScheduler(
 	ctx context.Context,
 	groupID *int64,
 	previousResponseID string,
-	requestedModel string,
+	routingModel string,
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
 ) int64 {
-	accountID, _, _, _ := s.resolveAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
+	accountID, _, _, _ := s.resolveAccountByPreviousResponseIDForCapability(
+		ctx,
+		groupID,
+		previousResponseID,
+		routingModel,
+		excludedIDs,
+		requiredCapability,
+		requireCompact,
+	)
 	return accountID
 }
 
+// resolveAccountByPreviousResponseIDForCapability 校验响应链绑定账号的模型、能力和渠道限制。
 func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	ctx context.Context,
 	groupID *int64,
 	previousResponseID string,
-	requestedModel string,
+	routingModel string,
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
@@ -473,6 +492,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	if responseID == "" {
 		return 0, nil, "", nil
 	}
+	routingModel = strings.TrimSpace(routingModel)
 	store := s.getOpenAIWSStateStore()
 	if store == nil {
 		return 0, nil, "", nil
@@ -498,7 +518,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	if s.getOpenAIWSProtocolResolver().Resolve(account).Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 		return 0, nil, "", nil
 	}
-	if shouldClearStickySession(account, requestedModel) || !account.IsOpenAI() || !account.IsSchedulable() {
+	if shouldClearStickySession(account, routingModel) || !account.IsOpenAI() || !account.IsSchedulable() {
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 		return 0, nil, "", nil
 	}
@@ -506,7 +526,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 		return 0, nil, "", nil
 	}
-	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
+	if !openAIAccountSupportsRoutingModel(ctx, account, routingModel) {
 		return 0, nil, "", nil
 	}
 	if !account.SupportsOpenAIEndpointCapability(requiredCapability) {
@@ -523,7 +543,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
 		}
-		if shouldClearStickySession(latest, requestedModel) || !latest.IsOpenAI() || !latest.IsSchedulable() {
+		if shouldClearStickySession(latest, routingModel) || !latest.IsOpenAI() || !latest.IsSchedulable() {
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
 		}
@@ -531,7 +551,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
 		}
-		if requestedModel != "" && !latest.IsModelSupported(requestedModel) {
+		if !openAIAccountSupportsRoutingModel(ctx, latest, routingModel) {
 			return 0, nil, "", nil
 		}
 		if !latest.SupportsOpenAIEndpointCapability(requiredCapability) {
@@ -540,7 +560,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 		if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, latest); paused {
 			return 0, nil, "", nil
 		}
-		if s.isOpenAIAccountRequestRuntimeBlocked(latest, requestedModel) {
+		if s.isOpenAIAccountRequestRuntimeBlocked(latest, routingModel) {
 			_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 			return 0, nil, "", nil
 		}
@@ -548,6 +568,10 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	}
 	if requireCompact && openAICompactSupportTier(account) == 0 {
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
+		return 0, nil, "", nil
+	}
+	if groupID != nil && s.needsUpstreamChannelRestrictionCheck(ctx, groupID) &&
+		s.isUpstreamRoutingModelRestrictedByChannel(ctx, *groupID, account, routingModel, requireCompact) {
 		return 0, nil, "", nil
 	}
 	return accountID, account, responseID, store

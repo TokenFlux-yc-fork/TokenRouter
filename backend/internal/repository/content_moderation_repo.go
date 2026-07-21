@@ -865,9 +865,17 @@ func buildContentModerationLogWhere(filter service.ContentModerationLogFilter) (
 	}
 	switch strings.ToLower(strings.TrimSpace(filter.Result)) {
 	case "hit", "flagged":
-		where = append(where, "l.flagged = TRUE")
-	case "blocked", "block":
+		// 命中表示观察模式下发现风险但未拒绝请求，必须与各类已执行拦截的记录互斥。
+		where = append(where, "l.flagged = TRUE AND l.action NOT IN ('block', 'keyword_block', 'hash_block')")
+	case "blocked":
+		// 兼容旧管理端和 API 调用方：历史 blocked 值仍表示所有已执行的拦截。
 		where = append(where, "l.action IN ('block', 'keyword_block', 'hash_block')")
+	case "block":
+		where = append(where, "l.action = 'block'")
+	case "keyword_block":
+		where = append(where, "l.action = 'keyword_block'")
+	case "hash_block":
+		where = append(where, "l.action = 'hash_block'")
 	case "pass", "allow":
 		where = append(where, "l.flagged = FALSE AND l.error = ''")
 	case "error":

@@ -175,7 +175,18 @@ func (r *OpenAIImagesRequest) StickySessionSeed() string {
 	return seed
 }
 
+// ParseOpenAIImagesRequest 解析请求并按请求中的模型执行严格校验，供不涉及渠道映射的调用方使用。
 func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []byte) (*OpenAIImagesRequest, error) {
+	return s.parseOpenAIImagesRequest(c, body, true)
+}
+
+// ParseOpenAIImagesRequestForRouting 解析请求结构，但把模型族校验延后到渠道映射完成之后。
+func (s *OpenAIGatewayService) ParseOpenAIImagesRequestForRouting(c *gin.Context, body []byte) (*OpenAIImagesRequest, error) {
+	return s.parseOpenAIImagesRequest(c, body, false)
+}
+
+// parseOpenAIImagesRequest 统一解析 JSON 与 multipart 请求，并由调用方决定模型校验阶段。
+func (s *OpenAIGatewayService) parseOpenAIImagesRequest(c *gin.Context, body []byte, validateModel bool) (*OpenAIImagesRequest, error) {
 	if c == nil || c.Request == nil {
 		return nil, fmt.Errorf("missing request context")
 	}
@@ -215,12 +226,28 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 	}
 
 	applyOpenAIImagesDefaults(req)
-	if err := validateOpenAIImagesModel(req.Model); err != nil {
-		return nil, err
-	}
 	req.SizeTier = normalizeOpenAIImageSizeTier(req.Size)
 	req.RequiredCapability = classifyOpenAIImagesCapability(req)
+	if validateModel {
+		if err := req.ValidateRoutingModel(req.Model); err != nil {
+			return nil, err
+		}
+	}
 	return req, nil
+}
+
+// ValidateRoutingModel 使用渠道映射后的模型 C 校验 Images 端点，并同步账号选择所需的图片能力。
+func (r *OpenAIImagesRequest) ValidateRoutingModel(routingModel string) error {
+	if err := validateOpenAIImagesModel(routingModel); err != nil {
+		return err
+	}
+	if r == nil {
+		return nil
+	}
+	routed := *r
+	routed.Model = strings.TrimSpace(routingModel)
+	r.RequiredCapability = classifyOpenAIImagesCapability(&routed)
+	return nil
 }
 
 func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
@@ -587,7 +614,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	if err := validateOpenAIImagesModel(requestModel); err != nil {
 		return nil, err
 	}
-	upstreamModel := account.GetMappedModel(requestModel)
+	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, requestModel, false, false)
 	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
 		return nil, err
 	}

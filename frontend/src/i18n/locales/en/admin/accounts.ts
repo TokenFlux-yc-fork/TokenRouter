@@ -374,6 +374,7 @@ export default {
         title: 'Bulk Edit Accounts',
         selectionInfo:
           '{count} account(s) selected. Only checked or filled fields will be updated; others stay unchanged.',
+        applyField: 'Apply this field',
         baseUrlPlaceholder: 'https://api.anthropic.com or https://api.openai.com',
         baseUrlNotice: 'Applies to API Key accounts and the forwarding endpoint of Grok OAuth accounts; leave empty to keep existing value',
         submit: 'Update Accounts',
@@ -383,7 +384,7 @@ export default {
         failed: 'Bulk update failed',
         noSelection: 'Please select accounts to edit',
         noFieldsSelected: 'Select at least one field to update',
-        mixedPlatformWarning: 'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.',
+        mixedPlatformWarning: 'Selected accounts span multiple platforms ({platforms}). Account model mapping presets shown are combined — ensure mappings are appropriate for each platform.',
         modelRestrictionMixedAntigravityNotSupported: 'Bulk editing model restrictions across Antigravity and other platforms is not supported. Edit them by platform instead.'
       },
       bulkDeleteTitle: 'Bulk Delete Accounts',
@@ -426,7 +427,7 @@ export default {
       bedrockDesc: 'SigV4 / API Key',
       vertexLabel: 'Vertex',
       vertexDesc: 'Service Account',
-      vertexAnthropicHint: 'Use a Google Cloud Service Account JSON to call Anthropic Claude via Vertex AI. It is recommended to configure model mapping to map client Claude model names to Vertex model IDs.',
+      vertexAnthropicHint: 'Use a Google Cloud Service Account JSON to call Anthropic Claude via Vertex AI. It is recommended to configure account model mapping to map client Claude model names to Vertex model IDs.',
       vertexGeminiHint: 'Use a Google Cloud Service Account JSON to access Vertex AI Gemini. It is recommended to place Vertex accounts in a separate group to avoid mixing with AI Studio/Gemini OAuth on the same models.',
       vertexSaJsonLabel: 'Service Account JSON',
       vertexSaJsonLoaded: 'Service Account JSON loaded',
@@ -556,7 +557,7 @@ export default {
         testMode: 'Test mode',
         testModeDefault: 'Default request',
         testModeCompact: 'Compact probe',
-        modelRestrictionDisabledByPassthrough: 'Automatic passthrough is enabled: model whitelist/mapping will not take effect.',
+        modelRestrictionDisabledByPassthrough: 'Automatic passthrough is enabled: the final model whitelist and account model mapping will not take effect.',
       },
       grok: {
         baseUrlHint: 'Grok OAuth accounts forward to the official xAI API base URL.',
@@ -578,16 +579,16 @@ export default {
         webSearchEnabled: 'Enabled',
         webSearchDisabled: 'Disabled',
       },
-      modelRestriction: 'Model Restriction (Optional)',
-      modelWhitelist: 'Model Whitelist',
-      modelMapping: 'Model Mapping',
+      modelRestriction: 'Account Model Rules (Optional)',
+      modelWhitelist: 'Final Model Whitelist',
+      modelMapping: 'Account Model Mapping',
       modelRestrictionCombinedHint:
-        'The whitelist applies to the final model after mapping, and the whitelist/mapping are stored separately; this switch only changes the editing view.',
-      selectAllowedModels: 'Select allowed models. Leave empty to support all models.',
+        'After a request reaches this account, account model mapping runs first, then the mapped result is checked against the final model whitelist. An empty whitelist means no account-level model restriction; channel rules, platform capabilities, and the upstream supported range still apply.',
+      selectAllowedModels: 'Only allow these final models. Leave empty for no account-level restriction; this does not mean the upstream supports every model.',
       mapRequestModels:
-        'Map request models to actual models. Left is the requested model, right is the actual model sent to API.',
+        'Rewrite the model name received by this account before sending it to the upstream API. If the channel also has a mapping, channel mapping runs first, followed by this account mapping; unmatched names pass through unchanged.',
       selectedModels: 'Selected {count} model(s)',
-      supportsAllModels: '(supports all models)',
+      supportsAllModels: 'No account-level restriction',
       requestModel: 'Request model',
       actualModel: 'Actual model',
       addMapping: 'Add Mapping',
@@ -600,7 +601,7 @@ export default {
       syncUpstreamModels: 'Sync upstream supported models',
       syncUpstreamModelsLoading: 'Syncing upstream...',
       syncUpstreamModelsSuccess: 'Synced {count} new model(s) from upstream ({total} upstream total)',
-      syncUpstreamModelsNoChanges: 'All {count} upstream model(s) are already in the whitelist',
+      syncUpstreamModelsNoChanges: 'All {count} upstream model(s) are already in the final model whitelist',
       syncUpstreamModelsEmpty: 'Upstream returned no models to sync',
       syncUpstreamModelsFailed: 'Failed to sync upstream models',
       syncUpstreamModelsError: 'Failed to sync upstream models: {message}',
@@ -1245,6 +1246,12 @@ export default {
       qoderAccount: 'Qoder Account',
       grokAccount: 'Grok Account',
       qoder: {
+        site: {
+          label: 'Qoder Site',
+          global: 'International',
+          cn: 'China',
+          changeWarning: 'Credentials may not work across sites. Save the account, then run a connection test.'
+        },
         accountType: {
           oauthTitle: 'Authorization Link',
           oauthDesc: 'Recommended: complete Qoder login in the browser.',

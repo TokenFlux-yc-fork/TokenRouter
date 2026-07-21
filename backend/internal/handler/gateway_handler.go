@@ -301,6 +301,19 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	hasBoundSession := sessionKey != "" && sessionBoundAccountID > 0
 
 	if platform == service.PlatformGemini {
+		// Gemini 分组仍以客户端模型参与错误语义和调度入口，但真正转发时必须使用
+		// 渠道映射后的模型，确保账号选择与发往上游的请求处于同一条 R -> C -> U 链路。
+		geminiAttempt, _, err := h.prepareGatewayAttemptRequest(
+			c.Request.Context(), parsedReq, body, apiKey, reqModel,
+		)
+		if err != nil {
+			reqLog.Warn("gateway.prepare_gemini_channel_mapping_failed", zap.Error(err))
+			h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "Failed to apply channel model mapping", streamStarted)
+			return
+		}
+		geminiForwardModel := geminiAttempt.Model
+		geminiForwardBody := geminiAttempt.Body.Bytes()
+
 		fs := NewFailoverState(h.maxAccountSwitchesGemini, hasBoundSession)
 
 		// 单账号分组提前设置 SingleAccountRetry 标记，让 Service 层首次 503 就不设模型限流标记。
@@ -314,7 +327,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), apiKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, "", int64(0)) // Gemini 不使用会话限制
 			if err != nil {
 				if len(fs.FailedAccountIDs) == 0 {
-					if handleGroupModelUnsupportedError(c, err, streamStarted, func(status int, errType string, message string, streamStarted bool) {
+					if handleGroupSelectionBusinessError(c, err, streamStarted, func(status int, errType string, message string, streamStarted bool) {
 						h.handleStreamingAwareError(c, status, errType, message, streamStarted)
 					}) {
 						return
@@ -445,15 +458,15 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					requestCtx,
 					c,
 					account,
-					reqModel,
+					geminiForwardModel,
 					"generateContent",
 					reqStream,
-					body,
+					geminiForwardBody,
 					hasBoundSession,
 					service.WithForwardGeminiSession(derefGroupID(apiKey.GroupID), sessionKey),
 				)
 			} else {
-				result, err = h.geminiCompatService.Forward(requestCtx, c, account, body)
+				result, err = h.geminiCompatService.Forward(requestCtx, c, account, geminiForwardBody)
 			}
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
@@ -589,7 +602,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		retryWithFallback := false
 
 		for {
-			attemptParsedReq, err := parsedReq.CloneForBody(body)
+			attemptParsedReq, attemptChannelMapping, err := h.prepareGatewayAttemptRequest(
+				c.Request.Context(), parsedReq, body, currentAPIKey, reqModel,
+			)
 			if err != nil {
 				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 				return
@@ -605,7 +620,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(c.Request.Context(), currentAPIKey.GroupID, sessionKey, reqModel, fs.FailedAccountIDs, parsedReq.MetadataUserID, subject.UserID)
 			if err != nil {
 				if len(fs.FailedAccountIDs) == 0 {
-					if handleGroupModelUnsupportedError(c, err, streamStarted, func(status int, errType string, message string, streamStarted bool) {
+					if handleGroupSelectionBusinessError(c, err, streamStarted, func(status int, errType string, message string, streamStarted bool) {
 						h.handleStreamingAwareError(c, status, errType, message, streamStarted)
 					}) {
 						return
@@ -790,16 +805,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			attemptParsedReq.OnUpstreamAccepted = queueRelease
 			// ===== 用户消息串行队列 END =====
 
-			// 渠道模型映射只作用于本次账号尝试，避免 failover 后污染原始 ParsedRequest。
-			if channelMapping.Mapped {
-				attemptParsedReq.Model = channelMapping.MappedModel
-				if err := attemptParsedReq.ReplaceBody(h.gatewayService.ReplaceModelInBody(attemptParsedReq.Body.Bytes(), channelMapping.MappedModel)); err != nil {
-					h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
-					return
-				}
-			}
 			// Bedrock CC 兼容：清理 body 专有字段 + 过滤 anthropic-beta header，适用于所有转发路径
-			if err := attemptParsedReq.ReplaceBody(h.gatewayService.ApplyBedrockCCCompat(c, attemptParsedReq.Body.Bytes(), attemptParsedReq.Model, account, apiKey.GroupID)); err != nil {
+			if err := attemptParsedReq.ReplaceBody(h.gatewayService.ApplyBedrockCCCompat(c, attemptParsedReq.Body.Bytes(), attemptParsedReq.Model, account, currentAPIKey.GroupID)); err != nil {
 				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 				return
 			}
@@ -873,6 +880,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						}
 						// 兜底重试按"直接请求兜底分组"处理：清除强制平台，允许按分组平台调度
 						ctx := context.WithValue(c.Request.Context(), ctxkey.ForcePlatform, "")
+						// 后续转发和用量计算必须读取兜底分组，而不是中间件写入的原分组。
+						ctx = context.WithValue(ctx, ctxkey.Group, fallbackGroup)
 						c.Request = c.Request.WithContext(ctx)
 						currentAPIKey = fallbackAPIKey
 						currentSubscription = nil
@@ -989,7 +998,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					SessionID:          sessionKey,
 					ForceCacheBilling:  forceCacheBilling,
 					APIKeyService:      h.apiKeyService,
-					ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+					ChannelUsageFields: attemptChannelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.gateway.messages"),
@@ -1009,10 +1018,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 }
 
-// Models handles listing available models
-// GET /v1/models
-// Returns models based on account configurations (request-side mappings / explicit whitelist)
-// Falls back to default models if no explicit model scope is configured
+// Models 处理 GET /v1/models，并返回通过账号能力与渠道规则校验的客户端模型。
+// 仅未绑定分组的兼容调用会在没有显式结果时回退平台默认模型。
 func (h *GatewayHandler) Models(c *gin.Context) {
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
 
@@ -1027,21 +1034,31 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		platform = forcedPlatform
 	}
 
-	// 按当前分组平台读取账号配置中的可用模型，避免混合分组泄漏其他平台模型。
-	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
+	// 统一按渠道映射、账号映射和渠道限制解析真实可请求模型。
+	resolution := h.gatewayService.ResolveRequestableModels(c.Request.Context(), groupID, platform)
+	availableModels := service.RequestableModelIDs(resolution.Models)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
-		fallbackModels := defaultModelIDsForPlatform(platform)
-		availableModels = filterModelsByCustomList(customModelsListSource(platform, availableModels, fallbackModels), fallbackModels, apiKey.Group.ModelsListConfig.Models)
+		// 自定义列表只能与已通过渠道和账号校验的模型取交集，不能重新加入被拒绝的模型。
+		availableModels = filterModelsByCustomList(availableModels, nil, apiKey.Group.ModelsListConfig.Models)
 		writeCustomModelsList(c, platform, availableModels)
 		return
 	}
 
 	if len(availableModels) > 0 {
-		writeModelsList(c, availableModels)
+		if resolution.HadExplicitAccountModels {
+			// 账号显式列表历史上统一使用 Claude 兼容字段结构，必须保持响应兼容。
+			writeModelsList(c, availableModels)
+		} else {
+			writeDefaultModelsList(c, platform, availableModels)
+		}
+		return
+	}
+	if resolution.Restricted || groupID != nil {
+		writeModelsList(c, nil)
 		return
 	}
 
-	// Fallback to default models
+	// 未绑定分组时保留旧版默认模型回退行为。
 	if platform == service.PlatformOpenAI {
 		c.JSON(http.StatusOK, gin.H{
 			"object": "list",
@@ -1088,12 +1105,25 @@ func writeModelsList(c *gin.Context, modelIDs []string) {
 	})
 }
 
+// writeCustomModelsList 保持分组自定义列表原有的响应结构。
 func writeCustomModelsList(c *gin.Context, platform string, modelIDs []string) {
 	if platform == service.PlatformOpenAI {
 		writeOpenAIModelsList(c, modelIDs)
 		return
 	}
 	writeModelsList(c, modelIDs)
+}
+
+// writeDefaultModelsList 保持各平台默认回退列表原有的响应结构和展示元数据。
+func writeDefaultModelsList(c *gin.Context, platform string, modelIDs []string) {
+	switch platform {
+	case service.PlatformOpenAI:
+		writeOpenAIModelsList(c, modelIDs)
+	case service.PlatformAnthropic, service.PlatformGemini, service.PlatformAntigravity, service.PlatformQoder:
+		writeClaudeCompatiblePlatformModelsList(c, platform, modelIDs)
+	default:
+		writeModelsList(c, modelIDs)
+	}
 }
 
 func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
@@ -1123,12 +1153,54 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 	})
 }
 
-// customModelsListSource 为 Anthropic 自定义列表补齐 OAuth 与混合调度的默认模型候选。
-func customModelsListSource(platform string, availableModels, fallbackModels []string) []string {
-	if platform == service.PlatformAnthropic && len(availableModels) > 0 {
-		return mergeModelIDs(availableModels, fallbackModels)
+// writeClaudeCompatiblePlatformModelsList 保留各平台默认模型的展示元数据。
+func writeClaudeCompatiblePlatformModelsList(c *gin.Context, platform string, modelIDs []string) {
+	defaultsByID := make(map[string]claude.Model)
+	appendDefault := func(id, modelType, displayName, createdAt string) {
+		defaultsByID[id] = claude.Model{
+			ID:          id,
+			Type:        modelType,
+			DisplayName: displayName,
+			CreatedAt:   createdAt,
+		}
 	}
-	return availableModels
+
+	switch platform {
+	case service.PlatformGemini:
+		for _, model := range geminicli.DefaultModels {
+			appendDefault(model.ID, model.Type, model.DisplayName, model.CreatedAt)
+		}
+	case service.PlatformAntigravity:
+		for _, model := range antigravity.DefaultModels() {
+			appendDefault(model.ID, model.Type, model.DisplayName, model.CreatedAt)
+		}
+	case service.PlatformQoder:
+		for _, model := range qoder.DefaultModels {
+			appendDefault(model.ID, model.Type, model.DisplayName, model.CreatedAt)
+		}
+	default:
+		for _, model := range claude.DefaultModels {
+			appendDefault(model.ID, model.Type, model.DisplayName, model.CreatedAt)
+		}
+	}
+
+	models := make([]claude.Model, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		if model, ok := defaultsByID[modelID]; ok {
+			models = append(models, model)
+			continue
+		}
+		models = append(models, claude.Model{
+			ID:          modelID,
+			Type:        "model",
+			DisplayName: modelID,
+			CreatedAt:   "2024-01-01T00:00:00Z",
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"object": "list",
+		"data":   models,
+	})
 }
 
 func filterModelsByCustomList(availableModels, fallbackModels, selectedModels []string) []string {
@@ -1259,6 +1331,38 @@ func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service
 	cloned.GroupID = &groupID
 	cloned.Group = group
 	return &cloned
+}
+
+// prepareGatewayAttemptRequest 按当前 API Key 分组克隆请求并执行渠道模型映射。
+// 每次账号尝试都重新解析当前分组，确保兜底分组不会沿用原分组的映射和用量字段。
+func (h *GatewayHandler) prepareGatewayAttemptRequest(
+	ctx context.Context,
+	parsed *service.ParsedRequest,
+	body []byte,
+	apiKey *service.APIKey,
+	requestedModel string,
+) (*service.ParsedRequest, service.ChannelMappingResult, error) {
+	attempt, err := parsed.CloneForBody(body)
+	if err != nil {
+		return nil, service.ChannelMappingResult{}, err
+	}
+
+	var groupID *int64
+	if apiKey != nil && apiKey.GroupID != nil {
+		value := *apiKey.GroupID
+		groupID = &value
+	}
+	attempt.GroupID = groupID
+	mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, groupID, requestedModel)
+	if !mapping.Mapped {
+		return attempt, mapping, nil
+	}
+
+	attempt.Model = mapping.MappedModel
+	if err := attempt.ReplaceBody(h.gatewayService.ReplaceModelInBody(attempt.Body.Bytes(), mapping.MappedModel)); err != nil {
+		return nil, service.ChannelMappingResult{}, err
+	}
+	return attempt, mapping, nil
 }
 
 // Usage handles getting account balance and usage statistics for CC Switch integration
@@ -1855,7 +1959,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)
 	if err != nil {
 		reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(err))
-		if handleGroupModelUnsupportedError(c, err, false, func(status int, errType string, message string, streamStarted bool) {
+		if handleGroupSelectionBusinessError(c, err, false, func(status int, errType string, message string, streamStarted bool) {
 			h.errorResponse(c, status, errType, message)
 		}) {
 			return
@@ -1869,8 +1973,17 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	}
 	setOpsSelectedAccount(c, account.ID, account.Platform)
 
+	// 渠道映射只写入本次转发副本，原始模型继续用于错误、日志和会话语义。
+	attemptParsedReq, _, err := h.prepareGatewayAttemptRequest(
+		c.Request.Context(), parsedReq, parsedReq.Body.Bytes(), apiKey, parsedReq.Model,
+	)
+	if err != nil {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		return
+	}
+
 	// 转发请求（不记录使用量）
-	if err := h.gatewayService.ForwardCountTokens(c.Request.Context(), c, account, parsedReq); err != nil {
+	if err := h.gatewayService.ForwardCountTokens(c.Request.Context(), c, account, attemptParsedReq); err != nil {
 		reqLog.Error("gateway.count_tokens_forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		// 错误响应已在 ForwardCountTokens 中处理
 		return

@@ -26,6 +26,7 @@ const (
 // Order status constants shared across payment and service layers.
 const (
 	OrderStatusPending           = "PENDING"
+	OrderStatusProcessing        = "PROCESSING"
 	OrderStatusPaid              = "PAID"
 	OrderStatusRecharging        = "RECHARGING"
 	OrderStatusCompleted         = "COMPLETED"
@@ -67,11 +68,12 @@ const (
 // Provider-level status constants returned by provider implementations
 // to the service layer (lowercase, distinct from OrderStatus uppercase constants).
 const (
-	ProviderStatusPending  = "pending"
-	ProviderStatusPaid     = "paid"
-	ProviderStatusSuccess  = "success"
-	ProviderStatusFailed   = "failed"
-	ProviderStatusRefunded = "refunded"
+	ProviderStatusPending    = "pending"
+	ProviderStatusProcessing = "processing"
+	ProviderStatusPaid       = "paid"
+	ProviderStatusSuccess    = "success"
+	ProviderStatusFailed     = "failed"
+	ProviderStatusRefunded   = "refunded"
 )
 
 // DefaultLoadBalanceStrategy is the default load-balancing strategy
@@ -180,6 +182,7 @@ type CreatePaymentResponse struct {
 	Currency      string                  // 服务商支付币种
 	CountryCode   string                  // 服务商收银台国家/地区代码
 	PaymentEnv    string                  // 服务商前端环境标识
+	ExpiresAt     time.Time               // 支付渠道实际返回的订单过期时间
 	ResultType    CreatePaymentResultType // Typed result contract for frontend flows
 	OAuth         *WechatOAuthInfo        // WeChat OAuth bootstrap payload when required
 	JSAPI         *WechatJSAPIPayload     // WeChat JSAPI invocation payload when ready
@@ -188,7 +191,7 @@ type CreatePaymentResponse struct {
 // QueryOrderResponse describes the payment status from the upstream provider.
 type QueryOrderResponse struct {
 	TradeNo  string
-	Status   string  // "pending", "paid", "failed", "refunded"
+	Status   string  // "pending", "processing", "paid", "failed", "refunded"
 	Amount   float64 // 按服务商返回币种解释的金额
 	PaidAt   string  // RFC3339 timestamp or empty
 	Metadata map[string]string
@@ -199,7 +202,7 @@ type PaymentNotification struct {
 	TradeNo  string
 	OrderID  string
 	Amount   float64
-	Status   string // "success" or "failed"
+	Status   string // "success"、"paid"、"processing" 或 "failed"
 	RawData  string // Raw notification body for audit
 	Metadata map[string]string
 }

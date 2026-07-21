@@ -72,10 +72,10 @@
             <AmountText :value="row.total_rebate" />
           </template>
           <template #cell-order_amount="{ row }">
-            <AmountText :value="row.order_amount" />
+            <span class="text-sm text-gray-900 dark:text-white">{{ formatAffiliateOrderAmount(row) }}</span>
           </template>
           <template #cell-pay_amount="{ row }">
-            <span class="text-sm text-gray-900 dark:text-white">¥{{ formatAmount(row.pay_amount) }}</span>
+            <span class="text-sm text-gray-900 dark:text-white">{{ formatPaymentAmount(row.pay_amount, row.pay_currency) }}</span>
           </template>
           <template #cell-rebate_amount="{ row }">
             <AmountText :value="row.rebate_amount" strong />
@@ -133,8 +133,8 @@
           <OverviewStat :label="t('admin.affiliates.overview.rebateRate')" :value="formatPercent(selectedOverview.rebate_rate_percent)" />
           <OverviewStat :label="t('admin.affiliates.overview.invitedCount')" :value="String(selectedOverview.invited_count)" />
           <OverviewStat :label="t('admin.affiliates.overview.rebatedInviteeCount')" :value="String(selectedOverview.rebated_invitee_count)" />
-          <OverviewStat :label="t('admin.affiliates.overview.availableQuota')" :value="'$' + formatAmount(selectedOverview.available_quota)" />
-          <OverviewStat :label="t('admin.affiliates.overview.historyQuota')" :value="'$' + formatAmount(selectedOverview.history_quota)" />
+          <OverviewStat :label="t('admin.affiliates.overview.availableQuota', { unitName: balanceUnitName })" :value="formatAffiliateAmount(selectedOverview.available_quota)" />
+          <OverviewStat :label="t('admin.affiliates.overview.historyQuota', { unitName: balanceUnitName })" :value="formatAffiliateAmount(selectedOverview.history_quota)" />
         </div>
       </div>
     </BaseDialog>
@@ -155,6 +155,8 @@ import type { Column } from '@/components/common/types'
 import { useAppStore } from '@/stores/app'
 import { affiliatesAPI, type AffiliateInviteRecord, type AffiliateRebateRecord, type AffiliateTransferRecord, type AffiliateUserOverview, type ListAffiliateRecordsParams } from '@/api/admin/affiliates'
 import type { PaginatedResponse } from '@/types'
+import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
+import { formatPaymentAmount } from '@/components/payment/currency'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDisplayDateTime } from '@/utils/format'
 
@@ -167,6 +169,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const { balanceUnitName, formatBalanceAmount } = useBalanceDisplay()
 const loading = ref(false)
 const records = ref<AffiliateRecord[]>([])
 const filters = reactive({ search: '', start_at: '', end_at: '' })
@@ -182,7 +185,7 @@ const columns = computed<Column[]>(() => {
       { key: 'inviter', label: t('admin.affiliates.records.inviter'), sortable: true },
       { key: 'invitee', label: t('admin.affiliates.records.invitee'), sortable: true },
       { key: 'aff_code', label: t('admin.affiliates.records.affCode'), sortable: true },
-      { key: 'total_rebate', label: t('admin.affiliates.records.totalRebate'), sortable: true },
+      { key: 'total_rebate', label: t('admin.affiliates.records.totalRebate', { unitName: balanceUnitName.value }), sortable: true },
       { key: 'created_at', label: t('admin.affiliates.records.invitedAt'), sortable: true },
     ]
   }
@@ -193,7 +196,7 @@ const columns = computed<Column[]>(() => {
       { key: 'invitee', label: t('admin.affiliates.records.invitee'), sortable: true },
       { key: 'order_amount', label: t('admin.affiliates.records.orderAmount'), sortable: true },
       { key: 'pay_amount', label: t('admin.affiliates.records.payAmount'), sortable: true },
-      { key: 'rebate_amount', label: t('admin.affiliates.records.rebateAmount') },
+      { key: 'rebate_amount', label: t('admin.affiliates.records.rebateAmount', { unitName: balanceUnitName.value }) },
       { key: 'payment_type', label: t('admin.affiliates.records.paymentType'), sortable: true },
       { key: 'order_status', label: t('admin.affiliates.records.orderStatus'), sortable: true },
       { key: 'created_at', label: t('admin.affiliates.records.rebatedAt'), sortable: true },
@@ -201,11 +204,11 @@ const columns = computed<Column[]>(() => {
   }
   return [
     { key: 'user', label: t('admin.affiliates.records.user'), sortable: true },
-    { key: 'amount', label: t('admin.affiliates.records.transferAmount'), sortable: true },
-    { key: 'balance_after', label: t('admin.affiliates.records.balanceAfter'), sortable: true },
-    { key: 'available_quota_after', label: t('admin.affiliates.records.availableQuotaAfter'), sortable: true },
-    { key: 'frozen_quota_after', label: t('admin.affiliates.records.frozenQuotaAfter'), sortable: true },
-    { key: 'history_quota_after', label: t('admin.affiliates.records.historyQuotaAfter'), sortable: true },
+    { key: 'amount', label: t('admin.affiliates.records.transferAmount', { unitName: balanceUnitName.value }), sortable: true },
+    { key: 'balance_after', label: t('admin.affiliates.records.balanceAfter', { unitName: balanceUnitName.value }), sortable: true },
+    { key: 'available_quota_after', label: t('admin.affiliates.records.availableQuotaAfter', { unitName: balanceUnitName.value }), sortable: true },
+    { key: 'frozen_quota_after', label: t('admin.affiliates.records.frozenQuotaAfter', { unitName: balanceUnitName.value }), sortable: true },
+    { key: 'history_quota_after', label: t('admin.affiliates.records.historyQuotaAfter', { unitName: balanceUnitName.value }), sortable: true },
     { key: 'created_at', label: t('admin.affiliates.records.transferredAt'), sortable: true },
   ]
 })
@@ -303,8 +306,17 @@ function handleSort(key: string, order: 'asc' | 'desc') {
   void loadRecords()
 }
 
-function formatAmount(value: number | null | undefined): string {
-  return Number(value || 0).toFixed(2)
+// 邀请返利额度与账户余额 1:1 流转，所有返利字段统一使用通用配置中的余额单位。
+function formatAffiliateAmount(value: number | null | undefined): string {
+  return formatBalanceAmount(value)
+}
+
+// 余额订单的订单金额是到账积分；订阅订单的订单金额仍是套餐价格。
+function formatAffiliateOrderAmount(row: AffiliateRebateRecord): string {
+  if (row.order_type === 'balance') {
+    return formatAffiliateAmount(row.order_amount)
+  }
+  return formatPaymentAmount(row.order_amount, row.order_currency)
 }
 
 function formatPercent(value: number | null | undefined): string {
@@ -364,7 +376,7 @@ const AmountText = defineComponent({
       class: amountProps.strong
         ? 'text-sm font-semibold text-emerald-600 dark:text-emerald-400'
         : 'text-sm text-gray-900 dark:text-white',
-    }, `$${formatAmount(amountProps.value)}`)
+    }, formatAffiliateAmount(amountProps.value))
   },
 })
 

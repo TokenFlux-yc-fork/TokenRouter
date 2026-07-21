@@ -84,8 +84,13 @@ const success = ref(false)
 const hint = ref(t('payment.stripePopup.redirecting'))
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollIntervalMs = 0
+let pollInFlight = false
 let initTimeoutTimer: ReturnType<typeof setTimeout> | null = null
 let messageHandler: ((event: MessageEvent) => void) | null = null
+
+const PENDING_POLL_INTERVAL_MS = 3000
+const PROCESSING_POLL_INTERVAL_MS = 15000
 
 function closeWindow() { window.close() }
 
@@ -123,7 +128,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  stopPolling()
   clearInitTimeout()
   if (messageHandler) {
     window.removeEventListener('message', messageHandler)
@@ -144,11 +149,11 @@ async function initStripe(clientSecret: string, publishableKey: string) {
     const returnUrl = window.location.origin + '/payment/result?order_id=' + orderId + '&status=success'
 
     if (method === 'alipay') {
-      // Alipay: redirect this popup to Alipay payment page
+      // 支付宝在当前弹窗中跳转到支付页面。
       const { error: err } = await stripe.confirmAlipayPayment(clientSecret, { return_url: returnUrl })
       if (err) error.value = err.message || t('payment.result.failed')
     } else if (method === 'wechat_pay') {
-      // WeChat: Stripe shows its built-in QR dialog, user scans, promise resolves
+      // 微信支付由 Stripe 展示内置二维码，关闭二维码后继续查询本地订单。
       hint.value = t('payment.stripePopup.loadingQr')
       const result = await (stripe as unknown as StripeWithWechatPay).confirmWechatPayPayment(clientSecret, {
         payment_method_options: { wechat_pay: { client: isMobileDevice() ? 'mobile_web' : 'web' } },
@@ -159,7 +164,6 @@ async function initStripe(clientSecret: string, publishableKey: string) {
         success.value = true
         setTimeout(closeWindow, 2000)
       } else {
-        // Payment not completed (user closed QR dialog)
         startPolling()
       }
     }
@@ -168,31 +172,46 @@ async function initStripe(clientSecret: string, publishableKey: string) {
   }
 }
 
-function startPolling() {
-  let inFlight = false
-  pollTimer = setInterval(async () => {
-    // 防重入：接口响应慢于轮询间隔时避免并发重叠请求。
-    if (inFlight) return
-    inFlight = true
-    try {
-      // access token 存储在 localStorage 的 'auth_token' 键下（见 api/client.ts），
-      // 之前误读 'token' 导致轮询请求不带认证、永远 401，支付成功无法被检测到。
-      const token = localStorage.getItem('auth_token') || ''
-      const res = await fetch(buildApiUrl(`/payment/orders/${orderId}`), {
-        headers: token ? { Authorization: 'Bearer ' + token } : {},
-        credentials: 'include',
-      })
-      if (!res.ok) return
-      const data = await res.json()
-      const status = data?.data?.status
-      if (status === 'COMPLETED' || status === 'PAID') {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-        success.value = true
-        setTimeout(closeWindow, 2000)
-      }
-    } catch { /* ignore */ } finally {
-      inFlight = false
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = null
+  pollIntervalMs = 0
+}
+
+async function pollOrderStatus() {
+  // 防重入：接口响应慢于轮询间隔时避免并发重叠请求。
+  if (pollInFlight) return
+  pollInFlight = true
+  try {
+    // 认证令牌固定存储在 auth_token，弹窗查询也必须携带它。
+    const token = localStorage.getItem('auth_token') || ''
+    const res = await fetch(buildApiUrl(`/payment/orders/${orderId}`), {
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+      credentials: 'include',
+    })
+    if (!res.ok) return
+    const data = await res.json()
+    const status = data?.data?.status
+    if (status === 'PROCESSING') {
+      hint.value = t('payment.result.processing')
+      startPolling(PROCESSING_POLL_INTERVAL_MS)
+    } else if (status === 'COMPLETED' || status === 'PAID' || status === 'RECHARGING') {
+      stopPolling()
+      success.value = true
+      setTimeout(closeWindow, 2000)
+    } else if (status === 'EXPIRED' || status === 'CANCELLED' || status === 'FAILED') {
+      stopPolling()
+      error.value = status === 'CANCELLED' ? t('payment.qr.cancelled') : t('payment.qr.expired')
     }
-  }, 3000)
+  } catch { /* 查询失败时由下一轮重试。 */ } finally {
+    pollInFlight = false
+  }
+}
+
+function startPolling(intervalMs = PENDING_POLL_INTERVAL_MS) {
+  if (pollTimer && pollIntervalMs === intervalMs) return
+  if (pollTimer) clearInterval(pollTimer)
+  pollIntervalMs = intervalMs
+  pollTimer = setInterval(pollOrderStatus, intervalMs)
 }
 </script>

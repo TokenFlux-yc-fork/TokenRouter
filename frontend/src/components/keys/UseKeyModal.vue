@@ -460,6 +460,14 @@ function buildQoderOpenCodeModels() {
         output: 128000
       }
     },
+    // Kimi-K3 使用 Qoder 新增的独立路由，不替换仍可用的 Kimi-K2.7-Code。
+    'kimi-k3': {
+      name: 'Kimi-K3',
+      limit: {
+        context: 400000,
+        output: 128000
+      }
+    },
     'kimi-k2.7-code': {
       name: 'Kimi-K2.7-Code',
       limit: {

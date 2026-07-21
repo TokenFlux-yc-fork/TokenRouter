@@ -226,11 +226,50 @@ type OpenAIWSIngressHooks struct {
 	// InitialRequestModel 是首帧渠道映射前的请求模型，只用于 usage metadata
 	// 的 reasoning effort 后缀推导，禁止用于上游请求或计费模型。
 	InitialRequestModel string
-	BeforeTurn          func(turn int) error
-	BeforeRequest       func(turn int, payload []byte, originalModel, previousResponseID string) ([]byte, error)
+	// ResolveRoutingModel 在账号映射前逐轮把客户端模型 R 解析为渠道模型 C。
+	// payload 用于按渠道映射后的完整请求判断该轮能力；返回错误时当前帧不得发送上游。
+	ResolveRoutingModel func(turn int, requestedModel string, payload []byte) (string, error)
+	// ResolveFastModePolicy 逐轮刷新 API Key Fast 策略，避免长连接永久沿用握手快照。
+	ResolveFastModePolicy func(turn int) string
+	BeforeTurn            func(turn int) error
+	BeforeRequest         func(turn int, payload []byte, originalModel, previousResponseID string) ([]byte, error)
 	// OnUpstreamError 在上游 WS 返回 error/failed 类事件时触发，用于记录 OpenAI cyber 等上游风控信号。
 	OnUpstreamError func(turn int, originalModel string, statusCode int, responseBody []byte, message string)
 	AfterTurn       func(capture OpenAIWSTurnCapture)
+}
+
+// openAIWSFastModePolicyContext 为当前 turn 生成带最新单 Key Fast 策略的上下文。
+func openAIWSFastModePolicyContext(ctx context.Context, hooks *OpenAIWSIngressHooks, turn int) context.Context {
+	if hooks == nil || hooks.ResolveFastModePolicy == nil {
+		return ctx
+	}
+	return withAPIKeyFastModePolicy(ctx, hooks.ResolveFastModePolicy(turn))
+}
+
+// resolveOpenAIWSTurnModels 按 R -> C -> U 顺序解析单个 WebSocket turn 的模型。
+// originalModel 始终由调用方另行保留，返回值只用于账号能力判断后的上游请求。
+func resolveOpenAIWSTurnModels(account *Account, hooks *OpenAIWSIngressHooks, turn int, requestedModel string, payload []byte) (string, string, error) {
+	routingModel := strings.TrimSpace(requestedModel)
+	if hooks != nil && hooks.ResolveRoutingModel != nil {
+		resolved, err := hooks.ResolveRoutingModel(turn, routingModel, payload)
+		if err != nil {
+			return "", "", err
+		}
+		routingModel = strings.TrimSpace(resolved)
+	}
+	if routingModel == "" {
+		return "", "", NewOpenAIWSClientCloseError(
+			coderws.StatusPolicyViolation,
+			"model is required in response.create payload",
+			nil,
+		)
+	}
+
+	upstreamModel := normalizeOpenAIModelForUpstream(account, resolveAccountMappedModelForForward(account, routingModel))
+	if upstreamModel == "" {
+		upstreamModel = routingModel
+	}
+	return routingModel, upstreamModel, nil
 }
 
 func (s *OpenAIGatewayService) getOpenAIWSConnPool() *openAIWSConnPool {

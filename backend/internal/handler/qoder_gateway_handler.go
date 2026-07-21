@@ -201,7 +201,7 @@ func (h *QoderGatewayHandler) handle(c *gin.Context, endpoint qoderEndpoint) {
 			}
 			if len(fs.FailedAccountIDs) == 0 {
 				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-				if handleGroupModelUnsupportedError(c, err, streamStarted, func(status int, errType string, message string, streamStarted bool) {
+				if handleGroupSelectionBusinessError(c, err, streamStarted, func(status int, errType string, message string, streamStarted bool) {
 					h.streamingAwareError(c, status, errType, message, streamStarted, endpoint)
 				}) {
 					return

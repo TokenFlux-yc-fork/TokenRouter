@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/tlsfingerprint"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
@@ -321,23 +322,43 @@ func TestAccountHandlerGetAvailableModels_QoderFallsBackToDefaults(t *testing.T)
 	for _, model := range resp.Data {
 		ids = append(ids, model.ID)
 	}
-	require.ElementsMatch(t, []string{
-		"claude-opus-4-6",
-		"auto",
-		"performance",
-		"efficient",
-		"lite",
-		"qwen3.7-max",
-		"qwen3.7-plus",
-		"deepseek-v4-pro",
-		"deepseek-v4-flash",
-		"glm-5.2",
-		"kimi-k2.7-code",
-		"minimax-m3",
-	}, ids)
+	require.ElementsMatch(t, qoder.DefaultRequestModelIDsForSite(qoder.SiteGlobal), ids)
 	require.NotContains(t, ids, "ultimate")
 	require.NotContains(t, ids, "qmodel_latest")
 	require.NotContains(t, ids, "quest-ultimate")
+}
+
+func TestAccountHandlerGetAvailableModels_QoderCNUsesCNSiteDefaults(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:          49,
+			Name:        "qoder-cn",
+			Platform:    service.PlatformQoder,
+			Type:        service.AccountTypeCosy,
+			Status:      service.StatusActive,
+			Credentials: map[string]any{"site": "cn"},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/49/models", nil)
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var responseBody struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &responseBody))
+	ids := make([]string, 0, len(responseBody.Data))
+	for _, model := range responseBody.Data {
+		ids = append(ids, model.ID)
+	}
+	require.ElementsMatch(t, qoder.DefaultRequestModelIDsForSite(qoder.SiteCN), ids)
+	require.NotContains(t, ids, "claude-opus-4-6")
+	require.Contains(t, ids, "qwen3.6-flash")
 }
 
 func TestAccountHandlerGetAvailableModels_QoderUsesConfiguredModels(t *testing.T) {

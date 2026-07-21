@@ -41,6 +41,15 @@ func (a *Account) IsSchedulableForModelWithContext(ctx context.Context, requeste
 	if !a.IsSchedulable() {
 		return false
 	}
+	return a.modelRateLimitAllowsScheduling(ctx, requestedModel)
+}
+
+// modelRateLimitAllowsScheduling 仅检查模型级限流；调用方已经从可调度账号查询取得账号时，
+// 可复用本方法补齐模型维度检查，避免再次依赖账号状态字段的投影完整性。
+func (a *Account) modelRateLimitAllowsScheduling(ctx context.Context, requestedModel string) bool {
+	if a == nil {
+		return false
+	}
 	if a.isModelRateLimitedWithContext(ctx, requestedModel) {
 		// Antigravity + overages 启用 + 积分未耗尽 → 放行（有积分可用）
 		if a.Platform == PlatformAntigravity && a.IsOveragesEnabled() && !a.isCreditsExhausted() {

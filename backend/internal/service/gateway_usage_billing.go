@@ -748,15 +748,12 @@ func (s *GatewayService) calculateImageCost(
 	}
 
 	if isQoderBillingContext(account, apiKey) {
-		for _, model := range qoderDefaultPricingCandidates(billingModel, requestedModel, billingModelSource) {
-			if !s.qoderCanUseDefaultImagePricing(model) {
-				continue
-			}
-			return s.billingService.CalculateImageCost(model, sizeTier, result.ImageCount, groupConfig, multiplier)
+		// Qoder 默认价格也只能使用当前计费依据选中的模型。
+		if s.qoderCanUseDefaultImagePricing(billingModel) {
+			return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
 		}
-		if qoderAliasRequiresManualPricingAny(billingModel, requestedModel, channelMappedModel, resolvedModel, result.UpstreamModel) {
-			return zeroCostBreakdown(BillingModeImage)
-		}
+		// 未知 Qoder 图片模型没有可验证的默认价格，不能套用全局图片兜底价。
+		return zeroCostBreakdown(BillingModeImage)
 	}
 	return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
 }
@@ -814,13 +811,8 @@ func (s *GatewayService) calculateTokenCost(
 			return s.billingService.CalculateCostWithServiceTier(model, tokens, multiplier, serviceTier)
 		}
 		if isQoderBillingContext(account, apiKey) {
-			for _, model := range qoderDefaultPricingCandidates(billingModel, requestedModel, billingModelSource) {
-				cost, err = calculateDefaultCost(model)
-				if err == nil {
-					return cost
-				}
-			}
-			if qoderAliasRequiresManualPricingAny(billingModel, requestedModel, channelMappedModel, result.UpstreamModel) {
+			// Qoder 手工定价与默认价格都严格使用当前计费依据选中的模型。
+			if qoderAliasRequiresManualPricingAny(billingModel) {
 				return zeroCostBreakdown(BillingModeToken)
 			}
 		}

@@ -21,8 +21,19 @@
           </div>
         </div>
 
+        <!-- 支付渠道处理中 -->
+        <template v-if="paymentProcessing">
+          <div class="card p-6">
+            <div class="flex flex-col items-center space-y-4 py-6 text-center">
+              <div class="h-10 w-10 animate-spin rounded-full border-4 border-cyan-500 border-t-transparent"></div>
+              <p class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.result.processing') }}</p>
+              <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('payment.result.processingHint') }}</p>
+            </div>
+          </div>
+        </template>
+
         <!-- 微信二维码展示 -->
-        <template v-if="wechatQrUrl">
+        <template v-else-if="wechatQrUrl">
           <div class="card p-6">
             <div class="flex flex-col items-center space-y-4">
               <p class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('payment.qr.scanWxpay') }}</p>
@@ -122,6 +133,7 @@ const initError = ref('')
 const stripeError = ref('')
 const stripeSubmitting = ref(false)
 const stripeSuccess = ref(false)
+const paymentProcessing = ref(false)
 const stripeReady = ref(false)
 const order = ref<PaymentOrder | null>(null)
 const currency = ref('CNY')
@@ -281,20 +293,51 @@ async function handleGenericPay() {
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollIntervalMs = 0
+let pollInFlight = false
 
-function startPolling() {
+const PENDING_POLL_INTERVAL_MS = 3000
+const PROCESSING_POLL_INTERVAL_MS = 15000
+
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = null
+  pollIntervalMs = 0
+}
+
+async function pollOrderStatus() {
   const orderId = Number(route.query.order_id)
-  if (!orderId) return
-  pollTimer = setInterval(async () => {
+  if (!orderId || pollInFlight) return
+  pollInFlight = true
+  try {
     const o = await paymentStore.pollOrderStatus(orderId)
     if (!o) return
-    if (o.status === 'COMPLETED' || o.status === 'PAID') {
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+    if (o.status === 'PROCESSING') {
+      paymentProcessing.value = true
+      wechatQrUrl.value = ''
+      startPolling(PROCESSING_POLL_INTERVAL_MS)
+    } else if (o.status === 'COMPLETED' || o.status === 'PAID' || o.status === 'RECHARGING') {
+      stopPolling()
+      paymentProcessing.value = false
       stripeSuccess.value = true
       wechatQrUrl.value = ''
       scheduleClose()
+    } else if (o.status === 'EXPIRED' || o.status === 'CANCELLED' || o.status === 'FAILED') {
+      stopPolling()
+      paymentProcessing.value = false
+      wechatQrUrl.value = ''
+      stripeError.value = o.status === 'CANCELLED' ? t('payment.qr.cancelled') : t('payment.qr.expired')
     }
-  }, 3000)
+  } finally {
+    pollInFlight = false
+  }
+}
+
+function startPolling(intervalMs = PENDING_POLL_INTERVAL_MS) {
+  if (pollTimer && pollIntervalMs === intervalMs) return
+  if (pollTimer) clearInterval(pollTimer)
+  pollIntervalMs = intervalMs
+  pollTimer = setInterval(pollOrderStatus, intervalMs)
 }
 
 function scheduleClose() {
@@ -309,6 +352,6 @@ function scheduleClose() {
 
 onUnmounted(() => {
   if (redirectTimer) clearTimeout(redirectTimer)
-  if (pollTimer) clearInterval(pollTimer)
+  stopPolling()
 })
 </script>

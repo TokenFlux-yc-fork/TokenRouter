@@ -73,14 +73,14 @@ func wxpayJSAPIAppIDFromContext(ctx context.Context) string {
 // instanceCandidate pairs an instance with its pre-fetched daily usage.
 type instanceCandidate struct {
 	inst      *dbent.PaymentProviderInstance
-	dailyUsed float64 // includes PENDING orders
+	dailyUsed float64 // 包含待支付和渠道处理中的订单
 }
 
 // SelectInstance picks an enabled instance for the given provider key and payment type.
 //
 // Flow:
 //  1. Query all enabled instances for providerKey, filter by supported paymentType
-//  2. Batch-query daily usage (PENDING + PAID + COMPLETED + RECHARGING) for all candidates
+//  2. 批量查询所有候选实例的当日占用（PENDING + PROCESSING + PAID + COMPLETED + RECHARGING）
 //  3. Filter out instances where: single-min/max violated OR daily remaining < orderAmount
 //  4. Pick from survivors using the configured strategy (round-robin / least-amount)
 //  5. If all filtered out, fall back to full list (let the provider itself reject)
@@ -164,7 +164,7 @@ func (lb *DefaultLoadBalancer) queryEnabledInstances(
 }
 
 // attachDailyUsage queries daily usage for each instance in a single pass.
-// Usage includes PENDING orders to avoid over-committing capacity.
+// 占用量包含待支付和渠道处理中的订单，避免实例容量被超额分配。
 func (lb *DefaultLoadBalancer) attachDailyUsage(
 	ctx context.Context,
 	instances []*dbent.PaymentProviderInstance,
@@ -187,7 +187,7 @@ func (lb *DefaultLoadBalancer) attachDailyUsage(
 		Where(
 			paymentorder.ProviderInstanceIDIn(ids...),
 			paymentorder.StatusIn(
-				OrderStatusPending, OrderStatusPaid,
+				OrderStatusPending, OrderStatusProcessing, OrderStatusPaid,
 				OrderStatusCompleted, OrderStatusRecharging,
 			),
 			paymentorder.CreatedAtGTE(todayStart),

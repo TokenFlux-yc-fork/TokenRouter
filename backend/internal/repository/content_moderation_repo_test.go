@@ -12,13 +12,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildContentModerationLogWhere_BlockedIncludesAllBlockActions(t *testing.T) {
-	where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: "blocked"})
+func TestBuildContentModerationLogWhere_BlockFiltersStandardBlocksOnly(t *testing.T) {
+	where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: "block"})
 
 	require.Empty(t, args)
 	sql := strings.Join(where, " AND ")
-	require.Contains(t, sql, "l.action IN ('block', 'keyword_block', 'hash_block')")
-	require.NotContains(t, sql, "l.action = 'block'")
+	// 普通拦截不能混入关键词或哈希拦截，否则前端无法按处置方式准确复查。
+	require.Contains(t, sql, "l.action = 'block'")
+	require.NotContains(t, sql, "keyword_block")
+	require.NotContains(t, sql, "hash_block")
+}
+
+func TestBuildContentModerationLogWhere_LegacyBlockedIncludesAllBlockActions(t *testing.T) {
+	where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: "blocked"})
+
+	require.Empty(t, args)
+	// 旧版管理端仍会传 blocked，保留原聚合行为以兼容前后端滚动升级。
+	require.Contains(t, strings.Join(where, " AND "), "l.action IN ('block', 'keyword_block', 'hash_block')")
+}
+
+func TestBuildContentModerationLogWhere_KeywordBlockFiltersKeywordBlocksOnly(t *testing.T) {
+	where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: "keyword_block"})
+
+	require.Empty(t, args)
+	require.Contains(t, strings.Join(where, " AND "), "l.action = 'keyword_block'")
+}
+
+func TestBuildContentModerationLogWhere_HashBlockFiltersHashBlocksOnly(t *testing.T) {
+	where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: "hash_block"})
+
+	require.Empty(t, args)
+	require.Contains(t, strings.Join(where, " AND "), "l.action = 'hash_block'")
+}
+
+func TestBuildContentModerationLogWhere_HitExcludesAllBlockActions(t *testing.T) {
+	where, args := buildContentModerationLogWhere(service.ContentModerationLogFilter{Result: "hit"})
+
+	require.Empty(t, args)
+	sql := strings.Join(where, " AND ")
+	// 命中条件必须同时排除 blocked 使用的三种动作，才能保证两个筛选集合互斥。
+	require.Contains(t, sql, "l.flagged = TRUE")
+	require.Contains(t, sql, "l.action NOT IN ('block', 'keyword_block', 'hash_block')")
 }
 
 func TestContentModerationRepositoryCreateLog_PersistsMatchedKeyword(t *testing.T) {

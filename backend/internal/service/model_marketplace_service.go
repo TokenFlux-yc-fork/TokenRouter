@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -90,6 +92,7 @@ func (s *ModelMarketplaceService) ListPublic(ctx context.Context) ([]ModelMarket
 	discountConfig, showDiscount := s.getOfficialPriceRatioConfig(ctx)
 	capacityMap := s.getPublicCapacityMap(ctx, groups)
 	availabilityMap := s.getPublicAvailabilityMap(ctx, groups)
+	accountsByGroup, accountsPrefetched := s.prefetchPublicGroupAccounts(ctx)
 	out := make([]ModelMarketplaceGroup, 0, len(groups))
 	for i := range groups {
 		group := &groups[i]
@@ -97,7 +100,12 @@ func (s *ModelMarketplaceService) ListPublic(ctx context.Context) ([]ModelMarket
 			continue
 		}
 
-		models := s.listPublicModelsForGroup(ctx, group)
+		var models []ModelMarketplaceModel
+		if accountsPrefetched {
+			models = s.listPublicModelsForGroupWithAccounts(ctx, group, accountsByGroup[group.ID])
+		} else {
+			models = s.listPublicModelsForGroup(ctx, group)
+		}
 		if len(models) == 0 {
 			continue
 		}
@@ -129,6 +137,69 @@ func (s *ModelMarketplaceService) ListPublic(ctx context.Context) ([]ModelMarket
 	}
 
 	return out, nil
+}
+
+// prefetchPublicGroupAccounts 一次读取全部可调度账号，并按分组优先级恢复分组查询顺序。
+func (s *ModelMarketplaceService) prefetchPublicGroupAccounts(ctx context.Context) (map[int64][]Account, bool) {
+	if s == nil || s.gatewayService == nil || s.gatewayService.accountRepo == nil {
+		return nil, false
+	}
+	accounts, err := s.gatewayService.accountRepo.ListSchedulable(ctx)
+	if err != nil {
+		slog.Warn("failed to prefetch marketplace accounts", "error", err)
+		return nil, false
+	}
+
+	accountsByGroup := make(map[int64][]Account)
+	for i := range accounts {
+		account := accounts[i]
+		seenGroups := make(map[int64]struct{}, len(account.GroupIDs)+len(account.AccountGroups))
+		for _, accountGroup := range account.AccountGroups {
+			if accountGroup.GroupID <= 0 {
+				continue
+			}
+			seenGroups[accountGroup.GroupID] = struct{}{}
+			accountsByGroup[accountGroup.GroupID] = append(accountsByGroup[accountGroup.GroupID], account)
+		}
+		for _, groupID := range account.GroupIDs {
+			if groupID <= 0 {
+				continue
+			}
+			if _, exists := seenGroups[groupID]; exists {
+				continue
+			}
+			accountsByGroup[groupID] = append(accountsByGroup[groupID], account)
+		}
+	}
+
+	for groupID := range accountsByGroup {
+		groupAccounts := accountsByGroup[groupID]
+		sort.SliceStable(groupAccounts, func(i, j int) bool {
+			leftPriority := marketplaceAccountGroupPriority(&groupAccounts[i], groupID)
+			rightPriority := marketplaceAccountGroupPriority(&groupAccounts[j], groupID)
+			if leftPriority != rightPriority {
+				return leftPriority < rightPriority
+			}
+			if groupAccounts[i].Priority != groupAccounts[j].Priority {
+				return groupAccounts[i].Priority < groupAccounts[j].Priority
+			}
+			return groupAccounts[i].ID < groupAccounts[j].ID
+		})
+		accountsByGroup[groupID] = groupAccounts
+	}
+	return accountsByGroup, true
+}
+
+func marketplaceAccountGroupPriority(account *Account, groupID int64) int {
+	if account == nil {
+		return 0
+	}
+	for _, accountGroup := range account.AccountGroups {
+		if accountGroup.GroupID == groupID {
+			return accountGroup.Priority
+		}
+	}
+	return 0
 }
 
 func (s *ModelMarketplaceService) getPublicCapacityMap(ctx context.Context, groups []Group) map[int64]GroupCapacitySummary {
@@ -324,7 +395,15 @@ func parsePositiveMarketplaceSettingFloat(raw string) (float64, bool) {
 }
 
 func (s *ModelMarketplaceService) listPublicModelsForGroup(ctx context.Context, group *Group) []ModelMarketplaceModel {
-	modelDefs := s.resolveGroupModels(ctx, group)
+	return s.buildPublicModelsForGroup(ctx, group, s.resolveGroupModels(ctx, group))
+}
+
+// listPublicModelsForGroupWithAccounts 使用本次模型广场请求预取的分组账号。
+func (s *ModelMarketplaceService) listPublicModelsForGroupWithAccounts(ctx context.Context, group *Group, accounts []Account) []ModelMarketplaceModel {
+	return s.buildPublicModelsForGroup(ctx, group, s.resolveGroupModelsWithAccounts(ctx, group, accounts))
+}
+
+func (s *ModelMarketplaceService) buildPublicModelsForGroup(ctx context.Context, group *Group, modelDefs []marketplaceModelDef) []ModelMarketplaceModel {
 	if len(modelDefs) == 0 {
 		return nil
 	}
@@ -337,10 +416,9 @@ func (s *ModelMarketplaceService) listPublicModelsForGroup(ctx context.Context, 
 
 	models := make([]ModelMarketplaceModel, 0, len(modelDefs))
 	for _, modelDef := range modelDefs {
-		pricingModel := modelDef.ID
 		pricing := unknownDisplayPricing()
-		if s.billingService != nil {
-			pricing = s.getPublicModelDisplayPricing(ctx, group, pricingModel, imageConfig, modelDef.BaseModelHint)
+		if s.billingService != nil && !modelDef.PricingAmbiguous {
+			pricing = s.getRequestableModelDisplayPricing(ctx, group, modelDef, imageConfig)
 		}
 
 		models = append(models, ModelMarketplaceModel{
@@ -353,6 +431,34 @@ func (s *ModelMarketplaceService) listPublicModelsForGroup(ctx context.Context, 
 	return models
 }
 
+// getRequestableModelDisplayPricing 使用共享解析器确定的定价模型，避免展示层再次推导映射链。
+func (s *ModelMarketplaceService) getRequestableModelDisplayPricing(ctx context.Context, group *Group, model marketplaceModelDef, imageConfig *ImagePriceConfig) ModelDisplayPricing {
+	pricingModel := strings.TrimSpace(model.PricingModel)
+	if pricingModel == "" {
+		pricingModel = model.ID
+	}
+	if group == nil || group.Platform != PlatformQoder {
+		return s.getPublicModelDisplayPricing(ctx, group, pricingModel, imageConfig)
+	}
+
+	imageRateMultiplier := marketplaceImageRateMultiplier(group)
+	if s.gatewayService != nil && s.gatewayService.resolver != nil {
+		groupID := group.ID
+		resolved := s.gatewayService.resolver.Resolve(ctx, PricingInput{Model: pricingModel, GroupID: &groupID})
+		if resolved.HasEffectiveChannelPricing() {
+			return s.billingService.getDisplayPricingWithResolvedMultipliers(pricingModel, group.RateMultiplier, imageRateMultiplier, imageConfig, resolved)
+		}
+	}
+	// Qoder 内置别名和路由键必须由渠道手工定价，不能回退到默认模型价格。
+	if qoderAliasRequiresManualPricingAny(pricingModel) {
+		return unknownDisplayPricing()
+	}
+	if qoderCanUseDefaultDisplayPricing(s.billingService, pricingModel) {
+		return s.billingService.getDisplayPricing(pricingModel, group.RateMultiplier, imageRateMultiplier, imageConfig)
+	}
+	return unknownDisplayPricing()
+}
+
 func (s *ModelMarketplaceService) getPublicModelDisplayPricing(ctx context.Context, group *Group, model string, imageConfig *ImagePriceConfig, baseModelHints ...string) ModelDisplayPricing {
 	if s.billingService == nil {
 		return unknownDisplayPricing()
@@ -360,23 +466,20 @@ func (s *ModelMarketplaceService) getPublicModelDisplayPricing(ctx context.Conte
 	imageRateMultiplier := marketplaceImageRateMultiplier(group)
 	if group != nil && group.Platform == PlatformQoder {
 		billingModel := strings.TrimSpace(model)
-		billingSource := BillingModelSourceRequested
 		baseHint := firstNonEmptyMarketplaceHint(baseModelHints...)
 		if s.gatewayService != nil && s.gatewayService.resolver != nil {
-			billingModel, billingSource, baseHint = s.qoderMarketplacePricingModels(ctx, group, model, baseHint)
-			resolved, pricingModel := s.gatewayService.resolveChannelPricingForUsage(ctx, billingModel, model, billingSource, baseHint, baseHint, &APIKey{Group: group}, nil)
-			if resolved.HasEffectiveChannelPricing() {
+			billingModel, _, _ = s.qoderMarketplacePricingModels(ctx, group, model, baseHint)
+			resolved, pricingModel := s.gatewayService.resolveQoderChannelPricingForUsage(ctx, billingModel, &APIKey{Group: group})
+			if resolved != nil && resolved.HasEffectiveChannelPricing() {
 				return s.billingService.getDisplayPricingWithResolvedMultipliers(pricingModel, group.RateMultiplier, imageRateMultiplier, imageConfig, resolved)
 			}
 		}
-		for _, candidate := range qoderDefaultPricingCandidates(billingModel, model, billingSource) {
-			if !qoderCanUseDefaultDisplayPricing(s.billingService, candidate) {
-				continue
-			}
-			pricing := s.billingService.getDisplayPricing(candidate, group.RateMultiplier, imageRateMultiplier, imageConfig)
-			if pricing.PriceStatus != "unpriced" {
-				return pricing
-			}
+		if qoderAliasRequiresManualPricingAny(billingModel) || !qoderCanUseDefaultDisplayPricing(s.billingService, billingModel) {
+			return unknownDisplayPricing()
+		}
+		pricing := s.billingService.getDisplayPricing(billingModel, group.RateMultiplier, imageRateMultiplier, imageConfig)
+		if pricing.PriceStatus != "unpriced" {
+			return pricing
 		}
 		return unknownDisplayPricing()
 	}
@@ -455,105 +558,56 @@ func (s *ModelMarketplaceService) qoderMarketplacePricingModels(ctx context.Cont
 }
 
 func (s *ModelMarketplaceService) resolveGroupModels(ctx context.Context, group *Group) []marketplaceModelDef {
-	if group != nil && group.Platform == PlatformQoder {
-		if models := s.resolveQoderGroupModels(ctx, group); len(models) > 0 {
-			return models
-		}
-	}
-	if s.gatewayService != nil {
+	if s.gatewayService != nil && group != nil {
 		groupID := group.ID
-		modelIDs := s.gatewayService.GetAvailableModels(ctx, &groupID, "")
-		if len(modelIDs) > 0 {
-			return buildMarketplaceModelDefs(modelIDs, group.Platform)
+		resolution := s.gatewayService.ResolveRequestableModels(ctx, &groupID, group.Platform)
+		if len(resolution.Models) > 0 {
+			return buildMarketplaceModelDefsFromRequestable(resolution.Models, group.Platform)
 		}
+		// 已完成账号和渠道解析后，空结果必须保持为空，不能再次回退平台默认模型。
+		return nil
 	}
 
+	if group == nil {
+		return nil
+	}
 	return defaultMarketplaceModelDefs(group.Platform)
 }
 
+// resolveGroupModelsWithAccounts 直接使用预取账号生成候选和执行 R -> C -> U 校验。
+func (s *ModelMarketplaceService) resolveGroupModelsWithAccounts(ctx context.Context, group *Group, accounts []Account) []marketplaceModelDef {
+	if s == nil || s.gatewayService == nil || group == nil {
+		return nil
+	}
+	groupID := group.ID
+	baseModels := configuredRequestModelsFromAccounts(accounts, group.Platform)
+	resolution := s.gatewayService.resolveRequestableModelsWithAccounts(ctx, &groupID, group.Platform, baseModels, accounts)
+	if len(resolution.Models) == 0 {
+		return nil
+	}
+	return buildMarketplaceModelDefsFromRequestable(resolution.Models, group.Platform)
+}
+
 type marketplaceModelDef struct {
-	ID            string
-	DisplayName   string
-	BaseModelHint string
+	ID               string
+	DisplayName      string
+	BaseModelHint    string
+	PricingModel     string
+	PricingAmbiguous bool
 }
 
-func (s *ModelMarketplaceService) resolveQoderGroupModels(ctx context.Context, group *Group) []marketplaceModelDef {
-	if s == nil || s.gatewayService == nil || s.gatewayService.accountRepo == nil || group == nil {
-		return nil
-	}
-	accounts, err := s.gatewayService.accountRepo.ListSchedulableByGroupID(ctx, group.ID)
-	if err != nil || len(accounts) == 0 {
-		return nil
-	}
-
-	displayNames := marketplaceDisplayNameLookup(PlatformQoder)
-	modelsByID := make(map[string]marketplaceModelDef)
-	hasConfiguredModels := false
-	for i := range accounts {
-		account := &accounts[i]
-		if account.Platform != PlatformQoder {
-			continue
-		}
-		requestModels := account.GetConfiguredRequestModels()
-		if len(requestModels) == 0 {
-			continue
-		}
-		hasConfiguredModels = true
-		mapping := account.GetModelMapping()
-		for _, rawModel := range requestModels {
-			modelID := strings.TrimSpace(rawModel)
-			if modelID == "" {
-				continue
-			}
-			def := modelsByID[modelID]
-			if def.ID == "" {
-				def = marketplaceModelDef{
-					ID:          modelID,
-					DisplayName: lookupMarketplaceDisplayName(modelID, displayNames),
-				}
-			}
-			if def.BaseModelHint == "" {
-				if mappedModel, matched := resolveRequestedModelInMapping(mapping, modelID); matched {
-					def.BaseModelHint = strings.TrimSpace(mappedModel)
-				}
-			}
-			modelsByID[modelID] = def
-		}
-	}
-	if !hasConfiguredModels || len(modelsByID) == 0 {
-		return nil
-	}
-
-	models := make([]marketplaceModelDef, 0, len(modelsByID))
-	for _, def := range modelsByID {
-		models = append(models, def)
-	}
-	sortMarketplaceModelDefs(models)
-	return models
-}
-
-func buildMarketplaceModelDefs(modelIDs []string, platform string) []marketplaceModelDef {
+func buildMarketplaceModelDefsFromRequestable(models []RequestableModel, platform string) []marketplaceModelDef {
 	displayNames := marketplaceDisplayNameLookup(platform)
-	seen := make(map[string]struct{}, len(modelIDs))
-	models := make([]marketplaceModelDef, 0, len(modelIDs))
-
-	for _, modelID := range modelIDs {
-		modelID = strings.TrimSpace(modelID)
-		if modelID == "" {
-			continue
-		}
-		if _, ok := seen[modelID]; ok {
-			continue
-		}
-		seen[modelID] = struct{}{}
-
-		models = append(models, marketplaceModelDef{
-			ID:          modelID,
-			DisplayName: lookupMarketplaceDisplayName(modelID, displayNames),
+	defs := make([]marketplaceModelDef, 0, len(models))
+	for _, model := range models {
+		defs = append(defs, marketplaceModelDef{
+			ID:               model.ID,
+			DisplayName:      lookupMarketplaceDisplayName(model.ID, displayNames),
+			PricingModel:     model.PricingModel,
+			PricingAmbiguous: model.PricingAmbiguous,
 		})
 	}
-
-	return models
+	return defs
 }
 
 func defaultMarketplaceModelDefs(platform string) []marketplaceModelDef {

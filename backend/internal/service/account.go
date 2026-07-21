@@ -16,6 +16,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/domain"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai_compat"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 )
 
@@ -849,6 +850,16 @@ func isModelInFinalWhitelist(platform, model string, whitelist map[string]struct
 	return ok
 }
 
+// isFinalModelWhitelisted 直接检查已经完成账号映射和平台规范化的最终模型，避免再次执行账号映射。
+func (a *Account) isFinalModelWhitelisted(finalModel string) bool {
+	if a == nil {
+		return false
+	}
+	mapping := a.GetModelMapping()
+	whitelist, _ := resolveFinalModelWhitelist(a.Platform, a.Credentials, mapping)
+	return isModelInFinalWhitelist(a.Platform, finalModel, whitelist)
+}
+
 func normalizeQoderModelForWhitelist(model string) string {
 	trimmed := strings.TrimSpace(model)
 	if trimmed == "" {
@@ -880,6 +891,18 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 		return matched
 	}
 	whitelist, _ := resolveFinalModelWhitelist(a.Platform, a.Credentials, mapping)
+	if a.Platform == PlatformQoder {
+		mappedModel, matched := a.ResolveMappedModel(requestedModel)
+		if matched {
+			// 显式账号 mapping 优先于站点默认模型限制。
+			return isModelInFinalWhitelist(a.Platform, mappedModel, whitelist)
+		}
+		site, err := qoderSiteForAccount(a)
+		if err != nil || !qoder.ModelCompatibleWithSite(site, requestedModel) {
+			return false
+		}
+		return isModelInFinalWhitelist(a.Platform, requestedModel, whitelist)
+	}
 	if len(mapping) == 0 {
 		if !isModelInFinalWhitelist(a.Platform, requestedModel, whitelist) {
 			return false

@@ -155,6 +155,17 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		})
 	}
 
+	// 账号模型映射必须先于平台模型规范化执行，确保调度、限制检查和实际转发使用同一条链路。
+	accountMappedModel := resolveAccountMappedModelForForward(account, reqModel)
+	if accountMappedModel != reqModel {
+		if err := replaceBody(s.replaceModelInBody(body, accountMappedModel)); err != nil {
+			return nil, err
+		}
+		reqModel = accountMappedModel
+		parsed.Model = accountMappedModel
+		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=account)", originalModel, accountMappedModel, account.Name)
+	}
+
 	// Claude Code 客户端判定：UA 匹配 claude-cli/* 且携带 metadata.user_id。
 	// 真正的 Claude Code 客户端自带完整的 system prompt、cache_control 断点和 header，
 	// 不需要代理做任何 body 级别的 mimicry；强行替换反而会破坏客户端的缓存策略
@@ -232,41 +243,14 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return nil, err
 	}
 
-	mappedModel := reqModel
-	mappingSource := ""
-	if account.Type == AccountTypeAPIKey {
-		mappedModel = account.GetMappedModel(reqModel)
-		if mappedModel != reqModel {
-			mappingSource = "account"
-		}
-	}
-	if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
-		if candidate, matched := account.ResolveMappedModel(reqModel); matched {
-			mappedModel = candidate
-			mappingSource = "account"
-		} else {
-			normalized := normalizeVertexAnthropicModelID(claude.NormalizeModelID(reqModel))
-			if normalized != reqModel {
-				mappedModel = normalized
-				mappingSource = "vertex"
-			}
-		}
-	}
-	if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
-		normalized := claude.NormalizeModelID(reqModel)
-		if normalized != reqModel {
-			mappedModel = normalized
-			mappingSource = "prefix"
-		}
-	}
+	mappedModel := resolveAnthropicAccountUpstreamModel(account, reqModel)
 	if mappedModel != reqModel {
-
 		if err := replaceBody(s.replaceModelInBody(body, mappedModel)); err != nil {
 			return nil, err
 		}
 		reqModel = mappedModel
 		parsed.Model = mappedModel
-		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
+		logger.LegacyPrintf("service.gateway", "Platform model normalization applied: %s -> %s (account: %s)", accountMappedModel, mappedModel, account.Name)
 	}
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
@@ -846,9 +830,6 @@ func (s *GatewayService) checkChannelPricingRestriction(ctx context.Context, gro
 	if billingModel == "" {
 		return false
 	}
-	if s.qoderRestrictionHasEffectivePricing(ctx, *groupID, requestedModel, mapping.MappedModel, billingModel) {
-		return false
-	}
 	return s.channelService.IsModelRestricted(ctx, *groupID, billingModel)
 }
 
@@ -877,22 +858,82 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 	if mapping := s.channelService.ResolveChannelMapping(ctx, groupID, requestedModel); mapping.Mapped {
 		routingModel = mapping.MappedModel
 	}
-	upstreamModel := resolveAccountUpstreamModel(account, routingModel)
+	upstreamModel := resolveAccountUpstreamModel(ctx, account, routingModel)
 	if upstreamModel == "" {
-		return false
-	}
-	if s.qoderRestrictionHasEffectivePricing(ctx, groupID, requestedModel, routingModel, upstreamModel) {
 		return false
 	}
 	return s.channelService.IsModelRestricted(ctx, groupID, upstreamModel)
 }
 
-// resolveAccountUpstreamModel 确定账号将请求模型映射为什么上游模型。
-func resolveAccountUpstreamModel(account *Account, requestedModel string) string {
-	if account.Platform == PlatformAntigravity {
-		return mapAntigravityModel(account, requestedModel)
+// channelMappedModelForGroup 返回账号调度层使用的渠道映射后模型。
+func (s *GatewayService) channelMappedModelForGroup(ctx context.Context, groupID *int64, requestedModel string) string {
+	if s == nil || s.channelService == nil || groupID == nil || strings.TrimSpace(requestedModel) == "" {
+		return requestedModel
 	}
-	return account.GetMappedModel(requestedModel)
+	mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
+	if mappedModel := strings.TrimSpace(mapping.MappedModel); mappedModel != "" {
+		return mappedModel
+	}
+	return requestedModel
+}
+
+// resolveAccountMappedModelForForward 执行账号模型映射，并对空映射结果保持原模型透传。
+// 所有实际转发和调度检查都应从渠道映射后的模型调用本函数。
+func resolveAccountMappedModelForForward(account *Account, requestedModel string) string {
+	if account == nil {
+		return ""
+	}
+	mappedModel, matched := account.ResolveMappedModel(requestedModel)
+	if !matched || strings.TrimSpace(mappedModel) == "" {
+		return requestedModel
+	}
+	return strings.TrimSpace(mappedModel)
+}
+
+// resolveAnthropicAccountUpstreamModel 执行账号映射后的 Anthropic 平台最终模型规范化。
+func resolveAnthropicAccountUpstreamModel(account *Account, accountMappedModel string) string {
+	if account == nil {
+		return ""
+	}
+	accountMappedModel = strings.TrimSpace(accountMappedModel)
+	if accountMappedModel == "" || account.Platform != PlatformAnthropic || account.Type == AccountTypeAPIKey || account.IsBedrock() {
+		return accountMappedModel
+	}
+	normalized := claude.NormalizeModelID(accountMappedModel)
+	if account.Type == AccountTypeServiceAccount {
+		return normalizeVertexAnthropicModelID(normalized)
+	}
+	return normalized
+}
+
+// resolveAccountUpstreamModel 解析真正发送给平台上游的最终模型。
+func resolveAccountUpstreamModel(ctx context.Context, account *Account, requestedModel string) string {
+	if account == nil {
+		return ""
+	}
+	if account.IsBedrock() {
+		mappedModel, ok := ResolveBedrockModelID(account, requestedModel)
+		if !ok {
+			return ""
+		}
+		return strings.TrimSpace(mappedModel)
+	}
+	if account.Platform == PlatformAntigravity {
+		return strings.TrimSpace(resolveFinalAntigravityModelKey(ctx, account, requestedModel))
+	}
+	if account.Platform == PlatformOpenAI {
+		// 模型列表按账号的 HTTP 自动透传规则展示真实可请求模型。
+		return resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, false, true)
+	}
+	mappedModel := resolveAccountMappedModelForForward(account, requestedModel)
+	if account.Platform == PlatformQoder {
+		site, err := qoderSiteForAccount(account)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(resolveQoderModelForSite(site, mappedModel).Key)
+	}
+	return resolveAnthropicAccountUpstreamModel(account, mappedModel)
 }
 
 // needsUpstreamChannelRestrictionCheck 判断是否需要在调度循环中逐账号检查上游模型的渠道限制。
@@ -909,17 +950,4 @@ func (s *GatewayService) needsUpstreamChannelRestrictionCheck(ctx context.Contex
 		return false
 	}
 	return ch.BillingModelSource == BillingModelSourceUpstream
-}
-
-// isStickyAccountUpstreamRestricted 检查粘性会话命中的账号是否受 upstream 渠道限制。
-// 合并 needsUpstreamChannelRestrictionCheck + isUpstreamModelRestrictedByChannel 两步调用，
-// 供 sticky session 条件链使用，避免内联多个函数调用导致行过长。
-func (s *GatewayService) isStickyAccountUpstreamRestricted(ctx context.Context, groupID *int64, account *Account, requestedModel string) bool {
-	if groupID == nil {
-		return false
-	}
-	if !s.needsUpstreamChannelRestrictionCheck(ctx, groupID) {
-		return false
-	}
-	return s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel)
 }

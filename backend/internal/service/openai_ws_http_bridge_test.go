@@ -157,6 +157,7 @@ func TestOpenAIWSHTTPBridgeRelaysSSEFramesAsWebSocketMessages(t *testing.T) {
 			payload,
 			len(payload),
 			"gpt-5",
+			"gpt-5",
 			"",
 			"",
 			"",
@@ -249,7 +250,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnForGrokDefaultsEmptyModelTo45(t *testing.T) 
 
 	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
 		context.Background(), c, account, "access-token", payload, len(payload),
-		"", "", "", "", "", 1,
+		"", "", "", "", "", "", 1,
 		func(message []byte) error {
 			events = append(events, append([]byte(nil), message...))
 			return nil
@@ -363,7 +364,7 @@ func TestOpenAIWSHTTPBridgeCapacityBeforeOutputReturnsFailover(t *testing.T) {
 			var messages [][]byte
 
 			_, err := svc.proxyOpenAIWSHTTPBridgeTurn(
-				context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "", "", "", "", 1,
+				context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "gpt-5.1", "", "", "", "", 1,
 				func(message []byte) error {
 					messages = append(messages, append([]byte(nil), message...))
 					return nil
@@ -397,7 +398,7 @@ func TestOpenAIWSHTTPBridgeTransportErrorBeforeOutputReturnsFailover(t *testing.
 	var messages [][]byte
 
 	_, err := svc.proxyOpenAIWSHTTPBridgeTurn(
-		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "", "", "", "", 1,
+		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "gpt-5.1", "", "", "", "", 1,
 		func(message []byte) error {
 			messages = append(messages, append([]byte(nil), message...))
 			return nil
@@ -461,7 +462,7 @@ func TestOpenAIWSHTTPBridgeIncompleteStreamBeforeOutputReturnsFailover(t *testin
 			var messages [][]byte
 
 			_, err := svc.proxyOpenAIWSHTTPBridgeTurn(
-				context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "", "", "", "", 1,
+				context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "gpt-5.1", "", "", "", "", 1,
 				func(message []byte) error {
 					messages = append(messages, append([]byte(nil), message...))
 					return nil
@@ -504,7 +505,7 @@ func TestOpenAIWSHTTPBridgeScannerErrorAfterOutputClosesWithoutFailover(t *testi
 	var messages [][]byte
 
 	_, err := svc.proxyOpenAIWSHTTPBridgeTurn(
-		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "", "", "", "", 1,
+		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "gpt-5.1", "", "", "", "", 1,
 		func(message []byte) error {
 			messages = append(messages, append([]byte(nil), message...))
 			return nil
@@ -552,7 +553,7 @@ func TestOpenAIWSHTTPBridgeDoneWithoutTerminalAfterOutputReturnsRetryableClose(t
 	var messages [][]byte
 
 	_, err := svc.proxyOpenAIWSHTTPBridgeTurn(
-		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "", "", "", "", 1,
+		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "gpt-5.1", "", "", "", "", 1,
 		func(message []byte) error {
 			messages = append(messages, append([]byte(nil), message...))
 			return nil
@@ -603,7 +604,7 @@ func TestOpenAIWSHTTPBridgeCapacityAfterDeltaIsSanitized(t *testing.T) {
 	var messages [][]byte
 
 	_, err := svc.proxyOpenAIWSHTTPBridgeTurn(
-		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "", "", "", "", 1,
+		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "gpt-5.1", "", "", "", "", 1,
 		func(message []byte) error {
 			messages = append(messages, append([]byte(nil), message...))
 			return nil
@@ -670,7 +671,7 @@ func TestOpenAIWSHTTPBridgeServerErrorAfterOutputRecordsPassiveFailure(t *testin
 	var messages [][]byte
 
 	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
-		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "", "", "", "", 1,
+		context.Background(), c, account, "sk-test", payload, len(payload), "gpt-5.1", "gpt-5.1", "", "", "", "", 1,
 		func(message []byte) error {
 			messages = append(messages, append([]byte(nil), message...))
 			return nil

@@ -586,11 +586,78 @@ func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Contex
 	return s.channelService.IsModelRestricted(ctx, *groupID, billingModel)
 }
 
+// resolveChannelRoutingModel 返回 OpenAI 账号调度层使用的渠道映射后模型。
+func (s *OpenAIGatewayService) resolveChannelRoutingModel(ctx context.Context, groupID *int64, requestedModel string) string {
+	if groupID == nil || s == nil || s.channelService == nil || strings.TrimSpace(requestedModel) == "" {
+		return requestedModel
+	}
+	mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
+	if mappedModel := strings.TrimSpace(mapping.MappedModel); mappedModel != "" {
+		return mappedModel
+	}
+	return requestedModel
+}
+
+// ResolveOpenAIWSRoutingModelForAccount 为已选定的 WebSocket 账号逐轮解析并校验渠道模型。
+// 长连接不能在后续 turn 重新调度账号，因此模型不再适配当前账号时直接拒绝该帧。
+func (s *OpenAIGatewayService) ResolveOpenAIWSRoutingModelForAccount(
+	ctx context.Context,
+	groupID *int64,
+	account *Account,
+	requestedModel string,
+	requiredCapability OpenAIEndpointCapability,
+) (string, error) {
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel == "" {
+		return "", errors.New("websocket request model is empty")
+	}
+	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
+		return "", fmt.Errorf("model %s is restricted by channel pricing", requestedModel)
+	}
+
+	routingModel := strings.TrimSpace(s.resolveChannelRoutingModel(ctx, groupID, requestedModel))
+	if routingModel == "" {
+		routingModel = requestedModel
+	}
+	if account == nil || !isOpenAICompatibleAccountEligibleForRequest(
+		ctx,
+		account,
+		account.Platform,
+		routingModel,
+		false,
+		requiredCapability,
+	) {
+		return "", fmt.Errorf("model %s is not supported by the selected websocket account", requestedModel)
+	}
+	if s.isOpenAIAccountRequestRuntimeBlocked(account, routingModel) {
+		return "", fmt.Errorf("model %s is temporarily unavailable on the selected websocket account", requestedModel)
+	}
+	if groupID != nil && s.needsUpstreamChannelRestrictionCheck(ctx, groupID) &&
+		s.isUpstreamRoutingModelRestrictedByChannel(ctx, *groupID, account, routingModel, false) {
+		return "", fmt.Errorf("model %s is restricted after account mapping", requestedModel)
+	}
+	return routingModel, nil
+}
+
 func (s *OpenAIGatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string, requireCompact bool) bool {
 	if s.channelService == nil {
 		return false
 	}
-	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
+	routingModel := s.resolveChannelRoutingModel(ctx, &groupID, requestedModel)
+	return s.isUpstreamRoutingModelRestrictedByChannel(ctx, groupID, account, routingModel, requireCompact)
+}
+
+// isUpstreamRoutingModelRestrictedByChannel 使用已经完成渠道及分组映射的账号层模型检查最终上游模型。
+func (s *OpenAIGatewayService) isUpstreamRoutingModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, routingModel string, requireCompact bool) bool {
+	if s.channelService == nil {
+		return false
+	}
+	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(
+		account,
+		routingModel,
+		requireCompact,
+		openAIHTTPPassthroughRoutingFromContext(ctx),
+	)
 	if upstreamModel == "" {
 		return false
 	}

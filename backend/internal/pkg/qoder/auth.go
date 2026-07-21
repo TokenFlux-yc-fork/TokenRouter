@@ -14,14 +14,14 @@ import (
 	"time"
 )
 
-// CenterBaseURL 是 Qoder center 服务的默认地址。
-const CenterBaseURL = "https://center.qoder.sh"
+// CenterBaseURL 是国际站 Center 服务地址，保留名称以兼容旧调用。
+const CenterBaseURL = GlobalCenterBaseURL
 
-// APIBaseURL 是 Qoder API 的默认地址，已按 qodercli endpoint-cache.json 校验。
-const APIBaseURL = "https://api1.qoder.sh"
+// APIBaseURL 是国际站推理地址，保留名称以兼容旧调用。
+const APIBaseURL = GlobalGatewayBaseURL
 
-// ClientVersion 是 COSY 协议版本，与 qodercli v1.0.20 保持一致。
-const ClientVersion = "1.0.20"
+// ClientVersion 是国际站 COSY 客户端版本，保留名称以兼容旧调用。
+const ClientVersion = GlobalClientVersion
 
 // GenerateRequestID 生成随机请求 ID。
 func GenerateRequestID() string {
@@ -77,13 +77,23 @@ func base64URLEncode(b []byte) string {
 	return result.String()
 }
 
-// NewMachine 创建新的随机机器身份。
+// NewMachine 创建国际站兼容的随机机器身份。
 func NewMachine() *MachineIdentity {
 	return &MachineIdentity{
-		MachineID:    RandomHex(36), // UUID 格式长度
+		MachineID:    RandomHex(36), // 保留国际站既有的 36 位机器标识格式。
 		MachineToken: RandomToken(50),
 		MachineType:  RandomHex(18),
 	}
+}
+
+// NewMachineForSite 按官方站点协议创建机器身份。
+func NewMachineForSite(site Site) *MachineIdentity {
+	parsed, err := ParseSite(string(site))
+	if err == nil && parsed == SiteCN {
+		// 国内客户端只持久化 UUID machine_id，其余机器头保持空值。
+		return &MachineIdentity{MachineID: RandomUUIDLike()}
+	}
+	return NewMachine()
 }
 
 // ExchangePAT 使用 Personal Access Token 换取 AuthIdentity。

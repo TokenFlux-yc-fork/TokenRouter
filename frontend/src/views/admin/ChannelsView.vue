@@ -212,19 +212,19 @@
                   v-model="form.restrict_models"
                   class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
-                <span class="input-label mb-0">{{ t('admin.channels.form.restrictModels', 'Restrict Models') }}</span>
+                <span class="input-label mb-0">{{ t('admin.channels.form.restrictModels', 'Only Allow Models in Channel Pricing') }}</span>
               </label>
               <p class="mt-1 ml-6 text-xs text-gray-400">
-                {{ t('admin.channels.form.restrictModelsHint', 'When enabled, only models in the pricing list are allowed. Others will be rejected.') }}
+                {{ t('admin.channels.form.restrictModelsHint', 'When enabled, the model must match channel pricing using the current pricing and restriction basis.') }}
               </p>
             </div>
 
             <!-- Billing Basis -->
             <div>
-              <label class="input-label">{{ t('admin.channels.form.billingModelSource', 'Billing Basis') }}</label>
+              <label class="input-label">{{ t('admin.channels.form.billingModelSource', 'Pricing and Restriction Basis') }}</label>
               <Select v-model="form.billing_model_source" :options="billingModelSourceOptions" />
-              <p class="mt-1 text-xs text-gray-400">
-                {{ t('admin.channels.form.billingModelSourceHint', 'Controls which model name is used for pricing lookup') }}
+              <p class="mt-1 text-xs text-gray-400" data-testid="billing-model-source-hint">
+                {{ billingModelSourceHint }}
               </p>
             </div>
 
@@ -372,11 +372,14 @@
             <!-- 模型映射 -->
             <div>
               <div class="mb-1 flex items-center justify-between">
-                <label class="input-label text-xs mb-0">{{ t('admin.channels.form.modelMapping', 'Model Mapping') }}</label>
+                <label class="input-label text-xs mb-0">{{ t('admin.channels.form.modelMapping', 'Channel Model Mapping') }}</label>
                 <button type="button" @click="addMappingEntry(sIdx)" class="text-xs text-primary-600 hover:text-primary-700">
                   + {{ t('common.add', 'Add') }}
                 </button>
               </div>
+              <p class="mb-2 text-[11px] text-gray-400" data-testid="channel-model-mapping-hint">
+                {{ t('admin.channels.form.modelMappingHint', 'Client request model -> channel mapping -> account mapping -> final upstream model') }}
+              </p>
               <div
                 v-if="Object.keys(section.model_mapping).length === 0"
                 class="rounded border border-dashed border-gray-300 p-2 text-center text-xs text-gray-400 dark:border-dark-500"
@@ -711,9 +714,9 @@ const statusEditOptions = computed(() => [
 ])
 
 const billingModelSourceOptions = computed(() => [
-  { value: 'channel_mapped', label: t('admin.channels.form.billingModelSourceChannelMapped', 'Bill by channel-mapped model') },
-  { value: 'requested', label: t('admin.channels.form.billingModelSourceRequested', 'Bill by requested model') },
-  { value: 'upstream', label: t('admin.channels.form.billingModelSourceUpstream', 'Bill by final upstream model') }
+  { value: 'channel_mapped', label: t('admin.channels.form.billingModelSourceChannelMapped', 'Channel-mapped model (default)') },
+  { value: 'requested', label: t('admin.channels.form.billingModelSourceRequested', 'Client request model') },
+  { value: 'upstream', label: t('admin.channels.form.billingModelSourceUpstream', 'Account final upstream model') }
 ])
 
 // ── State ──
@@ -755,6 +758,18 @@ const form = reactive({
   billing_model_source: 'channel_mapped' as string,
   platforms: [] as PlatformSection[],
   apply_pricing_to_account_stats: false,
+})
+
+// 定价依据同时决定渠道限制在哪个映射阶段执行。
+const billingModelSourceHint = computed(() => {
+  switch (form.billing_model_source) {
+    case 'requested':
+      return t('admin.channels.form.billingModelSourceHintRequested')
+    case 'upstream':
+      return t('admin.channels.form.billingModelSourceHintUpstream')
+    default:
+      return t('admin.channels.form.billingModelSourceHintChannelMapped')
+  }
 })
 
 let abortController: AbortController | null = null

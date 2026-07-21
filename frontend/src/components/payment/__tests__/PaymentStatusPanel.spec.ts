@@ -378,4 +378,44 @@ describe('PaymentStatusPanel', () => {
 
     expect(wrapper.text()).toContain('29:59')
   })
+
+  it('stops expiry countdown and switches to slow local polling while payment is processing', async () => {
+    vi.setSystemTime(new Date('2099-01-01T12:00:00Z'))
+    verifyOrder.mockResolvedValue({ data: orderFactory('PROCESSING') })
+    pollOrderStatus.mockResolvedValue(orderFactory('PROCESSING'))
+
+    const wrapper = mount(PaymentStatusPanel, {
+      props: {
+        orderId: 42,
+        qrCode: '',
+        expiresAt: '2099-01-01T12:00:02Z',
+        paymentType: 'stripe',
+        outTradeNo: 'sub2_20260420abcd1234',
+        orderType: 'balance',
+      },
+      global: {
+        stubs: {
+          Icon: true,
+        },
+      },
+    })
+
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+
+    expect(verifyOrder).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('payment.result.processing')
+    expect(wrapper.text()).toContain('payment.result.processingHint')
+    expect(wrapper.find('button.btn.btn-secondary.w-full').exists()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(13999)
+    await flushPromises()
+    expect(pollOrderStatus).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(pollOrderStatus).toHaveBeenCalledWith(42)
+    expect(verifyOrder).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).not.toContain('payment.qr.expired')
+  })
 })

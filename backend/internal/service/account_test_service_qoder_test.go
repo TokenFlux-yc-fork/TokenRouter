@@ -15,8 +15,9 @@ import (
 )
 
 type qoderAccountTestSessionProviderStub struct {
-	session *qoder.SessionContext
-	err     error
+	session     *qoder.SessionContext
+	err         error
+	invalidated []int64
 }
 
 func (s *qoderAccountTestSessionProviderStub) GetSession(context.Context, *Account) (*qoder.SessionContext, error) {
@@ -24,6 +25,10 @@ func (s *qoderAccountTestSessionProviderStub) GetSession(context.Context, *Accou
 		return nil, s.err
 	}
 	return s.session, nil
+}
+
+func (s *qoderAccountTestSessionProviderStub) Invalidate(accountID int64) {
+	s.invalidated = append(s.invalidated, accountID)
 }
 
 type qoderAccountTestClientStub struct {
@@ -159,6 +164,35 @@ func TestAccountTestService_QoderCosyUsesNativeTestPath(t *testing.T) {
 	require.Contains(t, body, `"type":"test_complete"`)
 	require.NotContains(t, body, "Unsupported account type: cosy")
 	require.NotNil(t, client.request)
+}
+
+func TestAccountTestService_QoderPATRebuildsSessionForConnectionTest(t *testing.T) {
+	ctx, _ := newQoderAccountTestContext()
+	account := &Account{
+		ID:       12,
+		Name:     "qoder-pat",
+		Platform: PlatformQoder,
+		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"pat": "pat-123",
+		},
+	}
+	provider := &qoderAccountTestSessionProviderStub{
+		session: &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
+	}
+	svc := &AccountTestService{
+		accountRepo:          stubOpenAIAccountRepo{accounts: []Account{*account}},
+		qoderSessionProvider: provider,
+		qoderClient: &qoderAccountTestClientStub{
+			body: "data: {\"body\":\"[DONE]\"}\n\n",
+		},
+		qoderOAuthClient: &qoderAccountTestOAuthClientStub{},
+	}
+
+	err := svc.TestAccountConnection(ctx, account.ID, "", "", "")
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{account.ID}, provider.invalidated)
 }
 
 func TestAccountTestService_QoderProbesUserInfoBeforeStream(t *testing.T) {

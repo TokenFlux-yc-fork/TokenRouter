@@ -27,7 +27,14 @@ const (
 	rateLimitModeFixed         = "fixed"
 	checkPaidResultAlreadyPaid = "already_paid"
 	checkPaidResultCancelled   = "cancelled"
+	checkPaidResultProcessing  = "processing"
+	checkPaidResultFailed      = "failed"
+	checkPaidResultUncertain   = "uncertain"
 	pendingWxpayReconcileLimit = 20
+	processingReconcileLimit   = 20
+	fulfillmentReconcileLimit  = 20
+	fulfillmentRetryDelay      = time.Minute
+	processingStaleAfter       = 24 * time.Hour
 )
 
 var createPaymentProviderFromInstance = provider.CreateProvider
@@ -121,12 +128,72 @@ func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (s
 
 func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
 	if o.PaymentTradeNo != "" || o.PaymentType != "" {
-		// 取消/过期路径可在确认未支付后关闭上游单据；普通 verify 只查询，不取消。
-		if s.checkPaidAndMaybeCancel(ctx, o, true) == checkPaidResultAlreadyPaid {
-			return checkPaidResultAlreadyPaid, nil
+		prov, queryRef, resp, err := s.queryPaymentOrderProvider(ctx, o)
+		if err != nil {
+			s.recordPaymentCancelFailure(ctx, o, prov, queryRef, err, nil)
+			return "", err
+		}
+		outcome, err := s.applyQueriedPaymentStatus(ctx, o, prov, queryRef, resp)
+		if err != nil {
+			return outcome, err
+		}
+		switch outcome {
+		case checkPaidResultAlreadyPaid:
+			return outcome, nil
+		case checkPaidResultProcessing:
+			return s.processingCancellationResult(fs)
+		case checkPaidResultUncertain:
+			err := fmt.Errorf("provider returned an invalid paid response")
+			s.recordPaymentCancelFailure(ctx, o, prov, queryRef, err, resp)
+			return "", err
+		case checkPaidResultFailed:
+			return s.finalizePendingOrder(ctx, o, fs, op, ad)
+		}
+
+		if cp, ok := prov.(payment.CancelableProvider); ok {
+			finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
+			cancelErr := cp.CancelPayment(ctx, queryRef)
+			finishProviderCall()
+			if cancelErr != nil {
+				// 关闭请求可能与付款完成并发，必须二次查单后才能决定本地终态。
+				retryResp, retryErr := s.queryPaymentOrderWithProvider(ctx, prov, queryRef)
+				if retryErr == nil {
+					retryOutcome, applyErr := s.applyQueriedPaymentStatus(ctx, o, prov, queryRef, retryResp)
+					if applyErr != nil {
+						return retryOutcome, applyErr
+					}
+					switch retryOutcome {
+					case checkPaidResultAlreadyPaid:
+						return retryOutcome, nil
+					case checkPaidResultProcessing:
+						return s.processingCancellationResult(fs)
+					case checkPaidResultFailed:
+						return s.finalizePendingOrder(ctx, o, fs, op, ad)
+					}
+				}
+				s.recordPaymentCancelFailure(ctx, o, prov, queryRef, cancelErr, retryResp)
+				if retryErr != nil {
+					return "", fmt.Errorf("cancel upstream payment: %w; requery: %v", cancelErr, retryErr)
+				}
+				return "", fmt.Errorf("cancel upstream payment: %w", cancelErr)
+			}
 		}
 	}
-	c, err := s.entClient.PaymentOrder.Update().Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).SetStatus(fs).Save(ctx)
+	return s.finalizePendingOrder(ctx, o, fs, op, ad)
+}
+
+func (s *PaymentService) processingCancellationResult(finalStatus string) (string, error) {
+	if finalStatus == OrderStatusExpired {
+		return checkPaidResultProcessing, nil
+	}
+	return checkPaidResultProcessing, infraerrors.BadRequest("INVALID_STATUS", "payment is processing and cannot be cancelled")
+}
+
+func (s *PaymentService) finalizePendingOrder(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
+	c, err := s.entClient.PaymentOrder.Update().
+		Where(paymentorder.IDEQ(o.ID), paymentorder.StatusEQ(OrderStatusPending)).
+		SetStatus(fs).
+		Save(ctx)
 	if err != nil {
 		return "", fmt.Errorf("update order status: %w", err)
 	}
@@ -137,28 +204,82 @@ func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, 
 		}
 		s.writeAuditLog(ctx, o.ID, auditAction, op, map[string]any{"detail": ad})
 	}
-	return checkPaidResultCancelled, nil
+	if c > 0 {
+		return checkPaidResultCancelled, nil
+	}
+	current, err := s.entClient.PaymentOrder.Get(ctx, o.ID)
+	if err != nil {
+		return "", fmt.Errorf("reload order after cancellation race: %w", err)
+	}
+	switch current.Status {
+	case OrderStatusPaid, OrderStatusRecharging, OrderStatusCompleted:
+		return checkPaidResultAlreadyPaid, nil
+	case OrderStatusProcessing:
+		return s.processingCancellationResult(fs)
+	case OrderStatusCancelled, OrderStatusExpired:
+		return checkPaidResultCancelled, nil
+	default:
+		return "", fmt.Errorf("order status changed to %s while cancelling", current.Status)
+	}
 }
 
-func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) string {
-	return s.checkPaidAndMaybeCancel(ctx, o, false)
+func (s *PaymentService) recordPaymentCancelFailure(ctx context.Context, o *dbent.PaymentOrder, prov payment.Provider, queryRef string, cancelErr error, resp *payment.QueryOrderResponse) {
+	if s.hasAuditLog(ctx, o.ID, "PAYMENT_CANCEL_FAILED") {
+		return
+	}
+	providerKey := "system"
+	if prov != nil {
+		providerKey = prov.ProviderKey()
+	}
+	detail := map[string]any{
+		"queryRef": queryRef,
+		"error":    psErrMsg(cancelErr),
+	}
+	if resp != nil {
+		detail["providerStatus"] = resp.Status
+		detail["tradeNo"] = resp.TradeNo
+	}
+	s.writeAuditLog(ctx, o.ID, "PAYMENT_CANCEL_FAILED", providerKey, detail)
 }
 
-func (s *PaymentService) checkPaidAndMaybeCancel(ctx context.Context, o *dbent.PaymentOrder, cancelUnpaid bool) string {
+func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) (string, error) {
+	prov, queryRef, resp, err := s.queryPaymentOrderProvider(ctx, o)
+	if err != nil {
+		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
+		return "", nil
+	}
+	return s.applyQueriedPaymentStatus(ctx, o, prov, queryRef, resp)
+}
+
+func (s *PaymentService) queryPaymentOrderProvider(ctx context.Context, o *dbent.PaymentOrder) (payment.Provider, string, *payment.QueryOrderResponse, error) {
 	prov, err := s.getOrderProvider(ctx, o)
 	if err != nil {
-		return ""
+		return nil, "", nil, fmt.Errorf("resolve order provider: %w", err)
 	}
 	queryRef := paymentOrderQueryReference(o, prov)
 	if queryRef == "" {
-		return ""
+		return prov, "", nil, fmt.Errorf("payment order %d has no upstream query reference", o.ID)
 	}
+	resp, err := s.queryPaymentOrderWithProvider(ctx, prov, queryRef)
+	return prov, queryRef, resp, err
+}
+
+func (s *PaymentService) queryPaymentOrderWithProvider(ctx context.Context, prov payment.Provider, queryRef string) (*payment.QueryOrderResponse, error) {
 	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	resp, err := prov.QueryOrder(ctx, queryRef)
 	finishProviderCall()
 	if err != nil {
-		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
-		return ""
+		return nil, fmt.Errorf("query upstream payment %s: %w", queryRef, err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("query upstream payment %s returned no response", queryRef)
+	}
+	return resp, nil
+}
+
+func (s *PaymentService) applyQueriedPaymentStatus(ctx context.Context, o *dbent.PaymentOrder, prov payment.Provider, queryRef string, resp *payment.QueryOrderResponse) (string, error) {
+	if resp == nil {
+		return "", fmt.Errorf("missing provider query response")
 	}
 	if resp.Status == payment.ProviderStatusPaid {
 		if !isValidProviderAmount(resp.Amount) {
@@ -171,7 +292,7 @@ func (s *PaymentService) checkPaidAndMaybeCancel(ctx context.Context, o *dbent.P
 			slog.Warn("query upstream returned invalid paid amount", "orderID", o.ID, "queryRef", queryRef, "paid", resp.Amount)
 			retriedResp, retryOK := requeryPaidOrderOnce(ctx, prov, queryRef)
 			if !retryOK {
-				return ""
+				return checkPaidResultUncertain, nil
 			}
 			resp = retriedResp
 		}
@@ -181,27 +302,35 @@ func (s *PaymentService) checkPaidAndMaybeCancel(ctx context.Context, o *dbent.P
 				Where(paymentorder.IDEQ(o.ID)).
 				SetPaymentTradeNo(upstreamTradeNo).
 				Save(ctx); updateErr != nil {
-				slog.Error("persist upstream trade no during checkPaid failed", "orderID", o.ID, "tradeNo", upstreamTradeNo, "error", updateErr)
+				return checkPaidResultAlreadyPaid, fmt.Errorf("persist upstream trade no during checkPaid: %w", updateErr)
 			} else {
 				o.PaymentTradeNo = upstreamTradeNo
 			}
 			notificationTradeNo = upstreamTradeNo
 		}
 		if err := s.HandlePaymentNotification(ctx, &payment.PaymentNotification{TradeNo: notificationTradeNo, OrderID: o.OutTradeNo, Amount: resp.Amount, Status: payment.ProviderStatusSuccess, Metadata: resp.Metadata}, prov.ProviderKey()); err != nil {
-			slog.Error("fulfillment failed during checkPaid", "orderID", o.ID, "error", err)
-			// Still return already_paid — order was paid, fulfillment can be retried
+			return checkPaidResultAlreadyPaid, err
 		}
-		return checkPaidResultAlreadyPaid
+		return checkPaidResultAlreadyPaid, nil
 	}
-	if !cancelUnpaid {
-		return ""
+	if resp.Status == payment.ProviderStatusProcessing {
+		tradeNo := strings.TrimSpace(resp.TradeNo)
+		if tradeNo == "" {
+			tradeNo = strings.TrimSpace(o.PaymentTradeNo)
+		}
+		err := s.HandlePaymentNotification(ctx, &payment.PaymentNotification{
+			TradeNo:  tradeNo,
+			OrderID:  o.OutTradeNo,
+			Amount:   resp.Amount,
+			Status:   payment.ProviderStatusProcessing,
+			Metadata: resp.Metadata,
+		}, prov.ProviderKey())
+		return checkPaidResultProcessing, err
 	}
-	if cp, ok := prov.(payment.CancelableProvider); ok {
-		finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
-		_ = cp.CancelPayment(ctx, queryRef)
-		finishProviderCall()
+	if resp.Status == payment.ProviderStatusFailed {
+		return checkPaidResultFailed, nil
 	}
-	return ""
+	return "", nil
 }
 
 func requeryPaidOrderOnce(ctx context.Context, prov payment.Provider, queryRef string) (*payment.QueryOrderResponse, bool) {
@@ -246,6 +375,9 @@ func paymentOrderQueryReference(order *dbent.PaymentOrder, prov payment.Provider
 	case payment.TypeAlipay, payment.TypeEasyPay, payment.TypeWxpay:
 		return strings.TrimSpace(order.OutTradeNo)
 	case payment.TypeStripe:
+		if tradeNo := strings.TrimSpace(order.PaymentTradeNo); strings.HasPrefix(tradeNo, "cs_") {
+			return tradeNo
+		}
 		if invoiceID := strings.TrimSpace(psStringValue(order.PaymentInvoiceID)); invoiceID != "" {
 			return invoiceID
 		}
@@ -292,11 +424,14 @@ func (s *PaymentService) VerifyOrderByOutTradeNo(ctx context.Context, outTradeNo
 	if o.UserID != userID {
 		return nil, infraerrors.Forbidden("FORBIDDEN", "no permission for this order")
 	}
-	// Only verify orders that are still pending or recently expired
+	// 待支付和已过期订单允许主动补查；处理中订单交给低频后台对账。
 	if o.Status == OrderStatusPending || o.Status == OrderStatusExpired {
-		result := s.checkPaid(ctx, o)
-		if result == checkPaidResultAlreadyPaid {
-			// Reload order to get updated status
+		result, checkErr := s.checkPaid(ctx, o)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if result == checkPaidResultAlreadyPaid || result == checkPaidResultProcessing {
+			// 重新读取以返回原子状态转换后的结果。
 			o, err = s.entClient.PaymentOrder.Get(ctx, o.ID)
 			if err != nil {
 				return nil, fmt.Errorf("reload order: %w", err)
@@ -329,7 +464,12 @@ func (s *PaymentService) ReconcilePendingWxpayOrders(ctx context.Context) (int, 
 
 	recovered := 0
 	for _, order := range orders {
-		if s.checkPaid(ctx, order) == checkPaidResultAlreadyPaid {
+		outcome, checkErr := s.checkPaid(ctx, order)
+		if checkErr != nil {
+			slog.Warn("reconcile pending wxpay order failed", "orderID", order.ID, "error", checkErr)
+			continue
+		}
+		if outcome == checkPaidResultAlreadyPaid {
 			recovered++
 		}
 	}
@@ -382,18 +522,164 @@ func (s *PaymentService) ExpireTimedOutOrders(ctx context.Context) (int, error) 
 	}
 	n := 0
 	for _, o := range orders {
-		// Check upstream payment status before expiring — the user may have
-		// paid just before timeout and the webhook hasn't arrived yet.
-		outcome, _ := s.cancelCore(ctx, o, OrderStatusExpired, "system", "order expired")
+		// 到期决策必须先确认上游状态并成功关闭待支付单据。
+		outcome, cancelErr := s.cancelCore(ctx, o, OrderStatusExpired, "system", "order expired")
+		if cancelErr != nil {
+			slog.Warn("keep timed-out order pending after upstream cancellation failure", "orderID", o.ID, "error", cancelErr)
+			continue
+		}
 		if outcome == checkPaidResultAlreadyPaid {
 			slog.Info("order was paid during expiry", "orderID", o.ID)
 			continue
 		}
-		if outcome != "" {
+		if outcome == checkPaidResultCancelled {
 			n++
 		}
 	}
 	return n, nil
+}
+
+// ReconcileProcessingOrders 低频补偿可能漏掉 Webhook 的渠道处理中订单。
+func (s *PaymentService) ReconcileProcessingOrders(ctx context.Context) (int, error) {
+	return s.reconcileProcessingOrdersAt(ctx, time.Now())
+}
+
+func (s *PaymentService) reconcileProcessingOrdersAt(ctx context.Context, now time.Time) (int, error) {
+	ids, err := s.entClient.PaymentOrder.Query().
+		Where(paymentorder.StatusEQ(OrderStatusProcessing)).
+		Order(paymentorder.ByID()).
+		IDs(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("query processing payment order ids: %w", err)
+	}
+	pageIDs := s.nextReconcilePageIDs(ids, &s.processingReconcileCursor, processingReconcileLimit)
+	if len(pageIDs) == 0 {
+		return 0, nil
+	}
+	orders, err := s.entClient.PaymentOrder.Query().
+		Where(
+			paymentorder.IDIn(pageIDs...),
+			paymentorder.StatusEQ(OrderStatusProcessing),
+		).
+		Order(paymentorder.ByID()).
+		All(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("query processing payment orders: %w", err)
+	}
+
+	recovered := 0
+	for _, order := range orders {
+		prov, queryRef, resp, queryErr := s.queryPaymentOrderProvider(ctx, order)
+		if queryErr != nil {
+			slog.Warn("query processing payment order failed", "orderID", order.ID, "error", queryErr)
+			s.maybeAuditStaleProcessingOrder(ctx, order, now, "query_failed")
+			continue
+		}
+		outcome, applyErr := s.applyQueriedPaymentStatus(ctx, order, prov, queryRef, resp)
+		if applyErr != nil {
+			slog.Error("apply processing payment status failed", "orderID", order.ID, "error", applyErr)
+			continue
+		}
+		switch outcome {
+		case checkPaidResultAlreadyPaid:
+			recovered++
+		case checkPaidResultFailed:
+			if err := s.markPaymentFailed(ctx, order, resp.TradeNo, prov.ProviderKey()); err != nil {
+				slog.Error("finalize failed processing payment failed", "orderID", order.ID, "error", err)
+			}
+		default:
+			s.maybeAuditStaleProcessingOrder(ctx, order, now, resp.Status)
+		}
+	}
+	return recovered, nil
+}
+
+// ReconcilePaidFulfillmentOrders 重试已收款但尚未完成的幂等履约。
+func (s *PaymentService) ReconcilePaidFulfillmentOrders(ctx context.Context) (int, error) {
+	return s.reconcilePaidFulfillmentOrdersAt(ctx, time.Now())
+}
+
+func (s *PaymentService) reconcilePaidFulfillmentOrdersAt(ctx context.Context, now time.Time) (int, error) {
+	ids, err := s.entClient.PaymentOrder.Query().
+		Where(
+			paymentorder.PaidAtNotNil(),
+			paymentorder.Or(
+				paymentorder.And(
+					paymentorder.StatusIn(OrderStatusPaid, OrderStatusFailed),
+					paymentorder.UpdatedAtLTE(now.Add(-fulfillmentRetryDelay)),
+				),
+				paymentorder.And(
+					paymentorder.StatusEQ(OrderStatusRecharging),
+					paymentorder.UpdatedAtLTE(now.Add(-paymentFulfillmentLeaseDuration)),
+				),
+			),
+		).
+		Order(paymentorder.ByID()).
+		IDs(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("query paid fulfillment order ids: %w", err)
+	}
+	pageIDs := s.nextReconcilePageIDs(ids, &s.fulfillmentReconcileCursor, fulfillmentReconcileLimit)
+	if len(pageIDs) == 0 {
+		return 0, nil
+	}
+
+	recovered := 0
+	for _, orderID := range pageIDs {
+		if err := s.executeFulfillment(ctx, orderID); err != nil {
+			slog.Warn("retry paid order fulfillment failed", "orderID", orderID, "error", err)
+			continue
+		}
+		order, err := s.entClient.PaymentOrder.Get(ctx, orderID)
+		if err != nil {
+			slog.Warn("reload reconciled fulfillment order failed", "orderID", orderID, "error", err)
+			continue
+		}
+		if order.Status == OrderStatusCompleted {
+			recovered++
+		}
+	}
+	return recovered, nil
+}
+
+func (s *PaymentService) nextReconcilePageIDs(ids []int64, cursor *uint64, limit int) []int64 {
+	s.reconcileCursorMu.Lock()
+	defer s.reconcileCursorMu.Unlock()
+
+	pageIDs := reconcilePageIDs(ids, *cursor, limit)
+	if len(ids) > limit {
+		*cursor = *cursor + 1
+	}
+	return pageIDs
+}
+
+func reconcilePageIDs(ids []int64, cursor uint64, limit int) []int64 {
+	if len(ids) == 0 || limit <= 0 {
+		return nil
+	}
+	if len(ids) <= limit {
+		return append([]int64(nil), ids...)
+	}
+
+	// 每轮推进一页，使长期不变的处理中订单也能覆盖整个待处理集合。
+	pageCount := (len(ids) + limit - 1) / limit
+	page := int(cursor % uint64(pageCount))
+	start := page * limit
+	end := start + limit
+	if end > len(ids) {
+		end = len(ids)
+	}
+	return append([]int64(nil), ids[start:end]...)
+}
+
+func (s *PaymentService) maybeAuditStaleProcessingOrder(ctx context.Context, order *dbent.PaymentOrder, now time.Time, providerStatus string) {
+	if order == nil || order.UpdatedAt.After(now.Add(-processingStaleAfter)) || s.hasAuditLog(ctx, order.ID, "PAYMENT_PROCESSING_STALE") {
+		return
+	}
+	s.writeAuditLog(ctx, order.ID, "PAYMENT_PROCESSING_STALE", "system", map[string]any{
+		"processing_since": order.UpdatedAt,
+		"provider_status":  providerStatus,
+	})
 }
 
 // getOrderProvider creates a provider using the order's original instance config.

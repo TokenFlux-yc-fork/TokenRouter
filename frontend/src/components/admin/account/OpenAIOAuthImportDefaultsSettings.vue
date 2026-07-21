@@ -62,6 +62,10 @@
               </div>
               <Toggle v-model="openaiPassthrough" />
             </div>
+            <CodexImageToolModeSelector
+              v-model="codexImageToolMode"
+              test-id-prefix="openai-oauth-default-codex-image-tool"
+            />
             <div class="flex items-center justify-between gap-4">
               <div>
                 <label class="input-label mb-0">{{ t('admin.accounts.openai.wsMode') }}</label>
@@ -324,10 +328,19 @@ import {
   splitPersistedModelRestriction
 } from '@/composables/useModelWhitelist'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
+import CodexImageToolModeSelector from '@/components/account/CodexImageToolModeSelector.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import { useAppStore } from '@/stores'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import {
+  applyCodexImageToolMode,
+  CODEX_IMAGE_GENERATION_BRIDGE_KEY,
+  CODEX_IMAGE_GENERATION_POLICY_KEY,
+  LEGACY_CODEX_IMAGE_GENERATION_BRIDGE_KEY,
+  readCodexImageToolMode,
+  type CodexImageToolMode
+} from '@/utils/codexImageToolMode'
 import {
   OPENAI_WS_MODE_OFF,
   isOpenAIWSModeEnabled,
@@ -353,6 +366,7 @@ const defaultModelMappings = ref<ModelMapping[]>([])
 const credentialsJson = ref('{}')
 const extraJson = ref('{}')
 const openaiPassthrough = ref(false)
+const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 const openAIOAuthClientPolicy = ref<OpenAIOAuthClientPolicy>('any')
 const codexCLIOnlyAllowClaudeCode = ref(false)
 const wsMode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -402,6 +416,9 @@ const structuredExtraKeys = [
   'openai_oauth_client_policy',
   'codex_cli_only',
   'codex_cli_only_allowed_clients',
+  CODEX_IMAGE_GENERATION_BRIDGE_KEY,
+  LEGACY_CODEX_IMAGE_GENERATION_BRIDGE_KEY,
+  CODEX_IMAGE_GENERATION_POLICY_KEY,
   'auto_pause_5h_threshold',
   'auto_pause_7d_threshold',
   'auto_pause_5h_disabled',
@@ -584,6 +601,7 @@ const hydrate = (defaults: OpenAIOAuthImportDefaults) => {
 
   const extra = { ...(defaults.extra || {}) }
   openaiPassthrough.value = extra.openai_passthrough === true || extra.openai_oauth_passthrough === true
+  codexImageToolMode.value = readCodexImageToolMode(extra)
   openAIOAuthClientPolicy.value = normalizeOpenAIOAuthClientPolicy(
     extra.openai_oauth_client_policy,
     extra.codex_cli_only
@@ -692,6 +710,7 @@ const save = async () => {
     for (const key of structuredExtraKeys) {
       delete extra[key]
     }
+    applyCodexImageToolMode(extra, codexImageToolMode.value)
 
     if (!rejectForbiddenFields(credentials, 'credentials', forbiddenCredentialFields)) return
     if (!rejectForbiddenFields(extra, 'extra', forbiddenExtraFields)) return

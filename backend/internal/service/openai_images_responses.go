@@ -1705,10 +1705,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if err := validateOpenAIImagesModel(requestModel); err != nil {
 		return nil, err
 	}
+	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, requestModel, false, false)
+	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
+		return nil, err
+	}
 	logger.LegacyPrintf(
 		"service.openai_gateway",
-		"[OpenAI] Images request routing request_model=%s endpoint=%s account_type=%s uploads=%d",
+		"[OpenAI] Images request routing request_model=%s upstream_model=%s endpoint=%s account_type=%s uploads=%d",
 		requestModel,
+		upstreamModel,
 		parsed.Endpoint,
 		account.Type,
 		len(parsed.Uploads),
@@ -1721,7 +1726,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 
-	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, requestModel)
+	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, upstreamModel)
 	if err != nil {
 		return nil, err
 	}
@@ -1795,7 +1800,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 					RequestID:        resp.Header.Get("x-request-id"),
 					Usage:            usage,
 					Model:            requestModel,
-					UpstreamModel:    requestModel,
+					UpstreamModel:    upstreamModel,
 					Stream:           parsed.Stream,
 					ResponseHeaders:  resp.Header.Clone(),
 					Duration:         time.Since(startTime),
@@ -1839,7 +1844,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		RequestID:        resp.Header.Get("x-request-id"),
 		Usage:            usage,
 		Model:            requestModel,
-		UpstreamModel:    requestModel,
+		UpstreamModel:    upstreamModel,
 		Stream:           parsed.Stream,
 		ResponseHeaders:  resp.Header.Clone(),
 		Duration:         time.Since(startTime),

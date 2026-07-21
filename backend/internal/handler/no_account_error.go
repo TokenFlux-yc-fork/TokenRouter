@@ -104,6 +104,40 @@ func classifyOpenAICompatibleNoAccountErrorFromGin(
 	)
 }
 
+// openAIResolvedRoutingModelDiagnoser 让通用错误分类器直接诊断账号层模型，避免重复渠道映射。
+type openAIResolvedRoutingModelDiagnoser struct {
+	service *service.OpenAIGatewayService
+}
+
+func (d openAIResolvedRoutingModelDiagnoser) DiagnoseModelAvailabilityForPlatform(
+	ctx context.Context,
+	groupID *int64,
+	routingModel string,
+	platform string,
+) service.ModelAvailabilityDiagnosis {
+	if d.service == nil {
+		return service.ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
+	}
+	return d.service.DiagnoseRoutingModelAvailabilityForPlatform(ctx, groupID, routingModel, platform)
+}
+
+// classifyOpenAICompatibleResolvedRoutingNoAccountErrorFromGin 用 D 诊断能力，用 R 输出错误信息。
+func classifyOpenAICompatibleResolvedRoutingNoAccountErrorFromGin(
+	c *gin.Context,
+	gatewayService *service.OpenAIGatewayService,
+	apiKey *service.APIKey,
+	routingModel string,
+	displayModel string,
+) noAccountErrorClassification {
+	return classifyOpenAICompatibleNoAccountErrorFromGin(
+		c,
+		openAIResolvedRoutingModelDiagnoser{service: gatewayService},
+		apiKey,
+		routingModel,
+		displayModel,
+	)
+}
+
 // openAICompatibleSelectionErrorForLog 将 Grok 选择失败日志中的平台名称改为实际平台。
 func openAICompatibleSelectionErrorForLog(err error, platform string) error {
 	if err == nil || platform != service.PlatformGrok {

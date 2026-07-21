@@ -90,6 +90,10 @@ func (h *PaymentWebhookHandler) handleNotify(c *gin.Context, providerKey string)
 	providers, err := h.paymentService.GetWebhookProviders(c.Request.Context(), providerKey, outTradeNo)
 	if err != nil {
 		slog.Warn("[Payment Webhook] provider not found", "provider", providerKey, "outTradeNo", outTradeNo, "error", err)
+		if !shouldAcknowledgeWebhookProviderLookupError(err) {
+			c.String(http.StatusInternalServerError, "provider lookup failed")
+			return
+		}
 		if providerKey == payment.TypeWxpay {
 			c.String(http.StatusBadRequest, "verify failed")
 			return
@@ -138,6 +142,10 @@ func (h *PaymentWebhookHandler) handleNotify(c *gin.Context, providerKey string)
 	}
 
 	writeSuccessResponse(c, resolvedProviderKey)
+}
+
+func shouldAcknowledgeWebhookProviderLookupError(err error) bool {
+	return errors.Is(err, payment.ErrProviderNotFound)
 }
 
 // extractOutTradeNo parses the webhook body to find the out_trade_no.

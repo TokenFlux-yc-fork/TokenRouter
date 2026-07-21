@@ -469,6 +469,7 @@ func (r *affiliateRepository) ListAffiliateRebateRecords(ctx context.Context, fi
 	baseJoin := `
 FROM user_affiliate_ledger ual
 JOIN payment_orders po ON po.id = ual.source_order_id
+LEFT JOIN subscription_plans sp ON sp.id = po.plan_id
 JOIN users invitee ON invitee.id = ual.source_user_id
 JOIN users inviter ON inviter.id = ual.user_id
 WHERE ual.action = 'accrue'
@@ -494,6 +495,7 @@ WHERE ual.action = 'accrue'
 		"created_at":    "ual.created_at",
 	}, "ual.created_at")
 	args = append(args, filter.PageSize, (filter.Page-1)*filter.PageSize)
+	// 新订单优先使用套餐快照；旧订单回退当前套餐币种，仍为空时沿用旧界面的 USD 口径。
 	rows, err := client.QueryContext(ctx, `
 SELECT po.id,
        po.out_trade_no,
@@ -505,6 +507,17 @@ SELECT po.id,
        COALESCE(invitee.username, ''),
        po.amount::double precision,
        po.pay_amount::double precision,
+       COALESCE(NULLIF(po.order_type, ''), 'balance'),
+       CASE
+           WHEN COALESCE(NULLIF(po.order_type, ''), 'balance') = 'subscription'
+           THEN COALESCE(
+               NULLIF(UPPER(po.plan_snapshot->>'currency'), ''),
+               NULLIF(UPPER(sp.currency), ''),
+               'USD'
+           )
+           ELSE ''
+       END,
+       COALESCE(NULLIF(UPPER(po.provider_snapshot->>'currency'), ''), 'CNY'),
        ual.amount::double precision,
        po.payment_type,
        po.status,
@@ -531,6 +544,9 @@ LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 			&item.InviteeUsername,
 			&item.OrderAmount,
 			&item.PayAmount,
+			&item.OrderType,
+			&item.OrderCurrency,
+			&item.PayCurrency,
 			&item.RebateAmount,
 			&item.PaymentType,
 			&item.OrderStatus,

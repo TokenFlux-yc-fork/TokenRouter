@@ -6,6 +6,7 @@
 
 export type OrderStatus =
   | 'PENDING'
+  | 'PROCESSING'
   | 'PAID'
   | 'RECHARGING'
   | 'COMPLETED'

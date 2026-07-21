@@ -5,6 +5,7 @@
 
 const STATUS_BADGE_MAP: Record<string, string> = {
   PENDING: 'badge-warning',
+  PROCESSING: 'badge-info',
   PAID: 'badge-info',
   RECHARGING: 'badge-info',
   COMPLETED: 'badge-success',

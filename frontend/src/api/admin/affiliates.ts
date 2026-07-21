@@ -56,6 +56,11 @@ export interface AffiliateRebateRecord {
   invitee_username: string
   order_amount: number
   pay_amount: number
+  order_type: 'balance' | 'subscription'
+  /** 订阅套餐的标价币种；余额订单为空。 */
+  order_currency: string
+  /** 支付渠道的实际扣款币种。 */
+  pay_currency: string
   rebate_amount: number
   payment_type: string
   order_status: string

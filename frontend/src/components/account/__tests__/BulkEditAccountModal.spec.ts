@@ -353,6 +353,104 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
+  it.each([
+    ['inherit', {
+      codex_image_generation_bridge: null,
+      codex_image_generation_bridge_enabled: null,
+      codex_image_generation_explicit_tool_policy: null
+    }],
+    ['enabled', {
+      codex_image_generation_bridge: true,
+      codex_image_generation_bridge_enabled: null,
+      codex_image_generation_explicit_tool_policy: null
+    }],
+    ['disabled', {
+      codex_image_generation_bridge: false,
+      codex_image_generation_bridge_enabled: null,
+      codex_image_generation_explicit_tool_policy: null
+    }],
+    ['block', {
+      codex_image_generation_bridge: null,
+      codex_image_generation_bridge_enabled: null,
+      codex_image_generation_explicit_tool_policy: 'strip'
+    }]
+  ])('OpenAI OAuth 批量编辑提交 Codex 图片工具 %s 策略', async (mode, expectedExtra) => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['oauth']
+    })
+
+    const applyCheckbox = wrapper.get<HTMLInputElement>('#bulk-edit-codex-image-tool-enabled')
+    expect(applyCheckbox.element.checked).toBe(false)
+    await applyCheckbox.setValue(true)
+    await wrapper.get(`[data-testid="bulk-edit-codex-image-tool-${mode}"]`).trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: expectedExtra
+    })
+  })
+
+  it('OpenAI API Key 批量编辑显示并提交 Codex 图片工具策略', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey']
+    })
+
+    expect(wrapper.find('#bulk-edit-codex-image-tool-enabled').exists()).toBe(true)
+    await wrapper.get('#bulk-edit-codex-image-tool-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-codex-image-tool-enabled"]').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: {
+        codex_image_generation_bridge: true,
+        codex_image_generation_bridge_enabled: null,
+        codex_image_generation_explicit_tool_policy: null
+      }
+    })
+  })
+
+  it('筛选 OpenAI OAuth/API Key 账号批量编辑提交 Codex 图片工具策略', async () => {
+    const wrapper = mountModal({
+      accountIds: [],
+      selectedPlatforms: [],
+      selectedTypes: [],
+      target: {
+        mode: 'filtered',
+        filters: { platform: 'openai', status: 'active' },
+        previewCount: 12,
+        selectedPlatforms: ['openai'],
+        selectedTypes: ['oauth', 'apikey']
+      }
+    })
+
+    await wrapper.get('#bulk-edit-codex-image-tool-enabled').setValue(true)
+    await wrapper.get('[data-testid="bulk-edit-codex-image-tool-block"]').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith({
+      filters: { platform: 'openai', status: 'active' },
+      extra: {
+        codex_image_generation_bridge: null,
+        codex_image_generation_bridge_enabled: null,
+        codex_image_generation_explicit_tool_policy: 'strip'
+      }
+    })
+  })
+
+  it('非 OpenAI 目标不显示 Codex 图片工具批量字段', () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['anthropic'],
+      selectedTypes: ['oauth']
+    })
+
+    expect(wrapper.find('#bulk-edit-codex-image-tool-enabled').exists()).toBe(false)
+  })
+
   it('OpenAI OAuth 批量编辑应提交 OAuth 专属 WS mode 字段', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],

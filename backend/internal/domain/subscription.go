@@ -3,6 +3,7 @@ package domain
 type SubscriptionPlanSnapshot struct {
 	Name            string   `json:"name"`
 	Price           float64  `json:"price"`
+	Currency        string   `json:"currency,omitempty"` // 下单时的套餐标价币种
 	ValidityDays    int      `json:"validity_days"`
 	DailyLimitUSD   *float64 `json:"daily_limit_usd,omitempty"`
 	WeeklyLimitUSD  *float64 `json:"weekly_limit_usd,omitempty"`

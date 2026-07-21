@@ -326,6 +326,18 @@ default:
   rate_multiplier: 1.0
 ```
 
+### OpenAI Responses WebSocket 首消息超时
+
+`gateway.openai_ws.client_first_message_timeout_seconds` 限制 WebSocket 升级后完整读取并
+解压首条客户端 `response.create` 消息的总时间，默认 30 秒。大上下文、图片较多或慢链路
+场景可调高到 120-300 秒。该截止时间在 HTTP bridge 路由判断前生效，bridge 模式不会绕过它。
+
+```yaml
+gateway:
+  openai_ws:
+    client_first_message_timeout_seconds: 30
+```
+
 ### Sora 功能状态（暂不可用）
 
 > ⚠️ 当前 Sora 相关功能因上游接入与媒体链路存在技术问题，暂时不可用。

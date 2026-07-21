@@ -53,7 +53,7 @@ func (s *PaymentService) GetDashboardStatsWithRange(ctx context.Context, start, 
 	}
 
 	st.PendingOrders, err = s.entClient.PaymentOrder.Query().
-		Where(paymentorder.StatusEQ(OrderStatusPending)).
+		Where(paymentorder.StatusIn(OrderStatusPending, OrderStatusProcessing)).
 		Count(ctx)
 	if err != nil {
 		return nil, err

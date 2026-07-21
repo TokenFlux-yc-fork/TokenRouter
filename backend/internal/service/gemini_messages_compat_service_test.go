@@ -67,6 +67,9 @@ func TestGeminiForwardAsChatCompletions_OAuthRoutesToGeminiAndReturnsChatFormat(
 		Credentials: map[string]any{
 			"access_token": "ya29.test-token",
 			"project_id":   "project-1",
+			"model_mapping": map[string]any{
+				"gemini-2.5-flash": "gemini-2.5-flash-upstream",
+			},
 		},
 		Concurrency: 1,
 	}
@@ -81,6 +84,7 @@ func TestGeminiForwardAsChatCompletions_OAuthRoutesToGeminiAndReturnsChatFormat(
 	require.NotNil(t, result)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "gemini-2.5-flash", result.Model)
+	require.Equal(t, "gemini-2.5-flash-upstream", result.UpstreamModel)
 	require.Equal(t, 7, result.Usage.InputTokens)
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, "hello from gemini", gjson.GetBytes(result.ResponseBody, "choices.0.message.content").String())
@@ -95,7 +99,7 @@ func TestGeminiForwardAsChatCompletions_OAuthRoutesToGeminiAndReturnsChatFormat(
 	sentBody, err := io.ReadAll(httpStub.lastReq.Body)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(sentBody, &sent))
-	require.Equal(t, "gemini-2.5-flash", sent["model"])
+	require.Equal(t, "gemini-2.5-flash-upstream", sent["model"])
 	require.Equal(t, "project-1", sent["project"])
 	require.Contains(t, fmt.Sprint(sent["request"]), "hi")
 
@@ -117,6 +121,96 @@ func TestGeminiForwardAsChatCompletions_OAuthRoutesToGeminiAndReturnsChatFormat(
 	require.Equal(t, float64(7), usage["prompt_tokens"])
 	require.Equal(t, float64(3), usage["completion_tokens"])
 	require.Equal(t, float64(10), usage["total_tokens"])
+}
+
+// TestGeminiMessagesCompatServiceForward_OAuthAppliesAccountModelMapping 验证 Messages 兼容入口的 OAuth 账号也执行 C -> U。
+func TestGeminiMessagesCompatServiceForward_OAuthAppliesAccountModelMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamBody := `data: {"response":{"candidates":[{"content":{"parts":[{"text":"hello"}]} ,"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2}}}` + "\n\n" +
+		"data: [DONE]\n\n"
+	httpStub := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &GeminiMessagesCompatService{
+		tokenProvider: &GeminiTokenProvider{},
+		httpUpstream:  httpStub,
+		cfg:           &config.Config{},
+	}
+	account := &Account{
+		ID:       103,
+		Platform: PlatformGemini,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "ya29.test-token",
+			"project_id":   "project-1",
+			"model_mapping": map[string]any{
+				"channel-model": "oauth-upstream-model",
+			},
+		},
+		Concurrency: 1,
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"channel-model","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "channel-model", result.Model)
+	require.Equal(t, "oauth-upstream-model", result.UpstreamModel)
+	require.NotNil(t, httpStub.lastReq)
+	sentBody, err := io.ReadAll(httpStub.lastReq.Body)
+	require.NoError(t, err)
+	require.Equal(t, "oauth-upstream-model", gjson.GetBytes(sentBody, "model").String())
+}
+
+// TestGeminiMessagesCompatServiceForwardNative_OAuthAppliesAccountModelMapping 验证原生 Gemini 入口的 OAuth 账号执行 C -> U。
+func TestGeminiMessagesCompatServiceForwardNative_OAuthAppliesAccountModelMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamBody := `data: {"response":{"candidates":[{"content":{"parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2}}}` + "\n\n" +
+		"data: [DONE]\n\n"
+	httpStub := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &GeminiMessagesCompatService{
+		tokenProvider: &GeminiTokenProvider{},
+		httpUpstream:  httpStub,
+		cfg:           &config.Config{},
+	}
+	account := &Account{
+		ID:       104,
+		Platform: PlatformGemini,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "ya29.test-token",
+			"project_id":   "project-1",
+			"model_mapping": map[string]any{
+				"channel-model": "oauth-upstream-model",
+			},
+		},
+		Concurrency: 1,
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/channel-model:generateContent", bytes.NewReader(body))
+
+	result, err := svc.ForwardNative(context.Background(), c, account, "channel-model", "generateContent", false, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "channel-model", result.Model)
+	require.Equal(t, "oauth-upstream-model", result.UpstreamModel)
+	require.NotNil(t, httpStub.lastReq)
+	sentBody, err := io.ReadAll(httpStub.lastReq.Body)
+	require.NoError(t, err)
+	require.Equal(t, "oauth-upstream-model", gjson.GetBytes(sentBody, "model").String())
 }
 
 func TestGeminiForwardAsChatCompletions_StreamsOpenAIChunksFromGeminiSSE(t *testing.T) {

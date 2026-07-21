@@ -6186,7 +6186,7 @@
 
                 <div>
                   <label class="input-label">
-                    {{ t("admin.settings.features.affiliate.perInviteeCap") }}
+                    {{ t("admin.settings.features.affiliate.perInviteeCap", { unitName: previewBalanceUnitName }) }}
                   </label>
                   <input
                     v-model.number="form.affiliate_rebate_per_invitee_cap"

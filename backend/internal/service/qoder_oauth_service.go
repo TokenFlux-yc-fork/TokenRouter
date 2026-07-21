@@ -25,7 +25,16 @@ type qoderOAuthClient interface {
 	GetOrganizationTags(ctx context.Context, token, uid string) (*qoder.OrganizationTags, error)
 }
 
-type qoderOAuthClientFactory func(proxyURL string) (qoderOAuthClient, error)
+type qoderCN20OAuthCompleter interface {
+	CompleteQoderCN20Identity(
+		ctx context.Context,
+		token *qoder.DeviceTokenResponse,
+		user *qoder.UserInfo,
+		machine *qoder.MachineIdentity,
+	) (*qoder.AuthIdentity, time.Time, error)
+}
+
+type qoderOAuthClientFactory func(profile qoder.Profile, proxyURL string) (qoderOAuthClient, error)
 
 type qoderOAuthSession struct {
 	State              string
@@ -33,6 +42,8 @@ type qoderOAuthSession struct {
 	CodeVerifier       string
 	Machine            *qoder.MachineIdentity
 	AuthURL            string
+	Site               qoder.Site
+	Profile            qoder.Profile
 	ProxyURL           string
 	CreatedAt          time.Time
 	Completing         bool
@@ -174,6 +185,7 @@ type QoderAuthURLResult struct {
 	State     string `json:"state"`
 	ExpiresIn int64  `json:"expires_in"`
 	Interval  int    `json:"interval"`
+	Site      string `json:"site"`
 }
 
 type QoderExchangeCodeInput struct {
@@ -196,11 +208,23 @@ type QoderTokenInfo struct {
 	OrganizationName   string         `json:"organization_name,omitempty"`
 	Name               string         `json:"name,omitempty"`
 	UserType           string         `json:"user_type,omitempty"`
+	Site               string         `json:"site"`
+	RefreshMode        string         `json:"refresh_mode"`
+	ExpiresAt          string         `json:"expires_at,omitempty"`
 	Extra              map[string]any `json:"extra,omitempty"`
 }
 
 func (s *QoderOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64) (*QoderAuthURLResult, error) {
-	req, err := qoder.NewDeviceAuthRequest()
+	return s.GenerateAuthURLForSite(ctx, qoder.SiteGlobal, proxyID)
+}
+
+// GenerateAuthURLForSite 为指定站点创建并冻结 OAuth 会话。
+func (s *QoderOAuthService) GenerateAuthURLForSite(ctx context.Context, site qoder.Site, proxyID *int64) (*QoderAuthURLResult, error) {
+	profile, err := qoder.ProfileForSite(site)
+	if err != nil {
+		return nil, err
+	}
+	req, err := qoder.NewDeviceAuthRequestForProfile(profile)
 	if err != nil {
 		return nil, fmt.Errorf("generate qoder device auth request: %w", err)
 	}
@@ -212,18 +236,19 @@ func (s *QoderOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64)
 		return nil, err
 	}
 
+	// 国内站必须复用授权 URL 中的 UUID machine_id，并保持其余机器字段为空。
+	machine := qoder.NewMachineForSite(profile.Site)
+	machine.MachineID = req.MachineID
 	session := &qoderOAuthSession{
 		State:        state,
 		Nonce:        req.Nonce,
 		CodeVerifier: req.CodeVerifier,
-		Machine: &qoder.MachineIdentity{
-			MachineID:    req.MachineID,
-			MachineToken: qoder.RandomToken(50),
-			MachineType:  qoder.RandomHex(18),
-		},
-		AuthURL:   req.AuthorizationURL(),
-		ProxyURL:  proxyURL,
-		CreatedAt: time.Now(),
+		Machine:      machine,
+		AuthURL:      req.AuthorizationURL(),
+		Site:         profile.Site,
+		Profile:      profile,
+		ProxyURL:     proxyURL,
+		CreatedAt:    time.Now(),
 	}
 	s.sessionStore.Set(sessionID, session)
 
@@ -233,6 +258,7 @@ func (s *QoderOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64)
 		State:     state,
 		ExpiresIn: int64(qoderOAuthSessionTTL / time.Second),
 		Interval:  qoderOAuthPollInterval,
+		Site:      string(profile.Site),
 	}, nil
 }
 
@@ -273,6 +299,8 @@ type QoderPollResult struct {
 }
 
 func (s *QoderOAuthService) completeSession(ctx context.Context, sessionID, state string, proxyID *int64) (*QoderTokenInfo, bool, error) {
+	// proxyID 仅为旧客户端兼容字段；OAuth 会话必须使用创建时冻结的代理。
+	_ = proxyID
 	for {
 		session, cachedTokenInfo, waitCh, err := s.sessionStore.BeginCompletion(sessionID, state)
 		if err != nil {
@@ -289,7 +317,7 @@ func (s *QoderOAuthService) completeSession(ctx context.Context, sessionID, stat
 				continue
 			}
 		}
-		tokenInfo, pending, err := s.completeSessionOnce(ctx, session, proxyID)
+		tokenInfo, pending, err := s.completeSessionOnce(ctx, session)
 		if err != nil || pending {
 			s.sessionStore.FinishCompletion(sessionID, nil)
 			return nil, pending, err
@@ -299,16 +327,8 @@ func (s *QoderOAuthService) completeSession(ctx context.Context, sessionID, stat
 	}
 }
 
-func (s *QoderOAuthService) completeSessionOnce(ctx context.Context, session *qoderOAuthSession, proxyID *int64) (*QoderTokenInfo, bool, error) {
-	proxyURL := session.ProxyURL
-	if proxyID != nil {
-		resolvedProxyURL, err := s.resolveProxyURL(ctx, proxyID)
-		if err != nil {
-			return nil, false, err
-		}
-		proxyURL = resolvedProxyURL
-	}
-	client, err := s.clientFactory(proxyURL)
+func (s *QoderOAuthService) completeSessionOnce(ctx context.Context, session *qoderOAuthSession) (*QoderTokenInfo, bool, error) {
+	client, err := s.clientFactory(session.Profile, session.ProxyURL)
 	if err != nil {
 		return nil, false, err
 	}
@@ -322,13 +342,42 @@ func (s *QoderOAuthService) completeSessionOnce(ctx context.Context, session *qo
 	}
 
 	accessToken := tokenResp.AccessTokenValue()
+	if session.Site == qoder.SiteCN {
+		expiresAt, validateErr := tokenResp.ValidateQoderCN20(time.Now())
+		if validateErr != nil {
+			return nil, false, validateErr
+		}
+		userInfo, userErr := client.GetUserInfo(ctx, accessToken)
+		if userErr != nil {
+			return nil, false, userErr
+		}
+		completer, ok := client.(qoderCN20OAuthCompleter)
+		if !ok {
+			return nil, false, errors.New("qoder CN OAuth client does not support status completion")
+		}
+		identity, completedExpiry, completeErr := completer.CompleteQoderCN20Identity(ctx, tokenResp, userInfo, session.Machine)
+		if completeErr != nil {
+			return nil, false, completeErr
+		}
+		if !completedExpiry.IsZero() {
+			expiresAt = completedExpiry
+		}
+		// status 是国内身份主数据；仅在缺少组织字段时使用 OpenAPI tags 补充。
+		organizationLookupUID := firstNonEmptyQoder(tokenResp.UserID, tokenResp.ID)
+		if userInfo != nil {
+			organizationLookupUID = firstNonEmptyQoder(userInfo.UserID, userInfo.ID, organizationLookupUID)
+		}
+		orgErr := populateQoderOrganizationForUID(ctx, client, accessToken, organizationLookupUID, identity)
+		return buildQoderTokenInfoForSite(identity, session.Machine, qoder.SiteCN, qoder.RefreshModeQoderCN20, expiresAt, nil, orgErr), false, nil
+	}
 	userInfo, userErr := client.GetUserInfo(ctx, accessToken)
 	if userErr != nil {
 		userInfo = &qoder.UserInfo{ID: tokenResp.UserID}
 	}
 	identity := qoder.BuildIdentityFromDeviceToken(userInfo, tokenResp)
 	orgErr := populateQoderOrganization(ctx, client, accessToken, identity)
-	return buildQoderTokenInfo(identity, session.Machine, userErr, orgErr), false, nil
+	expiresAt := tokenResp.ExpiryTime(time.Now())
+	return buildQoderTokenInfoForSite(identity, session.Machine, qoder.SiteGlobal, qoder.RefreshModeCosy, expiresAt, userErr, orgErr), false, nil
 }
 
 func normalizeQoderExchangeInput(input *QoderExchangeCodeInput) error {
@@ -397,7 +446,7 @@ func (s *QoderOAuthService) resolveProxyURL(ctx context.Context, proxyID *int64)
 	return proxy.URL(), nil
 }
 
-func (s *QoderOAuthService) defaultClientFactory(proxyURL string) (qoderOAuthClient, error) {
+func (s *QoderOAuthService) defaultClientFactory(profile qoder.Profile, proxyURL string) (qoderOAuthClient, error) {
 	client, err := httpclient.GetClient(httpclient.Options{
 		ProxyURL: strings.TrimSpace(proxyURL),
 		Timeout:  qoderOAuthDefaultTimeout,
@@ -405,17 +454,24 @@ func (s *QoderOAuthService) defaultClientFactory(proxyURL string) (qoderOAuthCli
 	if err != nil {
 		return nil, err
 	}
-	return qoder.NewOAuthClient(qoder.OpenAPIBaseURL, client), nil
+	return qoder.NewOAuthClientForProfile(profile, client), nil
 }
 
 func populateQoderOrganization(ctx context.Context, client qoderOAuthClient, token string, identity *qoder.AuthIdentity) error {
+	return populateQoderOrganizationForUID(ctx, client, token, "", identity)
+}
+
+func populateQoderOrganizationForUID(ctx context.Context, client qoderOAuthClient, token, lookupUID string, identity *qoder.AuthIdentity) error {
 	if client == nil || identity == nil {
 		return nil
 	}
 	if strings.TrimSpace(identity.OrganizationID) != "" {
 		return nil
 	}
-	uid := strings.TrimSpace(identity.UID)
+	uid := strings.TrimSpace(lookupUID)
+	if uid == "" {
+		uid = strings.TrimSpace(identity.UID)
+	}
 	if uid == "" {
 		uid = strings.TrimSpace(identity.AID)
 	}
@@ -435,11 +491,23 @@ func populateQoderOrganization(ctx context.Context, client qoderOAuthClient, tok
 }
 
 func buildQoderTokenInfo(identity *qoder.AuthIdentity, machine *qoder.MachineIdentity, userErr error, orgErr error) *QoderTokenInfo {
+	return buildQoderTokenInfoForSite(identity, machine, qoder.SiteGlobal, qoder.RefreshModeCosy, time.Time{}, userErr, orgErr)
+}
+
+func buildQoderTokenInfoForSite(
+	identity *qoder.AuthIdentity,
+	machine *qoder.MachineIdentity,
+	site qoder.Site,
+	refreshMode string,
+	expiresAt time.Time,
+	userErr error,
+	orgErr error,
+) *QoderTokenInfo {
 	if identity == nil {
 		identity = &qoder.AuthIdentity{UserType: "personal_standard"}
 	}
 	if machine == nil {
-		machine = qoder.NewMachine()
+		machine = qoder.NewMachineForSite(site)
 	}
 	extra := map[string]any{}
 	if userErr != nil {
@@ -451,7 +519,7 @@ func buildQoderTokenInfo(identity *qoder.AuthIdentity, machine *qoder.MachineIde
 	if len(extra) == 0 {
 		extra = nil
 	}
-	return &QoderTokenInfo{
+	tokenInfo := &QoderTokenInfo{
 		SecurityOauthToken: strings.TrimSpace(identity.SecurityOauthToken),
 		RefreshToken:       strings.TrimSpace(identity.RefreshToken),
 		MachineID:          strings.TrimSpace(machine.MachineID),
@@ -463,8 +531,14 @@ func buildQoderTokenInfo(identity *qoder.AuthIdentity, machine *qoder.MachineIde
 		OrganizationName:   strings.TrimSpace(identity.OrganizationName),
 		Name:               strings.TrimSpace(identity.Name),
 		UserType:           firstNonEmptyQoder(identity.UserType, "personal_standard"),
+		Site:               string(site),
+		RefreshMode:        refreshMode,
 		Extra:              extra,
 	}
+	if !expiresAt.IsZero() {
+		tokenInfo.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
+	}
+	return tokenInfo
 }
 
 func (s *QoderOAuthService) BuildAccountCredentials(tokenInfo *QoderTokenInfo) map[string]any {
@@ -504,6 +578,15 @@ func (s *QoderOAuthService) BuildAccountCredentials(tokenInfo *QoderTokenInfo) m
 	}
 	if tokenInfo.UserType != "" {
 		credentials["user_type"] = tokenInfo.UserType
+	}
+	if tokenInfo.Site != "" {
+		credentials["site"] = tokenInfo.Site
+	}
+	if tokenInfo.RefreshMode != "" {
+		credentials["refresh_mode"] = tokenInfo.RefreshMode
+	}
+	if tokenInfo.ExpiresAt != "" {
+		credentials["expires_at"] = tokenInfo.ExpiresAt
 	}
 	if len(tokenInfo.Extra) > 0 {
 		credentials["extra"] = tokenInfo.Extra

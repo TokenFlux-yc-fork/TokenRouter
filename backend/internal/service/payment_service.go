@@ -24,6 +24,7 @@ import (
 
 const (
 	OrderStatusPending           = payment.OrderStatusPending
+	OrderStatusProcessing        = payment.OrderStatusProcessing
 	OrderStatusPaid              = payment.OrderStatusPaid
 	OrderStatusRecharging        = payment.OrderStatusRecharging
 	OrderStatusCompleted         = payment.OrderStatusCompleted
@@ -41,8 +42,6 @@ const (
 const (
 	// defaultMaxPendingOrders and defaultOrderTimeoutMin are defined in
 	// payment_config_service.go alongside other payment configuration defaults.
-	paymentGraceMinutes = 5
-
 	defaultPageSize    = 20
 	maxPageSize        = 100
 	topUsersLimit      = 10
@@ -198,19 +197,23 @@ type TopUserStat struct {
 // --- Service ---
 
 type PaymentService struct {
-	providerMu               sync.Mutex
-	providersLoaded          bool
-	entClient                *dbent.Client
-	registry                 *payment.Registry
-	loadBalancer             payment.LoadBalancer
-	redeemService            *RedeemService
-	subscriptionSvc          *SubscriptionService
-	configService            *PaymentConfigService
-	userRepo                 UserRepository
-	groupRepo                GroupRepository
-	affiliateService         *AffiliateService
-	resumeService            *PaymentResumeService
-	notificationEmailService *NotificationEmailService
+	providerMu sync.Mutex
+	// 对账游标由同一把锁保护，确保并发触发时每轮仍推进到下一批。
+	reconcileCursorMu          sync.Mutex
+	processingReconcileCursor  uint64
+	fulfillmentReconcileCursor uint64
+	providersLoaded            bool
+	entClient                  *dbent.Client
+	registry                   *payment.Registry
+	loadBalancer               payment.LoadBalancer
+	redeemService              *RedeemService
+	subscriptionSvc            *SubscriptionService
+	configService              *PaymentConfigService
+	userRepo                   UserRepository
+	groupRepo                  GroupRepository
+	affiliateService           *AffiliateService
+	resumeService              *PaymentResumeService
+	notificationEmailService   *NotificationEmailService
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService) *PaymentService {

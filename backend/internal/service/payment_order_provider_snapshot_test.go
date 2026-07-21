@@ -110,6 +110,47 @@ func TestCreateOrderInTx_WritesProviderSnapshot(t *testing.T) {
 	require.NotContains(t, order.ProviderSnapshot, "instance_name")
 }
 
+// TestCreateOrderInTx_WritesSubscriptionPlanCurrencySnapshot 验证套餐标价币种随订单固化。
+func TestCreateOrderInTx_WritesSubscriptionPlanCurrencySnapshot(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+
+	user, err := client.User.Create().
+		SetEmail("plan-currency-snapshot@example.com").
+		SetPasswordHash("hash").
+		SetUsername("plan-currency-snapshot-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	plan, err := client.SubscriptionPlan.Create().
+		SetName("USD Plan").
+		SetPrice(10).
+		SetCurrency("USD").
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	order, err := svc.createOrderInTx(
+		ctx,
+		CreateOrderRequest{
+			UserID:      user.ID,
+			PaymentType: payment.TypeAlipay,
+			OrderType:   payment.OrderTypeSubscription,
+			ClientIP:    "127.0.0.1",
+			SrcHost:     "app.example.com",
+		},
+		&User{ID: user.ID, Email: user.Email, Username: user.Username},
+		plan,
+		&PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30},
+		10,
+		10,
+		payment.FeeBreakdown{BaseAmount: 72, PayAmount: 72},
+		&payment.InstanceSelection{ProviderKey: payment.TypeAlipay, PaymentMode: "redirect"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "USD", order.PlanSnapshot.Currency)
+}
+
 func TestCreateOrderInTx_WritesFeeBreakdown(t *testing.T) {
 	ctx := context.Background()
 	client := newPaymentConfigServiceTestClient(t)

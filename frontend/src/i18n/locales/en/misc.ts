@@ -395,6 +395,7 @@ marketplace: {
     },
     status: {
       pending: 'Pending',
+      processing: 'Payment Processing',
       paid: 'Paid',
       recharging: 'Recharging',
       completed: 'Completed',

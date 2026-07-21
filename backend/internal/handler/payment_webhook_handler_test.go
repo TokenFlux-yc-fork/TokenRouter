@@ -4,16 +4,24 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	dbent "github.com/TokenFlux/TokenRouter/ent"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
+	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	_ "modernc.org/sqlite"
 )
 
 func TestWriteSuccessResponse(t *testing.T) {
@@ -106,6 +114,32 @@ func TestWebhookConstants(t *testing.T) {
 	t.Run("webhookLogTruncateLen is 200", func(t *testing.T) {
 		assert.Equal(t, 200, webhookLogTruncateLen)
 	})
+}
+
+func TestWebhookProviderLookupErrorsOnlyAcknowledgeMissingConfiguration(t *testing.T) {
+	require.True(t, shouldAcknowledgeWebhookProviderLookupError(payment.ErrProviderNotFound))
+	require.False(t, shouldAcknowledgeWebhookProviderLookupError(errors.New("database unavailable")))
+}
+
+func TestStripeWebhookReturnsServerErrorWhenProviderLookupDatabaseFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := sql.Open("sqlite", "file:payment_webhook_lookup_failure?mode=memory&cache=shared")
+	require.NoError(t, err)
+	driver := entsql.OpenDB(dialect.SQLite, db)
+	client := dbent.NewClient(dbent.Driver(driver))
+	paymentSvc := service.NewPaymentService(client, payment.NewRegistry(), nil, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, client.Close())
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/payment/webhook/stripe", strings.NewReader(
+		`{"data":{"object":{"metadata":{"orderId":"sub2_database_failure"}}}}`,
+	))
+
+	NewPaymentWebhookHandler(paymentSvc, payment.NewRegistry()).StripeWebhook(ctx)
+
+	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+	require.Equal(t, "provider lookup failed", recorder.Body.String())
 }
 
 func TestExtractOutTradeNo(t *testing.T) {

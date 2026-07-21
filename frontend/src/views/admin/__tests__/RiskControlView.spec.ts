@@ -248,6 +248,43 @@ describe('admin RiskControlView', () => {
     }))
   })
 
+  it('separates standard, keyword, and hash block filters', async () => {
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    const resultSelect = wrapper.findAllComponents({ name: 'Select' })[0]
+    const options = resultSelect.props('options') as Array<{ value: string; label: string }>
+    // UI 选项和后端 action 一一对应，防止未来再次把不同处置合并到同一筛选。
+    expect(options.map((option) => option.value)).toEqual([
+      '',
+      'hit',
+      'block',
+      'keyword_block',
+      'hash_block',
+      'pass',
+      'error',
+    ])
+
+    listLogs.mockClear()
+    await resultSelect.vm.$emit('update:modelValue', 'hash_block')
+    await resultSelect.vm.$emit('change')
+    await flushPromises()
+
+    expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'hash_block' }))
+  })
+
   it('renders matched keyword for keyword-block audit logs', async () => {
     const log: ContentModerationLog = {
       id: 1,
@@ -298,6 +335,63 @@ describe('admin RiskControlView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('admin.riskControl.matchedKeyword: secret-token')
+  })
+
+  it('renders hash blocks with a red blocked badge instead of a hit badge', async () => {
+    const log: ContentModerationLog = {
+      id: 2,
+      request_id: 'req-hash',
+      user_id: 1002,
+      user_email: 'hash@example.com',
+      api_key_id: 2002,
+      api_key_name: 'hash-key',
+      group_id: 3002,
+      group_name: 'default',
+      endpoint: '/v1/responses',
+      provider: 'openai',
+      model: 'gpt-5',
+      mode: 'pre_block',
+      action: 'hash_block',
+      flagged: true,
+      highest_category: 'hash',
+      highest_score: 1,
+      matched_keyword: '',
+      category_scores: {},
+      threshold_snapshot: {},
+      input_excerpt: 'blocked by hash',
+      upstream_latency_ms: null,
+      error: '',
+      violation_count: 0,
+      auto_banned: false,
+      email_sent: false,
+      user_status: 'active',
+      queue_delay_ms: null,
+      created_at: '2026-01-02T03:04:05Z',
+    }
+    listLogs.mockResolvedValue({ items: [log], total: 1, page: 1, page_size: 20, pages: 1 })
+
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const badge = wrapper.findAll('span').find((node) =>
+      node.text() === 'admin.riskControl.action.hashBlock'
+    )
+    expect(badge).toBeDefined()
+    expect(badge?.classes()).toEqual(expect.arrayContaining(['bg-red-100', 'text-red-700']))
+    expect(wrapper.text()).not.toContain('admin.riskControl.result.hit')
   })
 
   it('loads full review content and releases media blob URLs when closed', async () => {
