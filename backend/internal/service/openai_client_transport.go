@@ -63,13 +63,8 @@ func normalizeOpenAIClientTransport(transport OpenAIClientTransport) OpenAIClien
 func resolveOpenAIWSDecisionByClientTransport(
 	decision OpenAIWSProtocolDecision,
 	clientTransport OpenAIClientTransport,
-	hasPreviousResponseID bool,
 ) OpenAIWSProtocolDecision {
 	if clientTransport == OpenAIClientTransportHTTP {
-		if hasPreviousResponseID && decision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
-			decision.Reason = "http_previous_response_bridge"
-			return decision
-		}
 		return openAIWSHTTPDecision("client_protocol_http")
 	}
 	return decision

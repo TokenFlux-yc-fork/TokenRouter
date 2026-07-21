@@ -120,7 +120,7 @@ func TestOpenAIGatewayService_Forward_PreservePreviousResponseIDWhenWSEnabled(t 
 	require.Nil(t, upstream.lastReq, "WS 模式下失败时不应回退 HTTP")
 }
 
-func TestOpenAIGatewayService_Forward_HTTPIngressWithoutContinuationStaysHTTPWhenWSEnabled(t *testing.T) {
+func TestOpenAIGatewayService_Forward_HTTPIngressStaysHTTPWhenWSEnabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	wsFallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -172,7 +172,7 @@ func TestOpenAIGatewayService_Forward_HTTPIngressWithoutContinuationStaysHTTPWhe
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_http_keep","input":[{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -247,7 +247,7 @@ func TestOpenAIGatewayService_Forward_HTTPIngressRetriesInvalidEncryptedContentO
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"reasoning","encrypted_content":"gAAA","summary":[{"type":"summary_text","text":"keep me"}]},{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_http_retry","input":[{"type":"reasoning","encrypted_content":"gAAA","summary":[{"type":"summary_text","text":"keep me"}]},{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -336,7 +336,7 @@ func TestOpenAIGatewayService_Forward_HTTPIngressRetriesWrappedInvalidEncryptedC
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"reasoning","encrypted_content":"gAAA","summary":[{"type":"summary_text","text":"keep me too"}]},{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_http_retry_wrapped","input":[{"type":"reasoning","encrypted_content":"gAAA","summary":[{"type":"summary_text","text":"keep me too"}]},{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)

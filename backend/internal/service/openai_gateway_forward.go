@@ -60,14 +60,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	// 普通 HTTP 入站保持 HTTP 上游；只有 previous_response_id 续链允许使用现有
-	// HTTP 响应适配器桥接到 WSv2，避免静默删除续链字段。
-	hasPreviousResponseID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()) != ""
-	clientTransport := GetOpenAIClientTransport(c)
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, clientTransport, hasPreviousResponseID)
-	httpContinuationBridge := clientTransport == OpenAIClientTransportHTTP &&
-		hasPreviousResponseID && wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2
-	passthroughEnabled := account.IsOpenAIPassthroughEnabled() && !httpContinuationBridge
+	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
+	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
 		if err != nil {
