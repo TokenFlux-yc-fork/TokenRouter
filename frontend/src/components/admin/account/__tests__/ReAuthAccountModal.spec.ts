@@ -7,34 +7,27 @@ import ReAuthAccountModal from '../ReAuthAccountModal.vue'
 const {
   showSuccessMock,
   showErrorMock,
-  showInfoMock,
   updateAccountMock,
   clearErrorMock,
   applyOAuthCredentialsMock,
   exchangeAuthCodeMock,
   buildCredentialsMock,
-  buildExtraInfoMock,
-  pollQoderAuthorizationMock,
-  buildQoderCredentialsMock
+  buildExtraInfoMock
 } = vi.hoisted(() => ({
   showSuccessMock: vi.fn(),
   showErrorMock: vi.fn(),
-  showInfoMock: vi.fn(),
   updateAccountMock: vi.fn(),
   clearErrorMock: vi.fn(),
   applyOAuthCredentialsMock: vi.fn(),
   exchangeAuthCodeMock: vi.fn(),
   buildCredentialsMock: vi.fn(),
-  buildExtraInfoMock: vi.fn(),
-  pollQoderAuthorizationMock: vi.fn(),
-  buildQoderCredentialsMock: vi.fn()
+  buildExtraInfoMock: vi.fn()
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showSuccess: showSuccessMock,
-    showError: showErrorMock,
-    showInfo: showInfoMock
+    showError: showErrorMock
   })
 }))
 
@@ -113,21 +106,6 @@ vi.mock('@/composables/useAntigravityOAuth', () => ({
   })
 }))
 
-vi.mock('@/composables/useQoderOAuth', () => ({
-  useQoderOAuth: () => ({
-    authUrl: { value: 'https://qoder.example.test/device' },
-    sessionId: { value: 'qoder-session' },
-    state: { value: 'qoder-state' },
-    loading: { value: false },
-    polling: { value: false },
-    error: { value: '' },
-    resetState: vi.fn(),
-    generateAuthUrl: vi.fn(),
-    pollAuthorization: pollQoderAuthorizationMock,
-    buildCredentials: buildQoderCredentialsMock
-  })
-}))
-
 const BaseDialogStub = defineComponent({
   name: 'BaseDialog',
   props: {
@@ -188,33 +166,16 @@ function openAIAccount(): Account {
   }
 }
 
-function qoderAccount(): Account {
-  return {
-    ...openAIAccount(),
-    id: 202,
-    name: 'Qoder COSY',
-    platform: 'qoder',
-    type: 'cosy',
-    credentials: { site: 'global' },
-    proxy_id: 18,
-    tls_fingerprint_router_id: null,
-    extra: {}
-  }
-}
-
 describe('admin/account/ReAuthAccountModal', () => {
   beforeEach(() => {
     showSuccessMock.mockReset()
     showErrorMock.mockReset()
-    showInfoMock.mockReset()
     updateAccountMock.mockReset()
     clearErrorMock.mockReset()
     applyOAuthCredentialsMock.mockReset()
     exchangeAuthCodeMock.mockReset()
     buildCredentialsMock.mockReset()
     buildExtraInfoMock.mockReset()
-    pollQoderAuthorizationMock.mockReset()
-    buildQoderCredentialsMock.mockReset()
 
     exchangeAuthCodeMock.mockResolvedValue({
       access_token: 'new-access-token',
@@ -232,12 +193,6 @@ describe('admin/account/ReAuthAccountModal', () => {
       ...openAIAccount(),
       status: 'active',
       error_message: null
-    })
-    buildQoderCredentialsMock.mockReturnValue({
-      security_oauth_token: 'cn-access-token',
-      machine_id: 'cn-machine-id',
-      site: 'cn',
-      refresh_mode: 'qodercn20'
     })
   })
 
@@ -284,73 +239,5 @@ describe('admin/account/ReAuthAccountModal', () => {
       status: 'active',
       error_message: null
     })
-  })
-
-  it('Qoder 完成设备授权后写入 CN 凭据并清除旧错误', async () => {
-    const updated = { ...qoderAccount(), status: 'active' as const, error_message: null }
-    pollQoderAuthorizationMock.mockResolvedValueOnce({
-      status: 'completed',
-      token_info: {
-        security_oauth_token: 'cn-access-token',
-        machine_id: 'cn-machine-id',
-        site: 'cn'
-      }
-    })
-    updateAccountMock.mockResolvedValueOnce(qoderAccount())
-    clearErrorMock.mockResolvedValueOnce(updated)
-
-    const wrapper = mount(ReAuthAccountModal, {
-      props: { show: true, account: qoderAccount() },
-      global: {
-        stubs: {
-          BaseDialog: BaseDialogStub,
-          OAuthAuthorizationFlow: OAuthAuthorizationFlowStub,
-          Icon: true
-        }
-      }
-    })
-    await flushPromises()
-
-    await wrapper.find('button.btn-primary').trigger('click')
-    await flushPromises()
-
-    expect(pollQoderAuthorizationMock).toHaveBeenCalledWith({
-      sessionId: 'qoder-session',
-      state: 'qoder-state'
-    })
-    expect(updateAccountMock).toHaveBeenCalledWith(202, {
-      type: 'cosy',
-      credentials: {
-        security_oauth_token: 'cn-access-token',
-        machine_id: 'cn-machine-id',
-        site: 'cn',
-        refresh_mode: 'qodercn20'
-      }
-    })
-    expect(clearErrorMock).toHaveBeenCalledWith(202)
-    expect(wrapper.emitted('reauthorized')?.[0]?.[0]).toEqual(updated)
-  })
-
-  it('Qoder 设备授权未完成时不更新账号', async () => {
-    pollQoderAuthorizationMock.mockResolvedValueOnce({ status: 'pending' })
-
-    const wrapper = mount(ReAuthAccountModal, {
-      props: { show: true, account: qoderAccount() },
-      global: {
-        stubs: {
-          BaseDialog: BaseDialogStub,
-          OAuthAuthorizationFlow: OAuthAuthorizationFlowStub,
-          Icon: true
-        }
-      }
-    })
-    await flushPromises()
-
-    await wrapper.find('button.btn-primary').trigger('click')
-    await flushPromises()
-
-    expect(showInfoMock).toHaveBeenCalledWith('admin.accounts.oauth.qoder.authorizationPending')
-    expect(updateAccountMock).not.toHaveBeenCalled()
-    expect(clearErrorMock).not.toHaveBeenCalled()
   })
 })

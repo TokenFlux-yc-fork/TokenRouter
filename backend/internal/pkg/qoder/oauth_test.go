@@ -60,7 +60,7 @@ func TestExchangeQoderCN20PATCompletesUserInfoAndStatus(t *testing.T) {
 		paths = append(paths, r.URL.Path)
 		switch r.URL.Path {
 		case JobTokenExchangePath:
-			require.Equal(t, "Qoder CLI CN/"+CNClientVersion, r.Header.Get("User-Agent"))
+			require.Equal(t, "Qoder CN/"+CNClientVersion, r.Header.Get("User-Agent"))
 			require.Equal(t, CNClientVersion, r.Header.Get("Cosy-Version"))
 			var body map[string]string
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
@@ -81,7 +81,7 @@ func TestExchangeQoderCN20PATCompletesUserInfoAndStatus(t *testing.T) {
 		case "/algo" + AuthStatusPath:
 			require.Equal(t, "1", r.URL.Query().Get("Encode"))
 			require.Equal(t, CNClientVersion, r.Header.Get("Cosy-Version"))
-			require.Equal(t, "5", r.Header.Get("Cosy-Clienttype"))
+			require.Equal(t, "0", r.Header.Get("Cosy-Clienttype"))
 			require.Equal(t, "Go-http-client/2.0", r.Header.Get("User-Agent"))
 			require.NotEmpty(t, r.Header.Get("Date"))
 			require.Equal(t, AppCode, r.Header.Get("Appcode"))
@@ -94,9 +94,9 @@ func TestExchangeQoderCN20PATCompletesUserInfoAndStatus(t *testing.T) {
 			require.NotContains(t, r.Header, "Cosy-Organization-Id")
 			require.NotContains(t, r.Header, "Cosy-Organization-Tags")
 			require.Equal(t, "machine-id", r.Header.Get("Cosy-Machineid"))
-			require.Equal(t, []string{"machine-id"}, r.Header.Values("Cosy-Machinetoken"))
-			require.Equal(t, []string{"5"}, r.Header.Values("Cosy-Machinetype"))
-			require.Empty(t, r.Header.Values("Cosy-Machinecode"))
+			require.Equal(t, []string{""}, r.Header.Values("Cosy-Machinetoken"))
+			require.Equal(t, []string{""}, r.Header.Values("Cosy-Machinetype"))
+			require.Equal(t, []string{""}, r.Header.Values("Cosy-Machinecode"))
 			envelope, params := decodeAuthStatusRequest(t, r)
 			require.JSONEq(t, `{
 				"userId": "user-token",
@@ -170,7 +170,7 @@ func TestQoderCN20PATErrorRedactsResponse(t *testing.T) {
 func TestQoderCN20RefreshPostsRefreshTokenAndValidatesExpiry(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, DeviceTokenRefreshPath, r.URL.Path)
-		require.Equal(t, "Qoder CLI CN/"+CNClientVersion, r.Header.Get("User-Agent"))
+		require.Equal(t, "Qoder CN/"+CNClientVersion, r.Header.Get("User-Agent"))
 		var body map[string]string
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		require.Equal(t, "old-refresh", body["refresh_token"])
@@ -254,7 +254,8 @@ func TestQoderOAuthClientUsesSiteUserAgent(t *testing.T) {
 		site Site
 		want string
 	}{
-		{name: "国内站", site: SiteCN, want: "Qoder CLI CN/" + CNClientVersion},
+		{name: "国际站", site: SiteGlobal, want: "Qoder/" + GlobalClientVersion},
+		{name: "国内站", site: SiteCN, want: "Qoder CN/" + CNClientVersion},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

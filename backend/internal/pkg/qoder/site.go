@@ -11,9 +11,9 @@ import (
 type Site string
 
 const (
-	// SiteGlobal 仅用于识别需要重新授权的旧国际站账号。
+	// SiteGlobal 表示 Qoder 国际站，也是旧账号的兼容默认值。
 	SiteGlobal Site = "global"
-	// SiteCN 是 Qoder 平台唯一支持的站点。
+	// SiteCN 表示 Qoder 国内站。
 	SiteCN Site = "cn"
 )
 
@@ -25,18 +25,32 @@ const (
 )
 
 const (
+	// GlobalDeviceAuthorizationURL 是国际站浏览器授权地址。
+	GlobalDeviceAuthorizationURL = "https://qoder.com/device/selectAccounts"
 	// CNDeviceAuthorizationURL 是国内站浏览器授权地址。
 	CNDeviceAuthorizationURL = "https://qoder.com.cn/device/selectAccounts"
+	// GlobalOpenAPIBaseURL 是国际站 OpenAPI 地址。
+	GlobalOpenAPIBaseURL = "https://openapi.qoder.sh"
 	// CNOpenAPIBaseURL 是国内站 OpenAPI 地址。
 	CNOpenAPIBaseURL = "https://openapi.qoder.com.cn"
+	// GlobalCenterBaseURL 是国际站 Center 地址。
+	GlobalCenterBaseURL = "https://center.qoder.sh"
+	// GlobalGatewayBaseURL 是国际站推理地址。
+	GlobalGatewayBaseURL = "https://api1.qoder.sh"
 	// CNGatewayBaseURL 是国内站推理地址。
 	CNGatewayBaseURL = "https://gateway.qoder.com.cn"
-	// CNClientVersion 是 qoderclicn 当前 COSY 客户端版本。
-	CNClientVersion = "1.1.2"
+	// GlobalClientVersion 是国际站当前 COSY 客户端版本。
+	GlobalClientVersion = "1.15.1"
+	// CNClientVersion 是国内站当前 COSY 客户端版本。
+	CNClientVersion = "1.7.1"
+	// GlobalOAuthClientID 是国际站公开 OAuth client ID。
+	GlobalOAuthClientID = "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"
 	// CNOAuthClientID 是国内站公开 OAuth client ID。
 	CNOAuthClientID = "f5a7f67c-11a8-491e-8b8e-a07f2d0df4b7"
-	// CNOpenAPIProductName 是国内站 CLI 的产品名。
-	CNOpenAPIProductName = "Qoder CLI CN"
+	// GlobalOpenAPIProductName 是国际站客户端在 OpenAPI UA 中使用的产品名。
+	GlobalOpenAPIProductName = "Qoder"
+	// CNOpenAPIProductName 是国内站客户端在 OpenAPI UA 中使用的产品名。
+	CNOpenAPIProductName = "Qoder CN"
 )
 
 // Profile 集中保存一个 Qoder 站点使用的协议端点和客户端标识。
@@ -51,13 +65,13 @@ type Profile struct {
 	OAuthClientID          string
 }
 
-// ParseSite 严格解析公开站点；新调用省略 site 时统一使用国内站。
+// ParseSite 严格解析站点；空值按国际站处理以兼容旧账号。
 func ParseSite(value string) (Site, error) {
 	switch Site(strings.ToLower(strings.TrimSpace(value))) {
-	case "", SiteCN:
+	case "", SiteGlobal:
+		return SiteGlobal, nil
+	case SiteCN:
 		return SiteCN, nil
-	case SiteGlobal:
-		return "", fmt.Errorf("qoder: global site credentials require Qoder CN reauthorization")
 	default:
 		return "", fmt.Errorf("qoder: unsupported site %q", strings.TrimSpace(value))
 	}
@@ -81,14 +95,27 @@ func ProfileForSite(site Site) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	return Profile{
-		Site:                   parsed,
-		DeviceAuthorizationURL: CNDeviceAuthorizationURL,
-		OpenAPIBaseURL:         CNOpenAPIBaseURL,
-		GatewayBaseURL:         CNGatewayBaseURL,
-		ClientVersion:          CNClientVersion,
-		OAuthClientID:          CNOAuthClientID,
-	}, nil
+	switch parsed {
+	case SiteCN:
+		return Profile{
+			Site:                   SiteCN,
+			DeviceAuthorizationURL: CNDeviceAuthorizationURL,
+			OpenAPIBaseURL:         CNOpenAPIBaseURL,
+			GatewayBaseURL:         CNGatewayBaseURL,
+			ClientVersion:          CNClientVersion,
+			OAuthClientID:          CNOAuthClientID,
+		}, nil
+	default:
+		return Profile{
+			Site:                   SiteGlobal,
+			DeviceAuthorizationURL: GlobalDeviceAuthorizationURL,
+			OpenAPIBaseURL:         GlobalOpenAPIBaseURL,
+			CenterBaseURL:          GlobalCenterBaseURL,
+			GatewayBaseURL:         GlobalGatewayBaseURL,
+			ClientVersion:          GlobalClientVersion,
+			OAuthClientID:          GlobalOAuthClientID,
+		}, nil
+	}
 }
 
 // MustProfileForSite 返回站点 profile，传入非法站点时 panic，仅供常量化内部调用。
@@ -131,9 +158,13 @@ func NormalizeProfile(profile Profile) (Profile, error) {
 func (p Profile) OpenAPIUserAgent() string {
 	normalized, err := NormalizeProfile(p)
 	if err != nil {
-		normalized = MustProfileForSite(SiteCN)
+		normalized = MustProfileForSite(SiteGlobal)
 	}
-	return CNOpenAPIProductName + "/" + normalized.ClientVersion
+	productName := GlobalOpenAPIProductName
+	if normalized.Site == SiteCN {
+		productName = CNOpenAPIProductName
+	}
+	return productName + "/" + normalized.ClientVersion
 }
 
 // MachineOS 返回 COSY 协议使用的“架构_系统”标识。

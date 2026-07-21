@@ -62,15 +62,22 @@ describe('useModelWhitelist', () => {
     const models = getModelsByPlatform('qoder')
 
     expect(models).toEqual([
+      'claude-opus-4-6',
       'auto',
+      'performance',
+      'efficient',
+      'lite',
       'qwen3.8-max-preview',
       'qwen3.7-max',
       'qwen3.7-plus',
-      'qwen3.6-flash',
+      // 新旧 Kimi 模型应同时作为创建账号的快捷候选。
+      'kimi-k3',
+      'kimi-k2.7-code',
+      'glm-5.2',
       'deepseek-v4-pro',
       'deepseek-v4-flash',
-      'glm-5.2',
-      'kimi-k2.7-code',
+      'minimax-m3',
+      'qwen3.6-flash',
       'minimax-m2.7'
     ])
     expect(models).not.toContain('ultimate')
@@ -93,22 +100,45 @@ describe('useModelWhitelist', () => {
     const presets = getPresetMappingsByPlatform('qoder')
 
     expect(presets.map(preset => [preset.from, preset.to])).toEqual([
+      ['claude-opus-4-6', 'ultimate'],
       ['auto', 'auto'],
+      ['performance', 'performance'],
+      ['efficient', 'efficient'],
+      ['lite', 'lite'],
       ['qwen3.8-max-preview', 'qmodel_preview'],
       ['qwen3.7-max', 'qmodel_latest'],
       ['qwen3.7-plus', 'qmodel'],
-      ['qwen3.6-flash', 'q36fmodel'],
+      // Kimi-K3 使用新增的独立 latest 路由。
+      ['kimi-k3', 'kmodel_latest'],
+      ['kimi-k2.7-code', 'kmodel'],
+      ['glm-5.2', 'gm51model'],
       ['deepseek-v4-pro', 'dmodel'],
       ['deepseek-v4-flash', 'dfmodel'],
-      ['glm-5.2', 'gm51model'],
-      ['kimi-k2.7-code', 'kmodel'],
+      ['minimax-m3', 'mmodel'],
+      ['qwen3.6-flash', 'q36fmodel'],
       ['minimax-m2.7', 'mmodel']
     ])
     expect(presets.map(preset => preset.from)).not.toContain('qwen3.5-plus')
     expect(presets.map(preset => preset.from)).not.toContain('glm-5')
   })
 
-  it('qoder 仅暴露国内站模型与预设', () => {
+  it('qoder 站点模型与预设分别匹配国际站和国内站', () => {
+    expect(getModelsByPlatform('qoder', 'global')).toEqual([
+      'claude-opus-4-6',
+      'auto',
+      'performance',
+      'efficient',
+      'lite',
+      'qwen3.8-max-preview',
+      'qwen3.7-max',
+      'qwen3.7-plus',
+      'kimi-k3',
+      'kimi-k2.7-code',
+      'glm-5.2',
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
+      'minimax-m3'
+    ])
     expect(getModelsByPlatform('qoder', 'cn')).toEqual([
       'auto',
       'qwen3.8-max-preview',
@@ -122,12 +152,14 @@ describe('useModelWhitelist', () => {
       'minimax-m2.7'
     ])
     expect(qoderModelKeyByPublicAlias('minimax-m2.7', 'cn')).toBe('mmodel')
+    expect(qoderModelKeyByPublicAlias('minimax-m2.7', 'global')).toBeUndefined()
   })
 
   it('qoder 公开别名到上游 route key 仅用于创建账号快捷填充', () => {
+    expect(qoderModelKeyByPublicAlias('claude-opus-4-6')).toBe('ultimate')
     expect(qoderModelKeyByPublicAlias('glm-5.2')).toBe('gm51model')
-    expect(qoderModelKeyByPublicAlias('kimi-k2.7-code')).toBe('kmodel')
-    expect(qoderModelKeyByPublicAlias('minimax-m2.7')).toBe('mmodel')
+    expect(qoderModelKeyByPublicAlias('kimi-k3')).toBe('kmodel_latest')
+    expect(qoderModelKeyByPublicAlias('minimax-m3')).toBe('mmodel')
     expect(qoderModelKeyByPublicAlias('qwen3.5-plus')).toBeUndefined()
     expect(qoderModelKeyByPublicAlias('custom-model')).toBeUndefined()
   })

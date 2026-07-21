@@ -96,6 +96,10 @@ type qoderAccountTestSessionInvalidator interface {
 	Invalidate(accountID int64)
 }
 
+type qoderAccountTestOAuthClient interface {
+	GetUserInfo(ctx context.Context, token string) (*qoder.UserInfo, error)
+}
+
 // TestEvent represents a SSE event for account testing
 type TestEvent struct {
 	Type     string `json:"type"`
@@ -134,6 +138,7 @@ type AccountTestService struct {
 	tlsFPProfileService       *TLSFingerprintProfileService
 	qoderSessionProvider      qoderAccountTestSessionProvider
 	qoderClient               qoderStreamClient
+	qoderOAuthClient          qoderAccountTestOAuthClient
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 }
@@ -1391,6 +1396,11 @@ func (s *AccountTestService) testQoderAccountConnection(c *gin.Context, account 
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	if site == qoder.SiteGlobal {
+		if err := s.probeQoderUserInfo(ctx, account, session); err != nil {
+			return s.sendErrorAndEnd(c, err.Error())
+		}
+	}
 	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过 Qoder COSY 测试连接"})
 
 	client, err := qoderStreamClientForAccount(s.qoderClient, account)
@@ -1416,6 +1426,73 @@ func (s *AccountTestService) testQoderAccountConnection(c *gin.Context, account 
 	}
 
 	return s.processQoderStream(c, resp.Body)
+}
+
+func (s *AccountTestService) probeQoderUserInfo(ctx context.Context, account *Account, session *qoder.SessionContext) error {
+	if session == nil || session.Identity == nil {
+		return errors.New("qoder session identity is empty")
+	}
+	token := strings.TrimSpace(session.Identity.SecurityOauthToken)
+	if token == "" {
+		token = strings.TrimSpace(account.GetCredential("security_oauth_token"))
+	}
+	if token == "" {
+		return errors.New("qoder security_oauth_token is empty")
+	}
+	client := s.qoderOAuthClient
+	var userInfo *qoder.UserInfo
+	var err error
+	if client != nil {
+		userInfo, err = client.GetUserInfo(ctx, token)
+	} else {
+		userInfo, err = s.getQoderUserInfoForAccount(ctx, account, token)
+	}
+	if err != nil {
+		return fmt.Errorf("qoder userinfo probe failed: %w", err)
+	}
+	if userInfo != nil {
+		if session.Identity.UID == "" && strings.TrimSpace(userInfo.ID) != "" {
+			session.Identity.UID = strings.TrimSpace(userInfo.ID)
+		}
+		if session.Identity.Name == "" && strings.TrimSpace(userInfo.Name) != "" {
+			session.Identity.Name = strings.TrimSpace(userInfo.Name)
+		}
+	}
+	return nil
+}
+
+func (s *AccountTestService) getQoderUserInfoForAccount(ctx context.Context, account *Account, token string) (*qoder.UserInfo, error) {
+	profile, err := qoderProfileForAccount(account)
+	if err != nil {
+		return nil, err
+	}
+	if doer := newQoderRequestDoer(account, s.httpUpstream, s.tlsFPProfileService); doer != nil {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, profile.OpenAPIBaseURL+qoder.UserInfoPath, nil)
+		if err != nil {
+			return nil, fmt.Errorf("qoder: create userinfo request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+		req.Header.Set("User-Agent", profile.OpenAPIUserAgent())
+
+		resp, err := doer(req)
+		if err != nil {
+			return nil, fmt.Errorf("qoder: userinfo request: %w", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			return nil, fmt.Errorf("qoder: userinfo failed with status %d: %s", resp.StatusCode, qoder.RedactSensitiveText(string(body)))
+		}
+
+		var info qoder.UserInfo
+		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+			return nil, fmt.Errorf("qoder: parse userinfo response: %w", err)
+		}
+		return &info, nil
+	}
+	return qoder.NewOAuthClientForProfile(profile, nil).GetUserInfo(ctx, token)
 }
 
 // testAntigravityAccountConnection tests an Antigravity account's connection

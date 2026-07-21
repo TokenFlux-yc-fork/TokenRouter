@@ -9,6 +9,10 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 )
 
+var qoderValidatePAT = func(ctx context.Context, account *Account, pat string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+	return qoder.ExchangePATContext(ctx, pat, machine, "", nil)
+}
+
 var qoderValidateCNPAT = func(ctx context.Context, account *Account, pat string, machine *qoder.MachineIdentity, doer qoder.RequestDoer) (*qoder.AuthIdentity, error) {
 	profile, err := qoder.ProfileForSite(qoder.SiteCN)
 	if err != nil {
@@ -23,6 +27,16 @@ func ValidateQoderCosyCredentials(ctx context.Context, account *Account) error {
 }
 
 func validateQoderCosyCredentials(ctx context.Context, account *Account, httpUpstream HTTPUpstream, tlsFPProfileService *TLSFingerprintProfileService) error {
+	return validateQoderCosyCredentialsWithOptions(ctx, account, httpUpstream, tlsFPProfileService, false)
+}
+
+func validateQoderCosyCredentialsWithOptions(
+	ctx context.Context,
+	account *Account,
+	httpUpstream HTTPUpstream,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	deferPATExchange bool,
+) error {
 	if account == nil {
 		return nil
 	}
@@ -38,7 +52,8 @@ func validateQoderCosyCredentials(ctx context.Context, account *Account, httpUps
 	if account.Credentials == nil {
 		return errors.New("qoder cosy credentials are required")
 	}
-	if _, err := qoderSiteForAccount(account); err != nil {
+	site, err := qoderSiteForAccount(account)
+	if err != nil {
 		return err
 	}
 	if _, err := qoderRefreshModeForAccount(account); err != nil {
@@ -47,10 +62,26 @@ func validateQoderCosyCredentials(ctx context.Context, account *Account, httpUps
 
 	pat := strings.TrimSpace(account.GetCredential("pat"))
 	if pat != "" {
+		// 编辑仅切换站点时先保存原凭据，兼容性由连接测试使用新站点协议验证。
+		if deferPATExchange {
+			return nil
+		}
 		machine := qoderMachineForAccount(account)
 		doer := newQoderRequestDoer(account, httpUpstream, tlsFPProfileService)
-		if _, err := qoderValidateCNPAT(ctx, account, pat, machine, doer); err != nil {
-			return fmt.Errorf("validate qoder cn pat: %w", err)
+		if site == qoder.SiteCN {
+			if _, err := qoderValidateCNPAT(ctx, account, pat, machine, doer); err != nil {
+				return fmt.Errorf("validate qoder cn pat: %w", err)
+			}
+			return nil
+		}
+		validatePAT := qoderValidatePAT
+		if httpUpstream != nil {
+			validatePAT = func(ctx context.Context, account *Account, pat string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
+				return qoder.ExchangePATContext(ctx, pat, machine, "", newQoderRequestDoer(account, httpUpstream, tlsFPProfileService))
+			}
+		}
+		if _, err := validatePAT(ctx, account, pat, machine); err != nil {
+			return fmt.Errorf("validate qoder pat: %w", err)
 		}
 		return nil
 	}
