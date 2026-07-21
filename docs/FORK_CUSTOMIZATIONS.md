@@ -56,6 +56,7 @@ separate production behavior:
 |---|---|
 | `5c8297b64` | Distinguish API-key server failover in gateway tests. |
 | `51b1ef617` | Configure the active-retry qualification fixture. |
+| `7b00e435d` | Synchronize the usage-cleanup recompute test stub for the serial service race gate. |
 
 Other test and lint adjustments are listed with their owning customization in
 the active table.
