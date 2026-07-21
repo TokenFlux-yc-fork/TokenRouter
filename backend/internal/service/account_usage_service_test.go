@@ -95,10 +95,11 @@ type qoderUsageHTTPUpstreamStub struct {
 
 func qoderUsageCredentials(token string) map[string]any {
 	return map[string]any{
+		"site":                 "cn",
 		"security_oauth_token": token,
 		"machine_id":           "machine-usage",
-		"machine_token":        "machine-token-usage",
-		"machine_type":         "machine-type-usage",
+		"machine_token":        "machine-usage",
+		"machine_type":         "5",
 		"uid":                  "uid-usage",
 		"organization_id":      "org-usage",
 	}

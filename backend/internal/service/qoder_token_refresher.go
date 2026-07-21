@@ -11,14 +11,12 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/qoder"
 )
 
-type qoderSessionRefresher func(ctx context.Context, refreshToken, securityOauthToken string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error)
 type qoderCN20SessionRefresher func(ctx context.Context, refreshToken string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, time.Time, error)
 type qoderCNCosySessionRefresher func(ctx context.Context, refreshToken, securityOauthToken, userID, organizationID string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error)
 
 // QoderTokenRefresher 使用 Qoder refresh_token 换取新的 COSY session。
 type QoderTokenRefresher struct {
 	qoderOAuthService *QoderOAuthService
-	refreshSession    qoderSessionRefresher
 	refreshCN20       qoderCN20SessionRefresher
 	refreshCNCosy     qoderCNCosySessionRefresher
 	httpUpstream      HTTPUpstream
@@ -59,7 +57,11 @@ func (r *QoderTokenRefresher) CacheKey(account *Account) string {
 }
 
 func (r *QoderTokenRefresher) CanRefresh(account *Account) bool {
-	return account != nil && account.Platform == PlatformQoder && account.Type == AccountTypeCosy
+	if account == nil || account.Platform != PlatformQoder || account.Type != AccountTypeCosy {
+		return false
+	}
+	_, err := qoderSiteForAccount(account)
+	return err == nil
 }
 
 func (r *QoderTokenRefresher) NeedsRefresh(account *Account, _ time.Duration) bool {
@@ -133,10 +135,9 @@ func (r *QoderTokenRefresher) Refresh(ctx context.Context, account *Account) (ma
 	newCredentials = MergeCredentials(account.Credentials, newCredentials)
 	newCredentials["site"] = string(site)
 	newCredentials["refresh_mode"] = refreshMode
-	if site == qoder.SiteCN {
-		// 合并旧凭据后再次清理，避免刷新把历史随机机器字段带回国内账号。
-		delete(newCredentials, "machine_token")
-		delete(newCredentials, "machine_type")
+	if machineID := strings.TrimSpace(machine.MachineID); machineID != "" {
+		newCredentials["machine_token"] = machineID
+		newCredentials["machine_type"] = "5"
 	}
 	if !expiresAt.IsZero() {
 		newCredentials["expires_at"] = expiresAt.UTC().Format(time.RFC3339)
@@ -166,13 +167,9 @@ func (r *QoderTokenRefresher) refreshIdentity(
 ) (*qoder.AuthIdentity, time.Time, error) {
 	pat := strings.TrimSpace(account.GetCredential("pat"))
 	if pat != "" {
-		if site == qoder.SiteCN {
-			profile := qoder.MustProfileForSite(qoder.SiteCN)
-			identity, expiresAt, err := qoder.ExchangeQoderCN20PATContext(ctx, pat, machine, profile, doer)
-			return identity, expiresAt, err
-		}
-		identity, err := qoder.ExchangePATContext(ctx, pat, machine, "", doer)
-		return identity, time.Time{}, err
+		profile := qoder.MustProfileForSite(qoder.SiteCN)
+		identity, expiresAt, err := qoder.ExchangeQoderCN20PATContext(ctx, pat, machine, profile, doer)
+		return identity, expiresAt, err
 	}
 
 	refreshToken := strings.TrimSpace(account.GetCredential("refresh_token"))
@@ -189,23 +186,13 @@ func (r *QoderTokenRefresher) refreshIdentity(
 		}
 		return qoder.RefreshQoderCN20SessionContext(ctx, refreshToken, machine, qoder.MustProfileForSite(site), doer)
 	}
-	if site == qoder.SiteCN {
-		userID := firstNonEmptyQoder(account.GetCredential("uid"), account.GetCredential("aid"))
-		organizationID := account.GetCredential("organization_id")
-		if r.refreshCNCosy != nil {
-			identity, err := r.refreshCNCosy(ctx, refreshToken, securityToken, userID, organizationID, machine)
-			return identity, time.Time{}, err
-		}
-		identity, err := qoder.RefreshCosySessionForProfileContext(ctx, qoder.MustProfileForSite(site), refreshToken, securityToken, userID, organizationID, machine, doer)
+	userID := firstNonEmptyQoder(account.GetCredential("uid"), account.GetCredential("aid"))
+	organizationID := account.GetCredential("organization_id")
+	if r.refreshCNCosy != nil {
+		identity, err := r.refreshCNCosy(ctx, refreshToken, securityToken, userID, organizationID, machine)
 		return identity, time.Time{}, err
 	}
-	refreshSession := r.refreshSession
-	if refreshSession == nil {
-		refreshSession = func(ctx context.Context, refreshToken, securityOauthToken string, machine *qoder.MachineIdentity) (*qoder.AuthIdentity, error) {
-			return qoder.RefreshSessionContext(ctx, refreshToken, securityOauthToken, machine, "", doer)
-		}
-	}
-	identity, err := refreshSession(ctx, refreshToken, securityToken, machine)
+	identity, err := qoder.RefreshCosySessionForProfileContext(ctx, qoder.MustProfileForSite(site), refreshToken, securityToken, userID, organizationID, machine, doer)
 	return identity, time.Time{}, err
 }
 

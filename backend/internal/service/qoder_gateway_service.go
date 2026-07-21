@@ -428,7 +428,7 @@ func (s *QoderGatewayService) buildQoderPayloadFromAnthropicMessages(c *gin.Cont
 
 func (s *QoderGatewayService) buildQoderPayloadWithConversation(c *gin.Context, account *Account, protocol string, request qoderPayloadRequest) qoderPayloadBuildResult {
 	request.userType = qoderUserType(account)
-	request.site = qoder.SiteGlobal
+	request.site = qoder.SiteCN
 	if site, err := qoderSiteForAccount(account); err == nil {
 		request.site = site
 	}
@@ -702,7 +702,7 @@ func applyQoderAccountModelMapping(account *Account, body []byte) []byte {
 }
 
 func BuildQoderPayloadFromChatCompletions(body []byte, userType string) (map[string]any, string, error) {
-	return BuildQoderPayloadFromChatCompletionsForSite(body, userType, qoder.SiteGlobal)
+	return BuildQoderPayloadFromChatCompletionsForSite(body, userType, qoder.SiteCN)
 }
 
 // BuildQoderPayloadFromChatCompletionsForSite 按账号站点解析默认模型 alias。
@@ -1650,11 +1650,6 @@ func qoderSessionIDForConversation(key, systemFingerprint, toolsFingerprint stri
 
 func buildQoderPayloadWithOptions(request qoderPayloadRequest, sessionID string, messages []qoderMessage, includeSystem bool, includeTools bool) (map[string]any, string) {
 	modelInfo := resolveQoderModelForSite(request.site, request.model)
-	userType := request.userType
-	if strings.TrimSpace(userType) == "" {
-		userType = "personal_standard"
-	}
-
 	requestID := uuid.NewString()
 	prompt := latestQoderPayloadPromptText(messages, includeTools)
 	if prompt == "" {
@@ -1668,28 +1663,26 @@ func buildQoderPayloadWithOptions(request qoderPayloadRequest, sessionID string,
 	payload["chat_record_id"] = requestID
 	payload["request_set_id"] = uuid.NewString()
 	payload["session_id"] = sessionID
-	payload["aliyun_user_type"] = userType
+	payload["aliyun_user_type"] = ""
 	parameters, _ := payload["parameters"].(map[string]any)
 	modelConfig, _ := payload["model_config"].(map[string]any)
 	parameters["max_tokens"] = request.maxTokens
 	modelConfig["key"] = modelInfo.Key
 	modelConfig["source"] = modelInfo.Source
 	chatContext, _ := payload["chat_context"].(map[string]any)
-	chatText, _ := chatContext["text"].(map[string]any)
 	extra, _ := chatContext["extra"].(map[string]any)
 	extraModelConfig, _ := extra["modelConfig"].(map[string]any)
-	extraOriginalContent, _ := extra["originalContent"].(map[string]any)
-	chatText["text"] = prompt
+	chatContext["text"] = prompt
 	extraModelConfig["key"] = modelInfo.Key
-	extraModelConfig["source"] = modelInfo.Source
-	extraOriginalContent["text"] = prompt
+	extra["originalContent"] = prompt
+	payload["system"] = request.system
 	payload["business"] = map[string]any{
 		"product":  "cli",
 		"version":  qoder.MustProfileForSite(request.site).ClientVersion,
 		"type":     "agent",
-		"stage":    "init",
+		"stage":    "start",
 		"id":       uuid.NewString(),
-		"name":     truncateRunes(prompt, 30),
+		"name":     truncateRunes(prompt, 10),
 		"begin_at": time.Now().UnixMilli(),
 	}
 
@@ -1742,28 +1735,25 @@ func qoderBasePayload() map[string]any {
 		"chat_record_id":   "",
 		"stream":           true,
 		"chat_task":        "FREE_INPUT",
-		"image_urls":       nil,
 		"is_reply":         true,
 		"is_retry":         false,
 		"session_id":       "",
-		"code_language":    "",
 		"source":           1,
 		"version":          "3",
-		"chat_prompt":      "",
 		"parameters":       map[string]any{"max_tokens": qoderDefaultMaxTokens},
-		"aliyun_user_type": "personal_standard",
-		"session_type":     "qodercli",
+		"aliyun_user_type": "",
+		"session_type":     "qoderclicn",
 		"agent_id":         "agent_common",
 		"task_id":          "common",
 		"chat_context": map[string]any{
 			"chatPrompt": "",
 			"features":   []any{},
 			"imageUrls":  nil,
-			"text":       map[string]any{"type": "text", "text": ""},
+			"text":       "",
 			"extra": map[string]any{
 				"context":         []any{},
 				"modelConfig":     map[string]any{"is_reasoning": false, "key": "auto"},
-				"originalContent": map[string]any{"type": "text", "text": ""},
+				"originalContent": "",
 			},
 		},
 		"model_config": map[string]any{
@@ -2604,11 +2594,7 @@ func qoderRawMessageOrDefault(raw json.RawMessage, fallback any) any {
 }
 
 func qoderPayloadMessageFromMessage(message qoderMessage) map[string]any {
-	isUser := message.Role == "user"
 	content := message.Text
-	if isUser {
-		content = ""
-	}
 	msg := map[string]any{
 		"role":                        message.Role,
 		"content":                     content,
@@ -5242,7 +5228,7 @@ func openAIUsageChunk(id, model string, usage ClaudeUsage, totalTokens int, usag
 }
 
 func resolveQoderModel(model string) qoderModelInfo {
-	return resolveQoderModelForSite(qoder.SiteGlobal, model)
+	return resolveQoderModelForSite(qoder.SiteCN, model)
 }
 
 func resolveQoderModelForSite(site qoder.Site, model string) qoderModelInfo {

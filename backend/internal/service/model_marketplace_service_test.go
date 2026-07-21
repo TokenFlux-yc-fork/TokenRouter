@@ -374,6 +374,7 @@ func TestModelMarketplaceQoderAccountMappedCustomModelUsesRouteKeyManualPricing(
 					Platform: PlatformQoder,
 					Type:     AccountTypeCosy,
 					Credentials: map[string]any{
+						"site": "cn",
 						"model_mapping": map[string]any{
 							"custom-qoder-model": "qmodel",
 						},

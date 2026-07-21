@@ -67,23 +67,8 @@ func (s *qoderAccountTestClientStub) StreamRequestContextWithDoer(ctx context.Co
 	return doer(req)
 }
 
-type qoderAccountTestOAuthClientStub struct {
-	token string
-	err   error
-}
-
-func (s *qoderAccountTestOAuthClientStub) GetUserInfo(_ context.Context, token string) (*qoder.UserInfo, error) {
-	s.token = token
-	if s.err != nil {
-		return nil, s.err
-	}
-	return &qoder.UserInfo{ID: "user-1", Name: "Qoder User"}, nil
-}
-
 type qoderHTTPUpstreamRecorder struct {
 	body               string
-	userInfoBody       string
-	userInfoStatusCode int
 	proxyURL           string
 	accountID          int64
 	accountConcurrency int
@@ -101,20 +86,9 @@ func (u *qoderHTTPUpstreamRecorder) DoWithTLS(req *http.Request, proxyURL string
 	u.accountConcurrency = accountConcurrency
 	u.profileSet = profile != nil
 	u.requests = append(u.requests, req)
-	body := u.body
-	if req.Method == http.MethodGet && strings.Contains(req.URL.Path, qoder.UserInfoPath) {
-		body = u.userInfoBody
-		if body == "" {
-			body = `{"id":"user-1","name":"Qoder User"}`
-		}
-	}
-	statusCode := http.StatusOK
-	if req.Method == http.MethodGet && strings.Contains(req.URL.Path, qoder.UserInfoPath) && u.userInfoStatusCode != 0 {
-		statusCode = u.userInfoStatusCode
-	}
 	return &http.Response{
-		StatusCode: statusCode,
-		Body:       io.NopCloser(strings.NewReader(body)),
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(u.body)),
 	}, nil
 }
 
@@ -135,6 +109,7 @@ func TestAccountTestService_QoderCosyUsesNativeTestPath(t *testing.T) {
 		Type:        AccountTypeCosy,
 		Concurrency: 1,
 		Credentials: map[string]any{
+			"site":                 "cn",
 			"security_oauth_token": "token",
 			"machine_id":           "machine",
 		},
@@ -150,8 +125,7 @@ func TestAccountTestService_QoderCosyUsesNativeTestPath(t *testing.T) {
 		qoderSessionProvider: &qoderAccountTestSessionProviderStub{
 			session: &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
 		},
-		qoderClient:      client,
-		qoderOAuthClient: &qoderAccountTestOAuthClientStub{},
+		qoderClient: client,
 	}
 
 	err := svc.TestAccountConnection(ctx, account.ID, "auto", "hi", "")
@@ -174,7 +148,8 @@ func TestAccountTestService_QoderPATRebuildsSessionForConnectionTest(t *testing.
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
-			"pat": "pat-123",
+			"site": "cn",
+			"pat":  "pat-123",
 		},
 	}
 	provider := &qoderAccountTestSessionProviderStub{
@@ -186,42 +161,12 @@ func TestAccountTestService_QoderPATRebuildsSessionForConnectionTest(t *testing.
 		qoderClient: &qoderAccountTestClientStub{
 			body: "data: {\"body\":\"[DONE]\"}\n\n",
 		},
-		qoderOAuthClient: &qoderAccountTestOAuthClientStub{},
 	}
 
 	err := svc.TestAccountConnection(ctx, account.ID, "", "", "")
 
 	require.NoError(t, err)
 	require.Equal(t, []int64{account.ID}, provider.invalidated)
-}
-
-func TestAccountTestService_QoderProbesUserInfoBeforeStream(t *testing.T) {
-	ctx, recorder := newQoderAccountTestContext()
-	account := &Account{
-		ID:       11,
-		Name:     "qoder",
-		Platform: PlatformQoder,
-		Type:     AccountTypeCosy,
-	}
-	client := &qoderAccountTestClientStub{
-		body: "data: {\"body\":\"[DONE]\"}\n\n",
-	}
-	oauthClient := &qoderAccountTestOAuthClientStub{}
-	svc := &AccountTestService{
-		accountRepo: stubOpenAIAccountRepo{accounts: []Account{*account}},
-		qoderSessionProvider: &qoderAccountTestSessionProviderStub{
-			session: &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "session-token"}},
-		},
-		qoderClient:      client,
-		qoderOAuthClient: oauthClient,
-	}
-
-	err := svc.TestAccountConnection(ctx, account.ID, "", "", "")
-
-	require.NoError(t, err)
-	require.Equal(t, "session-token", oauthClient.token)
-	require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
-	require.Equal(t, "auto", client.headers["x-model-key"])
 }
 
 func TestAccountTestService_QoderWrappedErrorIsVisible(t *testing.T) {
@@ -231,6 +176,9 @@ func TestAccountTestService_QoderWrappedErrorIsVisible(t *testing.T) {
 		Name:     "qoder",
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site": "cn",
+		},
 	}
 	client := &qoderAccountTestClientStub{
 		body: "data: {\"body\":\"{\\\"code\\\":\\\"101\\\",\\\"message\\\":\\\"Signature invalid\\\"}\",\"statusCodeValue\":403,\"statusCode\":\"FORBIDDEN\"}\n\n",
@@ -240,8 +188,7 @@ func TestAccountTestService_QoderWrappedErrorIsVisible(t *testing.T) {
 		qoderSessionProvider: &qoderAccountTestSessionProviderStub{
 			session: &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
 		},
-		qoderClient:      client,
-		qoderOAuthClient: &qoderAccountTestOAuthClientStub{},
+		qoderClient: client,
 	}
 
 	err := svc.TestAccountConnection(ctx, account.ID, "", "", "")
@@ -260,6 +207,9 @@ func TestAccountTestService_QoderReasoningOnlyDoesNotEmitContent(t *testing.T) {
 		Name:     "qoder",
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
+		Credentials: map[string]any{
+			"site": "cn",
+		},
 	}
 	client := &qoderAccountTestClientStub{
 		body: "data: {\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"reasoning_content\\\":\\\"hidden thought\\\"}}]}\"}\n\n" +
@@ -270,8 +220,7 @@ func TestAccountTestService_QoderReasoningOnlyDoesNotEmitContent(t *testing.T) {
 		qoderSessionProvider: &qoderAccountTestSessionProviderStub{
 			session: &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
 		},
-		qoderClient:      client,
-		qoderOAuthClient: &qoderAccountTestOAuthClientStub{},
+		qoderClient: client,
 	}
 
 	err := svc.TestAccountConnection(ctx, account.ID, "", "", "")
@@ -302,6 +251,9 @@ func TestAccountTestService_QoderUsesHTTPUpstreamForProxyAndTLS(t *testing.T) {
 		Extra: map[string]any{
 			"enable_tls_fingerprint": true,
 		},
+		Credentials: map[string]any{
+			"site": "cn",
+		},
 	}
 	client := &qoderAccountTestClientStub{}
 	upstream := &qoderHTTPUpstreamRecorder{
@@ -314,7 +266,6 @@ func TestAccountTestService_QoderUsesHTTPUpstreamForProxyAndTLS(t *testing.T) {
 			session: &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
 		},
 		qoderClient:         client,
-		qoderOAuthClient:    &qoderAccountTestOAuthClientStub{},
 		httpUpstream:        upstream,
 		tlsFPProfileService: &TLSFingerprintProfileService{},
 	}
@@ -327,95 +278,4 @@ func TestAccountTestService_QoderUsesHTTPUpstreamForProxyAndTLS(t *testing.T) {
 	require.Equal(t, int64(10), upstream.accountID)
 	require.True(t, upstream.profileSet)
 	require.NotNil(t, client.request)
-}
-
-func TestAccountTestService_QoderDefaultUserInfoProbeUsesHTTPUpstream(t *testing.T) {
-	ctx, recorder := newQoderAccountTestContext()
-	proxyID := int64(12)
-	account := &Account{
-		ID:          12,
-		Name:        "qoder",
-		Platform:    PlatformQoder,
-		Type:        AccountTypeCosy,
-		Concurrency: 3,
-		ProxyID:     &proxyID,
-		Proxy: &Proxy{
-			ID:       proxyID,
-			Protocol: "http",
-			Host:     "proxy.example.com",
-			Port:     8080,
-		},
-		Extra: map[string]any{
-			"enable_tls_fingerprint": true,
-		},
-	}
-	client := &qoderAccountTestClientStub{}
-	upstream := &qoderHTTPUpstreamRecorder{
-		userInfoBody: `{"id":"user-12","name":"Qoder User"}`,
-		body: "data: {\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"OK\\\"}}]}\"}\n\n" +
-			"data: {\"body\":\"[DONE]\"}\n\n",
-	}
-	svc := &AccountTestService{
-		accountRepo: stubOpenAIAccountRepo{accounts: []Account{*account}},
-		qoderSessionProvider: &qoderAccountTestSessionProviderStub{
-			session: &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
-		},
-		qoderClient:         client,
-		httpUpstream:        upstream,
-		tlsFPProfileService: &TLSFingerprintProfileService{},
-	}
-
-	err := svc.TestAccountConnection(ctx, account.ID, "", "", "")
-
-	require.NoError(t, err)
-	require.Contains(t, recorder.Body.String(), `"text":"OK"`)
-	require.Len(t, upstream.requests, 2)
-	require.Equal(t, http.MethodGet, upstream.requests[0].Method)
-	require.Contains(t, upstream.requests[0].URL.Path, qoder.UserInfoPath)
-	require.Equal(t, "http://proxy.example.com:8080", upstream.proxyURL)
-	require.Equal(t, int64(12), upstream.accountID)
-	require.Equal(t, 3, upstream.accountConcurrency)
-	require.True(t, upstream.profileSet)
-	// 确认探测路径使用注入的 Qoder session provider，而不是绕过代理/TLS 的默认客户端。
-	sessionProvider, ok := svc.qoderSessionProvider.(*qoderAccountTestSessionProviderStub)
-	require.True(t, ok)
-	require.Equal(t, "user-12", sessionProvider.session.Identity.UID)
-}
-
-func TestAccountTestService_QoderUserInfoProbeRedactsSensitiveErrorBody(t *testing.T) {
-	ctx, recorder := newQoderAccountTestContext()
-	account := &Account{
-		ID:          13,
-		Name:        "qoder",
-		Platform:    PlatformQoder,
-		Type:        AccountTypeCosy,
-		Concurrency: 1,
-		Credentials: map[string]any{
-			"security_oauth_token": "token",
-		},
-	}
-	upstream := &qoderHTTPUpstreamRecorder{
-		userInfoStatusCode: http.StatusInternalServerError,
-		userInfoBody:       `{"message":"failed","securityOauthToken":"sec-secret","refresh_token":"rt-secret","uid":"uid-secret","cookie":"sid=secret"}`,
-	}
-	svc := &AccountTestService{
-		accountRepo: stubOpenAIAccountRepo{accounts: []Account{*account}},
-		qoderSessionProvider: &qoderAccountTestSessionProviderStub{
-			session: &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
-		},
-		qoderClient:      &qoderAccountTestClientStub{},
-		httpUpstream:     upstream,
-		qoderOAuthClient: nil,
-	}
-
-	err := svc.TestAccountConnection(ctx, account.ID, "", "", "")
-
-	require.Error(t, err)
-	body := recorder.Body.String()
-	require.Contains(t, body, "qoder userinfo probe failed")
-	require.NotContains(t, body, "sec-secret")
-	require.NotContains(t, body, "rt-secret")
-	require.NotContains(t, body, "uid-secret")
-	require.NotContains(t, body, "sid=secret")
-	require.Contains(t, body, "***")
 }

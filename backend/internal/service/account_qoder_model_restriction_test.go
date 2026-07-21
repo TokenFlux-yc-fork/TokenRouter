@@ -59,9 +59,9 @@ func TestAccountIsModelSupported_QoderMappingWhitelistSemantics(t *testing.T) {
 		{
 			name: "whitelist public alias matches raw route key",
 			credentials: map[string]any{
-				"model_whitelist": []any{"claude-opus-4-6"},
+				"model_whitelist": []any{"qwen3.7-plus"},
 			},
-			requestedModel: "ultimate",
+			requestedModel: "qmodel",
 			expected:       true,
 		},
 		{
@@ -78,6 +78,7 @@ func TestAccountIsModelSupported_QoderMappingWhitelistSemantics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.credentials["site"] = "cn"
 			account := &Account{
 				Platform:    PlatformQoder,
 				Credentials: tt.credentials,
@@ -120,18 +121,18 @@ func TestAccountGetConfiguredRequestModels_QoderMappingWhitelistSemantics(t *tes
 }
 
 func TestAccountIsModelSupported_QoderSiteCompatibility(t *testing.T) {
-	global := &Account{Platform: PlatformQoder, Credentials: map[string]any{"site": "global"}}
+	legacy := &Account{Platform: PlatformQoder, Credentials: map[string]any{"site": "global"}}
 	cn := &Account{Platform: PlatformQoder, Credentials: map[string]any{"site": "cn"}}
 
-	require.True(t, global.IsModelSupported("claude-opus-4-6"))
+	require.False(t, legacy.IsModelSupported("claude-opus-4-6"))
 	require.False(t, cn.IsModelSupported("claude-opus-4-6"))
-	require.False(t, global.IsModelSupported("qwen3.6-flash"))
+	require.False(t, legacy.IsModelSupported("qwen3.6-flash"))
 	require.True(t, cn.IsModelSupported("qwen3.6-flash"))
-	require.False(t, global.IsModelSupported("q36fmodel"))
+	require.False(t, legacy.IsModelSupported("q36fmodel"))
 	require.True(t, cn.IsModelSupported("q36fmodel"))
-	require.True(t, global.IsModelSupported("mmodel"))
+	require.False(t, legacy.IsModelSupported("mmodel"))
 	require.True(t, cn.IsModelSupported("mmodel"))
-	require.True(t, global.IsModelSupported("unknown-raw-key"))
+	require.False(t, legacy.IsModelSupported("unknown-raw-key"))
 
 	cn.Credentials["model_mapping"] = map[string]any{"claude-opus-4-6": "ultimate"}
 	require.True(t, cn.IsModelSupported("claude-opus-4-6"), "显式账号 mapping 应覆盖站点默认限制")
