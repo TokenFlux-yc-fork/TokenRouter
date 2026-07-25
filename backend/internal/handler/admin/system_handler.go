@@ -23,6 +23,22 @@ type SystemHandler struct {
 	lockSvc   *service.SystemOperationLockService
 }
 
+// systemUpdateTimeout 限制一次完整的原地更新或指定版本回退，包括读取 Release
+// 清单和在慢速链路下载大型二进制。该值必须高于 GitHub 下载客户端的 10 分钟超时，
+// 让下载客户端自己的截止时间先起作用。
+const systemUpdateTimeout = 15 * time.Minute
+
+// systemUpdateContext 将长时间运行的更新或回退与 HTTP 请求生命周期解耦。浏览器和
+// 反向代理通常会在 30 至 60 秒后中止空闲请求，导致下载中的请求上下文被取消（#4504）。
+// 客户端断开后替换仍会继续，后续重试会命中系统操作锁或报告已经是最新版本。
+func systemUpdateContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(base, systemUpdateTimeout)
+}
+
 type systemUpdateService interface {
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
 	PerformUpdate(ctx context.Context) error
@@ -77,9 +93,12 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			release(releaseReason, succeeded)
 		}()
 
-		if err := h.updateSvc.PerformUpdate(ctx); err != nil {
+		updateCtx, cancel := systemUpdateContext(ctx)
+		defer cancel()
+
+		if err := h.updateSvc.PerformUpdate(updateCtx); err != nil {
 			if errors.Is(err, service.ErrNoUpdateAvailable) {
-				info, checkErr := h.updateSvc.CheckUpdate(ctx, false)
+				info, checkErr := h.updateSvc.CheckUpdate(updateCtx, false)
 				if checkErr != nil {
 					releaseReason = "SYSTEM_UPDATE_FAILED"
 					return nil, checkErr
@@ -153,7 +172,10 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 		}()
 
 		if targetVersion != "" {
-			err = h.updateSvc.RollbackToVersion(ctx, targetVersion)
+			// 指定版本回退同样要下载完整二进制，与更新一样和请求生命周期解耦。
+			rollbackCtx, cancel := systemUpdateContext(ctx)
+			defer cancel()
+			err = h.updateSvc.RollbackToVersion(rollbackCtx, targetVersion)
 		} else {
 			err = h.updateSvc.Rollback()
 		}

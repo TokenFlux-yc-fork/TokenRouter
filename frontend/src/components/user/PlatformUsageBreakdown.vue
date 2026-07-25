@@ -30,7 +30,7 @@
         :class="{ 'opacity-70 italic': item.isOther }"
       >
         <span class="capitalize">
-          {{ item.isOther ? t('admin.users.platformOther') : platformLabel(item.platform) }}
+          {{ item.isOther ? t('admin.users.platformOther') : usagePlatformLabel(item.platform) }}
         </span>
         <span class="font-mono">
           {{ formatBalanceAmount(item.today_actual_cost, { fractionDigits: 4 }) }}
@@ -48,6 +48,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import type { PlatformUsage } from '@/api/admin/dashboard'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
+import { usagePlatformLabel } from '@/utils/platformColors'
 
 const props = defineProps<{
   today: number
@@ -92,14 +93,4 @@ const sortedBreakdown = computed<BreakdownRow[]>(() => {
 
 const hasBreakdown = computed(() => sortedBreakdown.value.length > 0)
 
-const PLATFORM_LABELS: Record<string, string> = {
-  anthropic: 'Claude',
-  openai: 'OpenAI',
-  gemini: 'Gemini',
-  antigravity: 'Antigravity'
-}
-
-function platformLabel(platform: string): string {
-  return PLATFORM_LABELS[platform] ?? platform
-}
 </script>

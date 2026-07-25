@@ -272,7 +272,11 @@ func (s *OpenAIGatewayService) handleOpenAIWSTerminalTransientFailure(ctx contex
 	}
 	status := openAIWSPayloadTransientStatus(payload)
 	if status != 0 {
-		s.handleOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
+		if account != nil && account.Platform == PlatformGrok {
+			s.handleGrokAccountUpstreamError(ctx, account, status, headers, payload)
+		} else {
+			s.handleOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
+		}
 	}
 	return terminalEvent
 }

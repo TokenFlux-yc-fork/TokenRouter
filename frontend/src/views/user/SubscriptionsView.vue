@@ -160,7 +160,7 @@ import type { SubscriptionPlan, UserSubscription } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
-import { formatDateOnly } from '@/utils/format'
+import { formatDateOnly, formatDateTimeToMinute } from '@/utils/format'
 import {
   getRemainingDurationParts,
   isOneTimeDailyQuota,
@@ -275,9 +275,9 @@ function getProgressBarClass(used: number, limit: number | null): string {
 function formatExpirationDate(expiresAt: string): string {
   const now = new Date()
   const expires = new Date(expiresAt)
-  if (!Number.isFinite(expires.getTime())) return formatDateOnly(expires)
+  if (!Number.isFinite(expires.getTime())) return formatDateTimeToMinute(expires)
   if (expires.getTime() <= now.getTime()) return t('userSubscriptions.status.expired')
-  const date = formatDateOnly(expires)
+  const date = formatDateTimeToMinute(expires)
   const days = diffLocalCalendarDays(expires, now)
   if (days === 0) return `${date} (${t('common.today')})`
   if (days === 1) return `${date} (${t('common.tomorrow')})`

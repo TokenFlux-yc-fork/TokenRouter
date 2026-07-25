@@ -808,6 +808,8 @@ export interface OpsAdvancedSettings {
 export interface OpsDataRetentionSettings {
   cleanup_enabled: boolean
   cleanup_schedule: string
+  cleanup_batch_size: number
+  cleanup_pause_ms: number
   error_log_retention_days: number
   minute_metrics_retention_days: number
   hourly_metrics_retention_days: number
@@ -940,10 +942,6 @@ export interface OpsErrorLog {
   request_type?: number | null
   user_agent?: string
 
-  // 已删除 KEY 所有者(INVALID_API_KEY 归因快照):认证失败行 user_id 为空,
-  // 用户列以此回退显示所有者
-  deleted_key_owner_user_id?: number | null
-  deleted_key_owner_email?: string | null
 }
 
 export interface OpsErrorDetail extends OpsErrorLog {
@@ -963,11 +961,7 @@ export interface OpsErrorDetail extends OpsErrorLog {
 
   is_business_limited: boolean
 
-  // 已删除 Key 的归因信息；所有者字段已上移到 OpsErrorLog，供列表用户列回退。
-  attempted_key_prefix?: string | null
-  deleted_key_name?: string | null
-
-  // 有效未删除 key 报错时的前缀快照
+  // 有效且未删除的 Key 在错误发生时保存的前缀快照
   api_key_prefix?: string | null
 }
 

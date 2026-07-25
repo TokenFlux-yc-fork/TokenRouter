@@ -1003,6 +1003,9 @@ func (s *emailBindUserRepoStub) ExistsByNormalizedEmail(_ context.Context, norma
 func (s *emailBindUserRepoStub) LockRegistrationEmail(context.Context, string) error {
 	return nil
 }
+func (s *emailBindUserRepoStub) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	return 0, nil
+}
 
 func (s *emailBindUserRepoStub) RemoveGroupFromAllowedGroups(context.Context, int64) (int64, error) {
 	return 0, nil

@@ -61,11 +61,19 @@ export async function getRollbackVersions(): Promise<{ versions: RollbackVersion
 }
 
 /**
+ * 原地更新和指定版本回退需要从 GitHub 下载完整二进制，慢速链路可能耗时数分钟。
+ * 全局 30 秒 axios 超时会在下载中途取消请求（#4504），因此这里与后端一致等待 15 分钟。
+ */
+const UPDATE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
+
+/**
  * Perform system update
  * Downloads and applies the latest version
  */
 export async function performUpdate(): Promise<UpdateResult> {
-  const { data } = await apiClient.post<UpdateResult>('/admin/system/update')
+  const { data } = await apiClient.post<UpdateResult>('/admin/system/update', undefined, {
+    timeout: UPDATE_REQUEST_TIMEOUT_MS
+  })
   return data
 }
 
@@ -76,7 +84,8 @@ export async function performUpdate(): Promise<UpdateResult> {
 export async function rollback(version?: string): Promise<UpdateResult> {
   const { data } = await apiClient.post<UpdateResult>(
     '/admin/system/rollback',
-    version ? { version } : undefined
+    version ? { version } : undefined,
+    { timeout: UPDATE_REQUEST_TIMEOUT_MS }
   )
   return data
 }

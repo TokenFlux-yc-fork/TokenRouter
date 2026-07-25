@@ -1,10 +1,10 @@
 package repository
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"sync/atomic"
 	"time"
@@ -29,12 +29,16 @@ const s3MaxUploadConcurrency = 8
 const s3MaxUploadParts = 10000
 const s3UploadFailTimeout = 30 * time.Second
 
+const backupStreamPartSizeBytes = 16 * 1024 * 1024
+const backupStreamConcurrency = 1
+
 // S3BackupStore implements service.BackupObjectStore using AWS S3 compatible storage
 type S3BackupStore struct {
 	client            *s3.Client
 	bucket            string
 	uploadConcurrency int
 	uploadPartSizeMB  int
+	uploadMode        string
 }
 
 // NewS3BackupStoreFactory returns a BackupObjectStoreFactory that creates S3-backed stores
@@ -71,22 +75,85 @@ func NewS3BackupStoreFactory() service.BackupObjectStoreFactory {
 			bucket:            cfg.Bucket,
 			uploadConcurrency: normalizeS3UploadConcurrency(cfg.UploadConcurrency),
 			uploadPartSizeMB:  normalizeS3UploadPartSizeMB(cfg.UploadPartSizeMB),
+			uploadMode:        service.NormalizeBackupS3UploadMode(cfg.UploadMode),
 		}, nil
 	}
 }
 
 func (s *S3BackupStore) Upload(ctx context.Context, key string, body io.Reader, contentType string) (int64, error) {
-	// 读取全部内容以获取大小（S3 PutObject 需要知道内容长度）
-	// 注意：阿里云 OSS 不兼容 s3manager 分片上传的签名方式，因此使用 PutObject
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return 0, fmt.Errorf("read body: %w", err)
+	if s.uploadMode == service.BackupS3UploadModeMultipart {
+		return s.uploadBackupMultipart(ctx, key, body, contentType)
 	}
+	return s.uploadBackupSpooledPut(ctx, key, body, contentType)
+}
 
-	if err := s.putObject(ctx, key, bytes.NewReader(data), contentType); err != nil {
+// uploadBackupMultipart 使用单并发小分片上传未知长度的备份流，限制进程内缓冲区上限。
+func (s *S3BackupStore) uploadBackupMultipart(ctx context.Context, key string, body io.Reader, contentType string) (int64, error) {
+	progress := &s3UploadProgressListener{}
+	uploader := transfermanager.New(s.client, func(o *transfermanager.Options) {
+		o.PartSizeBytes = backupStreamPartSizeBytes
+		o.MultipartUploadThreshold = backupStreamPartSizeBytes
+		o.Concurrency = backupStreamConcurrency
+		o.MaxUploadParts = s3MaxUploadParts
+		o.FailTimeout = s3UploadFailTimeout
+		o.ObjectProgressListeners.Register(progress)
+	})
+	finish := servertiming.ObserveDependency(ctx, "s3")
+	out, err := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
+		Bucket:      &s.bucket,
+		Key:         &key,
+		Body:        body,
+		ContentType: &contentType,
+	})
+	finish()
+	if err != nil {
+		return progress.UploadedBytes(), fmt.Errorf("S3 backup multipart upload: %w", err)
+	}
+	uploaded := progress.UploadedBytes()
+	if out.ContentLength != nil && *out.ContentLength > uploaded {
+		uploaded = *out.ContentLength
+	}
+	return uploaded, nil
+}
+
+// uploadBackupSpooledPut 先写入权限受限的临时文件，再以已知长度执行兼容性更好的 PutObject。
+func (s *S3BackupStore) uploadBackupSpooledPut(ctx context.Context, key string, body io.Reader, contentType string) (sizeBytes int64, err error) {
+	tmp, err := os.CreateTemp("", "tokenrouter-backup-upload-*.tmp")
+	if err != nil {
+		return 0, fmt.Errorf("create backup upload temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	written, err := io.Copy(tmp, &contextAwareReader{ctx: ctx, reader: body})
+	if err != nil {
+		return 0, fmt.Errorf("spool backup upload: %w", err)
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("rewind backup upload temp file: %w", err)
+	}
+	if err := s.putObject(ctx, key, tmp, contentType, written); err != nil {
 		return 0, err
 	}
-	return int64(len(data)), nil
+	return written, nil
+}
+
+type contextAwareReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+// Read 在每次读取前检查取消信号，避免磁盘暂存阶段忽略任务超时。
+func (r *contextAwareReader) Read(p []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.reader.Read(p)
+	}
 }
 
 // UploadFile 面向几十 GB 级别的本地文件，超过单个分片后按固定缓冲区流式上传。
@@ -127,13 +194,14 @@ func (s *S3BackupStore) UploadFileWithProgress(ctx context.Context, key string, 
 	return uploaded, nil
 }
 
-func (s *S3BackupStore) putObject(ctx context.Context, key string, body io.Reader, contentType string) error {
+func (s *S3BackupStore) putObject(ctx context.Context, key string, body io.Reader, contentType string, contentLength int64) error {
 	finish := servertiming.ObserveDependency(ctx, "s3")
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      &s.bucket,
-		Key:         &key,
-		Body:        body,
-		ContentType: &contentType,
+		Bucket:        &s.bucket,
+		Key:           &key,
+		Body:          body,
+		ContentType:   &contentType,
+		ContentLength: &contentLength,
 	})
 	finish()
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
@@ -213,6 +214,10 @@ func (m *mockObjectStore) HeadBucket(_ context.Context) error {
 }
 
 func newTestBackupService(t *testing.T, repo *mockSettingRepo, dumper DBDumper, store *mockObjectStore) *BackupService {
+	return newTestBackupServiceWithEncryptionKey(t, repo, dumper, store, true)
+}
+
+func newTestBackupServiceWithEncryptionKey(t *testing.T, repo *mockSettingRepo, dumper DBDumper, store *mockObjectStore, encryptionKeyConfigured bool) *BackupService {
 	t.Helper()
 	cfg := &config.Config{
 		Database: config.DatabaseConfig{
@@ -221,6 +226,7 @@ func newTestBackupService(t *testing.T, repo *mockSettingRepo, dumper DBDumper, 
 			User:   "test",
 			DBName: "testdb",
 		},
+		Totp: config.TotpConfig{EncryptionKeyConfigured: encryptionKeyConfigured},
 	}
 	factory := func(_ context.Context, _ *BackupS3Config) (BackupObjectStore, error) {
 		return store, nil
@@ -316,6 +322,63 @@ func TestBackupService_S3ConfigKeepExistingSecret(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "original-secret", internal.SecretAccessKey)
 	require.Equal(t, "AKID-NEW", internal.AccessKeyID)
+}
+
+func TestBackupService_UpdateS3ConfigRejectsEphemeralKey(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupServiceWithEncryptionKey(t, repo, &mockDumper{}, newMockObjectStore(), false)
+
+	// 提供新密钥时必须拒绝，避免产生重启后无法解密的持久化配置。
+	_, err := svc.UpdateS3Config(context.Background(), BackupS3Config{
+		Bucket:          "my-bucket",
+		AccessKeyID:     "AKID",
+		SecretAccessKey: "my-secret",
+	})
+	require.ErrorIs(t, err, ErrSecretEncryptionKeyNotConfigured)
+
+	raw, _ := repo.GetValue(context.Background(), settingKeyBackupS3Config)
+	require.Empty(t, raw)
+}
+
+func TestBackupService_UpdateStorageConfigRejectsEphemeralKey(t *testing.T) {
+	repo := newMockSettingRepo()
+	svc := newTestBackupServiceWithEncryptionKey(t, repo, &mockDumper{}, newMockObjectStore(), false)
+
+	// fork 的统一存储配置入口必须执行与旧 S3 接口相同的门禁。
+	_, err := svc.UpdateStorageConfig(context.Background(), BackupStorageConfig{
+		Type: BackupStorageTypeS3,
+		S3: BackupS3Config{
+			Bucket:          "my-bucket",
+			AccessKeyID:     "AKID",
+			SecretAccessKey: "my-secret",
+		},
+	})
+	require.ErrorIs(t, err, ErrSecretEncryptionKeyNotConfigured)
+
+	raw, _ := repo.GetValue(context.Background(), settingKeyBackupStorageConfig)
+	require.Empty(t, raw)
+}
+
+func TestBackupService_EphemeralKeyAllowsExistingSecretReuse(t *testing.T) {
+	repo := newMockSettingRepo()
+	seedS3Config(t, repo)
+	svc := newTestBackupServiceWithEncryptionKey(t, repo, &mockDumper{}, newMockObjectStore(), false)
+
+	// 省略密钥时只复用已有密文，不会生成依赖当前临时密钥的新密文。
+	_, err := svc.UpdateS3Config(context.Background(), BackupS3Config{
+		Bucket:      "my-bucket",
+		AccessKeyID: "AKID-NEW",
+	})
+	require.NoError(t, err)
+
+	raw, _ := repo.GetValue(context.Background(), settingKeyBackupS3Config)
+	require.Contains(t, raw, "ENC:secret123")
+}
+
+func TestBackupService_EncryptionKeyConfigured(t *testing.T) {
+	repo := newMockSettingRepo()
+	require.True(t, newTestBackupService(t, repo, &mockDumper{}, newMockObjectStore()).EncryptionKeyConfigured())
+	require.False(t, newTestBackupServiceWithEncryptionKey(t, repo, &mockDumper{}, newMockObjectStore(), false).EncryptionKeyConfigured())
 }
 
 func TestBackupService_SaveRecordConcurrency(t *testing.T) {
@@ -592,6 +655,44 @@ func TestBackupService_RestoreBackup_NotCompleted(t *testing.T) {
 
 	err := svc.RestoreBackup(context.Background(), "fail-1")
 	require.Error(t, err)
+}
+
+func TestBackupService_RestoreMaintenanceBusy(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*BackupService) error
+	}{
+		{
+			name: "synchronous restore",
+			run: func(svc *BackupService) error {
+				return svc.RestoreBackup(context.Background(), "backup-id")
+			},
+		},
+		{
+			name: "asynchronous restore",
+			run: func(svc *BackupService) error {
+				_, err := svc.StartRestore(context.Background(), "backup-id")
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			mock.ExpectQuery("SELECT pg_try_advisory_lock").
+				WithArgs(databaseHeavyMaintenanceLockID).
+				WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(false))
+
+			svc := newTestBackupService(t, newMockSettingRepo(), &mockDumper{}, newMockObjectStore())
+			svc.SetMaintenanceDB(db)
+			require.ErrorIs(t, tt.run(svc), ErrDatabaseMaintenanceBusy)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestBackupService_DeleteBackup(t *testing.T) {
@@ -897,6 +998,17 @@ func TestStartRestore_Async(t *testing.T) {
 	record, err := svc.CreateBackup(context.Background(), "manual", 14)
 	require.NoError(t, err)
 
+	db, sqlMock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	sqlMock.ExpectQuery("SELECT pg_try_advisory_lock").
+		WithArgs(databaseHeavyMaintenanceLockID).
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
+	sqlMock.ExpectExec("SELECT pg_advisory_unlock").
+		WithArgs(databaseHeavyMaintenanceLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	svc.SetMaintenanceDB(db)
+
 	// 异步恢复
 	restored, err := svc.StartRestore(context.Background(), record.ID)
 	require.NoError(t, err)
@@ -908,4 +1020,5 @@ func TestStartRestore_Async(t *testing.T) {
 	final, err := svc.GetBackupRecord(context.Background(), record.ID)
 	require.NoError(t, err)
 	require.Equal(t, "completed", final.RestoreStatus)
+	require.NoError(t, sqlMock.ExpectationsWereMet())
 }

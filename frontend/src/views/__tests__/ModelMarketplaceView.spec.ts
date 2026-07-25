@@ -233,11 +233,22 @@ describe('ModelMarketplaceView', () => {
     fetchPublicSettings.mockClear()
   })
 
-  it('默认按模型-分组展示，并按模型 ID 去重', async () => {
+  it('默认按分组-模型展示', async () => {
     const wrapper = await mountMarketplace()
 
-    const gptCards = modelCards(wrapper).filter((card) => card.text().includes('gpt-5.5'))
+    expect(wrapper.findAll('[data-testid="marketplace-group-section"]')).toHaveLength(4)
+    expect(modelCards(wrapper)).toHaveLength(0)
+    expect(wrapper.findAll('[data-testid="marketplace-group-section"]').map((section) => section.text()).join('\n')).toContain('marketplace.dataSharingTag')
+  })
 
+  it('可以切换到模型-分组模式并保存本地偏好', async () => {
+    const wrapper = await mountMarketplace()
+
+    await wrapper.get('[data-testid="select-option-model-group"]').trigger('click')
+    await nextTick()
+
+    expect(localStorage.getItem('tokenrouter:model-marketplace:view-mode')).toBe('model-group')
+    const gptCards = modelCards(wrapper).filter((card) => card.text().includes('gpt-5.5'))
     expect(gptCards).toHaveLength(1)
     expect(gptCards[0].findAll('[data-testid="marketplace-model-group-entry"]')).toHaveLength(4)
     expect(gptCards[0].text()).toContain('Plus')
@@ -247,23 +258,11 @@ describe('ModelMarketplaceView', () => {
     expect(gptCards[0].text()).toContain('Plus Data Sharing')
     expect(gptCards[0].text()).toContain('Pro Data Sharing')
     expect(gptCards[0].text()).not.toContain('marketplace.dataSharingTag')
-  })
-
-  it('可以切换到分组-模型模式并保存本地偏好', async () => {
-    const wrapper = await mountMarketplace()
-
-    await wrapper.get('[data-testid="select-option-group-model"]').trigger('click')
-    await nextTick()
-
-    expect(localStorage.getItem('tokenrouter:model-marketplace:view-mode')).toBe('group-model')
-    expect(wrapper.findAll('[data-testid="marketplace-group-section"]')).toHaveLength(4)
-    expect(wrapper.findAll('[data-testid="marketplace-model-card"]')).toHaveLength(0)
-    expect(wrapper.findAll('[data-testid="marketplace-group-section"]').map((section) => section.text()).join('\n')).toContain('marketplace.dataSharingTag')
 
     wrapper.unmount()
 
     const restored = await mountMarketplace()
-    expect(restored.findAll('[data-testid="marketplace-group-section"]')).toHaveLength(4)
+    expect(modelCards(restored).filter((card) => card.text().includes('gpt-5.5'))).toHaveLength(1)
   })
 
   it('xAI 品牌在分组模式下展示 Grok 图标而不是字母占位', async () => {
@@ -276,9 +275,6 @@ describe('ModelMarketplaceView', () => {
     getMarketplaceModels.mockResolvedValue(fixture)
 
     const wrapper = await mountMarketplace()
-
-    await wrapper.get('[data-testid="select-option-group-model"]').trigger('click')
-    await nextTick()
 
     // 品牌名 xAI 应映射到现有 Grok SVG，不能退回紫色字母 X。
     const grokGroup = wrapper.findAll('[data-testid="marketplace-group-section"]')
@@ -301,15 +297,16 @@ describe('ModelMarketplaceView', () => {
 
     const wrapper = await mountMarketplace()
 
-    expect(modelCards(wrapper).map((card) => card.text()).join('\n')).toContain('marketplace.imageRateMultiplierValue x0.50')
+    expect(wrapper.findAll('[data-testid="marketplace-group-section"]').map((section) => section.text()).join('\n')).toContain('marketplace.imageRateMultiplierValue x0.50')
 
-    await wrapper.get('[data-testid="select-option-group-model"]').trigger('click')
+    await wrapper.get('[data-testid="select-option-model-group"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.findAll('[data-testid="marketplace-group-section"]').map((section) => section.text()).join('\n')).toContain('marketplace.imageRateMultiplierValue x0.50')
+    expect(modelCards(wrapper).map((card) => card.text()).join('\n')).toContain('marketplace.imageRateMultiplierValue x0.50')
   })
 
   it('模型-分组模式下按分组、搜索和计费类型裁剪分组条目', async () => {
+    localStorage.setItem('tokenrouter:model-marketplace:view-mode', 'model-group')
     const wrapper = await mountMarketplace()
 
     await wrapper.get('[data-testid="select-option-2"]').trigger('click')
@@ -335,6 +332,7 @@ describe('ModelMarketplaceView', () => {
   })
 
   it('点击分组条目会打开对应分组定价弹窗', async () => {
+    localStorage.setItem('tokenrouter:model-marketplace:view-mode', 'model-group')
     const wrapper = await mountMarketplace()
     const groupEntry = groupEntries(wrapper)[0]
 
@@ -353,9 +351,6 @@ describe('ModelMarketplaceView', () => {
 
   it('分组-模型模式下定价弹窗不重复显示分组名称', async () => {
     const wrapper = await mountMarketplace()
-
-    await wrapper.get('[data-testid="select-option-group-model"]').trigger('click')
-    await nextTick()
 
     const pricingButton = wrapper
       .findAll('button')

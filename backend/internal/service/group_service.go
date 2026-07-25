@@ -44,6 +44,19 @@ type GroupRepository interface {
 	ForceHealthCheck(ctx context.Context, groupID int64) error
 }
 
+type GroupDuplicateRepository interface {
+	// FindByDuplicateOperationID 在幂等存储结果不明确时执行只读恢复查询。
+	FindByDuplicateOperationID(ctx context.Context, operationID string) (*Group, error)
+	// CreateFromSource 原子保存分组、源分组账号优先级和调度 outbox 事件。
+	CreateFromSource(ctx context.Context, group *Group, sourceGroupID int64) error
+}
+
+// AdminGroupRepository 将分组复制写能力显式注入管理服务，避免扩大网关侧测试替身接口。
+type AdminGroupRepository interface {
+	GroupRepository
+	GroupDuplicateRepository
+}
+
 // GroupSortOrderUpdate 分组排序更新
 type GroupSortOrderUpdate struct {
 	ID        int64 `json:"id"`

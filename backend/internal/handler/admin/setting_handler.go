@@ -59,6 +59,8 @@ type SettingHandler struct {
 	paymentService           *service.PaymentService
 	userAttributeService     *service.UserAttributeService
 	notificationEmailService *service.NotificationEmailService
+	totpService              *service.TotpService
+	userService              *service.UserService
 }
 
 // NewSettingHandler 创建系统设置处理器
@@ -77,6 +79,13 @@ func NewSettingHandler(settingService *service.SettingService, emailService *ser
 // SetNotificationEmailService 注入通知邮件模板服务，并保持既有构造函数签名不变。
 func (h *SettingHandler) SetNotificationEmailService(notificationEmailService *service.NotificationEmailService) {
 	h.notificationEmailService = notificationEmailService
+}
+
+// SetStepUpDeps 注入 step-up 开关转换所需的服务，同时保持现有单元测试使用的构造函数签名不变。
+// 开启开关要求操作者已启用 TOTP，关闭开关本身也必须通过 step-up 门禁。
+func (h *SettingHandler) SetStepUpDeps(totpService *service.TotpService, userService *service.UserService) {
+	h.totpService = totpService
+	h.userService = userService
 }
 
 // GetSettings 获取所有系统设置
@@ -123,6 +132,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		TotpEnabled:                                            settings.TotpEnabled,
 		TotpEncryptionKeyConfigured:                            h.settingService.IsTotpEncryptionKeyConfigured(),
 		SessionBindingEnabled:                                  settings.SessionBindingEnabled,
+		StepUpEnabled:                                          settings.StepUpEnabled,
 		AuditLogRetentionDays:                                  settings.AuditLogRetentionDays,
 		LoginAgreementEnabled:                                  settings.LoginAgreementEnabled,
 		LoginAgreementMode:                                     settings.LoginAgreementMode,
@@ -139,6 +149,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		TurnstileSiteKey:                                       settings.TurnstileSiteKey,
 		TurnstileSecretKeyConfigured:                           settings.TurnstileSecretKeyConfigured,
 		APIKeyACLTrustForwardedIP:                              settings.APIKeyACLTrustForwardedIP,
+		ForwardedClientIPHeaders:                               settings.ForwardedClientIPHeaders,
 		LinuxDoConnectEnabled:                                  settings.LinuxDoConnectEnabled,
 		LinuxDoConnectClientID:                                 settings.LinuxDoConnectClientID,
 		LinuxDoConnectClientSecretConfigured:                   settings.LinuxDoConnectClientSecretConfigured,
@@ -242,6 +253,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		AffiliateRebatePerInviteeCap:                           settings.AffiliateRebatePerInviteeCap,
 		AdminRechargeRebateEnabled:                             settings.AdminRechargeRebateEnabled,
 		DefaultUserRPMLimit:                                    settings.DefaultUserRPMLimit,
+		DefaultUserAPIKeyLimit:                                 settings.DefaultUserAPIKeyLimit,
 		DefaultSubscriptions:                                   defaultSubscriptions,
 		BalanceUnitName:                                        settings.BalanceUnitName,
 		BalanceUnitSymbol:                                      settings.BalanceUnitSymbol,

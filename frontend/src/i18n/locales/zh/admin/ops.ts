@@ -30,7 +30,10 @@ export default {
       loadingText: '加载中...',
       ready: '就绪',
       systemLogs: {
-        host: 'Host'
+        host: 'Host',
+        empty: '暂无系统日志',
+        cleanupFilterRequired: '清理需要至少一个筛选条件（起止时间或其他字段）',
+        cleanupFailed: '清理系统日志失败'
       },
       requestsTotal: '请求（总计）',
       slaScope: 'SLA 范围：',
@@ -347,8 +350,6 @@ export default {
         suggestPlatform: '🚨 平台错误，建议立即排查修复',
         suggestGeneric: '查看详情了解更多信息',
         apiKeyPrefix: 'Key 前缀',
-        attemptedKeyPrefix: '尝试的 Key 前缀',
-        deletedKeyOwner: '已删除 Key 所有者',
         keyDeletedBadge: 'Key 已删除'
       },
       requestDetails: {
@@ -658,7 +659,10 @@ export default {
         dataRetention: '数据保留策略',
         enableCleanup: '启用数据清理',
         cleanupSchedule: '清理计划（Cron）',
-        cleanupScheduleHint: '例如：0 2 * * * 表示每天凌晨2点',
+        cleanupScheduleHint: '例如：0 3 * * * 表示每天凌晨3点',
+        cleanupBatchSize: '每批删除行数',
+        cleanupPauseMs: '批次暂停时间（毫秒）',
+        cleanupThrottleHint: '建议保持 1000 行和 200 毫秒，降低大量删除产生的瞬时内存、I/O 与 WAL 压力。',
         errorLogRetentionDays: '错误日志保留天数',
         minuteMetricsRetentionDays: '分钟指标保留天数',
         hourlyMetricsRetentionDays: '小时指标保留天数',
@@ -682,8 +686,6 @@ export default {
           '启用后，客户端主动断开连接（context canceled）的错误将不会写入错误日志。',
         ignoreNoAvailableAccounts: '忽略无可用账号错误',
         ignoreNoAvailableAccountsHint: '启用后，"No available accounts" 错误将不会写入错误日志（不推荐，这通常是配置问题）。',
-        ignoreInvalidApiKeyErrors: '忽略无效 API Key 错误',
-        ignoreInvalidApiKeyErrorsHint: '启用后，无效或缺失 API Key 的错误（INVALID_API_KEY、API_KEY_REQUIRED）将不会写入错误日志。',
         ignoreInsufficientBalanceErrors: '忽略余额不足错误',
         ignoreInsufficientBalanceErrorsHint: '启用后，账号余额不足（Insufficient balance）的错误将不会写入错误日志。',
         autoRefresh: '自动刷新',
@@ -702,6 +704,8 @@ export default {
         validation: {
           title: '请先修正以下问题',
           retentionDaysRange: '保留天数必须在0-365之间（0 = 每次清理时清空全部历史）',
+          cleanupBatchSizeRange: '每批删除行数必须是 100 到 5000 之间的整数',
+          cleanupPauseRange: '批次暂停时间必须是 1 到 2000 毫秒之间的整数',
           slaMinPercentRange: 'SLA最低百分比必须在0-100之间',
           ttftP99MaxRange: 'TTFT P99最大值必须大于等于0',
           requestErrorRateMaxRange: '请求错误率最大值必须在0-100之间',

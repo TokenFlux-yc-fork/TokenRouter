@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/pkg/ip"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/response"
 	"github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -150,7 +149,7 @@ func (h *AuditLogHandler) Clear(c *gin.Context) {
 		CredentialMasked: middleware.MaskedRequestCredential(c),
 		Method:           http.MethodPost,
 		Path:             c.FullPath(),
-		ClientIP:         ip.GetTrustedClientIP(c),
+		ClientIP:         middleware.SecurityClientIP(c),
 		UserAgent:        c.Request.UserAgent(),
 		StatusCode:       http.StatusOK,
 	}

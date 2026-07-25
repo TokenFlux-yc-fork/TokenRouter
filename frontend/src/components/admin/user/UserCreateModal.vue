@@ -45,11 +45,25 @@
           v-model.number="form.rpm_limit"
           type="number"
           min="0"
+          :max="MAX_USER_API_KEY_LIMIT"
           step="1"
           class="input"
           :placeholder="t('admin.users.form.rpmLimitPlaceholder')"
         />
         <p class="input-hint">{{ t('admin.users.form.rpmLimitHint') }}</p>
+      </div>
+      <div>
+        <label class="input-label">{{ t('admin.users.form.apiKeyLimit') }}</label>
+        <input
+          v-model="form.api_key_limit"
+          type="number"
+          min="0"
+          step="1"
+          class="input"
+          data-test="api-key-limit-input"
+          :placeholder="t('admin.users.form.apiKeyLimitPlaceholder')"
+        />
+        <p class="input-hint">{{ t('admin.users.form.apiKeyLimitCreateHint') }}</p>
       </div>
     </form>
     <template #footer>
@@ -75,6 +89,7 @@ import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
+import { MAX_USER_API_KEY_LIMIT } from '@/constants/user'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits(['close', 'success']); const { t } = useI18n()
@@ -85,20 +100,41 @@ const roleOptions = computed(() => [
   { value: 'admin', label: t('admin.users.roles.admin') }
 ])
 
-const form = reactive({ email: '', password: '', username: '', notes: '', role: 'user' as 'user' | 'admin', balance: '', concurrency: 1, rpm_limit: 0 })
+const form = reactive({
+  email: '',
+  password: '',
+  username: '',
+  notes: '',
+  role: 'user' as 'user' | 'admin',
+  balance: '',
+  concurrency: 1,
+  rpm_limit: 0,
+  api_key_limit: '' as number | ''
+})
 
 const stepUp = useStepUp()
 const loading = ref(false)
 
 const submit = async () => {
   if (loading.value) return
+  const rawAPIKeyLimit = String(form.api_key_limit).trim()
+  if (rawAPIKeyLimit !== '') {
+    const apiKeyLimit = Number(rawAPIKeyLimit)
+    if (!Number.isSafeInteger(apiKeyLimit) || apiKeyLimit < 0 || apiKeyLimit > MAX_USER_API_KEY_LIMIT) {
+      appStore.showError(t('admin.users.form.apiKeyLimitInvalid'))
+      return
+    }
+  }
   loading.value = true
   try {
-    const { balance: rawBalance, ...rest } = { ...form }
+    const { balance: rawBalance, api_key_limit: rawLimit, ...rest } = { ...form }
     const balance = String(rawBalance).trim()
-    const payload: typeof rest & { balance?: number } = { ...rest }
+    const payload: typeof rest & { balance?: number; api_key_limit?: number } = { ...rest }
     if (balance !== '') {
       payload.balance = Number(balance)
+    }
+    if (String(rawLimit).trim() !== '') {
+      payload.api_key_limit = Number(rawLimit)
     }
     // 创建管理员属敏感操作：后端返回 STEP_UP_REQUIRED 时弹 TOTP 验证并重试
     await stepUp.run(() => adminAPI.users.create(payload))
@@ -119,7 +155,7 @@ const submit = async () => {
   } finally { loading.value = false }
 }
 
-watch(() => props.show, (v) => { if(v) Object.assign(form, { email: '', password: '', username: '', notes: '', role: 'user', balance: '', concurrency: 1, rpm_limit: 0 }) })
+watch(() => props.show, (v) => { if(v) Object.assign(form, { email: '', password: '', username: '', notes: '', role: 'user', balance: '', concurrency: 1, rpm_limit: 0, api_key_limit: '' }) })
 
 const generateRandomPassword = () => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%^&*'

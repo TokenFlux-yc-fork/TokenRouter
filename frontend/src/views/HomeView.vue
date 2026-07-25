@@ -20,7 +20,7 @@
       <nav class="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4">
         <router-link to="/home" class="flex min-w-0 items-center gap-2.5">
           <span class="h-8 w-8 shrink-0 overflow-hidden rounded-lg shadow-sm">
-            <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
+            <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
           </span>
           <span class="truncate text-sm font-semibold text-gray-950 dark:text-white">{{ siteName }}</span>
         </router-link>
@@ -464,7 +464,7 @@
           <div class="col-span-2 sm:col-span-3 lg:col-auto lg:max-w-[240px] lg:shrink-0">
             <div class="flex items-center gap-2.5">
               <span class="h-8 w-8 shrink-0 overflow-hidden rounded-lg shadow-sm">
-                <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
+                <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
               </span>
               <span class="text-sm font-semibold text-gray-950 dark:text-white">{{ siteName }}</span>
             </div>

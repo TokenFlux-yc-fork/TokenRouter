@@ -26,6 +26,27 @@ upstream merge.
   routed model into every retry.
 - `go test ./internal/handler ./internal/service` passes on the combined tree.
 
+## Upstream Review: v0.1.235
+
+- Upstream target: `a6a66544f6acd7b79e40dcccaeee19f4e4478f2c` (the
+  post-tag `VERSION=0.1.235` sync commit for `v0.1.235`).
+- Reviewed range: `2ab21e0feb3c000909013650f8d9661ecceeb847..a6a66544f6acd7b79e40dcccaeee19f4e4478f2c`.
+- No active customization is fully upstreamed in this range; all rows remain
+  `local`.
+- Group health and backup-pool refill remain local while sharing the upstream
+  group duplicate-operation ID and reasoning-effort policy schema and APIs.
+- OpenAI request-blocked responses and non-429 Grok inference errors remain
+  request-scoped. Upstream first-output deadlines, model-scoped transient
+  availability, WebSocket write observation, exact terminal-event detection,
+  and Grok Free function-tool cache routing are combined with the fork's
+  pre-output failover and terminal-tail buffering rules.
+- HTTP and WebSocket preambles remain hidden until semantic output. Client
+  cancel and overlap control frames are still accepted after an upstream
+  preamble, and no retry occurs after semantic output is committed.
+- Focused SSE, HTTP bridge, WebSocket failover, account-state, and lifecycle
+  tests pass on the combined tree; the complete baseline gates below remain
+  required before the merge is finalized.
+
 ## Active Customizations
 
 | ID | Behavior | Source commits | Main paths | Status | Verification |

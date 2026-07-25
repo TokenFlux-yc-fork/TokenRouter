@@ -47,11 +47,25 @@
           v-model.number="form.rpm_limit"
           type="number"
           min="0"
+          :max="MAX_USER_API_KEY_LIMIT"
           step="1"
           class="input"
           :placeholder="t('admin.users.form.rpmLimitPlaceholder')"
         />
         <p class="input-hint">{{ t('admin.users.form.rpmLimitHint') }}</p>
+      </div>
+      <div>
+        <label class="input-label">{{ t('admin.users.form.apiKeyLimit') }}</label>
+        <input
+          v-model.number="form.api_key_limit"
+          type="number"
+          min="0"
+          step="1"
+          class="input"
+          data-test="api-key-limit-input"
+          :placeholder="t('admin.users.form.apiKeyLimitEditPlaceholder')"
+        />
+        <p class="input-hint">{{ t('admin.users.form.apiKeyLimitEditHint') }}</p>
       </div>
       <UserAttributeForm v-model="form.customAttributes" :user-id="user?.id" />
     </form>
@@ -82,6 +96,7 @@ import UserAttributeForm from '@/components/user/UserAttributeForm.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
+import { MAX_USER_API_KEY_LIMIT } from '@/constants/user'
 
 const props = defineProps<{ show: boolean, user: AdminUser | null }>()
 const emit = defineEmits(['close', 'success'])
@@ -93,11 +108,11 @@ const roleOptions = computed(() => [
 ])
 
 const submitting = ref(false); const passwordCopied = ref(false)
-const form = reactive({ email: '', password: '', username: '', notes: '', role: 'user', concurrency: 1, rpm_limit: 0, customAttributes: {} as UserAttributeValuesMap })
+const form = reactive({ email: '', password: '', username: '', notes: '', role: 'user', concurrency: 1, rpm_limit: 0, api_key_limit: 100, customAttributes: {} as UserAttributeValuesMap })
 
 watch(() => props.user, (u) => {
   if (u) {
-    Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', role: u.role || 'user', concurrency: u.concurrency, rpm_limit: u.rpm_limit ?? 0, customAttributes: {} })
+    Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', role: u.role || 'user', concurrency: u.concurrency, rpm_limit: u.rpm_limit ?? 0, api_key_limit: u.api_key_limit ?? 100, customAttributes: {} })
     passwordCopied.value = false
   }
 }, { immediate: true })
@@ -124,6 +139,10 @@ const handleUpdateUser = async () => {
     appStore.showError(t('admin.users.concurrencyMin'))
     return
   }
+  if (!Number.isSafeInteger(form.api_key_limit) || form.api_key_limit < 0 || form.api_key_limit > MAX_USER_API_KEY_LIMIT) {
+    appStore.showError(t('admin.users.form.apiKeyLimitInvalid'))
+    return
+  }
   const userId = props.user.id
   submitting.value = true
   try {
@@ -132,7 +151,8 @@ const handleUpdateUser = async () => {
       username: form.username,
       notes: form.notes,
       concurrency: form.concurrency,
-      rpm_limit: form.rpm_limit
+      rpm_limit: form.rpm_limit,
+      api_key_limit: form.api_key_limit
     }
     // 角色未变化时不发送 role，避免普通管理员资料编辑触发权限提升门控。
     if (form.role !== props.user.role) data.role = form.role

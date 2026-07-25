@@ -89,7 +89,7 @@ func AnthropicToResponsesResponse(resp *AnthropicResponse) *ResponsesResponse {
 	out.Output = outputs
 
 	// Map stop_reason → status
-	out.Status = anthropicStopReasonToResponsesStatus(resp.StopReason, resp.Content)
+	out.Status = anthropicStopReasonToResponsesStatus(AnthropicStopReasonString(resp.StopReason), resp.Content)
 	if out.Status == "incomplete" {
 		out.IncompleteDetails = &ResponsesIncompleteDetails{Reason: "max_output_tokens"}
 	}
@@ -150,12 +150,21 @@ type AnthropicEventToResponsesState struct {
 	CurrentItemID   string
 	CurrentItemType string // "message" | "function_call" | "reasoning"
 
-	// For message output: accumulate text parts
+	// 消息输出的内容分片索引与当前文本累积值。
 	ContentIndex int
+	TextAccum    string
 
-	// For function_call: track per-output info
+	// 函数调用当前输出项的信息。
 	CurrentCallID string
 	CurrentName   string
+
+	// 当前打开输出项的完整内容，在关闭时写入 Outputs。
+	CurrentContent []ResponsesContentPart // message
+	CurrentArgs    string                 // function_call
+	CurrentSummary string                 // reasoning
+
+	// 累积所有已关闭输出项，供终止事件返回完整结果。
+	Outputs []ResponsesOutput
 
 	// message_start / message_delta 中的 Usage。这里的 InputTokens 遵循
 	// Anthropic 语义（不含缓存 token）；输出 OpenAI Responses usage 时再补回。
@@ -293,6 +302,17 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 			}))
 		}
 
+		// OpenAI SDK 只有收到 content_part.added 才会创建对应内容分片，
+		// 因此该事件必须先于同一分片的首个 output_text.delta。
+		state.ContentIndex = len(state.CurrentContent)
+		events = append(events, makeResponsesEvent(state, "response.content_part.added", &ResponsesStreamEvent{
+			OutputIndex:  state.OutputIndex,
+			ContentIndex: state.ContentIndex,
+			ItemID:       state.CurrentItemID,
+			Part:         &ResponsesContentPart{Type: "output_text", Text: ""},
+		}))
+		state.TextAccum = ""
+
 	case "tool_use":
 		// Close previous item if any
 		events = append(events, closeCurrentResponsesItem(state)...)
@@ -327,6 +347,7 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.Text == "" {
 			return nil
 		}
+		state.TextAccum += evt.Delta.Text
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.output_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			ContentIndex: state.ContentIndex,
@@ -338,6 +359,7 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.Thinking == "" {
 			return nil
 		}
+		state.CurrentSummary += evt.Delta.Thinking
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.reasoning_summary_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			SummaryIndex: 0,
@@ -349,6 +371,7 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.PartialJSON == "" {
 			return nil
 		}
+		state.CurrentArgs += evt.Delta.PartialJSON
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.function_call_arguments.delta", &ResponsesStreamEvent{
 			OutputIndex: state.OutputIndex,
 			Delta:       evt.Delta.PartialJSON,
@@ -393,12 +416,23 @@ func anthToResHandleContentBlockStop(evt *AnthropicStreamEvent, state *Anthropic
 		return events
 
 	case "message":
-		// Emit output_text.done (text block is done, but message item stays open for potential more blocks)
+		// 文本块结束时按 OpenAI 顺序发送两个完成事件，并携带完整文本；
+		// message 输出项保持打开，以便继续接收后续文本块。
+		text := state.TextAccum
+		state.TextAccum = ""
+		state.CurrentContent = append(state.CurrentContent, ResponsesContentPart{Type: "output_text", Text: text})
 		return []ResponsesStreamEvent{
 			makeResponsesEvent(state, "response.output_text.done", &ResponsesStreamEvent{
 				OutputIndex:  state.OutputIndex,
 				ContentIndex: state.ContentIndex,
 				ItemID:       state.CurrentItemID,
+				Text:         text,
+			}),
+			makeResponsesEvent(state, "response.content_part.done", &ResponsesStreamEvent{
+				OutputIndex:  state.OutputIndex,
+				ContentIndex: state.ContentIndex,
+				ItemID:       state.CurrentItemID,
+				Part:         &ResponsesContentPart{Type: "output_text", Text: text},
 			}),
 		}
 	}
@@ -454,24 +488,46 @@ func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []Response
 		return nil
 	}
 
-	itemType := state.CurrentItemType
-	itemID := state.CurrentItemID
+	// 组装完整输出项，确保 output_item.done 与终止事件都能携带实际内容。
+	item := ResponsesOutput{
+		Type:   state.CurrentItemType,
+		ID:     state.CurrentItemID,
+		Status: "completed",
+	}
+	switch state.CurrentItemType {
+	case "message":
+		item.Role = "assistant"
+		item.Content = state.CurrentContent
+	case "function_call":
+		item.CallID = state.CurrentCallID
+		item.Name = state.CurrentName
+		args := state.CurrentArgs
+		if args == "" {
+			args = "{}"
+		}
+		item.Arguments = args
+	case "reasoning":
+		if state.CurrentSummary != "" {
+			item.Summary = []ResponsesSummary{{Type: "summary_text", Text: state.CurrentSummary}}
+		}
+	}
+	state.Outputs = append(state.Outputs, item)
 
-	// Reset
+	// 清理当前输出项状态。
 	state.CurrentItemType = ""
 	state.CurrentItemID = ""
 	state.CurrentCallID = ""
 	state.CurrentName = ""
+	state.CurrentContent = nil
+	state.CurrentArgs = ""
+	state.CurrentSummary = ""
+	state.TextAccum = ""
 	state.OutputIndex++
 	state.ContentIndex = 0
 
 	return []ResponsesStreamEvent{makeResponsesEvent(state, "response.output_item.done", &ResponsesStreamEvent{
-		OutputIndex: state.OutputIndex - 1, // Use the index before increment
-		Item: &ResponsesOutput{
-			Type:   itemType,
-			ID:     itemID,
-			Status: "completed",
-		},
+		OutputIndex: state.OutputIndex - 1, // 使用递增前的输出索引。
+		Item:        &item,
 	})}
 }
 
@@ -519,6 +575,12 @@ func makeResponsesCompletedEvent(
 		eventType = "response.incomplete"
 	}
 
+	// SDK 会直接从终止事件重建最终响应，因此必须带上流中累积的输出项。
+	outputs := state.Outputs
+	if outputs == nil {
+		outputs = []ResponsesOutput{}
+	}
+
 	return ResponsesStreamEvent{
 		Type:           eventType,
 		SequenceNumber: seq,
@@ -527,7 +589,7 @@ func makeResponsesCompletedEvent(
 			Object:            "response",
 			Model:             state.Model,
 			Status:            status,
-			Output:            []ResponsesOutput{},
+			Output:            outputs,
 			Usage:             usage,
 			IncompleteDetails: incompleteDetails,
 		},

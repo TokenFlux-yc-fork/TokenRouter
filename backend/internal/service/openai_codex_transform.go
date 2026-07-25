@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -81,10 +83,39 @@ type codexTransformResult struct {
 }
 
 type codexOAuthTransformOptions struct {
-	IsCodexCLI              bool
-	IsCompact               bool
-	SkipDefaultInstructions bool
-	PreserveToolCallIDs     bool
+	IsCodexCLI                          bool
+	IsCompact                           bool
+	SkipDefaultInstructions             bool
+	PreserveToolCallIDs                 bool
+	OmitPromotedSystemMessagesFromInput bool
+}
+
+const (
+	codexCallIDMaxLength = 64
+	codexCallIDPrefix    = "fc_"
+)
+
+func normalizeCodexCallID(id string) string {
+	candidate := id
+	switch {
+	case id == "":
+		return ""
+	case strings.HasPrefix(id, "fc"):
+	case strings.HasPrefix(id, "call_"):
+		candidate = codexCallIDPrefix + strings.TrimPrefix(id, "call_")
+	default:
+		candidate = codexCallIDPrefix + id
+	}
+	if len(candidate) <= codexCallIDMaxLength {
+		return candidate
+	}
+	return compactCodexCallID(candidate)
+}
+
+func compactCodexCallID(id string) string {
+	digest := sha256.Sum256([]byte("sub2api:codex-call-id:v1:" + id))
+	encoded := hex.EncodeToString(digest[:])
+	return codexCallIDPrefix + encoded[:codexCallIDMaxLength-len(codexCallIDPrefix)]
 }
 
 const codexImageGenerationFunctionToolName = "image_gen.imagegen"
@@ -222,8 +253,10 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		}
 	}
 
-	// 提取 input 中 role:"system" 消息至 instructions（OAuth 上游不支持 system role）。
-	if extractSystemMessagesFromInput(reqBody) {
+	// ChatGPT internal Codex endpoint 不接受 system role，因此把文本同步到 instructions。
+	// Responses JSON object 等调用方仍需在 input 中保留 developer 指引；Chat Completions
+	// 兼容路径可在无损提升纯文本消息后将其省略。
+	if extractSystemMessagesFromInput(reqBody, opts.OmitPromotedSystemMessagesFromInput) {
 		result.Modified = true
 	}
 
@@ -1148,30 +1181,44 @@ func extractTextFromContent(content any) string {
 	}
 }
 
-// extractSystemMessagesFromInput 将 role=="system" 的 input 消息改写为 developer，
-// 并把其文本同步到 instructions。这样既避开 ChatGPT internal Codex endpoint
-// 不接受 system role 的限制，也保留 Responses JSON mode 依赖的 input 内提示。
-func extractSystemMessagesFromInput(reqBody map[string]any) bool {
+// extractSystemMessagesFromInput 扫描 role=="system" 的 input 消息并把文本同步到
+// instructions。默认将消息改为 developer，让 Responses JSON mode 仍能看到 input 指引；
+// omitPromoted 为 true 时删除已无损提升的纯文本项，混合或异常内容仍保留为 developer。
+func extractSystemMessagesFromInput(reqBody map[string]any, omitPromoted bool) bool {
 	input, ok := reqBody["input"].([]any)
 	if !ok || len(input) == 0 {
 		return false
 	}
 
 	var systemTexts []string
+	filteredInput := make([]any, 0, len(input))
 	modified := false
 	for _, item := range input {
 		m, ok := item.(map[string]any)
-		if !ok {
+		if !ok || m["role"] != "system" {
+			filteredInput = append(filteredInput, item)
 			continue
 		}
-		if role, _ := m["role"].(string); role != "system" {
-			continue
+
+		if omitPromoted {
+			if losslessText, lossless := extractLosslessTextFromContent(m["content"]); lossless {
+				if losslessText != "" {
+					systemTexts = append(systemTexts, losslessText)
+				}
+				modified = true
+				continue
+			}
 		}
-		m["role"] = "developer"
-		modified = true
+
 		if text := extractTextFromContent(m["content"]); text != "" {
 			systemTexts = append(systemTexts, text)
 		}
+		m["role"] = "developer"
+		filteredInput = append(filteredInput, item)
+		modified = true
+	}
+	if omitPromoted && len(filteredInput) != len(input) {
+		reqBody["input"] = filteredInput
 	}
 
 	if len(systemTexts) == 0 {
@@ -1185,6 +1232,35 @@ func extractSystemMessagesFromInput(reqBody map[string]any) bool {
 		reqBody["instructions"] = extracted
 	}
 	return true
+}
+
+// extractLosslessTextFromContent 仅在全部内容都能由 instructions 字符串表示且不会丢失
+// 非文本部分时返回文本。
+func extractLosslessTextFromContent(content any) (string, bool) {
+	switch v := content.(type) {
+	case string:
+		return v, true
+	case []any:
+		var b strings.Builder
+		for _, part := range v {
+			m, ok := part.(map[string]any)
+			if !ok {
+				return "", false
+			}
+			typeName, ok := m["type"].(string)
+			if !ok || (typeName != "text" && typeName != "input_text" && typeName != "output_text") {
+				return "", false
+			}
+			text, ok := m["text"].(string)
+			if !ok {
+				return "", false
+			}
+			_, _ = b.WriteString(text)
+		}
+		return b.String(), true
+	default:
+		return "", false
+	}
 }
 
 func extractPromptLikeInstructionsFromInput(reqBody map[string]any) string {
@@ -1345,15 +1421,17 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		// 若 item_reference 指向 legacy call_* 标识，则仅修正该引用本身。
 		fixCallIDPrefix := func(id string) string {
 			if opts.PreserveCallIDs {
-				return id
+				// preserve 模式尽量原样透传客户端 id 以维持 tool_use/tool_result
+				// 配对，但上游对 call_id 有 64 字符硬上限，超长原样透传必然被
+				// 400 拒绝（"Invalid 'input[N].call_id': string too long"）。
+				// 超长时退回确定性压缩：同一逻辑 id 在 function_call 与
+				// function_call_output 两侧结果一致，配对不受影响。
+				if len(id) <= codexCallIDMaxLength {
+					return id
+				}
+				return compactCodexCallID(id)
 			}
-			if id == "" || strings.HasPrefix(id, "fc") {
-				return id
-			}
-			if strings.HasPrefix(id, "call_") {
-				return "fc_" + strings.TrimPrefix(id, "call_")
-			}
-			return "fc_" + id
+			return normalizeCodexCallID(id)
 		}
 
 		if typ == "item_reference" {

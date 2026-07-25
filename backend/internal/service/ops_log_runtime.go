@@ -32,8 +32,8 @@ func defaultOpsRuntimeLogConfig(cfg *config.Config) *OpsRuntimeLogConfig {
 	out.SamplingNext = cfg.Log.Sampling.Thereafter
 	out.Caller = cfg.Log.Caller
 	out.StacktraceLevel = strings.ToLower(strings.TrimSpace(cfg.Log.StacktraceLevel))
-	if cfg.Ops.Cleanup.ErrorLogRetentionDays > 0 {
-		out.RetentionDays = cfg.Ops.Cleanup.ErrorLogRetentionDays
+	if cfg.Ops.Cleanup.SystemLogRetentionDays > 0 {
+		out.RetentionDays = cfg.Ops.Cleanup.SystemLogRetentionDays
 	}
 	return out
 }
@@ -165,6 +165,13 @@ func (s *OpsService) UpdateRuntimeLogConfig(ctx context.Context, req *OpsRuntime
 	}
 
 	s.auditRuntimeLogConfigChange(operatorID, oldCfg, &next, "updated")
+	// 保留期同时驱动系统日志清理，保存后立即刷新清理任务的生效配置。
+	if s.cleanupReloader != nil {
+		if reloadErr := s.cleanupReloader.Reload(ctx); reloadErr != nil {
+			logger.LegacyPrintf("service.ops_settings",
+				"[OpsSettings] cleanup reload after runtime-log update failed: %v", reloadErr)
+		}
+	}
 
 	return &next, nil
 }
@@ -209,6 +216,13 @@ func (s *OpsService) ResetRuntimeLogConfig(ctx context.Context, operatorID int64
 	resetCfg.UpdatedByUserID = operatorID
 
 	s.auditRuntimeLogConfigChange(operatorID, oldCfg, resetCfg, "reset")
+	// 重置保留期后同步刷新清理任务，避免继续使用旧的系统日志截止时间。
+	if s.cleanupReloader != nil {
+		if reloadErr := s.cleanupReloader.Reload(ctx); reloadErr != nil {
+			logger.LegacyPrintf("service.ops_settings",
+				"[OpsSettings] cleanup reload after runtime-log reset failed: %v", reloadErr)
+		}
+	}
 	return resetCfg, nil
 }
 

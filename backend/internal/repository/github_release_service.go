@@ -3,10 +3,12 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -18,6 +20,7 @@ import (
 type githubReleaseClient struct {
 	httpClient         *http.Client
 	downloadHTTPClient *http.Client
+	updateGitHubToken  string
 }
 
 type githubReleaseClientError struct {
@@ -43,6 +46,8 @@ func NewGitHubReleaseClient(proxyURL string, allowDirectOnProxyError bool) servi
 		}
 		sharedClient = &http.Client{Timeout: 30 * time.Second}
 	}
+	apiClient := cloneHTTPClient(sharedClient)
+	apiClient.CheckRedirect = githubAPICheckRedirect(apiClient.CheckRedirect)
 
 	// 下载客户端需要更长的超时时间
 	downloadClient, err := httpclient.GetClient(httpclient.Options{
@@ -56,11 +61,56 @@ func NewGitHubReleaseClient(proxyURL string, allowDirectOnProxyError bool) servi
 		}
 		downloadClient = &http.Client{Timeout: 10 * time.Minute}
 	}
+	downloadClient = cloneHTTPClient(downloadClient)
 
 	return &githubReleaseClient{
-		httpClient:         sharedClient,
+		httpClient:         apiClient,
 		downloadHTTPClient: downloadClient,
+		updateGitHubToken:  os.Getenv("UPDATE_GITHUB_TOKEN"),
 	}
+}
+
+// cloneHTTPClient 复制客户端配置，避免更新检查修改共享客户端的重定向策略。
+func cloneHTTPClient(client *http.Client) *http.Client {
+	cloned := *client
+	return &cloned
+}
+
+// isGitHubAPIURL 仅接受无用户信息、无显式端口的 GitHub HTTPS API 地址。
+func isGitHubAPIURL(url *url.URL) bool {
+	return url != nil && strings.EqualFold(url.Scheme, "https") && url.User == nil &&
+		strings.EqualFold(url.Host, "api.github.com")
+}
+
+// githubAPICheckRedirect 在重定向离开 GitHub API 时移除认证头。
+func githubAPICheckRedirect(previous func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if !isGitHubAPIURL(req.URL) {
+			req.Header.Del("Authorization")
+		}
+		if previous != nil {
+			return previous(req, via)
+		}
+		// 自定义 CheckRedirect 会替代 net/http 的默认策略，因此需要显式保留 10 次上限。
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+}
+
+// newAPIRequest 只为受信任的 GitHub API 地址附加更新令牌。
+func (c *githubReleaseClient) newAPIRequest(ctx context.Context, url string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("User-Agent", "Sub2API-Updater")
+	if c.updateGitHubToken != "" && isGitHubAPIURL(req.URL) {
+		req.Header.Set("Authorization", "Bearer "+c.updateGitHubToken)
+	}
+	return req, nil
 }
 
 func (c *githubReleaseClientError) FetchLatestRelease(ctx context.Context, repo string) (*service.GitHubRelease, error) {
@@ -82,12 +132,10 @@ func (c *githubReleaseClientError) FetchChecksumFile(ctx context.Context, url st
 func (c *githubReleaseClient) FetchLatestRelease(ctx context.Context, repo string) (*service.GitHubRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := c.newAPIRequest(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "Sub2API-Updater")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -116,12 +164,10 @@ func (c *githubReleaseClient) FetchRecentReleases(ctx context.Context, repo stri
 	}
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=%d", repo, perPage)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := c.newAPIRequest(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "Sub2API-Updater")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

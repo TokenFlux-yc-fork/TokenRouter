@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 )
@@ -37,6 +38,8 @@ func TestComputeEffective_FallbackToCfgWhenSettingsAbsent(t *testing.T) {
 	base := config.OpsCleanupConfig{
 		Enabled:                    false,
 		Schedule:                   "0 2 * * *",
+		BatchSize:                  opsCleanupDefaultBatchSize,
+		BatchPauseMS:               int(opsCleanupDefaultBatchPause / time.Millisecond),
 		ErrorLogRetentionDays:      30,
 		MinuteMetricsRetentionDays: 30,
 		HourlyMetricsRetentionDays: 30,
@@ -62,6 +65,8 @@ func TestComputeEffective_SettingsOverridesAll(t *testing.T) {
 	base := config.OpsCleanupConfig{
 		Enabled:                    false,
 		Schedule:                   "0 2 * * *",
+		BatchSize:                  opsCleanupDefaultBatchSize,
+		BatchPauseMS:               int(opsCleanupDefaultBatchPause / time.Millisecond),
 		ErrorLogRetentionDays:      30,
 		MinuteMetricsRetentionDays: 30,
 		HourlyMetricsRetentionDays: 30,
@@ -73,12 +78,54 @@ func TestComputeEffective_SettingsOverridesAll(t *testing.T) {
 	want := config.OpsCleanupConfig{
 		Enabled:                    true,
 		Schedule:                   "0 * * * *",
+		BatchSize:                  opsCleanupDefaultBatchSize,
+		BatchPauseMS:               int(opsCleanupDefaultBatchPause / time.Millisecond),
 		ErrorLogRetentionDays:      0,
 		MinuteMetricsRetentionDays: 7,
 		HourlyMetricsRetentionDays: 14,
 	}
 	if svc.effective != want {
 		t.Fatalf("effective mismatch:\nwant %#v\n got %#v", want, svc.effective)
+	}
+}
+
+func TestComputeEffective_SystemLogRetentionUsesRuntimeConfig(t *testing.T) {
+	repo := newRuntimeSettingRepoStub()
+	writeAdvancedSettings(t, repo, OpsDataRetentionSettings{
+		CleanupEnabled:             true,
+		CleanupSchedule:            "0 3 * * *",
+		CleanupBatchSize:           1000,
+		CleanupPauseMS:             200,
+		ErrorLogRetentionDays:      7,
+		MinuteMetricsRetentionDays: 7,
+		HourlyMetricsRetentionDays: 7,
+	})
+	runtimeRaw, err := json.Marshal(OpsRuntimeLogConfig{RetentionDays: 1})
+	if err != nil {
+		t.Fatalf("marshal runtime config: %v", err)
+	}
+	if err := repo.Set(context.Background(), SettingKeyOpsRuntimeLogConfig, string(runtimeRaw)); err != nil {
+		t.Fatalf("set runtime config: %v", err)
+	}
+
+	base := config.OpsCleanupConfig{
+		Enabled:                    true,
+		Schedule:                   "0 3 * * *",
+		BatchSize:                  1000,
+		BatchPauseMS:               200,
+		ErrorLogRetentionDays:      30,
+		SystemLogRetentionDays:     30,
+		MinuteMetricsRetentionDays: 30,
+		HourlyMetricsRetentionDays: 30,
+	}
+	svc := makeOverlayService(repo, base)
+	svc.computeEffectiveLocked(context.Background())
+
+	if svc.effective.ErrorLogRetentionDays != 7 {
+		t.Fatalf("error retention = %d, want 7", svc.effective.ErrorLogRetentionDays)
+	}
+	if svc.effective.SystemLogRetentionDays != 1 {
+		t.Fatalf("system retention = %d, want 1", svc.effective.SystemLogRetentionDays)
 	}
 }
 
@@ -148,6 +195,8 @@ func TestComputeEffective_BadJSONFallsBackToCfg(t *testing.T) {
 	base := config.OpsCleanupConfig{
 		Enabled:                    true,
 		Schedule:                   "0 3 * * *",
+		BatchSize:                  opsCleanupDefaultBatchSize,
+		BatchPauseMS:               int(opsCleanupDefaultBatchPause / time.Millisecond),
 		ErrorLogRetentionDays:      30,
 		MinuteMetricsRetentionDays: 30,
 		HourlyMetricsRetentionDays: 30,

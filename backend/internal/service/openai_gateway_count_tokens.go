@@ -39,7 +39,40 @@ type openAIInputTokensCountPrepared struct {
 	UpstreamModel   string
 }
 
-// ForwardCountTokensAsAnthropic 将 Anthropic /v1/messages/count_tokens 桥接到 OpenAI Responses input_tokens。
+// EstimateGrokCountTokens 在本地估算 Anthropic 兼容的 count_tokens 请求。Grok 没有
+// 兼容的 token 计数端点，因此该路径不选择账号、不读取凭据，也不调用上游。
+func EstimateGrokCountTokens(body []byte) (int, error) {
+	var anthropicReq apicompat.AnthropicRequest
+	if err := json.Unmarshal(body, &anthropicReq); err != nil {
+		return 0, fmt.Errorf("parse anthropic count_tokens request: %w", err)
+	}
+	if strings.TrimSpace(anthropicReq.Model) == "" {
+		return 0, fmt.Errorf("parse anthropic count_tokens request: model is required")
+	}
+
+	responsesReq, err := apicompat.AnthropicToResponses(&anthropicReq)
+	if err != nil {
+		return 0, fmt.Errorf("convert anthropic request to responses: %w", err)
+	}
+
+	estimated, err := estimateOpenAIInputTokens(openAIInputTokensCountRequest{
+		Model:        anthropicReq.Model,
+		Instructions: responsesReq.Instructions,
+		Input:        responsesReq.Input,
+		Tools:        responsesReq.Tools,
+		ToolChoice:   responsesReq.ToolChoice,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("estimate grok input tokens: %w", err)
+	}
+	if estimated < openAIInputTokensFallbackMinimum {
+		estimated = openAIInputTokensFallbackMinimum
+	}
+	return estimated, nil
+}
+
+// ForwardCountTokensAsAnthropic 将 Anthropic /v1/messages/count_tokens 桥接到
+// OpenAI POST /v1/responses/input_tokens，并返回 Anthropic 兼容结果。
 func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	ctx context.Context,
 	c *gin.Context,

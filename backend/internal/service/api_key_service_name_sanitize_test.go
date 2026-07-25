@@ -220,3 +220,60 @@ func TestAPIKeyService_UpdatePersistsFastModePolicy(t *testing.T) {
 	require.Equal(t, APIKeyFastModePolicyForceOff, updated.FastModePolicy)
 	require.Equal(t, APIKeyFastModePolicyForceOff, repo.updated[0].FastModePolicy)
 }
+
+// 部分更新未携带 IP 限制字段时必须保留原有配置。
+func TestAPIKeyService_UpdatePreservesOmittedIPRestrictions(t *testing.T) {
+	repo := &apiKeyNameSanitizeRepoStub{
+		apiKey: &APIKey{
+			ID:          11,
+			UserID:      7,
+			Key:         "sk_existing_ip_key_01",
+			Status:      StatusActive,
+			IPWhitelist: []string{"192.0.2.10"},
+			IPBlacklist: []string{"198.51.100.0/24"},
+		},
+	}
+	svc := &APIKeyService{apiKeyRepo: repo}
+
+	updated, err := svc.Update(context.Background(), 11, 7, UpdateAPIKeyRequest{})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"192.0.2.10"}, updated.IPWhitelist)
+	require.Equal(t, []string{"198.51.100.0/24"}, updated.IPBlacklist)
+}
+
+// 显式空数组只清空对应的 IP 限制，未携带的另一字段保持不变。
+func TestAPIKeyService_UpdateClearsExplicitEmptyIPRestriction(t *testing.T) {
+	repo := &apiKeyNameSanitizeRepoStub{
+		apiKey: &APIKey{
+			ID:          11,
+			UserID:      7,
+			Key:         "sk_existing_ip_key_02",
+			Status:      StatusActive,
+			IPWhitelist: []string{"192.0.2.10"},
+			IPBlacklist: []string{"198.51.100.0/24"},
+		},
+	}
+	svc := &APIKeyService{apiKeyRepo: repo}
+	emptyWhitelist := []string{}
+
+	updated, err := svc.Update(context.Background(), 11, 7, UpdateAPIKeyRequest{IPWhitelist: &emptyWhitelist})
+
+	require.NoError(t, err)
+	require.Empty(t, updated.IPWhitelist)
+	require.Equal(t, []string{"198.51.100.0/24"}, updated.IPBlacklist)
+}
+
+// 显式更新 IP 限制时仍必须校验模式格式。
+func TestAPIKeyService_UpdateRejectsInvalidIPRestriction(t *testing.T) {
+	repo := &apiKeyNameSanitizeRepoStub{
+		apiKey: &APIKey{ID: 11, UserID: 7, Key: "sk_existing_ip_key_03", Status: StatusActive},
+	}
+	svc := &APIKeyService{apiKeyRepo: repo}
+	invalidBlacklist := []string{"not-an-ip"}
+
+	_, err := svc.Update(context.Background(), 11, 7, UpdateAPIKeyRequest{IPBlacklist: &invalidBlacklist})
+
+	require.ErrorIs(t, err, ErrInvalidIPPattern)
+	require.Empty(t, repo.updated)
+}

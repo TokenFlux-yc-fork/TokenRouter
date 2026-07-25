@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"strings"
+
+	"github.com/TokenFlux/TokenRouter/internal/config"
 )
 
 // DiagnoseModelAvailabilityForPlatform 判断请求模型是否被分组内指定 OpenAI 兼容平台账号配置支持。
 // platform 用于限定候选池，避免 OpenAI 与 Grok 等兼容平台互相污染诊断结果。
+// 诊断使用持久配置查询，绕过调度快照并忽略瞬时运行状态。
 //
 // 该方法用于错误路径：内部失败、空模型或 nil service 时返回 {true,true}，
 // 让调用方保守地继续走 503 分支。
@@ -42,8 +45,23 @@ func (s *OpenAIGatewayService) DiagnoseRoutingModelAvailabilityForPlatform(
 	if routingModel == "" {
 		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
 	}
+	if s.accountRepo == nil {
+		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
+	}
 
-	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
+	platform = normalizeOpenAICompatiblePlatform(platform)
+	queryGroupID := groupID
+	includeGrouped := false
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		queryGroupID = nil
+		includeGrouped = true
+	}
+	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(
+		ctx,
+		queryGroupID,
+		[]string{platform},
+		includeGrouped,
+	)
 	if err != nil {
 		// 查询失败时保守返回 503 分支，避免临时查询错误误判为 404 model_not_found。
 		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}

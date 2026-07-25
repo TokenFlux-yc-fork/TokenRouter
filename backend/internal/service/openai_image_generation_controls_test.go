@@ -80,6 +80,53 @@ func TestOpenAIGatewayServiceForward_DisabledGroupAllowsTextOnlyResponses(t *tes
 	require.NotNil(t, upstream.lastReq)
 }
 
+func TestOpenAIGatewayServiceForward_DisabledGroupAllowsPassiveImageNamespace(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name        string
+		passthrough bool
+	}{
+		{name: "managed forwarding"},
+		{name: "passthrough forwarding", passthrough: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{
+				resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"id":"resp_passive_namespace","model":"gpt-5.5","usage":{"input_tokens":3,"output_tokens":2}}`)),
+				},
+			}
+			svc := newOpenAIImageGenerationControlTestService(upstream)
+			c, recorder := newOpenAIImageGenerationControlTestContext(false, "codex_cli_rs/0.144.1")
+			SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+			account := newOpenAIImageGenerationControlTestAccount()
+			account.Extra = map[string]any{"openai_passthrough": tt.passthrough}
+			body := []byte(`{
+				"model":"gpt-5.5",
+				"input":"write code",
+				"stream":false,
+				"tools":[{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]}],
+				"tool_choice":"auto"
+			}`)
+
+			result, err := svc.Forward(context.Background(), c, account, body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.NotNil(t, upstream.lastReq)
+			require.Equal(t, "namespace", gjson.GetBytes(upstream.lastBody, `tools.#(name=="image_gen").type`).String())
+			cached, known := getOpenAIImageIntentHint(c)
+			require.True(t, known)
+			require.True(t, cached, "宽泛意图仍应保留给转发和计费")
+		})
+	}
+}
+
 func TestOpenAIGatewayServiceForward_CodexImageInjectionRespectsGroupCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -647,6 +694,12 @@ func TestNormalizeCompletedImageGenerationStatus(t *testing.T) {
 			input:       `{"type":"response.output_item.added","item":{"type":"image_generation_call","status":"generating","result":"image-data"}}`,
 			want:        `{"type":"response.output_item.added","item":{"type":"image_generation_call","status":"generating","result":"image-data"}}`,
 			wantChanged: false,
+		},
+		{
+			name:        "done preserves base64 result",
+			input:       `{"type":"response.done","response":{"output":[{"type":"image_generation_call","status":"generating","result":"iVBORw0KGgoAAAANSUhEUg/+=="}]}}`,
+			want:        `{"type":"response.done","response":{"output":[{"type":"image_generation_call","status":"completed","result":"iVBORw0KGgoAAAANSUhEUg/+=="}]}}`,
+			wantChanged: true,
 		},
 	}
 

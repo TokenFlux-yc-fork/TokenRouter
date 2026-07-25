@@ -3,13 +3,15 @@ package service
 import (
 	"context"
 	"strings"
+
+	"github.com/TokenFlux/TokenRouter/internal/config"
 )
 
-// ModelAvailabilityDiagnosis 描述请求模型是否被分组内任一账号静态配置支持。
-// 这里忽略限流、额度自动暂停、运行时阻断等临时状态，供 handler 在“无可用账号”
-// 错误路径区分 404 model_not_found 与 503 service_unavailable。
+// ModelAvailabilityDiagnosis 描述请求模型是否被分组内任一持久可用账号支持。
+// 持久可用指账号为 active 且启用 schedulable；诊断忽略限流、过载、临时不可调度和
+// 运行时阻断等瞬时状态，供 handler 区分 404 model_not_found 与 503 service_unavailable。
 type ModelAvailabilityDiagnosis struct {
-	// HasAccountsInPool 表示查询平台下至少存在一个可调度账号；
+	// HasAccountsInPool 表示查询平台下至少存在一个持久可用账号；
 	// Anthropic/Gemini 路径还会包含参与混排的 Antigravity 账号。
 	HasAccountsInPool bool
 	// HasModelSupport 表示至少有一个账号的模型映射允许请求模型。
@@ -27,8 +29,9 @@ type ModelAvailabilityDiagnoser interface {
 	) ModelAvailabilityDiagnosis
 }
 
-// DiagnoseModelAvailabilityForPlatform 检查指定平台的可调度账号，判断请求模型是否被配置支持。
-// 它刻意忽略限流、额度、运行时阻断等临时状态，只回答“静态配置上是否能服务”。
+// DiagnoseModelAvailabilityForPlatform 通过专用持久配置查询检查指定平台的账号，
+// 判断请求模型是否被配置支持。该查询绕过调度快照，忽略限流、过载、临时不可调度、
+// 到期窗口、额度和运行时阻断等瞬时状态。
 //
 // 该方法用于错误路径：内部失败或输入无法诊断时返回 {true,true}，
 // 让调用方保守地继续走 503 分支，避免误报 404。
@@ -51,9 +54,29 @@ func (s *GatewayService) DiagnoseModelAvailabilityForPlatform(
 		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
 	}
 
-	// hasForcePlatform=false 使 Anthropic/Gemini 也纳入混排的 Antigravity 账号，
-	// 与实际选择账号时的候选池保持一致。
-	accounts, _, err := s.listSchedulableAccounts(ctx, groupID, platform, false)
+	if s.accountRepo == nil {
+		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
+	}
+
+	useMixed := platform == PlatformAnthropic || platform == PlatformGemini
+	platforms := []string{platform}
+	if useMixed {
+		platforms = append(platforms, PlatformAntigravity)
+	}
+
+	queryGroupID := groupID
+	includeGrouped := false
+	if useMixed {
+		// 保持通用调度器的池范围：混排时显式分组优先；无分组的 simple 模式扫描全部账号。
+		if groupID == nil && s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+			includeGrouped = true
+		}
+	} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		queryGroupID = nil
+		includeGrouped = true
+	}
+
+	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(ctx, queryGroupID, platforms, includeGrouped)
 	if err != nil {
 		// 查询失败时保守返回 503 分支，避免因为临时查询错误误判为 404。
 		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
@@ -62,6 +85,9 @@ func (s *GatewayService) DiagnoseModelAvailabilityForPlatform(
 	diag := ModelAvailabilityDiagnosis{}
 	routingModel := s.channelMappedModelForGroup(ctx, groupID, requestedModel)
 	for i := range accounts {
+		if useMixed && accounts[i].Platform == PlatformAntigravity && !accounts[i].IsMixedSchedulingEnabled() {
+			continue
+		}
 		diag.HasAccountsInPool = true
 		if s.isRoutingModelSupportedByAccountWithContext(ctx, &accounts[i], routingModel) {
 			diag.HasModelSupport = true

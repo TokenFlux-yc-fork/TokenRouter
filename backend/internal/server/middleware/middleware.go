@@ -80,6 +80,19 @@ func AbortWithError(c *gin.Context, statusCode int, code, message string) {
 	c.Abort()
 }
 
+// abortWithOpenAIQuotaError 输出与 OpenAI 兼容的配额不足响应。
+func abortWithOpenAIQuotaError(c *gin.Context, statusCode int, message string) {
+	c.JSON(statusCode, gin.H{
+		"error": gin.H{
+			"message": message,
+			"type":    "insufficient_quota",
+			"param":   nil,
+			"code":    "insufficient_quota",
+		},
+	})
+	c.Abort()
+}
+
 // ──────────────────────────────────────────────────────────
 // RequireGroupAssignment — 未分组 Key 拦截中间件
 // ──────────────────────────────────────────────────────────
@@ -121,6 +134,7 @@ func RequireGroupAssignment(settingService *service.SettingService, writeError G
 			return
 		}
 		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonAPIKeyGroupUnassigned)
+		MarkIngressRejected(c, IngressRejectGroupUnassigned)
 		writeError(c, http.StatusForbidden, "API Key is not assigned to any group and cannot be used. Please contact the administrator to assign it to a group.")
 		c.Abort()
 	}

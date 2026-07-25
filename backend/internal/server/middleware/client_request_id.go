@@ -11,9 +11,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// ClientRequestID ensures every request has a unique client_request_id in request.Context().
-//
-// This is used by the Ops monitoring module for end-to-end request correlation.
+const clientRequestIDHeader = "X-Client-Request-ID"
+
+// ClientRequestID 确保每个请求都在 request.Context() 中携带唯一的 client_request_id。
+// Ops 监控模块使用该值关联端到端请求链路。
 func ClientRequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request == nil {
@@ -21,7 +22,17 @@ func ClientRequestID() gin.HandlerFunc {
 			return
 		}
 
-		if v := c.Request.Context().Value(ctxkey.ClientRequestID); v != nil {
+		if v, _ := c.Request.Context().Value(ctxkey.ClientRequestID).(string); strings.TrimSpace(v) != "" {
+			var valid bool
+			v, valid = normalizeCorrelationID(v)
+			if !valid {
+				v = uuid.New().String()
+			}
+			c.Header(clientRequestIDHeader, v)
+			ctx := context.WithValue(c.Request.Context(), ctxkey.ClientRequestID, v)
+			requestLogger := logger.FromContext(ctx).With(zap.String("client_request_id", v))
+			ctx = logger.IntoContext(ctx, requestLogger)
+			c.Request = c.Request.WithContext(ctx)
 			c.Next()
 			return
 		}
@@ -31,7 +42,7 @@ func ClientRequestID() gin.HandlerFunc {
 		requestLogger := logger.FromContext(ctx).With(zap.String("client_request_id", strings.TrimSpace(id)))
 		ctx = logger.IntoContext(ctx, requestLogger)
 		c.Request = c.Request.WithContext(ctx)
-		c.Header("X-Client-Request-Id", id)
+		c.Header(clientRequestIDHeader, id)
 		c.Next()
 	}
 }

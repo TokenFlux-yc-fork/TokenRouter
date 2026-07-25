@@ -91,6 +91,7 @@ export interface User {
   frozen_balance?: number // 异步批量任务当前冻结的余额
   concurrency: number // 允许的并发请求数
   rpm_limit?: number // 用户级 RPM 上限（0 表示无限制）；分组未配置时作为兜底
+  api_key_limit: number // 用户可创建的 API Key 数量上限，0 表示不限制
   status: 'active' | 'disabled' // 账号状态
   allowed_groups: number[] | null // 允许的专属分组 ID
   disabled_public_groups?: number[] | null // 被禁用的公开分组 ID
@@ -635,6 +636,11 @@ export interface GroupAvailabilityProbeConfig {
 
 export type GroupHealthStatus = 'unknown' | 'healthy' | 'unhealthy'
 
+export interface ReasoningEffortMapping {
+  from: string
+  to: string
+}
+
 export interface Group {
   id: number
   name: string
@@ -643,7 +649,9 @@ export interface Group {
   display_brand?: string
   rate_multiplier: number
   capacity?: MarketplaceGroupCapacity
-  rpm_limit?: number // Group-level RPM cap (0 = unlimited); overrides user-level rpm_limit when set
+  rpm_limit?: number // 分组级 RPM 上限（0 表示不限制），设置后覆盖用户级 rpm_limit 兜底值
+  max_reasoning_effort?: string // OpenAI/Codex 推理强度上限，空字符串表示不限制
+  reasoning_effort_mappings?: ReasoningEffortMapping[]
   is_exclusive: boolean
   is_default?: boolean
   data_sharing_enabled: boolean
@@ -857,6 +865,8 @@ export interface CreateGroupRequest {
   model_routing?: Record<string, number[]> | null
   model_routing_enabled?: boolean
   rpm_limit?: number
+  max_reasoning_effort?: string
+  reasoning_effort_mappings?: ReasoningEffortMapping[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
   // 从指定分组复制账号
@@ -915,6 +925,8 @@ export interface UpdateGroupRequest {
   model_routing?: Record<string, number[]> | null
   model_routing_enabled?: boolean
   rpm_limit?: number
+  max_reasoning_effort?: string
+  reasoning_effort_mappings?: ReasoningEffortMapping[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
   copy_accounts_from_group_ids?: number[]
@@ -1310,6 +1322,7 @@ export interface AccountUsageInfo {
   grok_last_quota_probe_at?: string
   grok_last_headers_seen_at?: string
   grok_last_status_code?: number
+  grok_free_token_limit?: number
   grok_local_usage?: WindowStats | null
   grok_local_usage_24h?: WindowStats | null
   grok_local_usage_7d?: WindowStats | null
@@ -1438,6 +1451,7 @@ export interface CreateAccountRequest {
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean
+  upstream_billing_probe_enabled?: boolean
   confirm_mixed_channel_risk?: boolean
 }
 
@@ -1981,6 +1995,8 @@ export interface UpdateUserRequest {
   role?: 'admin' | 'user'
   balance?: number
   concurrency?: number
+  rpm_limit?: number
+  api_key_limit?: number
   status?: 'active' | 'disabled'
   allowed_groups?: number[] | null
   disabled_public_groups?: number[] | null

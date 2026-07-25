@@ -10,6 +10,7 @@ const {
   getById,
   getUsage,
   setPrivacy,
+  getUpstreamBillingProbeSettings,
   getAllProxies,
   getAllGroupsIncludingInactive,
   showError,
@@ -24,6 +25,7 @@ const {
   getById: vi.fn(),
   getUsage: vi.fn(),
   setPrivacy: vi.fn(),
+  getUpstreamBillingProbeSettings: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroupsIncludingInactive: vi.fn(),
   showError: vi.fn(),
@@ -42,7 +44,7 @@ vi.mock('@/api/admin', () => ({
       getById,
       getUsage,
       setPrivacy,
-      getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
+      getUpstreamBillingProbeSettings,
       delete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
@@ -136,6 +138,7 @@ describe('admin AccountsView bulk edit scope', () => {
     getById.mockReset()
     getUsage.mockReset()
     setPrivacy.mockReset()
+    getUpstreamBillingProbeSettings.mockReset()
     getAllProxies.mockReset()
     getAllGroupsIncludingInactive.mockReset()
     showError.mockReset()
@@ -160,6 +163,7 @@ describe('admin AccountsView bulk edit scope', () => {
     getById.mockRejectedValue(new Error('unexpected getById call'))
     getUsage.mockResolvedValue({ updated_at: null, five_hour: null, seven_day: null, seven_day_sonnet: null })
     setPrivacy.mockRejectedValue(new Error('unexpected setPrivacy call'))
+    getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: true, interval_minutes: 30 })
     getAllProxies.mockResolvedValue([])
     getAllGroupsIncludingInactive.mockResolvedValue([])
     probeUpstreamBillingBatch.mockResolvedValue([])
@@ -642,6 +646,78 @@ describe('admin AccountsView bulk edit scope', () => {
     expect(getUsage).toHaveBeenCalledWith(99, 'active', true)
   })
 
+  it('passes the loaded global probe state to every upstream billing cell', async () => {
+    listAccounts.mockResolvedValue({
+      items: [
+        {
+          id: 1,
+          name: 'upstream',
+          platform: 'openai',
+          type: 'apikey',
+          status: 'active',
+          schedulable: true,
+          created_at: '2026-07-13T00:00:00Z',
+          updated_at: '2026-07-13T00:00:00Z'
+        }
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1
+    })
+    getUpstreamBillingProbeSettings.mockResolvedValue({ enabled: false, interval_minutes: 30 })
+
+    const wrapper = mount(AccountsView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: { template: '<div><slot name="table" /></div>' },
+          DataTable: {
+            props: ['data'],
+            template: '<div><div v-for="row in data" :key="row.id"><slot name="cell-upstream_billing_rate" :row="row" /></div></div>'
+          },
+          UpstreamBillingRateCell: {
+            props: ['globalProbeEnabled'],
+            template: '<span data-test="upstream-billing-cell" :data-global-enabled="String(globalProbeEnabled)"></span>'
+          },
+          Pagination: true,
+          ConfirmDialog: true,
+          AccountTableActions: true,
+          AccountTableFilters: true,
+          AccountBulkActionsBar: true,
+          AccountActionMenu: true,
+          ImportDataModal: true,
+          ReAuthAccountModal: true,
+          AccountTestModal: true,
+          AccountStatsModal: true,
+          ScheduledTestsPanel: true,
+          SyncFromCrsModal: true,
+          TempUnschedStatusModal: true,
+          ErrorPassthroughRulesModal: true,
+          TLSFingerprintProfilesModal: true,
+          TLSFingerprintRoutersModal: true,
+          CreateAccountModal: true,
+          EditAccountModal: true,
+          BulkEditAccountModal: true,
+          PlatformTypeBadge: true,
+          AccountCapacityCell: true,
+          AccountStatusIndicator: true,
+          AccountTodayStatsCell: true,
+          AccountGroupsCell: true,
+          AccountUsageCell: true,
+          Toggle: true,
+          HelpTooltip: true,
+          Icon: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(getUpstreamBillingProbeSettings).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-test="upstream-billing-cell"]').attributes('data-global-enabled')).toBe('false')
+  })
+
   it('submits selected account IDs from every page for backend eligibility checks', async () => {
     const account = (id: number) => ({
       id,
@@ -705,5 +781,76 @@ describe('admin AccountsView bulk edit scope', () => {
     await flushPromises()
 
     expect(probeUpstreamBillingBatch).toHaveBeenCalledWith([7, 11])
+  })
+
+  it('reloads the server-sorted list after a batch probe changes a snapshot', async () => {
+    localStorage.setItem('account-table-sort', JSON.stringify({ key: 'upstream_billing_rate', order: 'asc' }))
+    const account = (id: number) => ({
+      id,
+      name: `account-${id}`,
+      platform: 'openai',
+      type: 'apikey',
+      status: 'active',
+      schedulable: true,
+      created_at: '2026-07-13T00:00:00Z',
+      updated_at: '2026-07-13T00:00:00Z'
+    })
+    listAccounts
+      .mockResolvedValueOnce({ items: [account(7)], total: 1, page: 1, page_size: 20, pages: 1 })
+      .mockResolvedValueOnce({ items: [account(7)], total: 1, page: 1, page_size: 20, pages: 1 })
+    probeUpstreamBillingBatch.mockResolvedValue([
+      {
+        account_id: 7,
+        snapshot: {
+          status: 'ok',
+          data: { effective_rate_multiplier: 0.5 },
+          last_attempt_at: '2026-07-13T00:00:00Z',
+          next_probe_at: '2026-07-13T00:30:00Z'
+        }
+      }
+    ])
+
+    const wrapper = mount(AccountsView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: { template: '<div><slot name="table" /></div>' },
+          DataTable: DataTableStub,
+          AccountBulkActionsBar: AccountBulkActionsBarStub,
+          AccountTableActions: true,
+          AccountTableFilters: true,
+          AccountActionMenu: true,
+          Pagination: true,
+          ConfirmDialog: true,
+          ImportDataModal: true,
+          ReAuthAccountModal: true,
+          AccountTestModal: true,
+          AccountStatsModal: true,
+          ScheduledTestsPanel: true,
+          SyncFromCrsModal: true,
+          TempUnschedStatusModal: true,
+          ErrorPassthroughRulesModal: true,
+          TLSFingerprintProfilesModal: true,
+          CreateAccountModal: true,
+          EditAccountModal: true,
+          BulkEditAccountModal: BulkEditAccountModalStub,
+          PlatformTypeBadge: true,
+          AccountCapacityCell: true,
+          AccountStatusIndicator: true,
+          AccountTodayStatsCell: true,
+          AccountGroupsCell: true,
+          AccountUsageCell: true,
+          Icon: true
+        }
+      }
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-test="select-row"] input').trigger('change')
+    await wrapper.get('[data-test="probe-upstream-billing"]').trigger('click')
+    await flushPromises()
+
+    expect(probeUpstreamBillingBatch).toHaveBeenCalledWith([7])
+    expect(listAccounts).toHaveBeenCalledTimes(2)
   })
 })

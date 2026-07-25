@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
-	"github.com/TokenFlux/TokenRouter/internal/pkg/ip"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -149,7 +148,7 @@ func NewAuditLogMiddleware(auditService *service.AuditLogService) AuditLogMiddle
 			Action:      action,
 			Method:      c.Request.Method,
 			Path:        c.FullPath(),
-			ClientIP:    ip.GetTrustedClientIP(c),
+			ClientIP:    SecurityClientIP(c),
 			UserAgent:   c.Request.UserAgent(),
 			RequestBody: bodyRedacted,
 			StatusCode:  status,

@@ -1,12 +1,12 @@
 <template>
   <header class="glass sticky top-0 z-30 border-b border-primary-900/10 dark:border-dark-600/80">
-    <div class="flex h-16 items-center justify-between px-4 md:px-6">
+    <div class="flex h-16 items-center justify-between gap-2 px-2 sm:px-4 md:px-6">
       <!-- Left: Mobile Menu Toggle + Page Title -->
-      <div class="flex items-center gap-4">
+      <div class="flex shrink-0 items-center gap-2 sm:gap-4">
         <button
           @click="toggleMobileSidebar"
           class="btn-ghost btn-icon lg:hidden"
-          aria-label="Toggle Menu"
+          :aria-label="t('common.toggleMenu')"
         >
           <Icon name="menu" size="md" />
         </button>
@@ -67,7 +67,7 @@
           <button
             @click="toggleDropdown"
             class="header-status-user-button"
-            aria-label="User Menu"
+            :aria-label="t('common.userMenu')"
           >
             <div class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-primary-500 to-primary-600 text-sm font-medium text-white shadow-sm">
               <img
@@ -383,7 +383,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .header-status-actions {
-  @apply ml-auto flex min-w-0 shrink-0 items-center gap-3.5;
+  @apply ml-auto flex min-w-0 shrink-0 items-center gap-1 sm:gap-3.5;
 }
 
 .header-status-icon-group {

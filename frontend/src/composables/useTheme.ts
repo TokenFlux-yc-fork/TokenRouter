@@ -1,16 +1,9 @@
 import { ref } from 'vue'
 
-type ViewTransition = {
-  ready: Promise<void>
-}
-
-type ViewTransitionDocument = {
-  startViewTransition?: (callback: () => void) => ViewTransition
-}
-
 const themeStorageKey = 'theme'
-const themeRippleDuration = 640
+const themeSwitchingClass = 'theme-switching'
 const isDark = ref(document.documentElement.classList.contains('dark'))
+let themeSwitchFrame: number | undefined
 
 function prefersDarkMode(): boolean {
   const savedTheme = localStorage.getItem(themeStorageKey)
@@ -31,71 +24,34 @@ function persistTheme(nextIsDark: boolean) {
   localStorage.setItem(themeStorageKey, nextIsDark ? 'dark' : 'light')
 }
 
-function supportsAnimatedTheme(event?: MouseEvent): event is MouseEvent {
-  const viewTransitionDocument = document as unknown as ViewTransitionDocument
-  return Boolean(
-    event &&
-      viewTransitionDocument.startViewTransition &&
-      !window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
-}
+function suspendThemeTransitions() {
+  const root = document.documentElement
+  root.classList.add(themeSwitchingClass)
 
-function getRippleRadius(x: number, y: number): number {
-  return Math.hypot(
-    Math.max(x, window.innerWidth - x),
-    Math.max(y, window.innerHeight - y)
-  )
-}
+  if (themeSwitchFrame !== undefined) {
+    window.cancelAnimationFrame(themeSwitchFrame)
+  }
 
-function animateThemeRipple(transition: ViewTransition, x: number, y: number) {
-  void transition.ready
-    .then(() => {
-      const endRadius = getRippleRadius(x, y)
-      const options: KeyframeAnimationOptions & { pseudoElement: string } = {
-        duration: themeRippleDuration,
-        easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
-        pseudoElement: '::view-transition-new(root)',
-      }
-
-      // 用新主题截图做圆形裁剪，让颜色从点击位置像水波一样扩散。
-      document.documentElement.animate(
-        {
-          clipPath: [
-            `circle(0px at ${x}px ${y}px)`,
-            `circle(${endRadius}px at ${x}px ${y}px)`,
-          ],
-        },
-        options
-      )
+  // 保留两个渲染帧，确保 Vue 更新和浏览器绘制期间都不会触发零散的颜色过渡。
+  themeSwitchFrame = window.requestAnimationFrame(() => {
+    themeSwitchFrame = window.requestAnimationFrame(() => {
+      root.classList.remove(themeSwitchingClass)
+      themeSwitchFrame = undefined
     })
-    .catch(() => undefined)
+  })
 }
 
-export function setTheme(nextIsDark: boolean, event?: MouseEvent) {
+export function setTheme(nextIsDark: boolean) {
   if (nextIsDark === isDark.value) return
-
-  if (!supportsAnimatedTheme(event)) {
-    persistTheme(nextIsDark)
-    return
-  }
-
-  const { clientX, clientY } = event
-  const viewTransitionDocument = document as unknown as ViewTransitionDocument
-  const transition = viewTransitionDocument.startViewTransition?.(() => {
-    persistTheme(nextIsDark)
-  })
-
-  if (transition) {
-    animateThemeRipple(transition, clientX, clientY)
-  } else {
-    persistTheme(nextIsDark)
-  }
+  suspendThemeTransitions()
+  // 整体直接切换主题，避免不同组件按各自时长产生拖尾。
+  persistTheme(nextIsDark)
 }
 
 export function useTheme() {
   return {
     isDark,
     setTheme,
-    toggleTheme: (event?: MouseEvent) => setTheme(!isDark.value, event),
+    toggleTheme: () => setTheme(!isDark.value),
   }
 }

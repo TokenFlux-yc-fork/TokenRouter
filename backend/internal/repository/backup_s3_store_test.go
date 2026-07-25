@@ -3,10 +3,12 @@ package repository
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -167,4 +169,125 @@ func TestS3BackupStoreUploadFileWithProgressReturnsPartialProgressOnCancel(t *te
 	mu.Lock()
 	defer mu.Unlock()
 	require.Empty(t, unexpected)
+}
+
+func TestS3BackupStoreUploadMultipartDoesNotReadWholeBackup(t *testing.T) {
+	var createRequests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && hasRawQueryKey(r.URL.Query(), "uploads") {
+			createRequests.Add(1)
+			http.Error(w, "multipart unavailable", http.StatusInternalServerError)
+			return
+		}
+		t.Errorf("unexpected S3 request: method=%s path=%s query=%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		http.Error(w, "unexpected request", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	store, err := NewS3BackupStoreFactory()(context.Background(), &service.BackupS3Config{
+		Endpoint:        server.URL,
+		Region:          "us-east-1",
+		Bucket:          "bucket-a",
+		AccessKeyID:     "ak",
+		SecretAccessKey: "sk",
+		ForcePathStyle:  true,
+		UploadMode:      service.BackupS3UploadModeMultipart,
+	})
+	require.NoError(t, err)
+
+	reader := &generatedBackupReader{remaining: 256 * 1024 * 1024}
+	_, err = store.Upload(context.Background(), "backups/large.sql.gz", reader, "application/gzip")
+	require.Error(t, err)
+	require.Greater(t, createRequests.Load(), int64(0))
+	require.LessOrEqual(t, reader.readBytes.Load(), int64(backupStreamPartSizeBytes))
+}
+
+func TestS3BackupStoreUploadSpooledPutRemovesTemporaryFile(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+	payload := bytes.Repeat([]byte("backup"), 1024)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPut, r.Method)
+		require.Equal(t, int64(len(payload)), r.ContentLength)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, payload, body)
+		w.Header().Set("ETag", `"single"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	store, err := NewS3BackupStoreFactory()(context.Background(), &service.BackupS3Config{
+		Endpoint:        server.URL,
+		Region:          "us-east-1",
+		Bucket:          "bucket-a",
+		AccessKeyID:     "ak",
+		SecretAccessKey: "sk",
+		ForcePathStyle:  true,
+		UploadMode:      service.BackupS3UploadModeSpooledPut,
+	})
+	require.NoError(t, err)
+
+	size, err := store.Upload(context.Background(), "backups/small.sql.gz", bytes.NewReader(payload), "application/gzip")
+	require.NoError(t, err)
+	require.Equal(t, int64(len(payload)), size)
+	tempFiles, err := filepath.Glob(filepath.Join(tempDir, "tokenrouter-backup-upload-*.tmp"))
+	require.NoError(t, err)
+	require.Empty(t, tempFiles)
+}
+
+func TestS3BackupStoreUploadSpooledPutRemovesTemporaryFileOnCancel(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	store := &S3BackupStore{uploadMode: service.BackupS3UploadModeSpooledPut}
+	_, err := store.Upload(ctx, "backups/canceled.sql.gz", bytes.NewReader([]byte("backup")), "application/gzip")
+	require.ErrorIs(t, err, context.Canceled)
+	tempFiles, globErr := filepath.Glob(filepath.Join(tempDir, "tokenrouter-backup-upload-*.tmp"))
+	require.NoError(t, globErr)
+	require.Empty(t, tempFiles)
+}
+
+func TestS3BackupStoreUploadSpooledPutRemovesTemporaryFileOnReadError(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+
+	store := &S3BackupStore{uploadMode: service.BackupS3UploadModeSpooledPut}
+	_, err := store.Upload(context.Background(), "backups/failed.sql.gz", failingBackupReader{}, "application/gzip")
+	require.ErrorContains(t, err, "spool backup upload")
+	tempFiles, globErr := filepath.Glob(filepath.Join(tempDir, "tokenrouter-backup-upload-*.tmp"))
+	require.NoError(t, globErr)
+	require.Empty(t, tempFiles)
+}
+
+type generatedBackupReader struct {
+	remaining int64
+	readBytes atomic.Int64
+}
+
+type failingBackupReader struct{}
+
+// Read 模拟备份流在落盘过程中读取失败。
+func (failingBackupReader) Read([]byte) (int, error) {
+	return 0, errors.New("read backup failed")
+}
+
+// Read 按需生成备份字节，测试大输入时不在内存中创建完整 payload。
+func (r *generatedBackupReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if int64(n) > r.remaining {
+		n = int(r.remaining)
+	}
+	for i := 0; i < n; i++ {
+		p[i] = 'x'
+	}
+	r.remaining -= int64(n)
+	r.readBytes.Add(int64(n))
+	return n, nil
 }

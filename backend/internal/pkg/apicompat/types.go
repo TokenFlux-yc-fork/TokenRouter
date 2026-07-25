@@ -65,6 +65,9 @@ type AnthropicContentBlock struct {
 
 	// type=thinking
 	Thinking string `json:"thinking,omitempty"`
+	// Signature 携带提供方的加密推理（例如 xAI encrypted_content），使 Claude 多轮
+	// 客户端可以在后续轮次中原样回传。
+	Signature string `json:"signature,omitempty"`
 
 	// type=image
 	Source *AnthropicImageSource `json:"source,omitempty"`
@@ -129,16 +132,32 @@ type AnthropicCacheControl struct {
 	TTL  string `json:"ttl,omitempty"` // "5m" / "1h" / 省略=默认 5m（由 Anthropic 判定）
 }
 
-// AnthropicResponse is the non-streaming response from POST /v1/messages.
+// AnthropicResponse 表示 POST /v1/messages 的非流式响应。
+//
+// StopReason 使用指针，以便流式 message_start 按 Anthropic 官方格式输出 JSON null。
+// 普通字符串的零值会序列化为空字符串，严格客户端会将其视为无效的流中状态。
 type AnthropicResponse struct {
 	ID           string                  `json:"id"`
 	Type         string                  `json:"type"` // "message"
 	Role         string                  `json:"role"` // "assistant"
 	Content      []AnthropicContentBlock `json:"content"`
 	Model        string                  `json:"model"`
-	StopReason   string                  `json:"stop_reason"`
+	StopReason   *string                 `json:"stop_reason"`
 	StopSequence *string                 `json:"stop_sequence,omitempty"`
 	Usage        AnthropicUsage          `json:"usage"`
+}
+
+// AnthropicStopReasonPtr 为最终停止原因返回非空字符串指针。
+func AnthropicStopReasonPtr(s string) *string {
+	return &s
+}
+
+// AnthropicStopReasonString 返回停止原因；未设置或为 null 时返回空字符串。
+func AnthropicStopReasonString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // AnthropicUsage holds token counts in Anthropic format.
@@ -240,6 +259,9 @@ type ResponsesInputItem struct {
 	// Role-based messages (developer/system/user/assistant)
 	Role    string          `json:"role,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"` // string or []ResponsesContentPart
+
+	// type=reasoning，用于多轮回放加密推理。
+	EncryptedContent string `json:"encrypted_content,omitempty"`
 
 	// type=function_call
 	CallID    string `json:"call_id,omitempty"`

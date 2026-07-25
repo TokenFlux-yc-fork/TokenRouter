@@ -39,11 +39,17 @@ var (
 	ErrProfileEmailChangeForbidden = infraerrors.BadRequest("EMAIL_PROFILE_UPDATE_FORBIDDEN", "email must be changed through verified email binding")
 	ErrIdentityProviderInvalid     = infraerrors.BadRequest("IDENTITY_PROVIDER_INVALID", "identity provider is invalid")
 	ErrIdentityRedirectInvalid     = infraerrors.BadRequest("IDENTITY_REDIRECT_INVALID", "identity redirect path is invalid")
+	ErrUserAPIKeyLimitInvalid      = infraerrors.BadRequest("INVALID_API_KEY_LIMIT", fmt.Sprintf("api key limit must be between 0 and %d", MaxUserAPIKeyLimit))
 	ErrIdentityUnbindLastMethod    = infraerrors.Conflict(
 		"IDENTITY_UNBIND_LAST_METHOD",
 		"bind another sign-in method before unbinding this provider",
 	)
 )
+
+// IsValidUserAPIKeyLimit 判断用户 API Key 数量上限能否安全写入数据库。
+func IsValidUserAPIKeyLimit(limit int) bool {
+	return limit >= 0 && limit <= MaxUserAPIKeyLimit
+}
 
 const (
 	maxNotifyEmails      = 3 // Maximum number of notification emails per user
@@ -112,6 +118,8 @@ type UserRepository interface {
 	BatchSetConcurrency(ctx context.Context, userIDs []int64, value int) (int, error)
 	// BatchAddConcurrency 批量增减用户并发数，结果不会低于 0。
 	BatchAddConcurrency(ctx context.Context, userIDs []int64, delta int) (int, error)
+	// BatchUpdateLimits 在一次写入中只覆盖非 nil 的用户限制字段。
+	BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByNormalizedEmail(ctx context.Context, normalizedEmail string) (bool, error)
 	LockRegistrationEmail(ctx context.Context, normalizedEmail string) error

@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	middleware2 "github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -24,6 +27,82 @@ type opsFlushErrorRecorder struct {
 func (w *opsFlushErrorRecorder) FlushError() error {
 	w.flushCalls.Add(1)
 	return w.err
+}
+
+type ingressRejectSettingRepo struct {
+	service.SettingRepository
+	getValueCalls int
+}
+
+func (r *ingressRejectSettingRepo) GetValue(context.Context, string) (string, error) {
+	r.getValueCalls++
+	return "", service.ErrSettingNotFound
+}
+
+func (r *ingressRejectSettingRepo) GetMultiple(context.Context, []string) (map[string]string, error) {
+	r.getValueCalls++
+	return map[string]string{}, nil
+}
+
+func (r *ingressRejectSettingRepo) Set(context.Context, string, string) error {
+	return nil
+}
+
+type ingressRejectOpsRepo struct {
+	service.OpsRepository
+	insertCalls int
+}
+
+func (r *ingressRejectOpsRepo) InsertErrorLog(context.Context, *service.OpsInsertErrorLogInput) (int64, error) {
+	r.insertCalls++
+	return 0, nil
+}
+
+func (r *ingressRejectOpsRepo) BatchInsertErrorLogs(context.Context, []*service.OpsInsertErrorLogInput) (int64, error) {
+	r.insertCalls++
+	return 0, nil
+}
+
+func TestOpsErrorLogQueueByteBudget(t *testing.T) {
+	previousBytes := opsErrorLogQueueBytes.Load()
+	previousLen := opsErrorLogQueueLen.Load()
+	opsErrorLogQueueBytes.Store(0)
+	opsErrorLogQueueLen.Store(0)
+	t.Cleanup(func() {
+		opsErrorLogQueueBytes.Store(previousBytes)
+		opsErrorLogQueueLen.Store(previousLen)
+	})
+
+	if !reserveOpsErrorLogQueueBytes(opsErrorLogMaxQueueBytes - 1) {
+		t.Fatal("first reservation within byte budget should succeed")
+	}
+	if reserveOpsErrorLogQueueBytes(2) {
+		t.Fatal("reservation beyond byte budget should be rejected")
+	}
+	if got := OpsErrorLogQueueBytes(); got != opsErrorLogMaxQueueBytes-1 {
+		t.Fatalf("queued bytes = %d, want %d", got, opsErrorLogMaxQueueBytes-1)
+	}
+	if got := OpsErrorLogQueueLength(); got != 1 {
+		t.Fatalf("queue length = %d, want 1", got)
+	}
+}
+
+func TestEstimateOpsErrorLogJobBytesIncludesVariablePayloads(t *testing.T) {
+	base := estimateOpsErrorLogJobBytes(&service.OpsInsertErrorLogInput{})
+	message := "upstream message"
+	detail := "upstream detail"
+	events := `[{"error":"x"}]`
+	entry := &service.OpsInsertErrorLogInput{
+		ErrorBody:            strings.Repeat("x", 1024),
+		ErrorMessage:         "client error",
+		UserAgent:            "test-agent",
+		UpstreamErrorMessage: &message,
+		UpstreamErrorDetail:  &detail,
+		UpstreamErrorsJSON:   &events,
+	}
+	if got := estimateOpsErrorLogJobBytes(entry); got <= base+1024 {
+		t.Fatalf("estimated bytes = %d, expected variable payloads above %d", got, base+1024)
+	}
 }
 
 func resetOpsErrorLoggerStateForTest(t *testing.T) {
@@ -195,6 +274,29 @@ func TestOpsErrorLoggerMiddleware_RestoresWriterOutsideCompactKeepalive(t *testi
 	require.Equal(t, http.StatusNoContent, observedStatus)
 }
 
+func TestOpsCaptureWriterPool_DropsLargeBuffers(t *testing.T) {
+	w := &opsCaptureWriter{}
+	w.buf.Grow(opsCaptureWriterPoolMaxRetainedCapacity + 1)
+	require.False(t, shouldPoolOpsCaptureWriter(w))
+}
+
+func TestEnqueueOpsErrorLog_SanitizesAndBoundsBodyBeforeQueue(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 1)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	secret := strings.Repeat("s", service.OpsErrorLogQueueBodyMaxBytes)
+	entry := &service.OpsInsertErrorLogInput{
+		ErrorPhase: "request",
+		ErrorType:  "api_error",
+		ErrorBody:  `{"authorization":"Bearer ` + secret + `","message":"failed"}`,
+	}
+
+	enqueueOpsErrorLog(ops, entry)
+	job := <-opsErrorLogQueue
+	require.LessOrEqual(t, len(job.entry.ErrorBody), service.OpsErrorLogQueueBodyMaxBytes)
+	require.NotContains(t, job.entry.ErrorBody, secret)
+	require.Equal(t, int64(1), OpsErrorLogSanitizedTotal())
+}
+
 func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -223,6 +325,42 @@ func setupOpsErrorLogTestQueue(t *testing.T, size int) {
 	opsErrorLogMu.Lock()
 	opsErrorLogQueue = make(chan opsErrorLogJob, size)
 	opsErrorLogMu.Unlock()
+}
+
+func TestOpsErrorLoggerMiddleware_HardSkipsIngressRejection(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+	gin.SetMode(gin.TestMode)
+
+	settings := &ingressRejectSettingRepo{}
+	repo := &ingressRejectOpsRepo{}
+	ops := service.NewOpsService(repo, settings, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	// 构造阶段可能读取其它运行时设置，此处只统计请求路径中的读取。
+	settings.getValueCalls = 0
+
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.GET("/v1/messages", func(c *gin.Context) {
+		middleware2.MarkIngressRejected(c, middleware2.IngressRejectInvalidAPIKey)
+		c.JSON(http.StatusUnauthorized, gin.H{"code": "INVALID_API_KEY", "message": "Invalid API key"})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/messages", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.JSONEq(t, `{"code":"INVALID_API_KEY","message":"Invalid API key"}`, w.Body.String())
+	require.Zero(t, settings.getValueCalls, "ingress rejection must bypass monitoring settings reads")
+	require.Zero(t, repo.insertCalls, "ingress rejection must bypass inserts")
+	require.Zero(t, OpsErrorLogEnqueuedTotal(), "ingress rejection must not enter the error queue")
+}
+
+func TestNormalizeOpsPersistentUserAgentBoundsAndPreservesUTF8(t *testing.T) {
+	value := strings.Repeat("a", opsErrorLogMaxUserAgentBytes-1) + "你" + strings.Repeat("b", 32)
+	got := normalizeOpsPersistentUserAgent("  " + value + "  ")
+	require.LessOrEqual(t, len(got), opsErrorLogMaxUserAgentBytes)
+	require.True(t, utf8.ValidString(got))
+	require.NotContains(t, got, "b")
 }
 
 // 就地 SSE 错误挂在已固化的 HTTP 200 流上：实际状态码为 200，
@@ -256,6 +394,36 @@ func TestLogOpsStreamError_RecordsInBandConcurrencyLimit(t *testing.T) {
 	require.Equal(t, "P1", job.entry.Severity)            // 用 IntendedStatus 429 分级
 	require.Equal(t, "test-model", job.entry.Model)
 	require.Equal(t, "Concurrency limit exceeded for account, please retry later", job.entry.ErrorMessage)
+}
+
+func TestLogOpsStreamError_UpstreamFailureCountsTowardsSLA(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set(opsModelKey, "gpt-5.6-sol")
+
+	service.MarkOpsStreamFailure(
+		c,
+		"upstream_error",
+		service.OpenAIUpstreamHTTP2StreamErrorCode,
+		"Upstream HTTP/2 stream failed",
+		http.StatusBadGateway,
+	)
+
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	logOpsStreamError(c, ops, http.StatusOK)
+
+	job := <-opsErrorLogQueue
+	require.NotNil(t, job.entry)
+	require.Equal(t, http.StatusBadGateway, job.entry.StatusCode)
+	require.Equal(t, "upstream_error", job.entry.ErrorType)
+	require.Equal(t, "upstream", job.entry.ErrorPhase)
+	require.Equal(t, "provider", job.entry.ErrorOwner)
+	require.False(t, job.entry.IsBusinessLimited)
+	require.Contains(t, job.entry.ErrorBody, service.OpenAIUpstreamHTTP2StreamErrorCode)
 }
 
 // 未标记流内错误时 logOpsStreamError 必须是 no-op（不误记正常的 200 流）。

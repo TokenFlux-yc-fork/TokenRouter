@@ -532,7 +532,7 @@ func normalizeCodexImportEntry(entry codexImportEntry) (*codexImportAccount, err
 			if item.AgentTaskID == "" {
 				item.WarningTexts = append(item.WarningTexts, "未包含 task_id，首次请求会使用现有 runtime 注册新 task")
 			}
-			item.IdentityKeys = buildCodexAgentIdentityKeys(item.AccountID, item.UserID, item.Email, item.AgentRuntimeID)
+			item.IdentityKeys = buildCodexAgentIdentityKeys(item.AccountID)
 			item.Name = buildCodexImportAccountName(item, entry.Index)
 			return item, nil
 		}
@@ -893,12 +893,15 @@ func buildCodexImportIdentityKeys(accountID, userID, email, accessToken, refresh
 	return buildCodexStoredIdentityKeys(accountID, userID, email, accessToken)
 }
 
-func buildCodexAgentIdentityKeys(accountID, userID, email, runtimeID string) []string {
-	keys := buildCodexStoredIdentityKeys(accountID, userID, email, "")
-	if runtimeID = strings.TrimSpace(runtimeID); runtimeID != "" {
-		keys = append([]string{"agent:" + runtimeID}, keys...)
+func buildCodexAgentIdentityKeys(accountID string) []string {
+	// 同一 ChatGPT 账号下的 Agent Identity 凭据应合并，但同一用户可能拥有多个 Team
+	// 账号。这里不能用 user、email 或 runtime 作为回退键：user_id 会跨 Team 共享，
+	// runtime_id 则会在同一账号注册新 runtime 时变化。
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return nil
 	}
-	return keys
+	return []string{"account:" + accountID}
 }
 
 // buildCodexStoredIdentityKeys 生成存量账号索引键，保留 user/account 维度，

@@ -22,6 +22,13 @@ const (
 	RoleUser  = domain.RoleUser
 )
 
+const (
+	// DefaultUserAPIKeyLimit 是新用户 API Key 数量上限的内置默认值。
+	DefaultUserAPIKeyLimit = domain.DefaultUserAPIKeyLimit
+	// MaxUserAPIKeyLimit 是数据库能够保存的用户 API Key 数量上限最大值。
+	MaxUserAPIKeyLimit = domain.MaxUserAPIKeyLimit
+)
+
 // Affiliate rebate settings
 const (
 	AffiliateRebateRateDefault          = 20.0
@@ -170,6 +177,8 @@ const (
 
 	// API Key IP 访问控制设置
 	SettingKeyAPIKeyACLTrustForwardedIP = "api_key_acl_trust_forwarded_ip" // API Key IP 白/黑名单是否信任转发 IP
+	SettingKeyForwardedClientIPHeaders  = "forwarded_client_ip_headers"    // 自定义 CDN 客户端 IP 请求头（JSON 数组）
+	settingKeyForwardedClientIPModeV2   = "forwarded_client_ip_mode_v2_migrated"
 
 	// 数据共享须知设置
 	SettingKeyDataSharingNoticeContent      = "data_sharing_notice_content"       // 数据共享须知正文
@@ -185,7 +194,10 @@ const (
 	SettingKeyTotpEnabled = "totp_enabled" // 是否启用 TOTP 2FA 功能
 
 	// 会话安全设置
-	SettingKeySessionBindingEnabled = "session_binding_enabled" // 会话 IP/UA 绑定（变更即失效），默认开启
+	SettingKeySessionBindingEnabled = "session_binding_enabled" // 会话 IP/UA 绑定（变更即失效），默认关闭
+
+	// 敏感操作 step-up 2FA 设置
+	SettingKeyStepUpEnabled = "step_up_enabled" // 敏感操作（导出/备份/S3配置/提升管理员等）要求 step-up 2FA，默认关闭
 
 	// 操作审计日志设置
 	SettingKeyAuditLogRetentionDays = "audit_log_retention_days" // 审计日志保留天数（<=0 永久保留），默认 180
@@ -298,6 +310,7 @@ const (
 	SettingKeyDefaultBalance                       = "default_balance"                         // 新用户默认余额
 	SettingKeyDefaultSubscriptions                 = "default_subscriptions"                   // 新用户默认订阅列表（JSON）
 	SettingKeyDefaultUserRPMLimit                  = "default_user_rpm_limit"                  // 新用户默认 RPM 限制（0 = 不限制）
+	SettingKeyDefaultUserAPIKeyLimit               = "default_user_api_key_limit"              // 新用户默认 API Key 数量上限（0 = 不限制）
 	SettingKeyBalanceUnitName                      = "balance_unit_name"                       // 内部余额展示名称
 	SettingKeyBalanceUnitSymbol                    = "balance_unit_symbol"                     // 内部余额展示符号
 	SettingKeyBalanceIconSVG                       = "balance_icon_svg"                        // 内部余额展示 SVG 图标

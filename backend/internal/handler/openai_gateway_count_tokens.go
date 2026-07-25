@@ -12,7 +12,49 @@ import (
 	"go.uber.org/zap"
 )
 
-// CountTokens 处理 OpenAI 分组的 Anthropic 兼容 /v1/messages/count_tokens。
+// GrokCountTokens 在本地处理 Anthropic 兼容的 count_tokens 请求。路由中间件已完成
+// API Key 认证和分组解析，因此此处理器不选择账号，也不执行计费检查。
+func (h *OpenAIGatewayHandler) GrokCountTokens(c *gin.Context) {
+	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	if err != nil {
+		if maxErr, ok := extractMaxBytesError(err); ok {
+			h.anthropicErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
+			return
+		}
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		return
+	}
+	if len(body) == 0 {
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		return
+	}
+
+	bodyRef := service.NewRequestBodyRef(body)
+	parsedReq, err := service.ParseGatewayRequest(bodyRef, domain.PlatformAnthropic)
+	if err != nil {
+		logRequestBodyParseFailure(requestLogger(c, "handler.openai_gateway.grok_count_tokens"), body, err)
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		return
+	}
+	if parsedReq.Model == "" {
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		return
+	}
+
+	estimated, err := service.EstimateGrokCountTokens(parsedReq.Body.Bytes())
+	if err != nil {
+		requestLogger(c, "handler.openai_gateway.grok_count_tokens").Warn("grok_count_tokens.local_estimate_failed", zap.Error(err))
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		return
+	}
+
+	setOpsRequestContext(c, parsedReq.Model, false)
+	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(false, false)))
+	c.JSON(http.StatusOK, gin.H{"input_tokens": estimated})
+}
+
+// CountTokens 处理 OpenAI 分组的 Anthropic 兼容 POST /v1/messages/count_tokens。
+// 它校验计费并转到 OpenAI token-count bridge，不占用并发槽位，也不记录用量。
 func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	requestStart := time.Now()
 
@@ -69,6 +111,7 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
 	}
+	body = parsedReq.Body.Bytes()
 	if parsedReq.Model == "" {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return

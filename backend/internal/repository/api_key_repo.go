@@ -51,7 +51,89 @@ func apiKeyFastModePolicyForPersistence(value string) string {
 }
 
 func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) error {
-	builder := r.client.APIKey.Create().
+	if key == nil {
+		return fmt.Errorf("api key is required")
+	}
+
+	// API Key 数量判断和插入必须共用事务；PostgreSQL 上的用户行锁会串行化同一用户的并发创建。
+	txClient, sqlq, commit, rollback, err := r.beginAPIKeyCreateTransaction(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback()
+
+	current, limit, err := r.lockAPIKeyOwnerAndCount(ctx, sqlq, key.UserID)
+	if err != nil {
+		return err
+	}
+	if limit > 0 && current >= int64(limit) {
+		return service.NewAPIKeyLimitReachedError(current, limit)
+	}
+
+	created, err := createAPIKeyRecord(ctx, txClient, key)
+	if err != nil {
+		return translatePersistenceError(err, nil, service.ErrAPIKeyExists)
+	}
+	if err := commit(); err != nil {
+		return err
+	}
+
+	key.ID = created.ID
+	key.LastUsedAt = created.LastUsedAt
+	key.CreatedAt = created.CreatedAt
+	key.UpdatedAt = created.UpdatedAt
+	return nil
+}
+
+// beginAPIKeyCreateTransaction 返回创建流程使用的 Ent client、SQL 执行器和事务收尾函数。
+func (r *apiKeyRepository) beginAPIKeyCreateTransaction(ctx context.Context) (*dbent.Client, sqlExecutor, func() error, func(), error) {
+	if existing := dbent.TxFromContext(ctx); existing != nil {
+		client := existing.Client()
+		return client, client, func() error { return nil }, func() {}, nil
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err == nil {
+		client := tx.Client()
+		return client, client, tx.Commit, func() { _ = tx.Rollback() }, nil
+	}
+	if !errors.Is(err, dbent.ErrTxStarted) {
+		return nil, nil, nil, nil, err
+	}
+
+	// 仓储可能已经绑定到调用方创建的事务，此时由调用方负责提交或回滚。
+	if r.sql == nil {
+		return nil, nil, nil, nil, fmt.Errorf("sql executor is not configured")
+	}
+	return r.client, r.sql, func() error { return nil }, func() {}, nil
+}
+
+// lockAPIKeyOwnerAndCount 锁定用户并统计所有未软删除的 API Key。
+func (r *apiKeyRepository) lockAPIKeyOwnerAndCount(ctx context.Context, sqlq sqlExecutor, userID int64) (int64, int, error) {
+	lockQuery := `SELECT api_key_limit FROM users WHERE id = $1 AND deleted_at IS NULL`
+	if r.client.Driver().Dialect() == dialect.Postgres {
+		lockQuery += ` FOR UPDATE`
+	}
+
+	var limit int
+	if err := scanSingleRow(ctx, sqlq, lockQuery, []any{userID}, &limit); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, 0, service.ErrUserNotFound
+		}
+		return 0, 0, err
+	}
+
+	var current int64
+	const countQuery = `SELECT COUNT(*) FROM api_keys WHERE user_id = $1 AND deleted_at IS NULL`
+	if err := scanSingleRow(ctx, sqlq, countQuery, []any{userID}, &current); err != nil {
+		return 0, 0, err
+	}
+	return current, limit, nil
+}
+
+// createAPIKeyRecord 使用指定事务 client 插入 API Key 记录。
+func createAPIKeyRecord(ctx context.Context, client *dbent.Client, key *service.APIKey) (*dbent.APIKey, error) {
+	builder := client.APIKey.Create().
 		SetUserID(key.UserID).
 		SetKey(key.Key).
 		SetName(key.Name).
@@ -77,14 +159,7 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		builder.SetIPBlacklist(key.IPBlacklist)
 	}
 
-	created, err := builder.Save(ctx)
-	if err == nil {
-		key.ID = created.ID
-		key.LastUsedAt = created.LastUsedAt
-		key.CreatedAt = created.CreatedAt
-		key.UpdatedAt = created.UpdatedAt
-	}
-	return translatePersistenceError(err, nil, service.ErrAPIKeyExists)
+	return builder.Save(ctx)
 }
 
 func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
@@ -218,6 +293,8 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldMessagesDispatchModelConfig,
 				group.FieldModelsListConfig,
 				group.FieldRpmLimit,
+				group.FieldMaxReasoningEffort,
+				group.FieldReasoningEffortMappings,
 				group.FieldDataSharingEnabled,
 				group.FieldSessionIsolationEnabled,
 				group.FieldPeakRateEnabled,
@@ -358,16 +435,13 @@ func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// DeleteWithAudit 在同一事务内:
-//  1. 把(明文 key、所有者、key 名称)写入 deleted_api_key_audits;
-//  2. 软删除该 key(tombstone 覆盖 key 列以释放唯一约束)。
-//
-// 保证"被删除的 key 一定能反查到所有者"。事务模式与 group_repo.DeleteCascade 一致。
+// DeleteWithAudit 为兼容滚动升级保留历史方法名。
+// 该方法以原子方式写入墓碑并软删除 Key，不保留凭据材料；墓碑会释放唯一键值以便安全复用。
 func (r *apiKeyRepository) DeleteWithAudit(ctx context.Context, id int64) error {
 	tombstoneKey := fmt.Sprintf("__deleted__%d__%d", id, time.Now().UnixNano())
 
 	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
-		return r.deleteWithAudit(ctx, existingTx.Client(), id, tombstoneKey)
+		return r.deleteWithTombstone(ctx, existingTx.Client(), id, tombstoneKey)
 	}
 
 	tx, err := r.client.Tx(ctx)
@@ -380,7 +454,7 @@ func (r *apiKeyRepository) DeleteWithAudit(ctx context.Context, id int64) error 
 		exec = tx.Client()
 	}
 
-	if err := r.deleteWithAudit(ctx, exec, id, tombstoneKey); err != nil {
+	if err := r.deleteWithTombstone(ctx, exec, id, tombstoneKey); err != nil {
 		return err
 	}
 
@@ -390,17 +464,7 @@ func (r *apiKeyRepository) DeleteWithAudit(ctx context.Context, id int64) error 
 	return nil
 }
 
-func (r *apiKeyRepository) deleteWithAudit(ctx context.Context, exec *dbent.Client, id int64, tombstoneKey string) error {
-	// 1. 审计:数据源即 api_keys 当前行;WHERE deleted_at IS NULL 保证只对未删除行写一次。
-	if _, err := exec.ExecContext(ctx, `
-		INSERT INTO deleted_api_key_audits (key, api_key_id, user_id, key_name, deleted_at)
-		SELECT key, id, user_id, name, NOW()
-		FROM api_keys
-		WHERE id = $1 AND deleted_at IS NULL`, id); err != nil {
-		return err
-	}
-
-	// 2. 软删除(tombstone 覆盖 key)。
+func (r *apiKeyRepository) deleteWithTombstone(ctx context.Context, exec *dbent.Client, id int64, tombstoneKey string) error {
 	res, err := exec.ExecContext(ctx, `
 		UPDATE api_keys
 		SET key = $1, deleted_at = NOW(), updated_at = NOW()
@@ -1050,6 +1114,7 @@ func userEntityToService(u *dbent.User) *service.User {
 		BalanceNotifyThreshold:     u.BalanceNotifyThreshold,
 		TotalRecharged:             u.TotalRecharged,
 		RPMLimit:                   u.RpmLimit,
+		APIKeyLimit:                u.APIKeyLimit,
 		CreatedAt:                  u.CreatedAt,
 		UpdatedAt:                  u.UpdatedAt,
 		DeletedAt:                  u.DeletedAt,
@@ -1076,6 +1141,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		IsDefault:                       g.IsDefault,
 		Status:                          g.Status,
 		Hydrated:                        true,
+		DuplicateOperationID:            derefString(g.DuplicateOperationID),
 		DataSharingEnabled:              g.DataSharingEnabled,
 		SessionIsolationEnabled:         g.SessionIsolationEnabled,
 		AllowImageGeneration:            g.AllowImageGeneration,
@@ -1121,6 +1187,8 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		HealthConsecutiveSuccesses:      g.HealthConsecutiveSuccesses,
 		HealthStatus:                    g.HealthStatus,
 		RPMLimit:                        g.RpmLimit,
+		MaxReasoningEffort:              g.MaxReasoningEffort,
+		ReasoningEffortMappings:         g.ReasoningEffortMappings,
 		PeakRateEnabled:                 g.PeakRateEnabled,
 		PeakStart:                       g.PeakStart,
 		PeakEnd:                         g.PeakEnd,

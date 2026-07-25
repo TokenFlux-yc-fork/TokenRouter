@@ -30,7 +30,10 @@ export default {
       loadingText: 'loading',
       ready: 'ready',
       systemLogs: {
-        host: 'Host'
+        host: 'Host',
+        empty: 'No system logs',
+        cleanupFilterRequired: 'Cleanup requires at least one filter condition (start/end time or another field)',
+        cleanupFailed: 'Failed to clean up system logs'
       },
       requestsTotal: 'Requests (total)',
       slaScope: 'SLA scope:',
@@ -347,8 +350,6 @@ export default {
         suggestPlatform: 'Platform error: prioritize investigation and fix',
         suggestGeneric: 'See details for more context',
         apiKeyPrefix: 'Key Prefix',
-        attemptedKeyPrefix: 'Attempted Key Prefix',
-        deletedKeyOwner: 'Deleted Key Owner',
         keyDeletedBadge: 'Key Deleted'
       },
       requestDetails: {
@@ -658,7 +659,10 @@ export default {
         dataRetention: 'Data Retention Policy',
         enableCleanup: 'Enable Data Cleanup',
         cleanupSchedule: 'Cleanup Schedule (Cron)',
-        cleanupScheduleHint: 'Example: 0 2 * * * means 2 AM daily',
+        cleanupScheduleHint: 'Example: 0 3 * * * means 3 AM daily',
+        cleanupBatchSize: 'Rows Deleted per Batch',
+        cleanupPauseMs: 'Pause Between Batches (ms)',
+        cleanupThrottleHint: 'Keep the recommended 1,000 rows and 200 ms to reduce burst memory, I/O, and WAL pressure.',
         errorLogRetentionDays: 'Error Log Retention Days',
         minuteMetricsRetentionDays: 'Minute Metrics Retention Days',
         hourlyMetricsRetentionDays: 'Hourly Metrics Retention Days',
@@ -681,8 +685,6 @@ export default {
         ignoreContextCanceledHint: 'When enabled, client disconnect (context canceled) errors will not be written to the error log.',
         ignoreNoAvailableAccounts: 'Ignore no available accounts errors',
         ignoreNoAvailableAccountsHint: 'When enabled, "No available accounts" errors will not be written to the error log (not recommended; usually a config issue).',
-        ignoreInvalidApiKeyErrors: 'Ignore invalid API key errors',
-        ignoreInvalidApiKeyErrorsHint: 'When enabled, invalid or missing API key errors (INVALID_API_KEY, API_KEY_REQUIRED) will not be written to the error log.',
         ignoreInsufficientBalanceErrors: 'Ignore Insufficient Balance Errors',
         ignoreInsufficientBalanceErrorsHint: 'When enabled, insufficient account balance errors will not be written to the error log.',
         autoRefresh: 'Auto Refresh',
@@ -701,6 +703,8 @@ export default {
         validation: {
           title: 'Please fix the following issues',
           retentionDaysRange: 'Retention days must be between 0 and 365 (0 = wipe all on every cleanup)',
+          cleanupBatchSizeRange: 'Cleanup batch size must be an integer between 100 and 5000',
+          cleanupPauseRange: 'Cleanup pause must be an integer between 1 and 2000 milliseconds',
           slaMinPercentRange: 'SLA minimum percentage must be between 0 and 100',
           ttftP99MaxRange: 'TTFT P99 maximum must be a number ≥ 0',
           requestErrorRateMaxRange: 'Request error rate maximum must be between 0 and 100',

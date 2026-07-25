@@ -83,6 +83,7 @@ describe('UserCreateModal', () => {
 
     expect(createUserMock).toHaveBeenCalledTimes(1)
     expect(createUserMock).toHaveBeenCalledWith(expect.not.objectContaining({ balance: expect.anything() }))
+    expect(createUserMock).toHaveBeenCalledWith(expect.not.objectContaining({ api_key_limit: expect.anything() }))
   })
 
   it('sends explicit zero balance', async () => {
@@ -95,5 +96,41 @@ describe('UserCreateModal', () => {
 
     expect(createUserMock).toHaveBeenCalledTimes(1)
     expect(createUserMock).toHaveBeenCalledWith(expect.objectContaining({ balance: 0 }))
+  })
+
+  it('sends explicit zero API key limit', async () => {
+    const wrapper = mountModal()
+    await fillRequiredFields(wrapper)
+    await wrapper.get('[data-test="api-key-limit-input"]').setValue('0')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(createUserMock).toHaveBeenCalledTimes(1)
+    expect(createUserMock).toHaveBeenCalledWith(expect.objectContaining({ api_key_limit: 0 }))
+  })
+
+  it('rejects a negative API key limit', async () => {
+    const wrapper = mountModal()
+    await fillRequiredFields(wrapper)
+    await wrapper.get('[data-test="api-key-limit-input"]').setValue('-1')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(createUserMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.users.form.apiKeyLimitInvalid')
+  })
+
+  it('rejects an API key limit above the database range', async () => {
+    const wrapper = mountModal()
+    await fillRequiredFields(wrapper)
+    await wrapper.get('[data-test="api-key-limit-input"]').setValue('2147483648')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(createUserMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.users.form.apiKeyLimitInvalid')
   })
 })

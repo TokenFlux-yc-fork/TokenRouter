@@ -3,18 +3,18 @@
     <Transition name="modal">
       <div
         v-if="show"
-        class="modal-overlay"
+        class="modal-overlay min-w-0 overflow-x-hidden"
         :style="zIndexStyle"
         :aria-labelledby="dialogId"
         role="dialog"
         aria-modal="true"
         @click.self="handleClose"
       >
-        <!-- Modal panel -->
-        <div ref="dialogRef" :class="['modal-content', widthClasses]" @click.stop>
-          <!-- Header -->
-          <div class="modal-header">
-            <h3 :id="dialogId" class="modal-title">
+        <!-- 弹窗面板 -->
+        <div ref="dialogRef" :class="['modal-content min-w-0', widthClasses]" @click.stop>
+          <!-- 头部 -->
+          <div class="modal-header min-w-0 max-w-full">
+            <h3 :id="dialogId" class="modal-title min-w-0 break-words">
               {{ title }}
             </h3>
             <button
@@ -26,13 +26,13 @@
             </button>
           </div>
 
-          <!-- Body -->
-          <div class="modal-body">
+          <!-- 内容区 -->
+          <div class="modal-body min-w-0 max-w-full">
             <slot></slot>
           </div>
 
-          <!-- Footer -->
-          <div v-if="$slots.footer" class="modal-footer">
+          <!-- 底部 -->
+          <div v-if="$slots.footer" class="modal-footer min-w-0 max-w-full">
             <slot name="footer"></slot>
           </div>
         </div>
@@ -82,21 +82,19 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<Emits>()
 
-// Custom z-index style (overrides the default z-50 from CSS)
+// 自定义层级会覆盖 CSS 中默认的 z-50。
 const zIndexStyle = computed(() => {
   return props.zIndex !== 50 ? { zIndex: props.zIndex } : undefined
 })
 
 const widthClasses = computed(() => {
-  // Width guidance: narrow=confirm/short prompts, normal=standard forms,
-  // wide=multi-section forms or rich content, extra-wide=analytics/tables,
-  // full=full-screen or very dense layouts.
+  // 移动端统一保留遮罩边距，避免弹窗内容的最小宽度撑开页面。
   const widths: Record<DialogWidth, string> = {
-    narrow: 'max-w-md',
-    normal: 'max-w-lg',
-    wide: 'w-full sm:max-w-2xl md:max-w-3xl lg:max-w-4xl',
-    'extra-wide': 'w-full sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl',
-    full: 'w-full sm:max-w-4xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl'
+    narrow: 'max-w-[calc(100vw-1rem)] sm:max-w-md',
+    normal: 'max-w-[calc(100vw-1rem)] sm:max-w-lg',
+    wide: 'max-w-[calc(100vw-1rem)] sm:max-w-2xl md:max-w-3xl lg:max-w-4xl',
+    'extra-wide': 'max-w-[calc(100vw-1rem)] sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl',
+    full: 'max-w-[calc(100vw-1rem)] sm:max-w-4xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl'
   }
   return widths[props.width]
 })
@@ -130,7 +128,7 @@ const unlockBodyScroll = () => {
   bodyScrollLocked.value = false
 }
 
-// Prevent body scroll when modal is open and manage focus
+// 弹窗打开时锁定页面滚动并管理焦点。
 watch(
   () => props.show,
   async (isOpen) => {

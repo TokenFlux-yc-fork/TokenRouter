@@ -168,6 +168,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
 	}
+	body = parsedReq.Body.Bytes()
 	reqModel := parsedReq.Model
 	reqStream := parsedReq.Stream
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
@@ -819,6 +820,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			if fs.SwitchCount > 0 {
 				requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
 			}
+			if fs.ForceCacheBilling {
+				// 将故障转移后的缓存计费语义传给同步响应改写逻辑。
+				requestCtx = service.WithForceCacheBilling(requestCtx)
+			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
 			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
@@ -1046,8 +1051,13 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 	if len(availableModels) > 0 {
 		if resolution.HadExplicitAccountModels {
-			// 账号显式列表历史上统一使用 Claude 兼容字段结构，必须保持响应兼容。
-			writeModelsList(c, availableModels)
+			if platform == service.PlatformGrok {
+				// Grok Build 需要 reasoning 元数据，同时保留显式列表的旧兼容字段。
+				writeGrokModelsList(c, availableModels)
+			} else {
+				// 其它平台的账号显式列表继续使用历史 Claude 兼容字段结构。
+				writeModelsList(c, availableModels)
+			}
 		} else {
 			writeDefaultModelsList(c, platform, availableModels)
 		}
@@ -1072,6 +1082,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 			"object": "list",
 			"data":   geminicli.DefaultModels,
 		})
+		return
+	}
+	if platform == service.PlatformGrok {
+		writeGrokModelsList(c, xai.DefaultModelIDs())
 		return
 	}
 
@@ -1107,11 +1121,81 @@ func writeModelsList(c *gin.Context, modelIDs []string) {
 
 // writeCustomModelsList 保持分组自定义列表原有的响应结构。
 func writeCustomModelsList(c *gin.Context, platform string, modelIDs []string) {
-	if platform == service.PlatformOpenAI {
+	switch platform {
+	case service.PlatformOpenAI:
 		writeOpenAIModelsList(c, modelIDs)
-		return
+	case service.PlatformGrok:
+		writeGrokModelsList(c, modelIDs)
+	default:
+		writeModelsList(c, modelIDs)
 	}
-	writeModelsList(c, modelIDs)
+}
+
+type grokReasoningEffortOption struct {
+	Value   string `json:"value"`
+	Label   string `json:"label"`
+	Default bool   `json:"default,omitempty"`
+}
+
+type grokModelListItem struct {
+	xai.Model
+	SupportsReasoningEffort bool                        `json:"supportsReasoningEffort,omitempty"`
+	ReasoningEffort         string                      `json:"reasoningEffort,omitempty"`
+	ReasoningEfforts        []grokReasoningEffortOption `json:"reasoningEfforts,omitempty"`
+	Type                    string                      `json:"type"`
+	CreatedAt               string                      `json:"created_at"`
+}
+
+// writeGrokModelsList 返回 Grok Build 所需的 reasoning 能力，同时保留历史兼容字段。
+func writeGrokModelsList(c *gin.Context, modelIDs []string) {
+	defaults := xai.DefaultModels()
+	defaultsByID := make(map[string]xai.Model, len(defaults))
+	for _, model := range defaults {
+		defaultsByID[model.ID] = model
+	}
+
+	models := make([]grokModelListItem, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		model, ok := defaultsByID[modelID]
+		if !ok {
+			model = xai.Model{
+				ID:          modelID,
+				Object:      "model",
+				OwnedBy:     "xai",
+				DisplayName: modelID,
+			}
+		}
+		item := grokModelListItem{
+			Model:     model,
+			Type:      "model",
+			CreatedAt: "2024-01-01T00:00:00Z",
+		}
+		if grokModelSupportsConfigurableReasoning(modelID) {
+			item.SupportsReasoningEffort = true
+			item.ReasoningEffort = "high"
+			item.ReasoningEfforts = []grokReasoningEffortOption{
+				{Value: "low", Label: "Low"},
+				{Value: "medium", Label: "Medium"},
+				{Value: "high", Label: "High", Default: true},
+			}
+		}
+		models = append(models, item)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"object": "list",
+		"data":   models,
+	})
+}
+
+// grokModelSupportsConfigurableReasoning 判断模型是否支持 Grok Build 可配置推理档位。
+func grokModelSupportsConfigurableReasoning(modelID string) bool {
+	switch strings.ToLower(strings.TrimSpace(modelID)) {
+	case "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
+		return true
+	default:
+		return false
+	}
 }
 
 // writeDefaultModelsList 保持各平台默认回退列表原有的响应结构和展示元数据。
@@ -1119,6 +1203,8 @@ func writeDefaultModelsList(c *gin.Context, platform string, modelIDs []string) 
 	switch platform {
 	case service.PlatformOpenAI:
 		writeOpenAIModelsList(c, modelIDs)
+	case service.PlatformGrok:
+		writeGrokModelsList(c, modelIDs)
 	case service.PlatformAnthropic, service.PlatformGemini, service.PlatformAntigravity, service.PlatformQoder:
 		writeClaudeCompatiblePlatformModelsList(c, platform, modelIDs)
 	default:
@@ -1918,6 +2004,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
 	}
+	body = parsedReq.Body.Bytes()
 	// count_tokens 走 messages 严格校验时，复用已解析请求，避免二次反序列化。
 	SetClaudeCodeClientContext(c, body, parsedReq)
 	reqLog = reqLog.With(zap.String("model", parsedReq.Model), zap.Bool("stream", parsedReq.Stream))

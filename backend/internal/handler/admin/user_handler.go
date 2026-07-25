@@ -33,6 +33,7 @@ type UserHandler struct {
 	billingCache          service.BillingCache                // T17/T18 缓存失效（PUT/POST 路径）
 	totpService           *service.TotpService                // 角色提升为管理员的 step-up 门控
 	userService           *service.UserService
+	settingService        *service.SettingService // step-up 功能开关
 }
 
 // NewUserHandler creates a new admin user handler
@@ -43,6 +44,7 @@ func NewUserHandler(
 	billingCache service.BillingCache,
 	totpService *service.TotpService,
 	userService *service.UserService,
+	settingService *service.SettingService,
 ) *UserHandler {
 	return &UserHandler{
 		adminService:          adminService,
@@ -51,6 +53,7 @@ func NewUserHandler(
 		billingCache:          billingCache,
 		totpService:           totpService,
 		userService:           userService,
+		settingService:        settingService,
 	}
 }
 
@@ -64,6 +67,7 @@ type CreateUserRequest struct {
 	Balance       *float64 `json:"balance"`
 	Concurrency   int      `json:"concurrency"`
 	RPMLimit      int      `json:"rpm_limit"`
+	APIKeyLimit   *int     `json:"api_key_limit" binding:"omitempty,gte=0,lte=2147483647"`
 	AllowedGroups []int64  `json:"allowed_groups"`
 	// DisabledPublicGroups 记录该用户被禁止使用的公开分组。
 	DisabledPublicGroups []int64 `json:"disabled_public_groups"`
@@ -80,6 +84,7 @@ type UpdateUserRequest struct {
 	Balance       *float64 `json:"balance"`
 	Concurrency   *int     `json:"concurrency"`
 	RPMLimit      *int     `json:"rpm_limit"`
+	APIKeyLimit   *int     `json:"api_key_limit" binding:"omitempty,gte=0,lte=2147483647"`
 	Status        string   `json:"status" binding:"omitempty,oneof=active disabled"`
 	AllowedGroups *[]int64 `json:"allowed_groups"`
 	// DisabledPublicGroups 使用指针区分未提供和清空禁用列表。
@@ -287,7 +292,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 
 	// 创建管理员账号属权限敏感操作：需最近完成 step-up 2FA 验证。
 	if req.Role == service.RoleAdmin {
-		if !middleware.EnforceStepUp(c, h.totpService, h.userService) {
+		if !middleware.EnforceStepUp(c, h.totpService, h.userService, h.settingService) {
 			return
 		}
 	}
@@ -301,6 +306,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 		Balance:              req.Balance,
 		Concurrency:          req.Concurrency,
 		RPMLimit:             req.RPMLimit,
+		APIKeyLimit:          req.APIKeyLimit,
 		AllowedGroups:        req.AllowedGroups,
 		DisabledPublicGroups: req.DisabledPublicGroups,
 		ActorAdminID:         getAdminIDFromContext(c),
@@ -338,7 +344,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 	// 显式设置管理员角色属于权限敏感操作，必须执行 step-up；前端在角色未变化时不发送该字段。
 	// 这里不先读取目标角色，避免目标被并发降级后又在无验证情况下重新提升的竞态窗口。
 	if req.Role == service.RoleAdmin {
-		if !middleware.EnforceStepUp(c, h.totpService, h.userService) {
+		if !middleware.EnforceStepUp(c, h.totpService, h.userService, h.settingService) {
 			return
 		}
 	}
@@ -353,6 +359,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 		Balance:              req.Balance,
 		Concurrency:          req.Concurrency,
 		RPMLimit:             req.RPMLimit,
+		APIKeyLimit:          req.APIKeyLimit,
 		Status:               req.Status,
 		AllowedGroups:        req.AllowedGroups,
 		DisabledPublicGroups: req.DisabledPublicGroups,
@@ -603,6 +610,74 @@ func (h *UserHandler) GetUserRPMStatus(c *gin.Context) {
 	}
 
 	response.Success(c, status)
+}
+
+// BatchUpdateLimitsRequest 表示管理员批量覆盖用户限制的请求。
+type BatchUpdateLimitsRequest struct {
+	UserIDs     []int64 `json:"user_ids"`
+	All         bool    `json:"all"`
+	Concurrency *int    `json:"concurrency" binding:"omitempty,min=0"`
+	RPMLimit    *int    `json:"rpm_limit" binding:"omitempty,min=0"`
+}
+
+// BatchUpdateLimits 批量覆盖多个用户的并发数和/或 RPM 上限。
+// 接口：POST /api/v1/admin/users/batch-limits。
+func (h *UserHandler) BatchUpdateLimits(c *gin.Context) {
+	var req BatchUpdateLimitsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.Concurrency == nil && req.RPMLimit == nil {
+		response.BadRequest(c, "at least one of concurrency or rpm_limit is required")
+		return
+	}
+	if !req.All && len(req.UserIDs) == 0 {
+		response.BadRequest(c, "user_ids is required unless all=true")
+		return
+	}
+	if !req.All && len(req.UserIDs) > 500 {
+		response.BadRequest(c, "user_ids cannot exceed 500")
+		return
+	}
+
+	userIDs := req.UserIDs
+	if req.All {
+		userIDs = nil
+		page := 1
+		const pageSize = 500
+		for {
+			users, _, err := h.adminService.ListUsers(c.Request.Context(), page, pageSize, service.UserListFilters{}, "id", "asc")
+			if err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+			for _, user := range users {
+				userIDs = append(userIDs, user.ID)
+			}
+			if len(users) < pageSize {
+				break
+			}
+			page++
+		}
+	}
+
+	if len(userIDs) == 0 {
+		response.Success(c, gin.H{"affected": 0})
+		return
+	}
+
+	affected, err := h.adminService.BatchUpdateLimits(
+		c.Request.Context(),
+		userIDs,
+		req.Concurrency,
+		req.RPMLimit,
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"affected": affected})
 }
 
 // GetUserPlatformQuotas 处理 GET /admin/users/:id/platform-quotas。

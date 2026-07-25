@@ -167,6 +167,73 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	return accessToken, nil
 }
 
+// GetAccessTokenForManualTest 为管理员发起的“测试连接”返回访问令牌。它与
+// GetAccessToken 不同，不应用请求路径的调度资格门（手动调度开关、限流、过载或
+// 临时冷却），因为手动测试正是用来检查这些状态中的账号，与 Codex/OpenAI
+// 测试不受调度状态影响的行为一致（#4598）。
+//
+// 凭据完整性检查仍然生效，包括配置代理缺失、共享刷新锁协议和刷新 API 的账号重读。
+// 非 active（禁用或错误）账号的凭据轮换仍由 RefreshIfNeeded 拦截，其尚未过期的
+// 令牌只用于原样探测。
+func (p *GrokTokenProvider) GetAccessTokenForManualTest(ctx context.Context, account *Account) (string, error) {
+	if account == nil {
+		return "", errors.New("account is nil")
+	}
+	if account.Platform != PlatformGrok || account.Type != AccountTypeOAuth {
+		return "", errors.New("not a grok oauth account")
+	}
+	if account.ProxyID != nil && account.Proxy == nil {
+		return "", errGrokOAuthConfiguredProxyMiss
+	}
+	if strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
+		return "", errGrokOAuthRefreshTokenMissing
+	}
+
+	accessToken := strings.TrimSpace(account.GetGrokAccessToken())
+	expiresAt := account.GetCredentialAsTime("expires_at")
+	tokenValid := accessToken != "" && expiresAt != nil && time.Now().Before(*expiresAt)
+	if accessToken != "" && expiresAt != nil && time.Until(*expiresAt) > grokTokenRefreshSkew {
+		return accessToken, nil
+	}
+
+	if p.refreshAPI == nil || p.executor == nil {
+		if tokenValid {
+			return accessToken, nil
+		}
+		return "", errGrokOAuthRefreshNotConfigured
+	}
+
+	// 刻意不标记为请求路径刷新：该路径会在 RefreshIfNeeded 内再次应用调度资格，
+	// 而这正是手动测试需要绕过的门禁。
+	refreshCtx, cancel := context.WithTimeout(ctx, grokRequestRefreshTimeout)
+	defer cancel()
+	result, err := p.refreshAPI.RefreshIfNeeded(refreshCtx, account, p.executor, grokTokenRefreshSkew)
+	if err != nil {
+		if tokenValid {
+			return accessToken, nil
+		}
+		return "", err
+	}
+	if result != nil && result.LockHeld {
+		if tokenValid {
+			return accessToken, nil
+		}
+		return "", errors.New("token refresh is already in progress on another worker; retry in a few seconds")
+	}
+	if result != nil && result.Account != nil {
+		account = result.Account
+	}
+
+	accessToken = strings.TrimSpace(account.GetGrokAccessToken())
+	if accessToken == "" {
+		return "", errGrokOAuthAccessTokenMissing
+	}
+	if latestExpiry := account.GetCredentialAsTime("expires_at"); latestExpiry != nil && !time.Now().Before(*latestExpiry) {
+		return "", errGrokOAuthAccessTokenExpired
+	}
+	return accessToken, nil
+}
+
 func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *Account, cacheKey string) (string, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, grokRefreshLockWaitTimeout)
 	defer cancel()

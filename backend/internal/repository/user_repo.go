@@ -924,6 +924,44 @@ func (r *userRepository) BatchAddConcurrency(ctx context.Context, userIDs []int6
 	return int(affected), nil
 }
 
+// BatchUpdateLimits 在单条 SQL 中覆盖指定用户已提供的并发数与 RPM 上限。
+func (r *userRepository) BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error) {
+	if len(userIDs) == 0 || (concurrency == nil && rpmLimit == nil) {
+		return 0, nil
+	}
+	sqlq := r.sqlExecutorFromContext(ctx)
+	if sqlq == nil {
+		return 0, fmt.Errorf("sql executor is not configured")
+	}
+
+	setClauses := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if concurrency != nil {
+		value := max(*concurrency, 0)
+		args = append(args, value)
+		setClauses = append(setClauses, fmt.Sprintf("concurrency = $%d", len(args)))
+	}
+	if rpmLimit != nil {
+		value := max(*rpmLimit, 0)
+		args = append(args, value)
+		setClauses = append(setClauses, fmt.Sprintf("rpm_limit = $%d", len(args)))
+	}
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, pq.Array(userIDs))
+
+	query := fmt.Sprintf(
+		"UPDATE users SET %s WHERE id = ANY($%d) AND deleted_at IS NULL",
+		strings.Join(setClauses, ", "),
+		len(args),
+	)
+	res, err := sqlq.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch update user limits: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	return int(affected), nil
+}
+
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	client := clientFromContext(ctx, r.client)
 	return client.User.Query().Where(userEmailLookupPredicate(email)).Exist(ctx)
@@ -1147,24 +1185,44 @@ func (r *userRepository) syncUserAllowedGroupsWithClient(ctx context.Context, cl
 		return nil
 	}
 
-	// Keep join table as the source of truth for reads.
-	if _, err := client.UserAllowedGroup.Delete().Where(userallowedgroup.UserIDEQ(userID)).Exec(ctx); err != nil {
+	existingRows, err := client.UserAllowedGroup.Query().
+		Where(userallowedgroup.UserIDEQ(userID)).
+		All(ctx)
+	if err != nil {
 		return err
 	}
 
-	unique := make(map[int64]struct{}, len(groupIDs))
+	desired := make(map[int64]struct{}, len(groupIDs))
 	for _, id := range groupIDs {
 		if id <= 0 {
 			continue
 		}
-		unique[id] = struct{}{}
+		desired[id] = struct{}{}
 	}
 
-	if len(unique) > 0 {
-		creates := make([]*dbent.UserAllowedGroupCreate, 0, len(unique))
-		for groupID := range unique {
+	existing := make(map[int64]struct{}, len(existingRows))
+	removed := make([]int64, 0)
+	for _, row := range existingRows {
+		existing[row.GroupID] = struct{}{}
+		if _, keep := desired[row.GroupID]; !keep {
+			removed = append(removed, row.GroupID)
+		}
+	}
+	if len(removed) > 0 {
+		if _, err := client.UserAllowedGroup.Delete().
+			Where(userallowedgroup.UserIDEQ(userID), userallowedgroup.GroupIDIn(removed...)).
+			Exec(ctx); err != nil {
+			return err
+		}
+	}
+
+	creates := make([]*dbent.UserAllowedGroupCreate, 0, len(desired))
+	for groupID := range desired {
+		if _, present := existing[groupID]; !present {
 			creates = append(creates, client.UserAllowedGroup.Create().SetUserID(userID).SetGroupID(groupID))
 		}
+	}
+	if len(creates) > 0 {
 		if err := client.UserAllowedGroup.
 			CreateBulk(creates...).
 			OnConflictColumns(userallowedgroup.FieldUserID, userallowedgroup.FieldGroupID).
@@ -1323,6 +1381,7 @@ func (r *userRepository) updateWithClient(ctx context.Context, client *dbent.Cli
 		SetNillableLastLoginAt(userIn.LastLoginAt).
 		SetNillableLastActiveAt(userIn.LastActiveAt).
 		SetRpmLimit(userIn.RPMLimit).
+		SetAPIKeyLimit(userIn.APIKeyLimit).
 		SetBalanceNotifyEnabled(userIn.BalanceNotifyEnabled).
 		SetBalanceNotifyThresholdType(userIn.BalanceNotifyThresholdType).
 		SetNillableBalanceNotifyThreshold(userIn.BalanceNotifyThreshold).
@@ -1347,7 +1406,8 @@ func (r *userRepository) createWithClient(ctx context.Context, client *dbent.Cli
 		SetSignupSource(userSignupSourceOrDefault(userIn.SignupSource)).
 		SetNillableLastLoginAt(userIn.LastLoginAt).
 		SetNillableLastActiveAt(userIn.LastActiveAt).
-		SetRpmLimit(userIn.RPMLimit)
+		SetRpmLimit(userIn.RPMLimit).
+		SetAPIKeyLimit(userIn.APIKeyLimit)
 	return createOp.Save(ctx)
 }
 

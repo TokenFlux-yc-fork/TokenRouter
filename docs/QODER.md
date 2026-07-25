@@ -54,6 +54,31 @@ Qoder account `model_mapping` follows the same rewrite-rule semantics as other p
 
 Use `model_whitelist` when an account must be limited to specific final route/upstream models. The gateway applies mapping first and then checks the whitelist. If no whitelist is configured, the account remains unrestricted. Channel-level mapping is also a one-step rewrite; do not configure alias chains such as `custom -> public alias -> route key`. Configure `model -> upstream route key` directly.
 
+## China Thinking Controls
+
+The China-site capability snapshot below was verified against Qoder CN 1.8.0. Capability lookup runs after account-level model mapping and alias resolution, so a custom request model mapped directly to a known route key receives the same handling. The snapshot is intentionally limited to `credentials.site=cn`; Global, `auto`, and unknown route keys are not modified.
+
+| Public model | Route key | Thinking capability | Downstream mapping |
+| --- | --- | --- | --- |
+| `auto` | `auto` | No user-editable control | No override |
+| `qwen3.8-max-preview` | `qmodel_preview` | Toggle only | Any valid effort, enabled/adaptive switch, or positive budget enables Thinking; no level is sent |
+| `qwen3.7-max` | `qmodel_latest` | Toggle only | Same as Qwen3.8-Max-Preview |
+| `qwen3.7-plus` | `qmodel` | Toggle only | Same as Qwen3.8-Max-Preview |
+| `qwen3.6-flash` | `q36fmodel` | No user-editable control | No override |
+| `deepseek-v4-pro` | `dmodel` | High / Max | Minimal, Low, and Medium become High; High, Very High, and Max become Max; any positive budget becomes Max |
+| `deepseek-v4-flash` | `dfmodel` | High / Max | Same as DeepSeek-V4-Pro |
+| `glm-5.2` | `gm51model` | High / Max | Same as DeepSeek-V4-Pro |
+| `kimi-k2.7-code` | `kmodel` | No user-editable control | No override |
+| `minimax-m2.7` | `mmodel` | No user-editable control | No override |
+
+The gateway reads the protocol-native controls from each inbound endpoint:
+
+- Chat Completions: `reasoning_effort`, with `reasoning.effort` accepted as a compatibility fallback.
+- Responses: `reasoning.effort`, with `reasoning_effort` accepted as a compatibility fallback.
+- Anthropic Messages: `output_config.effort`, `thinking.type`, and `thinking.budget_tokens`.
+
+Explicit `thinking.type=disabled` or effort `none` always wins. Otherwise an explicit valid effort wins over a positive budget, followed by `enabled` / `adaptive`; missing or invalid controls remain disabled. Toggle-capable models use Qoder's `reasoning_effort=none` override when disabled so the request cannot fall back to an upstream default. Unknown effort strings are ignored instead of rejecting the request.
+
 ## Billing Scope
 
 Qoder built-in public aliases and their route keys are manual-pricing-only. They do not fall back to LiteLLM, Claude Opus, or any model-file price when no effective channel price is configured.

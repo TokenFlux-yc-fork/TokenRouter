@@ -9,6 +9,8 @@ const mockListSystemLogs = vi.fn()
 const mockCleanupSystemLogs = vi.fn()
 const mockGetSystemLogSinkHealth = vi.fn()
 const mockGetRuntimeLogConfig = vi.fn()
+const mockShowError = vi.fn()
+const mockShowSuccess = vi.fn()
 
 vi.mock('@/api/admin/ops', () => ({
   opsAPI: {
@@ -21,8 +23,8 @@ vi.mock('@/api/admin/ops', () => ({
 
 vi.mock('@/stores', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
-    showSuccess: vi.fn(),
+    showError: mockShowError,
+    showSuccess: mockShowSuccess,
   }),
 }))
 
@@ -124,6 +126,29 @@ describe('OpsSystemLogTable host support', () => {
     await flushPromises()
 
     expect(mockCleanupSystemLogs).toHaveBeenCalledWith(expect.objectContaining({ host: 'api-node-2' }))
+  })
+
+  it('shows the localized reason when cleanup has no filter condition', async () => {
+    mockCleanupSystemLogs.mockRejectedValueOnce({
+      reason: 'OPS_SYSTEM_LOG_CLEANUP_FILTER_REQUIRED',
+      message: 'cleanup filter required',
+    })
+    const wrapper = mount(OpsSystemLogTable, {
+      global: {
+        stubs: {
+          Select: SelectStub,
+          Pagination: PaginationStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    const cleanupButton = wrapper.findAll('button').find((button) => button.text() === '按当前筛选清理')
+    expect(cleanupButton).toBeDefined()
+    await cleanupButton!.trigger('click')
+    await flushPromises()
+
+    expect(mockShowError).toHaveBeenCalledWith('admin.ops.systemLogs.cleanupFilterRequired')
   })
 
   it.each([

@@ -165,6 +165,10 @@ func (s *emailNormalizationRepoStub) BatchAddConcurrency(context.Context, []int6
 	panic("unexpected BatchAddConcurrency call")
 }
 
+func (s *emailNormalizationRepoStub) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	panic("unexpected BatchUpdateLimits call")
+}
+
 func (s *emailNormalizationRepoStub) ExistsByEmail(_ context.Context, email string) (bool, error) {
 	s.existsByEmailCalls = append(s.existsByEmailCalls, email)
 	if s.existsByEmailErr != nil {

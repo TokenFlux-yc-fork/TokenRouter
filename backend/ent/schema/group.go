@@ -69,6 +69,12 @@ func (Group) Fields() []ent.Field {
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),
+		field.String("duplicate_operation_id").
+			MaxLen(64).
+			Optional().
+			Nillable().
+			Immutable().
+			Comment("内部幂等恢复标识，不对 API 暴露"),
 
 		field.String("platform").
 			MaxLen(50).
@@ -250,6 +256,16 @@ func (Group) Fields() []ent.Field {
 			Default(0).
 			Comment("分组 RPM 上限，0 表示不限制；设置后接管该分组用户的限流"),
 
+		// OpenAI/Codex 请求的推理强度上限，空字符串表示不限制。
+		field.String("max_reasoning_effort").
+			MaxLen(20).
+			Default("").
+			Comment("OpenAI reasoning effort 上限；可选 minimal/low/medium/high/xhigh/max"),
+		field.JSON("reasoning_effort_mappings", []domain.ReasoningEffortMapping{}).
+			Default([]domain.ReasoningEffortMapping{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("OpenAI reasoning effort 自定义精确映射；先映射再应用上限"),
+
 		// 数据共享开关：开启后该分组产生的 Agent session 会进入数据共享采集流程。
 		field.Bool("data_sharing_enabled").
 			Default(false).
@@ -292,5 +308,9 @@ func (Group) Indexes() []ent.Index {
 		index.Fields("session_isolation_enabled"),
 		index.Fields("health_check_enabled"),
 		index.Fields("health_status"),
+		index.Fields("duplicate_operation_id").
+			Unique().
+			StorageKey("idx_groups_duplicate_operation_id_active").
+			Annotations(entsql.IndexWhere("duplicate_operation_id IS NOT NULL AND deleted_at IS NULL")),
 	}
 }

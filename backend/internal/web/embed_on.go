@@ -10,9 +10,12 @@ import (
 	htmlpkg "html"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -86,9 +89,10 @@ func (s *FrontendServer) InvalidateCache() {
 func (s *FrontendServer) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
+		addEmbeddedFrontendNegotiationHeaders(c)
 
 		// Skip API routes
-		if shouldBypassEmbeddedFrontend(path) {
+		if shouldBypassEmbeddedFrontend(c.Request) {
 			c.Next()
 			return
 		}
@@ -209,10 +213,62 @@ func (s *FrontendServer) injectSettings(settingsJSON []byte) []byte {
 	headClose := []byte("</head>")
 	result := bytes.Replace(s.baseHTML, headClose, append(script, headClose...), 1)
 
-	// Replace <title> with custom site name so the browser tab shows it immediately
+	// 在浏览器绘制静态默认内容前应用自定义品牌信息。
 	result = injectSiteTitle(result, settingsJSON)
+	result = injectSiteFavicon(result, settingsJSON)
 
 	return result
+}
+
+// injectSiteFavicon 使用配置中经安全校验的图片 URL 替换静态站点图标。
+func injectSiteFavicon(html, settingsJSON []byte) []byte {
+	var cfg struct {
+		SiteLogo string `json:"site_logo"`
+	}
+	if err := json.Unmarshal(settingsJSON, &cfg); err != nil {
+		return html
+	}
+
+	logoURL := safeImageURL(cfg.SiteLogo)
+	if logoURL == "" {
+		return html
+	}
+
+	linkStart := bytes.Index(html, []byte(`<link rel="icon"`))
+	if linkStart == -1 {
+		return html
+	}
+	linkEndOffset := bytes.IndexByte(html[linkStart:], '>')
+	if linkEndOffset == -1 {
+		return html
+	}
+	linkEnd := linkStart + linkEndOffset + 1
+	replacement := []byte(`<link rel="icon" href="` + htmlpkg.EscapeString(logoURL) + `" />`)
+
+	var buf bytes.Buffer
+	buf.Write(html[:linkStart])
+	buf.Write(replacement)
+	buf.Write(html[linkEnd:])
+	return buf.Bytes()
+}
+
+func safeImageURL(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "/") && !strings.HasPrefix(trimmed, "//") {
+		return trimmed
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "data:image/") {
+		return trimmed
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ""
+	}
+	return trimmed
 }
 
 // injectSiteTitle replaces the static <title> in HTML with the configured site name.
@@ -257,8 +313,9 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
+		addEmbeddedFrontendNegotiationHeaders(c)
 
-		if shouldBypassEmbeddedFrontend(path) {
+		if shouldBypassEmbeddedFrontend(c.Request) {
 			c.Next()
 			return
 		}
@@ -284,6 +341,13 @@ func ServeEmbeddedFrontend() gin.HandlerFunc {
 	}
 }
 
+// addEmbeddedFrontendNegotiationHeaders 防止缓存混用 `/models` 的 HTML 与 JSON 响应。
+func addEmbeddedFrontendNegotiationHeaders(c *gin.Context) {
+	if strings.TrimSpace(c.Request.URL.Path) == "/models" {
+		c.Writer.Header().Add("Vary", "Accept")
+	}
+}
+
 // tryServeOverrideFile is a standalone version of tryServeOverride for legacy usage.
 func tryServeOverrideFile(c *gin.Context, overrideDir, cleanPath string) bool {
 	if overrideDir == "" {
@@ -299,8 +363,18 @@ func tryServeOverrideFile(c *gin.Context, overrideDir, cleanPath string) bool {
 	return true
 }
 
-func shouldBypassEmbeddedFrontend(path string) bool {
-	trimmed := strings.TrimSpace(path)
+// shouldBypassEmbeddedFrontend 判断请求应交给 API 路由还是嵌入式前端。
+func shouldBypassEmbeddedFrontend(request *http.Request) bool {
+	if request == nil || request.URL == nil {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(request.URL.Path)
+	// `/models` 同时是模型广场页面和 Codex 模型 API，需要按请求意图分流。
+	if trimmed == "/models" && shouldServeModelMarketplace(request) {
+		return false
+	}
+
 	return strings.HasPrefix(trimmed, "/api/") ||
 		strings.HasPrefix(trimmed, "/v1/") ||
 		strings.HasPrefix(trimmed, "/v1beta/") ||
@@ -314,6 +388,73 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 		trimmed == "/alpha/search" ||
 		strings.HasPrefix(trimmed, "/images/") ||
 		strings.HasPrefix(trimmed, "/videos/")
+}
+
+// shouldServeModelMarketplace 仅将没有 API 信号的 HTML 导航交给模型广场页面。
+func shouldServeModelMarketplace(request *http.Request) bool {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		return false
+	}
+
+	query := request.URL.Query()
+	if strings.TrimSpace(query.Get("client_version")) != "" ||
+		strings.TrimSpace(query.Get("key")) != "" ||
+		strings.TrimSpace(query.Get("api_key")) != "" {
+		return false
+	}
+	for _, header := range []string{"Authorization", "x-api-key", "x-goog-api-key"} {
+		if strings.TrimSpace(request.Header.Get(header)) != "" {
+			return false
+		}
+	}
+
+	return requestPrefersHTML(request.Header.Get("Accept"))
+}
+
+// requestPrefersHTML 按 Accept 的质量权重和声明顺序区分页面导航与 JSON API 请求。
+func requestPrefersHTML(acceptHeader string) bool {
+	parts := strings.Split(acceptHeader, ",")
+	htmlQuality, jsonQuality := -1.0, -1.0
+	htmlOrder, jsonOrder := len(parts), len(parts)
+
+	for order, part := range parts {
+		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(part))
+		if err != nil {
+			continue
+		}
+
+		quality := 1.0
+		if rawQuality := strings.TrimSpace(params["q"]); rawQuality != "" {
+			quality, err = strconv.ParseFloat(rawQuality, 64)
+			if err != nil || quality < 0 || quality > 1 {
+				continue
+			}
+		}
+
+		switch {
+		case mediaType == "text/html" || mediaType == "application/xhtml+xml":
+			if quality > htmlQuality {
+				htmlQuality = quality
+				htmlOrder = order
+			}
+		case mediaType == "application/json" || strings.HasSuffix(mediaType, "+json"):
+			if quality > jsonQuality {
+				jsonQuality = quality
+				jsonOrder = order
+			}
+		}
+	}
+
+	if htmlQuality <= 0 {
+		return false
+	}
+	if jsonQuality < 0 || htmlQuality > jsonQuality {
+		return true
+	}
+	if htmlQuality < jsonQuality {
+		return false
+	}
+	return htmlOrder < jsonOrder
 }
 
 func serveIndexHTML(c *gin.Context, fsys fs.FS) {

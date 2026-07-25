@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
+import type { SubscriptionPlan } from '@/types/payment'
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
@@ -16,7 +17,12 @@ vi.mock('@/composables/useBalanceDisplay', () => ({
 import SubscriptionPlanCard from '../SubscriptionPlanCard.vue'
 
 // 统一构造套餐卡片，便于覆盖平台和币种的组合展示。
-const mountPlanCard = (groupPlatform: string, currency = '', originalPrice?: number) =>
+const mountPlanCard = (
+  groupPlatform: string,
+  currency = '',
+  originalPrice?: number,
+  overrides: Partial<SubscriptionPlan> = {},
+) =>
   mount(SubscriptionPlanCard, {
     props: {
       plan: {
@@ -34,6 +40,7 @@ const mountPlanCard = (groupPlatform: string, currency = '', originalPrice?: num
         for_sale: true,
         sort_order: 1,
         supported_model_scopes: ['claude', 'gemini_text', 'gemini_image'],
+        ...overrides,
       },
     },
   })
@@ -55,10 +62,20 @@ describe('SubscriptionPlanCard', () => {
     expect(text).toContain('Imagen')
   })
 
-  it('shows the currency on both current and original prices', () => {
+  // 卡片必须同时兼容历史单数单位和管理端曾写入的复数单位。
+  it('renders plural validity units instead of mislabeled days', () => {
+    expect(mountPlanCard('openai', '', undefined, { validity_days: 1, validity_unit: 'months' }).text()).toContain('/ payment.perMonth')
+    expect(mountPlanCard('openai', '', undefined, { validity_days: 3, validity_unit: 'months' }).text()).toContain('/ 3payment.months')
+    expect(mountPlanCard('openai', '', undefined, { validity_days: 2, validity_unit: 'weeks' }).text()).toContain('/ 2payment.weeks')
+    expect(mountPlanCard('openai', '', undefined, { validity_days: 30, validity_unit: 'day' }).text()).toContain('/ 30payment.days')
+  })
+
+  it('uses the configured currency symbol on current and original prices', () => {
     const text = mountPlanCard('openai', 'NZD', 20).text()
 
-    expect(text).toContain('$10NZD')
-    expect(text).toContain('$20NZD')
+    expect(text).toContain('NZ$10NZD')
+    expect(text).toContain('NZ$20NZD')
+    expect(mountPlanCard('openai', 'CNY', 20).text()).toContain('¥10CNY')
+    expect(mountPlanCard('openai').text()).toContain('$10')
   })
 })

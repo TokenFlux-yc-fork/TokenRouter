@@ -275,6 +275,8 @@ func TestApplyMigrationsFS_TransactionalMigration(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
+	// 咨询锁与所有迁移操作必须共用同一会话；这也证明连接池上限为一时启动过程不会自锁。
+	db.SetMaxOpenConns(1)
 
 	prepareMigrationsBootstrapExpectations(mock)
 	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").

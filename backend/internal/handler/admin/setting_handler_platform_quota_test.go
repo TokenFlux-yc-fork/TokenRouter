@@ -82,6 +82,15 @@ func TestDiffSettings_NoChangeWhenEqual(t *testing.T) {
 	}
 }
 
+func TestDiffSettings_DetectsDefaultUserAPIKeyLimitChange(t *testing.T) {
+	before := &service.SystemSettings{DefaultUserAPIKeyLimit: 100}
+	after := &service.SystemSettings{DefaultUserAPIKeyLimit: 0}
+
+	changed := diffSettings(before, after, nil, nil, UpdateSettingsRequest{})
+
+	require.Contains(t, changed, service.SettingKeyDefaultUserAPIKeyLimit)
+}
+
 func TestEqualNullableFloat(t *testing.T) {
 	five := 5.0
 	five2 := 5.0

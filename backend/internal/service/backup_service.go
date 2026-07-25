@@ -3,6 +3,7 @@ package service
 import (
 	"compress/gzip"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,9 @@ const (
 	BackupStorageTypeLocal = "local"
 	BackupStorageTypeS3    = "s3"
 
+	BackupS3UploadModeMultipart  = "multipart"
+	BackupS3UploadModeSpooledPut = "spooled_put"
+
 	maxBackupRecords = 100
 )
 
@@ -46,6 +50,12 @@ var (
 	ErrBackupS3ConfigCorrupt      = infraerrors.InternalServer("BACKUP_S3_CONFIG_CORRUPT", "backup S3 config data is corrupted")
 	ErrBackupStorageConfigCorrupt = infraerrors.InternalServer("BACKUP_STORAGE_CONFIG_CORRUPT", "backup storage config data is corrupted")
 	ErrBackupContentConfigCorrupt = infraerrors.InternalServer("BACKUP_CONTENT_CONFIG_CORRUPT", "backup content config data is corrupted")
+	ErrDatabaseMaintenanceBusy    = infraerrors.Conflict("MAINTENANCE_BUSY", "another database maintenance task is running")
+	// ErrSecretEncryptionKeyNotConfigured 表示当前使用的是重启后会变化的临时密钥，不能持久化新的 S3 密钥。
+	ErrSecretEncryptionKeyNotConfigured = infraerrors.BadRequest(
+		"SECRET_ENCRYPTION_KEY_NOT_CONFIGURED",
+		"cannot store the S3 secret access key: no fixed secret encryption key is configured, so the auto-generated key would change on every restart and make the stored secret undecryptable after a restart or upgrade. Set a fixed TOTP_ENCRYPTION_KEY (e.g. generate one with `openssl rand -hex 32`) and try again",
+	)
 )
 
 var backupContentTableDataGroups = map[string][]string{
@@ -155,6 +165,7 @@ type BackupS3Config struct {
 	ForcePathStyle    bool   `json:"force_path_style"`
 	UploadConcurrency int    `json:"upload_concurrency"`
 	UploadPartSizeMB  int    `json:"upload_part_size_mb"`
+	UploadMode        string `json:"upload_mode"`
 }
 
 // IsConfigured 检查必要字段是否已配置
@@ -193,12 +204,15 @@ type BackupRecord struct {
 
 // BackupService 数据库备份恢复服务
 type BackupService struct {
-	settingRepo  SettingRepository
-	dbCfg        *config.DatabaseConfig
-	encryptor    SecretEncryptor
-	storeFactory BackupObjectStoreFactory
-	dumper       DBDumper
-	localStore   BackupObjectStore
+	settingRepo SettingRepository
+	dbCfg       *config.DatabaseConfig
+	encryptor   SecretEncryptor
+	// encryptionKeyConfigured 标记加密密钥是否由部署显式配置；临时密钥不能用于持久化新凭证。
+	encryptionKeyConfigured bool
+	storeFactory            BackupObjectStoreFactory
+	dumper                  DBDumper
+	localStore              BackupObjectStore
+	db                      *sql.DB
 
 	opMu      sync.Mutex // 保护 backingUp/restoring 标志
 	backingUp bool
@@ -220,6 +234,14 @@ type BackupService struct {
 	bgCancel     context.CancelFunc // 取消所有活跃后台操作
 }
 
+// SetMaintenanceDB 注入数据库连接，使备份与其他数据库重任务共享互斥锁。
+func (s *BackupService) SetMaintenanceDB(db *sql.DB) {
+	if s == nil {
+		return
+	}
+	s.db = db
+}
+
 func NewBackupService(
 	settingRepo SettingRepository,
 	cfg *config.Config,
@@ -229,14 +251,15 @@ func NewBackupService(
 ) *BackupService {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	return &BackupService{
-		settingRepo:  settingRepo,
-		dbCfg:        &cfg.Database,
-		encryptor:    encryptor,
-		storeFactory: storeFactory,
-		dumper:       dumper,
-		localStore:   NewLocalBackupStore(defaultBackupLocalPath()),
-		bgCtx:        bgCtx,
-		bgCancel:     bgCancel,
+		settingRepo:             settingRepo,
+		dbCfg:                   &cfg.Database,
+		encryptor:               encryptor,
+		encryptionKeyConfigured: cfg.Totp.EncryptionKeyConfigured,
+		storeFactory:            storeFactory,
+		dumper:                  dumper,
+		localStore:              NewLocalBackupStore(defaultBackupLocalPath()),
+		bgCtx:                   bgCtx,
+		bgCancel:                bgCancel,
 	}
 }
 
@@ -326,6 +349,11 @@ func (s *BackupService) Stop() {
 
 // ─── 存储配置管理 ───
 
+// EncryptionKeyConfigured 返回当前是否使用部署显式配置、可跨重启保持不变的加密密钥。
+func (s *BackupService) EncryptionKeyConfigured() bool {
+	return s != nil && s.encryptionKeyConfigured
+}
+
 func (s *BackupService) GetStorageConfig(ctx context.Context) (*BackupStorageConfig, error) {
 	cfg, err := s.loadStorageConfig(ctx)
 	if err != nil {
@@ -335,6 +363,7 @@ func (s *BackupService) GetStorageConfig(ctx context.Context) (*BackupStorageCon
 		cfg = &BackupStorageConfig{Type: BackupStorageTypeLocal}
 	}
 	cfg.LocalPath = defaultBackupLocalPath()
+	cfg.S3.UploadMode = NormalizeBackupS3UploadMode(cfg.S3.UploadMode)
 	cfg.S3.SecretAccessKey = ""
 	return cfg, nil
 }
@@ -434,9 +463,10 @@ func (s *BackupService) GetS3Config(ctx context.Context) (*BackupS3Config, error
 		}
 	}
 	if cfg == nil {
-		return &BackupS3Config{}, nil
+		return &BackupS3Config{UploadMode: BackupS3UploadModeSpooledPut}, nil
 	}
 	// 脱敏返回
+	cfg.UploadMode = NormalizeBackupS3UploadMode(cfg.UploadMode)
 	cfg.SecretAccessKey = ""
 	return cfg, nil
 }
@@ -615,6 +645,15 @@ func (s *BackupService) CreateBackup(ctx context.Context, triggeredBy string, ex
 		return nil, infraerrors.ServiceUnavailable("SERVER_SHUTTING_DOWN", "server is shutting down")
 	}
 
+	releaseMaintenance, acquired, err := tryAcquireDatabaseHeavyMaintenanceLock(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("acquire database maintenance lock: %w", err)
+	}
+	if !acquired {
+		return nil, ErrDatabaseMaintenanceBusy
+	}
+	defer releaseMaintenance()
+
 	s.opMu.Lock()
 	if s.backingUp {
 		s.opMu.Unlock()
@@ -735,9 +774,18 @@ func (s *BackupService) StartBackup(ctx context.Context, triggeredBy string, exp
 		return nil, infraerrors.ServiceUnavailable("SERVER_SHUTTING_DOWN", "server is shutting down")
 	}
 
+	releaseMaintenance, acquired, err := tryAcquireDatabaseHeavyMaintenanceLock(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("acquire database maintenance lock: %w", err)
+	}
+	if !acquired {
+		return nil, ErrDatabaseMaintenanceBusy
+	}
+
 	s.opMu.Lock()
 	if s.backingUp {
 		s.opMu.Unlock()
+		releaseMaintenance()
 		return nil, ErrBackupInProgress
 	}
 	s.backingUp = true
@@ -747,6 +795,7 @@ func (s *BackupService) StartBackup(ctx context.Context, triggeredBy string, exp
 	launched := false
 	defer func() {
 		if !launched {
+			releaseMaintenance()
 			s.opMu.Lock()
 			s.backingUp = false
 			s.opMu.Unlock()
@@ -799,6 +848,7 @@ func (s *BackupService) StartBackup(ctx context.Context, triggeredBy string, exp
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer releaseMaintenance()
 		defer func() {
 			s.opMu.Lock()
 			s.backingUp = false
@@ -899,6 +949,15 @@ func (s *BackupService) executeBackup(record *BackupRecord, objectStore BackupOb
 
 // RestoreBackup 从记录对应存储后端下载备份并流式恢复到数据库
 func (s *BackupService) RestoreBackup(ctx context.Context, backupID string) error {
+	releaseMaintenance, acquired, err := tryAcquireDatabaseHeavyMaintenanceLock(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("acquire database maintenance lock: %w", err)
+	}
+	if !acquired {
+		return ErrDatabaseMaintenanceBusy
+	}
+	defer releaseMaintenance()
+
 	s.opMu.Lock()
 	if s.restoring {
 		s.opMu.Unlock()
@@ -953,9 +1012,18 @@ func (s *BackupService) StartRestore(ctx context.Context, backupID string) (*Bac
 		return nil, infraerrors.ServiceUnavailable("SERVER_SHUTTING_DOWN", "server is shutting down")
 	}
 
+	releaseMaintenance, acquired, err := tryAcquireDatabaseHeavyMaintenanceLock(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("acquire database maintenance lock: %w", err)
+	}
+	if !acquired {
+		return nil, ErrDatabaseMaintenanceBusy
+	}
+
 	s.opMu.Lock()
 	if s.restoring {
 		s.opMu.Unlock()
+		releaseMaintenance()
 		return nil, ErrRestoreInProgress
 	}
 	s.restoring = true
@@ -965,6 +1033,7 @@ func (s *BackupService) StartRestore(ctx context.Context, backupID string) (*Bac
 	launched := false
 	defer func() {
 		if !launched {
+			releaseMaintenance()
 			s.opMu.Lock()
 			s.restoring = false
 			s.opMu.Unlock()
@@ -993,6 +1062,7 @@ func (s *BackupService) StartRestore(ctx context.Context, backupID string) (*Bac
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer releaseMaintenance()
 		defer func() {
 			s.opMu.Lock()
 			s.restoring = false
@@ -1190,6 +1260,7 @@ func (s *BackupService) loadStorageConfig(ctx context.Context) (*BackupStorageCo
 			cfg.S3 = *oldS3
 		}
 	}
+	cfg.S3.UploadMode = NormalizeBackupS3UploadMode(cfg.S3.UploadMode)
 	if cfg.S3.SecretAccessKey != "" {
 		decrypted, err := s.encryptor.Decrypt(cfg.S3.SecretAccessKey)
 		if err != nil {
@@ -1251,10 +1322,20 @@ func (s *BackupService) buildExcludedTableData(cfg *BackupContentConfig) []strin
 }
 
 func (s *BackupService) prepareS3ConfigForSave(ctx context.Context, cfg BackupS3Config) (*BackupS3Config, error) {
+	uploadMode := NormalizeBackupS3UploadMode(cfg.UploadMode)
+	if uploadMode == "" {
+		return nil, infraerrors.BadRequest("INVALID_BACKUP_UPLOAD_MODE", "backup upload mode must be multipart or spooled_put")
+	}
+	cfg.UploadMode = uploadMode
+
 	// 如果没提供 secret，优先保留统一配置中的旧值，其次保留旧 S3 配置。
 	if cfg.SecretAccessKey == "" {
 		cfg.SecretAccessKey = s.loadStoredEncryptedS3Secret(ctx)
 	} else {
+		// 自动生成的临时密钥会在重启后变化，使用它落库会让新密文永久无法解密。
+		if !s.encryptionKeyConfigured {
+			return nil, ErrSecretEncryptionKeyNotConfigured
+		}
 		encrypted, err := s.encryptor.Encrypt(cfg.SecretAccessKey)
 		if err != nil {
 			return nil, fmt.Errorf("encrypt secret: %w", err)
@@ -1316,6 +1397,7 @@ func (s *BackupService) loadS3Config(ctx context.Context) (*BackupS3Config, erro
 			cfg.SecretAccessKey = decrypted
 		}
 	}
+	cfg.UploadMode = NormalizeBackupS3UploadMode(cfg.UploadMode)
 	return &cfg, nil
 }
 
@@ -1564,6 +1646,18 @@ func normalizeBackupStorageType(value string) string {
 	}
 }
 
+// NormalizeBackupS3UploadMode 归一化备份上传模式；旧配置默认走磁盘暂存的兼容路径。
+func NormalizeBackupS3UploadMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", BackupS3UploadModeSpooledPut:
+		return BackupS3UploadModeSpooledPut
+	case BackupS3UploadModeMultipart:
+		return BackupS3UploadModeMultipart
+	default:
+		return ""
+	}
+}
+
 func defaultBackupContentConfig() BackupContentConfig {
 	return BackupContentConfig{}
 }
@@ -1606,7 +1700,10 @@ func backupS3ConfigHasValue(cfg BackupS3Config) bool {
 		cfg.AccessKeyID != "" ||
 		cfg.SecretAccessKey != "" ||
 		cfg.Prefix != "" ||
-		cfg.ForcePathStyle
+		cfg.ForcePathStyle ||
+		cfg.UploadMode != "" ||
+		cfg.UploadConcurrency != 0 ||
+		cfg.UploadPartSizeMB != 0
 }
 
 func recordEffectiveStorageType(record *BackupRecord) string {

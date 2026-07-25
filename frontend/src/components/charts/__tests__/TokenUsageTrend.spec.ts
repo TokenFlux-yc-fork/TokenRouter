@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import TokenUsageTrend from '../TokenUsageTrend.vue'
+import { setTheme } from '@/composables/useTheme'
 
 const messages: Record<string, string> = {
   'admin.dashboard.tokenUsageTrend': 'Token Usage Trend',
@@ -21,11 +22,20 @@ vi.mock('vue-i18n', async () => {
 vi.mock('vue-chartjs', () => ({
   Line: {
     props: ['data', 'options'],
-    template: '<div class="chart-data">{{ JSON.stringify(data) }}</div>'
+    template: `
+      <div>
+        <div class="chart-data">{{ JSON.stringify(data) }}</div>
+        <div class="chart-options">{{ JSON.stringify(options) }}</div>
+      </div>
+    `
   }
 }))
 
 describe('TokenUsageTrend', () => {
+  beforeEach(() => {
+    setTheme(false)
+  })
+
   it('calculates cache hit rate against all prompt tokens', () => {
     const wrapper = mount(TokenUsageTrend, {
       props: {
@@ -116,5 +126,43 @@ describe('TokenUsageTrend', () => {
     )
     // 命中率 = 500 / (200 + 500 + 300) * 100 = 50%
     expect(hitRateDataset.data[0]).toBe(50)
+  })
+
+  it('updates chart text colors after switching from dark to light mode', async () => {
+    setTheme(true)
+    const wrapper = mount(TokenUsageTrend, {
+      props: {
+        trendData: [
+          {
+            date: '2026-07-25',
+            requests: 1,
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            cost: 0.01,
+            actual_cost: 0.005
+          }
+        ]
+      },
+      global: {
+        stubs: {
+          LoadingSpinner: true
+        }
+      }
+    })
+
+    expect(JSON.parse(wrapper.find('.chart-options').text()).plugins.legend.labels.color).toBe(
+      '#E4E4E7'
+    )
+
+    setTheme(false)
+    await wrapper.vm.$nextTick()
+
+    const lightOptions = JSON.parse(wrapper.find('.chart-options').text())
+    // 浅色主题下使用深色文字，避免图例和坐标轴融入白色背景。
+    expect(lightOptions.plugins.legend.labels.color).toBe('#3F3F46')
+    expect(lightOptions.scales.x.ticks.color).toBe('#3F3F46')
+    expect(lightOptions.scales.y.ticks.color).toBe('#3F3F46')
   })
 })

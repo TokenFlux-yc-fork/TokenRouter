@@ -19,12 +19,15 @@ import (
 )
 
 // openAIWSImageIntentForRoutingModel 用渠道模型 C 还原判定请求体，避免账号模型 U 改写生图语义。
-func openAIWSImageIntentForRoutingModel(routingModel, upstreamModel string, body []byte, platform string) ([]byte, bool) {
+// 宽泛意图供图片状态和计费使用，显式意图只负责权限门禁。
+func openAIWSImageIntentForRoutingModel(routingModel, upstreamModel string, body []byte, platform string) ([]byte, bool, bool) {
 	imageIntentBody := body
 	if routingModel != upstreamModel {
 		imageIntentBody = ReplaceModelInBody(body, routingModel)
 	}
-	return imageIntentBody, IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, routingModel, imageIntentBody, platform)
+	imageIntent := IsImageGenerationIntentForPlatform(openAIResponsesEndpoint, routingModel, imageIntentBody, platform)
+	explicitImageIntent := IsExplicitImageGenerationIntent(openAIResponsesEndpoint, routingModel, imageIntentBody)
+	return imageIntentBody, imageIntent, explicitImageIntent
 }
 
 // openAIWSIngressInterTurnIdleTimeout 返回已完成轮次之间允许的客户端空闲时间。
@@ -217,6 +220,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
+		if hooks != nil && (hooks.MaxReasoningEffort != "" || len(hooks.ReasoningEffortMappings) > 0) {
+			if capped, changed := ApplyOpenAIReasoningEffortPolicy(normalized, hooks.MaxReasoningEffort, hooks.ReasoningEffortMappings); changed {
+				normalized = capped
+			}
+		}
 
 		originalModel := strings.TrimSpace(values[1].String())
 		modelMissing := originalModel == ""
@@ -330,8 +338,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			logOpenAIWSModeInfo("ingress_ws_codex_spark_image_tool_stripped account_id=%d", account.ID)
 		}
 		// 生图能力必须按渠道模型 C 判断；账号最终模型 U 只用于真正的上游请求。
-		imageIntentBody, imageIntent := openAIWSImageIntentForRoutingModel(routingModel, upstreamModel, normalized, account.Platform)
-		if imageIntent && !imageGenerationAllowed {
+		imageIntentBody, imageIntent, explicitImageIntent := openAIWSImageIntentForRoutingModel(routingModel, upstreamModel, normalized, account.Platform)
+		if explicitImageIntent && !imageGenerationAllowed {
 			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
 		}
@@ -934,6 +942,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					fmt.Errorf("read upstream websocket event: %w", readErr),
 					wroteDownstream,
 				)
+			}
+			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
+				upstreamMessage = normalized
 			}
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)

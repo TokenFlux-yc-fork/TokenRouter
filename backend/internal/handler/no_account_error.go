@@ -27,8 +27,9 @@ type noAccountErrorClassification struct {
 // classifyNoAccountError 在“无可用账号”场景下区分 404 model_not_found 与 503 api_error。
 //
 // 选择层不会明确告诉调用方账号池为空的具体原因：限流和模型不支持都可能包装成
-// ErrNoAvailableAccounts。因此这里重新检查账号池配置，只看 model_mapping 等静态配置，
-// 忽略限流、额度暂停等临时状态，确保只有“改账号模型配置才可能成功”的场景返回 404。
+// ErrNoAvailableAccounts。因此这里通过专用数据库查询重新检查账号池，只考虑 active、
+// schedulable 和 model_mapping 等持久配置，绕过调度快照和瞬时过滤。只有必须修改
+// 账号、分组或模型配置才能成功的场景才返回 404。
 //
 // routingModel 是账号选择实际比较的模型名（可能已经过分组模型分发映射）；
 // displayModel 是调用方原始请求模型，仅用于客户端错误消息，避免泄露内部映射细节。

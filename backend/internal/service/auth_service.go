@@ -902,6 +902,11 @@ func (s *AuthService) createRegisteredUser(ctx context.Context, user *User, arti
 	if user == nil {
 		return nil
 	}
+	// 注册时固化当前默认值，之后修改系统默认值不会追溯已有用户。
+	user.APIKeyLimit = DefaultUserAPIKeyLimit
+	if s.settingService != nil {
+		user.APIKeyLimit = s.settingService.GetDefaultUserAPIKeyLimit(ctx)
+	}
 	if artifacts == nil {
 		artifacts = &registrationArtifacts{}
 	}

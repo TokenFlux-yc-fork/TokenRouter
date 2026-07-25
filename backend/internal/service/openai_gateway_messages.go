@@ -67,6 +67,18 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	anthropicDigestChain := ""
 	anthropicMatchedDigestChain := ""
 	compatPromptCacheInjected := false
+	// Grok 不经过 gpt-5/codex 兼容注入器，但 Claude Code 仍携带稳定的会话标识。
+	// 优先将它作为 Grok 提示缓存种子，使多轮 /v1/messages 流量可以命中 xAI
+	// 服务端缓存。
+	if promptCacheKey == "" && account.Platform == PlatformGrok {
+		if sessionSeed := extractClaudeCodeSessionID(c, body); sessionSeed != "" {
+			promptCacheKey = sessionSeed
+			compatPromptCacheInjected = true
+		} else if sessionSeed := promptCacheKeyFromAnthropicMetadataSession(&anthropicReq); sessionSeed != "" {
+			promptCacheKey = sessionSeed
+			compatPromptCacheInjected = true
+		}
+	}
 	if promptCacheKey == "" && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 		promptCacheKey = promptCacheKeyFromAnthropicMetadataSession(&anthropicReq)
 		if promptCacheKey == "" {
@@ -331,9 +343,61 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
-	if err != nil {
-		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+	// Grok 可能拒绝在不同 OAuth 账号或缓存身份下回放的加密推理。与
+	// forwardGrokResponses 保持一致：先剥离密文并重试一次，再将 400 作为硬失败
+	// 或故障转移触发条件处理。
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if account.Platform != PlatformGrok {
+				break
+			}
+			upstreamCtxRetry, releaseRetry := detachUpstreamContext(ctx)
+			upstreamReq, err = buildGrokResponsesRequest(upstreamCtxRetry, c, account, responsesBody, token, grokCacheIdentity, s.cfg)
+			releaseRetry()
+			if err != nil {
+				return nil, fmt.Errorf("build grok retry request: %w", err)
+			}
+		}
+		resp, err = s.httpUpstream.DoWithTLS(
+			upstreamReq,
+			proxyURL,
+			account.ID,
+			account.Concurrency,
+			s.resolveOpenAITLSProfile(account, tlsRouterMatch...),
+		)
+		if err != nil {
+			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		}
+		if account.Platform != PlatformGrok || attempt > 0 || resp.StatusCode != http.StatusBadRequest {
+			break
+		}
+		respBody := s.readUpstreamErrorBody(resp)
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		// 优先识别明确的解密错误；若出站请求仍带有 reasoning.encrypted_content，
+		// 任意 400 也允许剥离一次（账号切换经常只返回不透明的 "Upstream error: 400"）。
+		shouldStrip := isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) ||
+			requestHasGrokEncryptedReasoning(responsesBody)
+		if !shouldStrip {
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			break
+		}
+		retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(responsesBody)
+		if trimErr != nil {
+			return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
+		}
+		if !changed {
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			break
+		}
+		responsesBody = retryBody
+		logger.L().Info("openai messages: retrying after stripping invalid Grok encrypted_content",
+			zap.Int64("account_id", account.ID),
+			zap.Bool("cache_identity_present", strings.TrimSpace(grokCacheIdentity) != ""),
+			zap.String("upstream_error_preview", truncateOpenAIWSLogValue(string(respBody), 240)),
+		)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -362,6 +426,18 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				zap.String("upstream_model", upstreamModel),
 			)
 			return s.ForwardAsAnthropic(ctx, c, account, body, promptCacheKey, defaultMappedModel, tlsRouterMatch...)
+		}
+		// Grok 切换账号后的历史记录经常解密失败；在客户端请求体层剥离一次加密推理，
+		// 让故障转移账号可以接收多轮工具续接，避免连续返回 400。
+		if account.Platform == PlatformGrok &&
+			isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) &&
+			!grokEncryptedContentStripRetried(ctx) {
+			if strippedBody, ok := stripAnthropicThinkingSignatures(body); ok {
+				logger.L().Info("openai messages: stripping thinking signatures for Grok failover retry",
+					zap.Int64("account_id", account.ID),
+				)
+				return s.ForwardAsAnthropic(markGrokEncryptedContentStripRetried(ctx), c, account, strippedBody, promptCacheKey, defaultMappedModel, tlsRouterMatch...)
+			}
 		}
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
 			return nil, foErr
@@ -533,6 +609,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
+	c.Header("Content-Type", "application/json; charset=utf-8")
 	c.JSON(http.StatusOK, anthropicResp)
 
 	return &OpenAIForwardResult{

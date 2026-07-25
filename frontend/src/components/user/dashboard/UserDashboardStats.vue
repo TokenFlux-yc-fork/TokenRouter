@@ -151,7 +151,7 @@
       >
         <div class="flex items-center justify-between">
           <span class="text-sm font-semibold text-gray-900 dark:text-white">
-            {{ item.isOther ? t('dashboard.platformOther') : platformLabel(item.platform) }}
+            {{ item.isOther ? t('dashboard.platformOther') : usagePlatformLabel(item.platform) }}
           </span>
           <span class="font-mono text-sm text-purple-600 dark:text-purple-400" :title="t('dashboard.actual')">
             {{ formatBalanceAmount(item.total_actual_cost, { fractionDigits: 4 }) }}
@@ -226,6 +226,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import BalanceIcon from '@/components/common/BalanceIcon.vue'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
+import { usagePlatformLabel } from '@/utils/platformColors'
 import type { UserDashboardStats as UserStatsType } from '@/api/usage'
 import type { PlatformQuotaItem } from '@/types'
 
@@ -247,15 +248,6 @@ const props = defineProps<{
 }>()
 const { t } = useI18n()
 const { formatBalanceAmount, formatUsdAmount } = useBalanceDisplay()
-
-const PLATFORM_LABELS: Record<string, string> = {
-  anthropic: 'Claude',
-  openai: 'OpenAI',
-  gemini: 'Gemini',
-  antigravity: 'Antigravity'
-}
-
-const platformLabel = (p: string) => PLATFORM_LABELS[p] ?? p
 
 const sortedPlatforms = computed(() => {
   const list = props.stats?.by_platform ?? []

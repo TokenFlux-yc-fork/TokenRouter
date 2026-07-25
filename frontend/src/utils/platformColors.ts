@@ -187,3 +187,8 @@ export function platformLabel(p: string): string {
     default: return p || 'API'
   }
 }
+
+// 用户用量页面沿用 Claude 产品名，其余平台统一使用品牌规定的大小写。
+export function usagePlatformLabel(p: string): string {
+  return p === 'anthropic' ? 'Claude' : platformLabel(p)
+}

@@ -37,6 +37,12 @@ func (h *AsyncImageHandler) enabled() bool {
 	return h != nil && h.tasks != nil && h.tasks.Enabled()
 }
 
+// pollable 判断任务查询是否可用。该条件有意弱于 enabled：关闭功能后，
+// 已写入 Redis 的结果仍可读取，避免进行中的任务失去轮询入口。
+func (h *AsyncImageHandler) pollable() bool {
+	return h != nil && h.tasks != nil && h.tasks.Pollable()
+}
+
 // Submit 接收与同步 Images 接口相同的请求体，并在上游开始生成图片前返回任务信息。
 func (h *AsyncImageHandler) Submit(c *gin.Context) {
 	if !h.enabled() {
@@ -113,7 +119,9 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 }
 
 func (h *AsyncImageHandler) Get(c *gin.Context) {
-	if !h.enabled() {
+	// 轮询不要求功能继续开启，只要求任务存储可用；后台关闭开关后，
+	// 已受理任务的结果仍保存在 Redis 中，提交方必须能够继续轮询。
+	if !h.pollable() {
 		imageTaskJSONError(c, http.StatusNotFound, "not_found_error", "async image tasks are not enabled")
 		return
 	}

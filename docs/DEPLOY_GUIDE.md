@@ -53,6 +53,11 @@ sudo systemctl enable sub2api
 - 一键下载并应用更新
 - 支持回滚
 
+匿名访问 GitHub Release API 触发限流时，可在安装脚本进程环境或 Docker `.env`
+中设置 `UPDATE_GITHUB_TOKEN`。该令牌只会发送给 `https://api.github.com` 的版本
+检查请求，跨目标重定向会移除认证头；Release 资源与校验和下载始终保持匿名。
+系统不会回退使用 `GITHUB_TOKEN` 或 `GH_TOKEN`。
+
 #### 常用命令
 
 ```bash
@@ -313,6 +318,7 @@ database:
 redis:
   host: "localhost"
   port: 6379
+  username: "" # Redis ACL 用户名；使用默认用户时留空
   password: ""
 
 jwt:
@@ -327,6 +333,17 @@ default:
 ```
 
 ### OpenAI Responses WebSocket 首消息超时
+
+账号级 WS mode（包括 `http_bridge`）仅在新版 mode router 开启时生效。关闭该开关时，
+账号级 mode 会被忽略，网关继续使用 legacy `ctx_pool` 行为。可通过 YAML 开启：
+
+```yaml
+gateway:
+  openai_ws:
+    mode_router_v2_enabled: true
+```
+
+也可设置环境变量 `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true`。
 
 `gateway.openai_ws.client_first_message_timeout_seconds` 限制 WebSocket 升级后完整读取并
 解压首条客户端 `response.create` 消息的总时间，默认 30 秒。大上下文、图片较多或慢链路

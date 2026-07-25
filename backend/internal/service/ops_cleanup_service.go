@@ -159,11 +159,14 @@ func (s *OpsCleanupService) applyScheduleLocked(ctx context.Context) error {
 	c.Start()
 	s.cron = c
 	logger.LegacyPrintf("service.ops_cleanup",
-		"[OpsCleanup] scheduled (schedule=%q tz=%s retention_days=err:%d/min:%d/hour:%d)",
+		"[OpsCleanup] scheduled (schedule=%q tz=%s retention_days=err:%d/system:%d/min:%d/hour:%d batch=%d pause_ms=%d)",
 		schedule, loc.String(),
 		s.effective.ErrorLogRetentionDays,
+		s.effective.SystemLogRetentionDays,
 		s.effective.MinuteMetricsRetentionDays,
 		s.effective.HourlyMetricsRetentionDays,
+		s.effective.BatchSize,
+		s.effective.BatchPauseMS,
 	)
 	return nil
 }
@@ -197,9 +200,15 @@ func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
 	if s.cfg != nil {
 		base = s.cfg.Ops.Cleanup
 	}
-	defer func() { s.effective = base }()
+	if base.BatchSize <= 0 {
+		base.BatchSize = opsCleanupDefaultBatchSize
+	}
+	if base.BatchPauseMS <= 0 {
+		base.BatchPauseMS = int(opsCleanupDefaultBatchPause / time.Millisecond)
+	}
 
 	if s.settingRepo == nil {
+		s.effective = base
 		return
 	}
 	if ctx == nil {
@@ -211,28 +220,50 @@ func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
 			logger.LegacyPrintf("service.ops_cleanup",
 				"[OpsCleanup] read advanced settings failed, using cfg: %v", err)
 		}
-		return
+	} else if strings.TrimSpace(raw) != "" {
+		var adv OpsAdvancedSettings
+		if err := json.Unmarshal([]byte(raw), &adv); err != nil {
+			logger.LegacyPrintf("service.ops_cleanup",
+				"[OpsCleanup] parse advanced settings failed, using cfg: %v", err)
+		} else {
+			dr := adv.DataRetention
+			base.Enabled = dr.CleanupEnabled
+			if sched := strings.TrimSpace(dr.CleanupSchedule); sched != "" {
+				base.Schedule = sched
+			}
+			if dr.CleanupBatchSize > 0 {
+				base.BatchSize = dr.CleanupBatchSize
+			}
+			if dr.CleanupPauseMS > 0 {
+				base.BatchPauseMS = dr.CleanupPauseMS
+			}
+			if dr.ErrorLogRetentionDays >= 0 {
+				base.ErrorLogRetentionDays = dr.ErrorLogRetentionDays
+			}
+			if dr.MinuteMetricsRetentionDays >= 0 {
+				base.MinuteMetricsRetentionDays = dr.MinuteMetricsRetentionDays
+			}
+			if dr.HourlyMetricsRetentionDays >= 0 {
+				base.HourlyMetricsRetentionDays = dr.HourlyMetricsRetentionDays
+			}
+		}
 	}
-	var adv OpsAdvancedSettings
-	if err := json.Unmarshal([]byte(raw), &adv); err != nil {
+
+	// 系统日志保留期由运行时日志配置负责，避免与错误日志保留期错误绑定。
+	runtimeRaw, runtimeErr := s.settingRepo.GetValue(ctx, SettingKeyOpsRuntimeLogConfig)
+	if runtimeErr != nil && !errors.Is(runtimeErr, ErrSettingNotFound) {
 		logger.LegacyPrintf("service.ops_cleanup",
-			"[OpsCleanup] parse advanced settings failed, using cfg: %v", err)
-		return
+			"[OpsCleanup] read runtime log config failed, using cfg: %v", runtimeErr)
+	} else if strings.TrimSpace(runtimeRaw) != "" {
+		var runtimeCfg OpsRuntimeLogConfig
+		if err := json.Unmarshal([]byte(runtimeRaw), &runtimeCfg); err != nil {
+			logger.LegacyPrintf("service.ops_cleanup",
+				"[OpsCleanup] parse runtime log config failed, using cfg: %v", err)
+		} else if runtimeCfg.RetentionDays > 0 {
+			base.SystemLogRetentionDays = runtimeCfg.RetentionDays
+		}
 	}
-	dr := adv.DataRetention
-	base.Enabled = dr.CleanupEnabled
-	if sched := strings.TrimSpace(dr.CleanupSchedule); sched != "" {
-		base.Schedule = sched
-	}
-	if dr.ErrorLogRetentionDays >= 0 {
-		base.ErrorLogRetentionDays = dr.ErrorLogRetentionDays
-	}
-	if dr.MinuteMetricsRetentionDays >= 0 {
-		base.MinuteMetricsRetentionDays = dr.MinuteMetricsRetentionDays
-	}
-	if dr.HourlyMetricsRetentionDays >= 0 {
-		base.HourlyMetricsRetentionDays = dr.HourlyMetricsRetentionDays
-	}
+	s.effective = base
 }
 
 // snapshotEffective 取一份 effective 副本（runCleanupOnce 等读路径使用）。
@@ -269,6 +300,19 @@ func (s *OpsCleanupService) runScheduled() {
 		defer release()
 	}
 
+	releaseMaintenance, acquired, lockErr := tryAcquireDatabaseHeavyMaintenanceLock(ctx, s.db)
+	if lockErr != nil {
+		s.recordHeartbeatError(time.Now().UTC(), 0, lockErr)
+		logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] acquire maintenance lock failed: %v", lockErr)
+		return
+	}
+	if !acquired {
+		s.recordHeartbeatError(time.Now().UTC(), 0, ErrDatabaseMaintenanceBusy)
+		logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] skipped: database maintenance task is running")
+		return
+	}
+	defer releaseMaintenance()
+
 	startedAt := time.Now().UTC()
 	runAt := startedAt
 
@@ -293,12 +337,21 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 
 	targets := []opsCleanupTarget{
 		{effective.ErrorLogRetentionDays, "ops_error_logs", "created_at", false, &out.errorLogs},
-		{effective.ErrorLogRetentionDays, "ops_alert_events", "created_at", false, &out.alertEvents},
-		{effective.ErrorLogRetentionDays, "ops_system_logs", "created_at", false, &out.systemLogs},
+		{effective.ErrorLogRetentionDays, "ops_ingress_reject_aggregates", "bucket_start", false, &out.ingressRejects},
+		{effective.ErrorLogRetentionDays, "ops_alert_events", "fired_at", false, &out.alertEvents},
+		{effective.SystemLogRetentionDays, "ops_system_logs", "created_at", false, &out.systemLogs},
 		{effective.ErrorLogRetentionDays, "ops_system_log_cleanup_audits", "created_at", false, &out.logAudits},
 		{effective.MinuteMetricsRetentionDays, "ops_system_metrics", "created_at", false, &out.systemMetrics},
 		{effective.HourlyMetricsRetentionDays, "ops_metrics_hourly", "bucket_start", false, &out.hourlyPreagg},
 		{effective.HourlyMetricsRetentionDays, "ops_metrics_daily", "bucket_date", true, &out.dailyPreagg},
+	}
+	batchSize := effective.BatchSize
+	if batchSize <= 0 {
+		batchSize = opsCleanupDefaultBatchSize
+	}
+	batchPause := time.Duration(effective.BatchPauseMS) * time.Millisecond
+	if batchPause <= 0 {
+		batchPause = opsCleanupDefaultBatchPause
 	}
 
 	for _, t := range targets {
@@ -306,11 +359,16 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 		if !ok {
 			continue
 		}
-		n, err := opsCleanupRunOne(ctx, s.db, truncate, cutoff, t.table, t.timeCol, t.castDate, opsCleanupBatchSize)
+		result, err := opsCleanupRunOne(ctx, s.db, truncate, cutoff, t.table, t.timeCol, t.castDate, batchSize, batchPause)
 		if err != nil {
 			return out, err
 		}
-		*t.counter = n
+		*t.counter = result.deleted
+		out.batches += result.batches
+		out.throttled += result.throttled
+		logger.LegacyPrintf("service.ops_cleanup",
+			"[OpsCleanup] table complete: table=%s deleted=%d batches=%d throttled_ms=%d",
+			t.table, result.deleted, result.batches, result.throttled.Milliseconds())
 	}
 
 	return out, nil

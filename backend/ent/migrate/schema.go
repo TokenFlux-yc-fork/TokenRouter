@@ -790,6 +790,7 @@ var (
 		{Name: "is_exclusive", Type: field.TypeBool, Default: false},
 		{Name: "is_default", Type: field.TypeBool, Default: false},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
+		{Name: "duplicate_operation_id", Type: field.TypeString, Nullable: true, Size: 64},
 		{Name: "platform", Type: field.TypeString, Size: 50, Default: "anthropic"},
 		{Name: "display_brand", Type: field.TypeString, Size: 50, Default: ""},
 		{Name: "allow_image_generation", Type: field.TypeBool, Default: false},
@@ -835,6 +836,8 @@ var (
 		{Name: "health_consecutive_successes", Type: field.TypeInt, Default: 0},
 		{Name: "health_status", Type: field.TypeString, Size: 20, Default: "unknown"},
 		{Name: "rpm_limit", Type: field.TypeInt, Default: 0},
+		{Name: "max_reasoning_effort", Type: field.TypeString, Size: 20, Default: ""},
+		{Name: "reasoning_effort_mappings", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "data_sharing_enabled", Type: field.TypeBool, Default: false},
 		{Name: "session_isolation_enabled", Type: field.TypeBool, Default: false},
 	}
@@ -852,7 +855,7 @@ var (
 			{
 				Name:    "group_platform",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[14]},
+				Columns: []*schema.Column{GroupsColumns[15]},
 			},
 			{
 				Name:    "group_is_exclusive",
@@ -872,27 +875,35 @@ var (
 			{
 				Name:    "group_sort_order",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[41]},
+				Columns: []*schema.Column{GroupsColumns[42]},
 			},
 			{
 				Name:    "group_data_sharing_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[59]},
+				Columns: []*schema.Column{GroupsColumns[62]},
 			},
 			{
 				Name:    "group_session_isolation_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[60]},
+				Columns: []*schema.Column{GroupsColumns[63]},
 			},
 			{
 				Name:    "group_health_check_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[49]},
+				Columns: []*schema.Column{GroupsColumns[50]},
 			},
 			{
 				Name:    "group_health_status",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[57]},
+				Columns: []*schema.Column{GroupsColumns[58]},
+			},
+			{
+				Name:    "idx_groups_duplicate_operation_id_active",
+				Unique:  true,
+				Columns: []*schema.Column{GroupsColumns[14]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "duplicate_operation_id IS NOT NULL AND deleted_at IS NULL",
+				},
 			},
 		},
 	}
@@ -1771,6 +1782,7 @@ var (
 		{Name: "balance_notify_extra_emails", Type: field.TypeString, Default: "[]", SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "total_recharged", Type: field.TypeFloat64, Default: 0, SchemaType: map[string]string{"postgres": "decimal(20,8)"}},
 		{Name: "rpm_limit", Type: field.TypeInt, Default: 0},
+		{Name: "api_key_limit", Type: field.TypeInt, Default: 100},
 	}
 	// UsersTable holds the schema information for the "users" table.
 	UsersTable = &schema.Table{

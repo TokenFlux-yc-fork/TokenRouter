@@ -407,6 +407,7 @@ export interface SystemSettings {
   totp_enabled: boolean; // TOTP 双因素认证
   totp_encryption_key_configured: boolean; // TOTP 加密密钥是否已配置
   session_binding_enabled: boolean; // 会话 IP/UA 绑定
+  step_up_enabled: boolean; // 敏感操作 step-up 2FA
   audit_log_retention_days: number; // 审计日志保留天数
   login_agreement_enabled: boolean;
   login_agreement_mode: "modal" | "checkbox" | string;
@@ -422,6 +423,7 @@ export interface SystemSettings {
   affiliate_admin_recharge_enabled: boolean;
   default_concurrency: number;
   default_user_rpm_limit: number;
+  default_user_api_key_limit: number;
   default_subscriptions: DefaultSubscriptionSetting[];
   balance_unit_name: string;
   balance_unit_symbol: string;
@@ -511,6 +513,7 @@ export interface SystemSettings {
   turnstile_site_key: string;
   turnstile_secret_key_configured: boolean;
   api_key_acl_trust_forwarded_ip: boolean;
+  forwarded_client_ip_headers: string[];
 
   // LinuxDo Connect OAuth settings
   linuxdo_connect_enabled: boolean;
@@ -713,6 +716,7 @@ export interface UpdateSettingsRequest {
   invitation_code_enabled?: boolean;
   totp_enabled?: boolean; // TOTP 双因素认证
   session_binding_enabled?: boolean; // 会话 IP/UA 绑定
+  step_up_enabled?: boolean; // 敏感操作 step-up 2FA
   audit_log_retention_days?: number; // 审计日志保留天数
   login_agreement_enabled?: boolean;
   login_agreement_mode?: "modal" | "checkbox" | string;
@@ -727,6 +731,7 @@ export interface UpdateSettingsRequest {
   affiliate_admin_recharge_enabled?: boolean;
   default_concurrency?: number;
   default_user_rpm_limit?: number;
+  default_user_api_key_limit?: number;
   default_subscriptions?: DefaultSubscriptionSetting[];
   balance_unit_name?: string;
   balance_unit_symbol?: string;
@@ -813,6 +818,7 @@ export interface UpdateSettingsRequest {
   turnstile_site_key?: string;
   turnstile_secret_key?: string;
   api_key_acl_trust_forwarded_ip?: boolean;
+  forwarded_client_ip_headers?: string[];
   linuxdo_connect_enabled?: boolean;
   linuxdo_connect_client_id?: string;
   linuxdo_connect_client_secret?: string;

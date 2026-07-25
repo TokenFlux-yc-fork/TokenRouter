@@ -45,6 +45,7 @@ const messages: Record<string, string> = {
   'keys.allStatus': 'All Status',
   'keys.columnSettings': 'Column Settings',
   'keys.createKey': 'Create API Key',
+  'keys.apiKeyLimitReached': 'API key limit reached',
   'keys.created': 'Created',
   'keys.expiresAt': 'Expires',
   'keys.group': 'Group',
@@ -162,7 +163,8 @@ const AppLayoutStub = {
 }
 
 const BaseDialogStub = {
-  props: ['show'],
+  name: 'BaseDialog',
+  props: ['show', 'title', 'width'],
   template: '<div v-if="show"><slot /><slot name="footer" /></div>',
 }
 
@@ -447,6 +449,19 @@ describe('user KeysView column settings', () => {
     expect(currentConcurrencyColumn?.sortable).toBe(true)
   })
 
+  it('keeps the create key form shrinkable on narrow screens', async () => {
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await nextTick()
+
+    const dialog = wrapper.findComponent({ name: 'BaseDialog' })
+    const form = wrapper.get('form#key-form')
+
+    expect(dialog.props('width')).toBe('normal')
+    expect(form.classes()).toEqual(expect.arrayContaining(['min-w-0', 'max-w-full']))
+  })
+
   it('keeps filters and selected page size when sorting by current concurrency', async () => {
     getAvailableGroups.mockResolvedValue([{ id: 42, name: 'OpenAI' }])
     const wrapper = await mountView()
@@ -518,5 +533,38 @@ describe('user KeysView column settings', () => {
       group_id: 42,
       fast_mode_policy: 'force_on',
     }))
+  })
+
+  it('shows the localized API key limit error with a rejected create request', async () => {
+    getAvailableGroups.mockResolvedValueOnce([{
+      id: 42,
+      name: 'OpenAI',
+      description: '',
+      display_brand: '',
+      rate_multiplier: 1,
+      peak_rate_enabled: false,
+      peak_start: '',
+      peak_end: '',
+      peak_rate_multiplier: 1,
+      platform: 'openai',
+      data_sharing_enabled: false,
+    }])
+    createKey.mockRejectedValueOnce({
+      reason: 'API_KEY_LIMIT_REACHED',
+      metadata: { current: '2', limit: '2' },
+    })
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await nextTick()
+    await wrapper.get('[data-tour="key-form-name"]').setValue('limited-key')
+    const groupSelect = wrapper.findAllComponents({ name: 'Select' })
+      .find((select) => select.attributes('data-tour') === 'key-form-group')
+    expect(groupSelect).toBeDefined()
+    await groupSelect!.vm.$emit('update:modelValue', 42)
+    await wrapper.get('form#key-form').trigger('submit')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith('API key limit reached')
   })
 })

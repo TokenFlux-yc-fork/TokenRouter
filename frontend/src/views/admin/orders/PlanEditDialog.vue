@@ -41,7 +41,7 @@
 
       <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div>
-          <label class="input-label">{{ t('payment.admin.validityDays') }} <span class="text-red-500">*</span></label>
+          <label class="input-label">{{ t('payment.admin.validity') }} <span class="text-red-500">*</span></label>
           <input v-model.number="planForm.validity_days" type="number" min="1" class="input" required />
         </div>
         <div>
@@ -394,7 +394,7 @@ async function handleSavePlan() {
     return
   }
   if (!planForm.validity_days || planForm.validity_days < 1) {
-    appStore.showError(t('payment.admin.validityDaysRequired'))
+    appStore.showError(t('payment.admin.validityRequired'))
     return
   }
   for (const groupId of planForm.group_ids) {

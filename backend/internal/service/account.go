@@ -94,6 +94,9 @@ const (
 	OpenAIEndpointCapabilityChatCompletions OpenAIEndpointCapability = "chat_completions"
 	OpenAIEndpointCapabilityEmbeddings      OpenAIEndpointCapability = "embeddings"
 	OpenAIEndpointCapabilityAlphaSearch     OpenAIEndpointCapability = "alpha_search"
+	// OpenAIEndpointCapabilityGrokMediaGeneration 用于排除被显式禁用或计费资格
+	// 探测遭拒的 Grok 账号；视频状态查询不要求该能力，以便继续查询已提交的任务。
+	OpenAIEndpointCapabilityGrokMediaGeneration OpenAIEndpointCapability = "grok_media_generation"
 	// OpenAIEndpointCapabilityResponses 表示上游确实提供 /v1/responses 端点。
 	// 与其他能力不同：支持状态来自 accounts.extra 的自动探测标记
 	// （openai_responses_supported / openai_responses_mode），而非
@@ -103,6 +106,10 @@ const (
 )
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
+
+// GrokMediaEligibleExtraKey 是 accounts.extra 中可选的账号级覆盖：true 强制允许
+// 媒体调度，false 禁用，缺失或 null 时使用上游观测自动判断。
+const GrokMediaEligibleExtraKey = "grok_media_eligible"
 
 const (
 	OpenAIAuthModePersonalAccessToken = "personalAccessToken"
@@ -1500,9 +1507,9 @@ func (a *Account) GetGrokBaseURL() string {
 	}
 	baseURL := strings.TrimSpace(a.GetCredential("base_url"))
 	if a.IsGrokOAuth() {
-		// 订阅流量默认使用受支持的 CLI 网关。创建或刷新凭据时写入的官方地址及其历史变体
-		// 均表示“未自定义”，只有显式配置的自定义主机才会改写转发地址。
-		if baseURL == "" || xai.IsOfficialBaseURL(baseURL) {
+		// 运营方需要在官方 CLI 网关、官方或区域 API 端点和第三方转发地址之间切换，
+		// 因此只要已存地址可解析就原样使用；空值或无法解析的脏数据才回落默认 CLI 网关。
+		if baseURL == "" || !xai.IsParseableBaseURL(baseURL) {
 			return xai.DefaultCLIBaseURL
 		}
 		return baseURL
@@ -1514,12 +1521,17 @@ func (a *Account) GetGrokBaseURL() string {
 }
 
 // GetGrokMediaBaseURL 返回 Grok Imagine 媒体接口使用的上游地址。
-// 当前解析规则与文本流量一致，独立访问器用于在调用点保留媒体与文本的语义边界。
+// CLI 订阅网关会拒绝较大的 Base64 请求体，因此 OAuth 文本流量解析到 CLI 网关时，
+// 媒体改走 api.x.ai；手工选择的官方、区域或自定义端点仍原样用于媒体。
 func (a *Account) GetGrokMediaBaseURL() string {
 	if !a.IsGrok() {
 		return ""
 	}
-	return a.GetGrokBaseURL()
+	baseURL := a.GetGrokBaseURL()
+	if a.IsGrokOAuth() && isGrokCLIProxyTarget(baseURL) {
+		return xai.DefaultBaseURL
+	}
+	return baseURL
 }
 
 func (a *Account) GetGrokAccessToken() string {
@@ -1618,7 +1630,17 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		return false
 	}
 	if a.IsGrok() {
-		return capability == OpenAIEndpointCapabilityChatCompletions
+		switch capability {
+		case OpenAIEndpointCapabilityChatCompletions:
+			return true
+		case OpenAIEndpointCapabilityGrokMediaGeneration:
+			eligible, reason := a.GrokMediaGenerationEligibility()
+			// 尚无观测的 OAuth 账号仍作为调度候选，供请求路径在转发前执行计费探测。
+			// 如果探测不可用或无法提供明确的付费资格证据，转发门控会拒绝该账号。
+			return eligible || reason == "billing_unobserved"
+		default:
+			return false
+		}
 	}
 	switch capability {
 	case OpenAIEndpointCapabilityChatCompletions:
@@ -1634,10 +1656,11 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		// 配置集校验。
 		capability = OpenAIEndpointCapabilityChatCompletions
 	case OpenAIEndpointCapabilityAlphaSearch:
-		// Codex alpha/search 是 ChatGPT/Codex 后端工具端点，必须使用
-		// OAuth/PAT/AgentIdentity 这类 ChatGPT 账号凭据；API key 被发往
-		// chatgpt.com/backend-api/codex/alpha/search 会稳定 401。
-		if a.Type != AccountTypeOAuth {
+		// alpha/search 的转发按账号类型分流：OAuth/PAT 走
+		// chatgpt.com/backend-api/codex/alpha/search，API key 走
+		// {base_url}/v1/alpha/search（见 openAIAlphaSearchURL），两类账号
+		// 都可承接独立搜索请求。上游不支持该端点时由转发层 failover 兜底。
+		if a.Type != AccountTypeOAuth && a.Type != AccountTypeAPIKey {
 			return false
 		}
 	case OpenAIEndpointCapabilityEmbeddings:
@@ -1656,6 +1679,50 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		return true
 	}
 	return configured[string(capability)]
+}
+
+// GrokMediaGenerationEligibility 判断 Grok 账号能否承接新的图片或视频生成请求。
+// OAuth 媒体必须有明确的付费资格观测，否则按拒绝处理；管理员显式覆盖优先于探测数据。
+func (a *Account) GrokMediaGenerationEligibility() (bool, string) {
+	if a == nil || !a.IsGrok() {
+		return false, "not_grok"
+	}
+	if override, ok := grokMediaEligibilityOverride(a.Extra); ok {
+		if override {
+			return true, "override_enabled"
+		}
+		return false, "override_disabled"
+	}
+	if a.Type != AccountTypeOAuth {
+		return true, "non_oauth"
+	}
+
+	billing, err := grokBillingSnapshotFromExtra(a.Extra)
+	if err != nil || billing == nil {
+		return false, "billing_unobserved"
+	}
+	if billing.StatusCode == 403 || billing.WeeklyStatusCode == 403 || billing.MonthlyStatusCode == 403 {
+		return false, "billing_forbidden"
+	}
+	if isKnownGrokFreeAccount(a) {
+		return false, "billing_free_tier"
+	}
+	if !grokBillingHasAuthoritativeQuota(billing) {
+		return false, "billing_inconclusive"
+	}
+	return true, "eligible"
+}
+
+func grokMediaEligibilityOverride(extra map[string]any) (bool, bool) {
+	if extra == nil {
+		return false, false
+	}
+	raw, exists := extra[GrokMediaEligibleExtraKey]
+	if !exists || raw == nil {
+		return false, false
+	}
+	value, ok := raw.(bool)
+	return value, ok
 }
 
 func (a *Account) openAIEndpointCapabilitySet() (map[string]bool, bool) {

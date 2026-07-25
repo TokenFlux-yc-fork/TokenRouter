@@ -123,6 +123,16 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 	} else if s.settingService != nil {
 		balance = s.settingService.GetDefaultBalance(ctx)
 	}
+	apiKeyLimit := DefaultUserAPIKeyLimit
+	if s.settingService != nil {
+		apiKeyLimit = s.settingService.GetDefaultUserAPIKeyLimit(ctx)
+	}
+	if input.APIKeyLimit != nil {
+		if !IsValidUserAPIKeyLimit(*input.APIKeyLimit) {
+			return nil, ErrUserAPIKeyLimitInvalid
+		}
+		apiKeyLimit = *input.APIKeyLimit
+	}
 
 	// 角色可由管理员在创建时指定(admin/user);未提供时默认 user。
 	role, err := normalizeUserRole(input.Role, RoleUser)
@@ -138,6 +148,7 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 		Balance:              balance,
 		Concurrency:          input.Concurrency,
 		RPMLimit:             input.RPMLimit,
+		APIKeyLimit:          apiKeyLimit,
 		Status:               StatusActive,
 		AllowedGroups:        input.AllowedGroups,
 		DisabledPublicGroups: input.DisabledPublicGroups,
@@ -286,6 +297,12 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 
 	if input.RPMLimit != nil {
 		user.RPMLimit = *input.RPMLimit
+	}
+	if input.APIKeyLimit != nil {
+		if !IsValidUserAPIKeyLimit(*input.APIKeyLimit) {
+			return nil, ErrUserAPIKeyLimitInvalid
+		}
+		user.APIKeyLimit = *input.APIKeyLimit
 	}
 
 	if input.AllowedGroups != nil {
@@ -501,6 +518,41 @@ func (s *adminServiceImpl) BatchUpdateConcurrency(ctx context.Context, userIDs [
 
 	if s.authCacheInvalidator != nil {
 		// 并发数写入后立即失效认证缓存，避免 API Key 继续使用旧并发快照。
+		for _, userID := range cleaned {
+			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+		}
+	}
+	return affected, nil
+}
+
+// BatchUpdateLimits 清洗用户 ID 后批量覆盖限制，并在写入成功后失效认证缓存。
+func (s *adminServiceImpl) BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error) {
+	if concurrency == nil && rpmLimit == nil {
+		return 0, fmt.Errorf("at least one of concurrency or rpm_limit is required")
+	}
+
+	cleaned := make([]int64, 0, len(userIDs))
+	seen := make(map[int64]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID <= 0 {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		cleaned = append(cleaned, userID)
+	}
+	if len(cleaned) == 0 {
+		return 0, nil
+	}
+
+	affected, err := s.userRepo.BatchUpdateLimits(ctx, cleaned, concurrency, rpmLimit)
+	if err != nil {
+		return 0, err
+	}
+	if s.authCacheInvalidator != nil {
+		// 两个字段都会进入认证快照，必须在数据库写入成功后逐用户失效缓存。
 		for _, userID := range cleaned {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 		}

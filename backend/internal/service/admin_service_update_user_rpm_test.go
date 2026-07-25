@@ -86,3 +86,42 @@ func TestAdminService_UpdateUser_InvalidatesAuthCacheOnDisabledPublicGroupsChang
 	require.Equal(t, []int64{1, 3}, updated.DisabledPublicGroups)
 	require.Equal(t, []int64{42}, invalidator.userIDs)
 }
+
+func TestAdminService_UpdateUser_SavesExplicitZeroAPIKeyLimit(t *testing.T) {
+	base := &userRepoStub{user: &User{ID: 42, Email: "u@example.com", APIKeyLimit: 100}}
+	repo := &rpmUserRepoStub{userRepoStub: base}
+	svc := &adminServiceImpl{userRepo: repo, redeemCodeRepo: &redeemRepoStub{}}
+	limit := 0
+
+	updated, err := svc.UpdateUser(context.Background(), 42, &UpdateUserInput{APIKeyLimit: &limit})
+
+	require.NoError(t, err)
+	require.Equal(t, 0, updated.APIKeyLimit)
+	require.Equal(t, 0, repo.lastUpdated.APIKeyLimit)
+}
+
+func TestAdminService_UpdateUser_RejectsNegativeAPIKeyLimit(t *testing.T) {
+	base := &userRepoStub{user: &User{ID: 42, Email: "u@example.com", APIKeyLimit: 100}}
+	repo := &rpmUserRepoStub{userRepoStub: base}
+	svc := &adminServiceImpl{userRepo: repo, redeemCodeRepo: &redeemRepoStub{}}
+	limit := -1
+
+	_, err := svc.UpdateUser(context.Background(), 42, &UpdateUserInput{APIKeyLimit: &limit})
+
+	require.ErrorIs(t, err, ErrUserAPIKeyLimitInvalid)
+	require.Nil(t, repo.lastUpdated)
+	require.Equal(t, 100, base.user.APIKeyLimit)
+}
+
+func TestAdminService_UpdateUser_RejectsAPIKeyLimitAboveDatabaseRange(t *testing.T) {
+	base := &userRepoStub{user: &User{ID: 42, Email: "u@example.com", APIKeyLimit: 100}}
+	repo := &rpmUserRepoStub{userRepoStub: base}
+	svc := &adminServiceImpl{userRepo: repo, redeemCodeRepo: &redeemRepoStub{}}
+	limit := MaxUserAPIKeyLimit + 1
+
+	_, err := svc.UpdateUser(context.Background(), 42, &UpdateUserInput{APIKeyLimit: &limit})
+
+	require.ErrorIs(t, err, ErrUserAPIKeyLimitInvalid)
+	require.Nil(t, repo.lastUpdated)
+	require.Equal(t, 100, base.user.APIKeyLimit)
+}

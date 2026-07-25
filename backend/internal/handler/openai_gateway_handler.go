@@ -28,17 +28,23 @@ import (
 
 // OpenAIGatewayHandler handles OpenAI API gateway requests
 type OpenAIGatewayHandler struct {
-	gatewayService           *service.OpenAIGatewayService
-	billingCacheService      *service.BillingCacheService
-	apiKeyService            *service.APIKeyService
-	usageRecordWorkerPool    *service.UsageRecordWorkerPool
-	errorPassthroughService  *service.ErrorPassthroughService
-	contentModerationService *service.ContentModerationService
-	opsService               *service.OpsService
-	concurrencyHelper        *ConcurrencyHelper
-	imageLimiter             *imageConcurrencyLimiter
-	maxAccountSwitches       int
-	cfg                      *config.Config
+	gatewayService             *service.OpenAIGatewayService
+	billingCacheService        *service.BillingCacheService
+	apiKeyService              *service.APIKeyService
+	usageRecordWorkerPool      *service.UsageRecordWorkerPool
+	errorPassthroughService    *service.ErrorPassthroughService
+	contentModerationService   *service.ContentModerationService
+	grokMediaEligibilityProber grokMediaEligibilityProber
+	opsService                 *service.OpsService
+	concurrencyHelper          *ConcurrencyHelper
+	imageLimiter               *imageConcurrencyLimiter
+	maxAccountSwitches         int
+	cfg                        *config.Config
+}
+
+// grokMediaEligibilityProber 在首次媒体转发前补齐 OAuth 账号的计费观测。
+type grokMediaEligibilityProber interface {
+	ProbeMediaEligibility(ctx context.Context, accountID int64) (bool, string, error)
 }
 
 const maxOpenAIFirstOutputTimeoutSwitches = 1
@@ -84,7 +90,7 @@ func openAIModelMappedBody(body []byte, mapped bool, mappedModel string, replace
 }
 
 // resolveOpenAIChannelMappedImageIntent 先把客户端模型 R 映射为渠道模型 C，
-// 再使用 C 和映射后的请求体判断生图意图，供并发限制与账号能力选择共用。
+// 再返回映射后的请求体、渠道模型和宽泛意图，供显式门禁与转发提示分别使用。
 func resolveOpenAIChannelMappedImageIntent(
 	endpoint string,
 	requestedModel string,
@@ -183,6 +189,14 @@ func openAICompatibleRequestPlatform(apiKey *service.APIKey) string {
 		return service.PlatformGrok
 	}
 	return service.PlatformOpenAI
+}
+
+// openAIResponsesRequiredCapability 根据显式生图意图选择账号必须支持的端点能力。
+func openAIResponsesRequiredCapability(imageIntent bool, platform string) service.OpenAIEndpointCapability {
+	if imageIntent && platform == service.PlatformOpenAI {
+		return service.OpenAIEndpointCapabilityResponses
+	}
+	return service.OpenAIEndpointCapabilityChatCompletions
 }
 
 // allowOpenAICompatibleMessagesDispatch 保留 OpenAI 分组的显式开关，同时让 Grok CLI 兼容入口默认可用。
@@ -310,6 +324,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	reqModel := modelResult.String()
+	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformOpenAI {
+		if cappedBody, changed := service.ApplyOpenAIReasoningEffortPolicy(body, apiKey.Group.MaxReasoningEffort, apiKey.Group.ReasoningEffortMappings); changed {
+			body = cappedBody
+		}
+	}
 
 	reqStream, ok := parseOpenAICompatibleStream(body)
 	if !ok {
@@ -350,15 +369,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	// 渠道模型 C 决定生图并发和账号端点能力，客户端模型 R 继续用于日志与会话语义。
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
-	forwardBody, _, imageIntent := resolveOpenAIChannelMappedImageIntent(
+	forwardBody, routingModel, forwardImageIntent := resolveOpenAIChannelMappedImageIntent(
 		"/v1/responses", reqModel, body, channelMapping, openAICompatibleRequestPlatform(apiKey), h.gatewayService.ReplaceModelInBody,
 	)
+	// 权限、并发和账号能力只看显式意图；宽泛意图继续供转发层处理工具与计费。
+	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", routingModel, forwardBody)
 	// 只有 HTTP Responses 入口会按账号开关进入自动透传，供 upstream 限制计算真实模型。
 	selectionCtx := service.WithOpenAIHTTPPassthroughRouting(c.Request.Context())
 	// 错误诊断也必须看到相同入口语义，避免把可透传模型误报为 model_not_found。
 	c.Request = c.Request.WithContext(selectionCtx)
 	if imageIntent {
-		// 生图家族限流依赖上下文标记，必须使用渠道映射后的意图结果。
+		// 生图家族限流依赖上下文标记，必须使用渠道映射后的显式意图结果。
 		selectionCtx = service.WithOpenAIImageGenerationIntent(selectionCtx)
 	}
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
@@ -378,7 +399,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 	}
 
-	seedOpenAIForwardImageIntentHint(c, channelMapping.Mapped, imageIntent)
+	seedOpenAIForwardImageIntentHint(c, channelMapping.Mapped, forwardImageIntent)
 
 	// 提前校验 function_call_output 是否具备可关联上下文，避免上游 400。
 	if !h.validateFunctionCallOutputRequest(c, body, reqLog) {
@@ -441,10 +462,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 生图意图的 /v1/responses 请求必须调度到确实支持 Responses API 的账号，否则
 	// 会在 forward 阶段被静默降级为无法生图的 Chat Completions 直转（#4417）。
 	// 仅对 OpenAI 平台生效：Grok 生图走独立的 forwardGrokResponses 路径，不应被过滤。
-	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
-	if imageIntent && requestPlatform == service.PlatformOpenAI {
-		requiredCapability = service.OpenAIEndpointCapabilityResponses
-	}
+	// 复用前置权限与并发阶段按渠道模型 C 和未再修改的 forwardBody 确认的显式生图意图，
+	// 避免大 tools 请求重复扫描。
+	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
+	requiredCapability := openAIResponsesRequiredCapability(imageIntent, requestPlatform)
 
 	for {
 		// 流式 Forward 会主动分离上游请求，以便客户端断开后继续回收用量；每次账号尝试前
@@ -480,7 +501,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			if len(failedAccountIDs) == 0 {
 				if errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available OpenAI accounts support /responses/compact", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available accounts support /responses/compact", streamStarted)
 					return
 				}
 				if h.handleOpenAISelectionBusinessError(c, err, streamStarted) {
@@ -1667,12 +1688,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 	// 首轮账号选择必须按渠道模型 C 判断生图能力，避免别名映射绕过 Responses 能力检查。
 	channelMappingWS, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, reqModel)
-	_, _, imageIntent := resolveOpenAIChannelMappedImageIntent(
+	mappedFirstMessage, routingModelWS, _ := resolveOpenAIChannelMappedImageIntent(
 		"/v1/responses", reqModel, firstMessage, channelMappingWS, openAICompatibleRequestPlatform(apiKey), h.gatewayService.ReplaceModelInBody,
 	)
+	imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", routingModelWS, mappedFirstMessage)
 	initialSchedulingCtx := ctx
 	if imageIntent {
-		// 首轮账号选择也要遵守生图家族的模型级限流。
+		// 首轮账号选择也要遵守显式生图请求的模型级限流。
 		initialSchedulingCtx = service.WithOpenAIImageGenerationIntent(initialSchedulingCtx)
 	}
 	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
@@ -1814,6 +1836,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 	// 与 HTTP Responses 路径保持一致：生图意图请求要求账号支持 Responses API（#4417）。
 	// WSv2 传输本身已隐含 Responses 支持，此处为防御性对齐。
+	// 首轮显式意图已按渠道模型 C 判断，被动 namespace 不会误过滤账号（#4476）。
 	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
 	if imageIntent && requestPlatform == service.PlatformOpenAI {
 		requiredCapability = service.OpenAIEndpointCapabilityResponses
@@ -1926,8 +1949,16 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// 每轮通过现有鉴权缓存刷新策略；刷新失败时沿用最近一次有效值，避免瞬时故障中断长连接。
 		var currentFastModePolicy atomic.Value
 		currentFastModePolicy.Store(apiKey.FastModePolicy)
+		maxReasoningEffort := ""
+		var reasoningEffortMappings []service.ReasoningEffortMapping
+		if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformOpenAI {
+			maxReasoningEffort = apiKey.Group.MaxReasoningEffort
+			reasoningEffortMappings = apiKey.Group.ReasoningEffortMappings
+		}
 		hooks := &service.OpenAIWSIngressHooks{
-			InitialRequestModel: reqModel,
+			InitialRequestModel:     reqModel,
+			MaxReasoningEffort:      maxReasoningEffort,
+			ReasoningEffortMappings: reasoningEffortMappings,
 			ResolveFastModePolicy: func(_ int) string {
 				fallback, _ := currentFastModePolicy.Load().(string)
 				if h.apiKeyService == nil || strings.TrimSpace(apiKey.Key) == "" {
@@ -1950,9 +1981,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					requestedModel = reqModel
 				}
 				turnMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, requestedModel)
-				_, _, turnImageIntent := resolveOpenAIChannelMappedImageIntent(
+				mappedPayload, turnRoutingModel, _ := resolveOpenAIChannelMappedImageIntent(
 					"/v1/responses", requestedModel, payload, turnMapping, requestPlatform, h.gatewayService.ReplaceModelInBody,
 				)
+				turnImageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", turnRoutingModel, mappedPayload)
 				if turnImageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
 					service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
 					return "", service.NewOpenAIWSClientCloseError(
@@ -2545,6 +2577,18 @@ func (h *OpenAIGatewayHandler) mapUpstreamError(statusCode int) (int, string, st
 
 // handleStreamingAwareError handles errors that may occur after streaming has started
 func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status int, errType, message string, streamStarted bool) {
+	h.handleStreamingAwareErrorWithCode(c, status, errType, "", message, streamStarted, false)
+}
+
+func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
+	c *gin.Context,
+	status int,
+	errType string,
+	code string,
+	message string,
+	streamStarted bool,
+	countTowardsSLA bool,
+) {
 	// body-signal compact 心跳可能已把响应头提交为 200：先停心跳（建立
 	// happens-before，接管 ResponseWriter），并升级为流内错误处理。
 	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
@@ -2554,6 +2598,11 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status 
 		streamStarted = true
 	}
 	if streamStarted {
+		if countTowardsSLA {
+			service.MarkOpsStreamFailure(c, errType, code, message, status)
+		} else {
+			service.MarkOpsStreamError(c, errType, message, status)
+		}
 		// /v1/responses 的严格 SDK（Codex CLI）要求终止事件必须属于
 		// response.completed/failed/incomplete/cancelled 集合。
 		// 通用 `event: error` 帧不被识别为终止事件，会导致
@@ -2566,8 +2615,15 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status 
 		// Stream already started, send error as SSE event then close
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
-			// SSE 错误事件固定 schema，使用 Quote 直拼可避免额外 Marshal 分配。
-			errorEvent := "event: error\ndata: " + `{"error":{"type":` + strconv.Quote(errType) + `,"message":` + strconv.Quote(message) + `}}` + "\n\n"
+			errorObject := gin.H{"type": errType, "message": message}
+			if code != "" {
+				errorObject["code"] = code
+			}
+			payload, err := json.Marshal(gin.H{"error": errorObject})
+			if err != nil {
+				payload = []byte(`{"error":{"type":"upstream_error","message":"Upstream request failed"}}`)
+			}
+			errorEvent := "event: error\ndata: " + string(payload) + "\n\n"
 			if _, err := fmt.Fprint(c.Writer, errorEvent); err != nil {
 				_ = c.Error(err)
 			}
@@ -2577,7 +2633,27 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareError(c *gin.Context, status 
 	}
 
 	// Normal case: return JSON response with proper status code
-	h.errorResponse(c, status, errType, message)
+	if code == "" {
+		h.errorResponse(c, status, errType, message)
+		return
+	}
+	c.JSON(status, gin.H{"error": gin.H{
+		"type": errType, "code": code, "message": message,
+	}})
+}
+
+func (h *OpenAIGatewayHandler) ensureOpenAIStreamReadErrorResponse(c *gin.Context, err error, streamStarted bool) bool {
+	code, message, ok := service.OpenAIUpstreamStreamReadErrorDetails(err)
+	if !ok || c == nil || c.Writer == nil || service.IsResponseCommitted(c) {
+		return false
+	}
+	if c.Writer.Written() {
+		streamStarted = true
+	}
+	h.handleStreamingAwareErrorWithCode(
+		c, http.StatusBadGateway, "upstream_error", code, message, streamStarted, true,
+	)
+	return true
 }
 
 // ensureForwardErrorResponse 在 Forward 返回错误但尚未写响应时补写统一错误响应。

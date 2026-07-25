@@ -54,6 +54,7 @@ type RelayTurnResult struct {
 type RelayExit struct {
 	Stage           string
 	Err             error
+	Graceful        bool
 	WroteDownstream bool
 }
 
@@ -69,6 +70,9 @@ type RelayOptions struct {
 	OnUpstreamEvent   func(eventType string, payload []byte)
 	OnTurnComplete    func(turn RelayTurnResult)
 	BeforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
+	BeforeClientWrite func(msgType coderws.MessageType, payload []byte)
+	AfterClientWrite  func(msgType coderws.MessageType, payload []byte, writeErr error)
+	BeforeRelayCancel func(exit RelayExit)
 	ReadClientFrame   func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
 	OnTrace           func(event RelayTraceEvent)
 	Now               func() time.Time
@@ -238,7 +242,9 @@ func Relay(
 		options.OnUpstreamEvent,
 		options.OnTurnComplete,
 		options.BeforeWriteClient,
-		func() {
+		options.BeforeClientWrite,
+		options.AfterClientWrite,
+		func(msgType coderws.MessageType, payload []byte) {
 			if options.StartClientAfterFirstDownstream {
 				startClientReader()
 			}
@@ -253,6 +259,11 @@ func Relay(
 	go runIdleWatchdog(relayCtx, nowFn, options.IdleTimeout, &lastActivity, onTrace, exitCh)
 
 	firstExit := <-exitCh
+	// 外层入口取消属于控制面关闭，不是上游的正常断开。此处保持客户端连接，
+	// 由适配器返回精确的租约或请求关闭码；内部 relayCancel 不会取消 ctx。
+	if ctx.Err() != nil {
+		firstExit.graceful = false
+	}
 	emitRelayTrace(onTrace, RelayTraceEvent{
 		Stage:           "first_exit",
 		Direction:       relayDirectionFromStage(firstExit.stage),
@@ -260,6 +271,14 @@ func Relay(
 		WroteDownstream: firstExit.wroteDownstream,
 		Error:           relayErrorString(firstExit.err),
 	})
+	if options.BeforeRelayCancel != nil {
+		options.BeforeRelayCancel(RelayExit{
+			Stage:           firstExit.stage,
+			Err:             firstExit.err,
+			Graceful:        firstExit.graceful,
+			WroteDownstream: firstExit.wroteDownstream,
+		})
+	}
 	combinedWroteDownstream := firstExit.wroteDownstream
 	secondExit := relayExitSignal{graceful: true}
 	hasSecondExit := false
@@ -435,7 +454,9 @@ func runUpstreamToClient(
 	onUpstreamEvent func(eventType string, payload []byte),
 	onTurnComplete func(turn RelayTurnResult),
 	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error,
-	afterWriteClient func(),
+	beforeClientWrite func(msgType coderws.MessageType, payload []byte),
+	afterClientWrite func(msgType coderws.MessageType, payload []byte, writeErr error),
+	onClientReadReady func(msgType coderws.MessageType, payload []byte),
 	dropDownstreamWrites *atomic.Bool,
 	forwardedFrames *atomic.Int64,
 	droppedFrames *atomic.Int64,
@@ -448,21 +469,28 @@ func runUpstreamToClient(
 	pendingTerminalTail := make([]bufferedRelayFrame, 0, 4)
 	holdingTerminalTail := false
 	forwardClientFrame := func(msgType coderws.MessageType, payload []byte) bool {
-		if err := writeClient(msgType, payload); err != nil {
+		if beforeClientWrite != nil {
+			beforeClientWrite(msgType, payload)
+		}
+		writeErr := writeClient(msgType, payload)
+		if afterClientWrite != nil {
+			afterClientWrite(msgType, payload, writeErr)
+		}
+		if writeErr != nil {
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:           "write_client_failed",
 				Direction:       "upstream_to_client",
 				MessageType:     relayMessageTypeString(msgType),
 				PayloadBytes:    len(payload),
 				WroteDownstream: wroteDownstream,
-				Error:           err.Error(),
+				Error:           writeErr.Error(),
 			})
-			exitCh <- relayExitSignal{stage: "write_client", err: err, wroteDownstream: wroteDownstream}
+			exitCh <- relayExitSignal{stage: "write_client", err: writeErr, wroteDownstream: wroteDownstream}
 			return false
 		}
 		wroteDownstream = true
-		if afterWriteClient != nil {
-			afterWriteClient()
+		if onClientReadReady != nil {
+			onClientReadReady(msgType, payload)
 		}
 		if forwardedFrames != nil {
 			forwardedFrames.Add(1)
@@ -583,6 +611,9 @@ func runUpstreamToClient(
 			}
 		}
 		if !wroteDownstream && msgType == coderws.MessageText && isPreambleEvent(observedEvent.eventType) {
+			if onClientReadReady != nil {
+				onClientReadReady(msgType, payload)
+			}
 			pendingPreamble = append(pendingPreamble, bufferedRelayFrame{
 				msgType: msgType,
 				payload: append([]byte(nil), payload...),

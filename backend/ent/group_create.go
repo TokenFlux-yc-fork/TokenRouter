@@ -201,6 +201,20 @@ func (_c *GroupCreate) SetNillableStatus(v *string) *GroupCreate {
 	return _c
 }
 
+// SetDuplicateOperationID sets the "duplicate_operation_id" field.
+func (_c *GroupCreate) SetDuplicateOperationID(v string) *GroupCreate {
+	_c.mutation.SetDuplicateOperationID(v)
+	return _c
+}
+
+// SetNillableDuplicateOperationID sets the "duplicate_operation_id" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableDuplicateOperationID(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetDuplicateOperationID(*v)
+	}
+	return _c
+}
+
 // SetPlatform sets the "platform" field.
 func (_c *GroupCreate) SetPlatform(v string) *GroupCreate {
 	_c.mutation.SetPlatform(v)
@@ -815,6 +829,26 @@ func (_c *GroupCreate) SetNillableRpmLimit(v *int) *GroupCreate {
 	return _c
 }
 
+// SetMaxReasoningEffort sets the "max_reasoning_effort" field.
+func (_c *GroupCreate) SetMaxReasoningEffort(v string) *GroupCreate {
+	_c.mutation.SetMaxReasoningEffort(v)
+	return _c
+}
+
+// SetNillableMaxReasoningEffort sets the "max_reasoning_effort" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableMaxReasoningEffort(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetMaxReasoningEffort(*v)
+	}
+	return _c
+}
+
+// SetReasoningEffortMappings sets the "reasoning_effort_mappings" field.
+func (_c *GroupCreate) SetReasoningEffortMappings(v []domain.ReasoningEffortMapping) *GroupCreate {
+	_c.mutation.SetReasoningEffortMappings(v)
+	return _c
+}
+
 // SetDataSharingEnabled sets the "data_sharing_enabled" field.
 func (_c *GroupCreate) SetDataSharingEnabled(v bool) *GroupCreate {
 	_c.mutation.SetDataSharingEnabled(v)
@@ -1129,6 +1163,14 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultRpmLimit
 		_c.mutation.SetRpmLimit(v)
 	}
+	if _, ok := _c.mutation.MaxReasoningEffort(); !ok {
+		v := group.DefaultMaxReasoningEffort
+		_c.mutation.SetMaxReasoningEffort(v)
+	}
+	if _, ok := _c.mutation.ReasoningEffortMappings(); !ok {
+		v := group.DefaultReasoningEffortMappings
+		_c.mutation.SetReasoningEffortMappings(v)
+	}
 	if _, ok := _c.mutation.DataSharingEnabled(); !ok {
 		v := group.DefaultDataSharingEnabled
 		_c.mutation.SetDataSharingEnabled(v)
@@ -1193,6 +1235,11 @@ func (_c *GroupCreate) check() error {
 	if v, ok := _c.mutation.Status(); ok {
 		if err := group.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Group.status": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.DuplicateOperationID(); ok {
+		if err := group.DuplicateOperationIDValidator(v); err != nil {
+			return &ValidationError{Name: "duplicate_operation_id", err: fmt.Errorf(`ent: validator failed for field "Group.duplicate_operation_id": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.Platform(); !ok {
@@ -1311,6 +1358,17 @@ func (_c *GroupCreate) check() error {
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		return &ValidationError{Name: "rpm_limit", err: errors.New(`ent: missing required field "Group.rpm_limit"`)}
 	}
+	if _, ok := _c.mutation.MaxReasoningEffort(); !ok {
+		return &ValidationError{Name: "max_reasoning_effort", err: errors.New(`ent: missing required field "Group.max_reasoning_effort"`)}
+	}
+	if v, ok := _c.mutation.MaxReasoningEffort(); ok {
+		if err := group.MaxReasoningEffortValidator(v); err != nil {
+			return &ValidationError{Name: "max_reasoning_effort", err: fmt.Errorf(`ent: validator failed for field "Group.max_reasoning_effort": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.ReasoningEffortMappings(); !ok {
+		return &ValidationError{Name: "reasoning_effort_mappings", err: errors.New(`ent: missing required field "Group.reasoning_effort_mappings"`)}
+	}
 	if _, ok := _c.mutation.DataSharingEnabled(); !ok {
 		return &ValidationError{Name: "data_sharing_enabled", err: errors.New(`ent: missing required field "Group.data_sharing_enabled"`)}
 	}
@@ -1395,6 +1453,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(group.FieldStatus, field.TypeString, value)
 		_node.Status = value
+	}
+	if value, ok := _c.mutation.DuplicateOperationID(); ok {
+		_spec.SetField(group.FieldDuplicateOperationID, field.TypeString, value)
+		_node.DuplicateOperationID = &value
 	}
 	if value, ok := _c.mutation.Platform(); ok {
 		_spec.SetField(group.FieldPlatform, field.TypeString, value)
@@ -1575,6 +1637,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
 		_node.RpmLimit = value
+	}
+	if value, ok := _c.mutation.MaxReasoningEffort(); ok {
+		_spec.SetField(group.FieldMaxReasoningEffort, field.TypeString, value)
+		_node.MaxReasoningEffort = value
+	}
+	if value, ok := _c.mutation.ReasoningEffortMappings(); ok {
+		_spec.SetField(group.FieldReasoningEffortMappings, field.TypeJSON, value)
+		_node.ReasoningEffortMappings = value
 	}
 	if value, ok := _c.mutation.DataSharingEnabled(); ok {
 		_spec.SetField(group.FieldDataSharingEnabled, field.TypeBool, value)
@@ -2658,6 +2728,30 @@ func (u *GroupUpsert) AddRpmLimit(v int) *GroupUpsert {
 	return u
 }
 
+// SetMaxReasoningEffort sets the "max_reasoning_effort" field.
+func (u *GroupUpsert) SetMaxReasoningEffort(v string) *GroupUpsert {
+	u.Set(group.FieldMaxReasoningEffort, v)
+	return u
+}
+
+// UpdateMaxReasoningEffort sets the "max_reasoning_effort" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateMaxReasoningEffort() *GroupUpsert {
+	u.SetExcluded(group.FieldMaxReasoningEffort)
+	return u
+}
+
+// SetReasoningEffortMappings sets the "reasoning_effort_mappings" field.
+func (u *GroupUpsert) SetReasoningEffortMappings(v []domain.ReasoningEffortMapping) *GroupUpsert {
+	u.Set(group.FieldReasoningEffortMappings, v)
+	return u
+}
+
+// UpdateReasoningEffortMappings sets the "reasoning_effort_mappings" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateReasoningEffortMappings() *GroupUpsert {
+	u.SetExcluded(group.FieldReasoningEffortMappings)
+	return u
+}
+
 // SetDataSharingEnabled sets the "data_sharing_enabled" field.
 func (u *GroupUpsert) SetDataSharingEnabled(v bool) *GroupUpsert {
 	u.Set(group.FieldDataSharingEnabled, v)
@@ -2695,6 +2789,9 @@ func (u *GroupUpsertOne) UpdateNewValues() *GroupUpsertOne {
 	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(group.FieldCreatedAt)
+		}
+		if _, exists := u.create.mutation.DuplicateOperationID(); exists {
+			s.SetIgnore(group.FieldDuplicateOperationID)
 		}
 	}))
 	return u
@@ -3812,6 +3909,34 @@ func (u *GroupUpsertOne) UpdateRpmLimit() *GroupUpsertOne {
 	})
 }
 
+// SetMaxReasoningEffort sets the "max_reasoning_effort" field.
+func (u *GroupUpsertOne) SetMaxReasoningEffort(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetMaxReasoningEffort(v)
+	})
+}
+
+// UpdateMaxReasoningEffort sets the "max_reasoning_effort" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateMaxReasoningEffort() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateMaxReasoningEffort()
+	})
+}
+
+// SetReasoningEffortMappings sets the "reasoning_effort_mappings" field.
+func (u *GroupUpsertOne) SetReasoningEffortMappings(v []domain.ReasoningEffortMapping) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetReasoningEffortMappings(v)
+	})
+}
+
+// UpdateReasoningEffortMappings sets the "reasoning_effort_mappings" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateReasoningEffortMappings() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateReasoningEffortMappings()
+	})
+}
+
 // SetDataSharingEnabled sets the "data_sharing_enabled" field.
 func (u *GroupUpsertOne) SetDataSharingEnabled(v bool) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
@@ -4018,6 +4143,9 @@ func (u *GroupUpsertBulk) UpdateNewValues() *GroupUpsertBulk {
 		for _, b := range u.create.builders {
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(group.FieldCreatedAt)
+			}
+			if _, exists := b.mutation.DuplicateOperationID(); exists {
+				s.SetIgnore(group.FieldDuplicateOperationID)
 			}
 		}
 	}))
@@ -5133,6 +5261,34 @@ func (u *GroupUpsertBulk) AddRpmLimit(v int) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateRpmLimit() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRpmLimit()
+	})
+}
+
+// SetMaxReasoningEffort sets the "max_reasoning_effort" field.
+func (u *GroupUpsertBulk) SetMaxReasoningEffort(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetMaxReasoningEffort(v)
+	})
+}
+
+// UpdateMaxReasoningEffort sets the "max_reasoning_effort" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateMaxReasoningEffort() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateMaxReasoningEffort()
+	})
+}
+
+// SetReasoningEffortMappings sets the "reasoning_effort_mappings" field.
+func (u *GroupUpsertBulk) SetReasoningEffortMappings(v []domain.ReasoningEffortMapping) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetReasoningEffortMappings(v)
+	})
+}
+
+// UpdateReasoningEffortMappings sets the "reasoning_effort_mappings" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateReasoningEffortMappings() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateReasoningEffortMappings()
 	})
 }
 

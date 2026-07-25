@@ -35,6 +35,7 @@ import {
 import { Line } from 'vue-chartjs'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
+import { useTheme } from '@/composables/useTheme'
 import type { TrendDataPoint } from '@/types'
 
 ChartJS.register(
@@ -50,19 +51,17 @@ ChartJS.register(
 
 const { t } = useI18n()
 const { formatBalanceAmount, formatUsdAmount } = useBalanceDisplay()
+const { isDark } = useTheme()
 
 const props = defineProps<{
   trendData: TrendDataPoint[]
   loading?: boolean
 }>()
 
-const isDarkMode = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
-
 const chartColors = computed(() => ({
-  text: isDarkMode.value ? '#E4E4E7' : '#3F3F46',
-  grid: isDarkMode.value ? '#3F3F46' : '#E4E4E7',
+  // 使用响应式主题状态，确保切换主题后 Chart.js 会同步刷新文字和网格颜色。
+  text: isDark.value ? '#E4E4E7' : '#3F3F46',
+  grid: isDark.value ? '#3F3F46' : '#E4E4E7',
   input: '#3b82f6',
   output: '#10b981',
   cacheCreation: '#f59e0b',

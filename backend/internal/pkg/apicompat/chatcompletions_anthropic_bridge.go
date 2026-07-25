@@ -360,7 +360,7 @@ func ChatCompletionsResponseToAnthropic(resp *ChatCompletionsResponse, model str
 		if len(resp.Choices) > 0 {
 			choice := resp.Choices[0]
 			out.Content = chatMessageToAnthropicBlocks(choice.Message)
-			out.StopReason = chatFinishReasonToAnthropicStopReason(choice.FinishReason, out.Content)
+			out.StopReason = AnthropicStopReasonPtr(chatFinishReasonToAnthropicStopReason(choice.FinishReason, out.Content))
 			// length 由 stop_reason 表达为 max_tokens，不需要 incomplete_details 字段。
 		}
 		if resp.Usage != nil {
@@ -371,9 +371,9 @@ func ChatCompletionsResponseToAnthropic(resp *ChatCompletionsResponse, model str
 	if len(out.Content) == 0 {
 		out.Content = []AnthropicContentBlock{{Type: "text", Text: ""}}
 	}
-	// 空 choices 或 nil 响应也必须与旧桥一致地生成 end_turn；严格 Anthropic 客户端不接受空 stop_reason。
-	if out.StopReason == "" {
-		out.StopReason = chatFinishReasonToAnthropicStopReason("", out.Content)
+	// 空 choices 或 nil 响应也必须与旧桥一致地生成 end_turn；完成态的非流式响应不能使用 null 或空 stop_reason。
+	if AnthropicStopReasonString(out.StopReason) == "" {
+		out.StopReason = AnthropicStopReasonPtr(chatFinishReasonToAnthropicStopReason("", out.Content))
 	}
 	// 上游省略响应 ID 时与旧桥一致地补齐，因为客户端把该字段视为必需。
 	if out.ID == "" {
@@ -645,12 +645,13 @@ func ensureCCAnthropicMessageStart(state *ChatCompletionsToAnthropicStreamState)
 	return []AnthropicStreamEvent{{
 		Type: "message_start",
 		Message: &AnthropicResponse{
-			ID:      state.ResponseID,
-			Type:    "message",
-			Role:    "assistant",
-			Content: []AnthropicContentBlock{},
-			Model:   state.Model,
-			Usage:   AnthropicUsage{InputTokens: 0, OutputTokens: 0},
+			ID:         state.ResponseID,
+			Type:       "message",
+			Role:       "assistant",
+			Content:    []AnthropicContentBlock{},
+			Model:      state.Model,
+			StopReason: nil, // 序列化为 JSON null，不能是空字符串。
+			Usage:      AnthropicUsage{InputTokens: 0, OutputTokens: 0},
 		},
 	}}
 }

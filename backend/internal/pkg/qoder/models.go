@@ -74,6 +74,30 @@ var cnAliases = map[string]string{
 	"minimax-m2.7":        "mmodel",
 }
 
+// ThinkingCapability 描述 Qoder 模型可由客户端调整的思考能力。
+// 能力快照来自 Qoder CN 1.8.0；更新 CN 模型列表时必须同步核对该表。
+type ThinkingCapability uint8
+
+const (
+	ThinkingUnsupported ThinkingCapability = iota
+	ThinkingToggleOnly
+	ThinkingHighMax
+)
+
+// cnThinkingCapabilities 显式记录每个 CN route key 的可调思考能力。
+var cnThinkingCapabilities = map[string]ThinkingCapability{
+	"auto":           ThinkingUnsupported,
+	"qmodel_preview": ThinkingToggleOnly,
+	"qmodel_latest":  ThinkingToggleOnly,
+	"qmodel":         ThinkingToggleOnly,
+	"q36fmodel":      ThinkingUnsupported,
+	"dmodel":         ThinkingHighMax,
+	"dfmodel":        ThinkingHighMax,
+	"gm51model":      ThinkingHighMax,
+	"kmodel":         ThinkingUnsupported,
+	"mmodel":         ThinkingUnsupported,
+}
+
 // DefaultModels 是无账号上下文使用的两站稳定并集，国际站模型排在前面。
 var DefaultModels = unionModels(globalModels, cnModels)
 
@@ -107,6 +131,19 @@ func AliasForSite(site Site, model string) (string, bool) {
 	}
 	route, ok := aliases[model]
 	return route, ok
+}
+
+// ThinkingCapabilityForSite 按站点和最终路由查询可调思考能力。
+// 公开 alias 会先解析为 route key；未知路由以及 CN Auto 均不主动透传。
+func ThinkingCapabilityForSite(site Site, model string) ThinkingCapability {
+	if site != SiteCN {
+		return ThinkingUnsupported
+	}
+	model = strings.ToLower(strings.TrimSpace(model))
+	if route, ok := AliasForSite(site, model); ok {
+		model = route
+	}
+	return cnThinkingCapabilities[model]
 }
 
 // ModelCompatibleWithSite 判断已知 alias 或 route key 是否能由指定站点处理。

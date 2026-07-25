@@ -23,6 +23,28 @@ func ReadOpenAIWSClientMessage(
 	timeoutStatus coderws.StatusCode,
 	timeoutReason string,
 ) (coderws.MessageType, []byte, error) {
+	return readOpenAIWSClientMessageWithTimeoutStart(
+		controlCtx,
+		conn,
+		timeout,
+		timeoutStatus,
+		timeoutReason,
+		nil,
+		nil,
+	)
+}
+
+// readOpenAIWSClientMessageWithTimeoutStart 支持在状态转换后才开始计时，
+// 例如 passthrough 一轮完成后等待下一轮。timeoutActive 为 nil 时，正数超时会立即起算。
+func readOpenAIWSClientMessageWithTimeoutStart(
+	controlCtx context.Context,
+	conn *coderws.Conn,
+	timeout time.Duration,
+	timeoutStatus coderws.StatusCode,
+	timeoutReason string,
+	timeoutStart <-chan struct{},
+	timeoutActive func() bool,
+) (coderws.MessageType, []byte, error) {
 	if conn == nil {
 		return 0, nil, errors.New("openai websocket client connection is nil")
 	}
@@ -36,13 +58,33 @@ func ReadOpenAIWSClientMessage(
 		readDone <- openAIWSClientReadResult{messageType: messageType, payload: payload, err: err}
 	}()
 
-	var timeoutCh <-chan time.Time
 	var timer *time.Timer
-	if timeout > 0 {
-		timer = time.NewTimer(timeout)
+	var timeoutCh <-chan time.Time
+	startTimeout := func() {
+		if timeout <= 0 || (timeoutActive != nil && !timeoutActive()) {
+			return
+		}
+		if timer == nil {
+			timer = time.NewTimer(timeout)
+		} else {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(timeout)
+		}
 		timeoutCh = timer.C
-		defer timer.Stop()
 	}
+	if timeoutActive == nil || timeoutActive() {
+		startTimeout()
+	}
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 
 	closeAndJoin := func(status coderws.StatusCode, reason string, cause error) (coderws.MessageType, []byte, error) {
 		_ = conn.Close(status, reason)
@@ -51,20 +93,24 @@ func ReadOpenAIWSClientMessage(
 		return 0, nil, NewOpenAIWSClientCloseError(status, reason, cause)
 	}
 
-	select {
-	case result := <-readDone:
-		return result.messageType, result.payload, result.err
-	case <-timeoutCh:
-		return closeAndJoin(timeoutStatus, timeoutReason, context.DeadlineExceeded)
-	case <-controlCtx.Done():
-		cause := context.Cause(controlCtx)
-		if errors.Is(cause, ErrOpenAIWSIngressLeaseLost) {
-			return closeAndJoin(
-				coderws.StatusTryAgainLater,
-				"websocket ingress capacity lease lost; please reconnect",
-				cause,
-			)
+	for {
+		select {
+		case result := <-readDone:
+			return result.messageType, result.payload, result.err
+		case <-timeoutStart:
+			startTimeout()
+		case <-timeoutCh:
+			return closeAndJoin(timeoutStatus, timeoutReason, context.DeadlineExceeded)
+		case <-controlCtx.Done():
+			cause := context.Cause(controlCtx)
+			if errors.Is(cause, ErrOpenAIWSIngressLeaseLost) {
+				return closeAndJoin(
+					coderws.StatusTryAgainLater,
+					"websocket ingress capacity lease lost; please reconnect",
+					cause,
+				)
+			}
+			return closeAndJoin(coderws.StatusGoingAway, "websocket request canceled", cause)
 		}
-		return closeAndJoin(coderws.StatusGoingAway, "websocket request canceled", cause)
 	}
 }

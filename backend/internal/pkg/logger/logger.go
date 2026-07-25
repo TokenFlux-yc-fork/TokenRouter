@@ -26,6 +26,9 @@ const (
 	LevelWarn  = zapcore.WarnLevel
 	LevelError = zapcore.ErrorLevel
 	LevelFatal = zapcore.FatalLevel
+
+	// OpsSystemLogSkipField 让事件保留在标准日志中，同时阻止 Ops 数据库日志接收器索引该事件。
+	OpsSystemLogSkipField = "ops_system_log_skip"
 )
 
 type Sink interface {

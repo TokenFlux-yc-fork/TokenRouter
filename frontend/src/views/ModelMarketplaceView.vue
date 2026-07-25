@@ -10,7 +10,7 @@
         <nav class="mx-auto flex max-w-[1400px] items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
           <RouterLink to="/home" class="flex min-w-0 items-center gap-3">
             <div class="h-11 w-11 overflow-hidden rounded-2xl border border-primary-200/70 bg-white shadow-md dark:border-dark-600 dark:bg-dark-900">
-              <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
+              <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
             </div>
             <div class="min-w-0">
               <div class="truncate text-sm font-semibold text-gray-900 dark:text-white">{{ siteName }}</div>
@@ -638,7 +638,7 @@ watch(displayMode, (mode) => {
 
 function readPersistedDisplayMode(): MarketplaceDisplayMode {
   if (typeof localStorage === 'undefined') {
-    return 'model-group'
+    return 'group-model'
   }
   return normalizeDisplayMode(localStorage.getItem(MARKETPLACE_DISPLAY_MODE_STORAGE_KEY))
 }
@@ -651,7 +651,8 @@ function persistDisplayMode(mode: MarketplaceDisplayMode) {
 }
 
 function normalizeDisplayMode(value: unknown): MarketplaceDisplayMode {
-  return value === 'group-model' ? 'group-model' : 'model-group'
+  // 仅保留用户明确选择的模型优先视图，其余情况默认按分组展示。
+  return value === 'model-group' ? 'model-group' : 'group-model'
 }
 
 function groupMatchesSelectedFilters(group: MarketplaceGroup): boolean {

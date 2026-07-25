@@ -323,6 +323,15 @@ func runOpenAIExitBreakerWSPassthrough(t *testing.T, svc *OpenAIGatewayService, 
 	cancelDial()
 	require.NoError(t, err)
 	defer func() { _ = clientConn.CloseNow() }()
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	defer cancelRead()
+	go func() {
+		for {
+			if _, _, readErr := clientConn.Read(readCtx); readErr != nil {
+				return
+			}
+		}
+	}()
 
 	select {
 	case proxyErr := <-errCh:

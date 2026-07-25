@@ -36,6 +36,7 @@ func TestAdminService_CreateUser_Success(t *testing.T) {
 	require.Equal(t, input.Notes, user.Notes)
 	require.Equal(t, balance, user.Balance)
 	require.Equal(t, input.Concurrency, user.Concurrency)
+	require.Equal(t, DefaultUserAPIKeyLimit, user.APIKeyLimit)
 	require.Equal(t, input.AllowedGroups, user.AllowedGroups)
 	require.Equal(t, input.DisabledPublicGroups, user.DisabledPublicGroups)
 	require.Equal(t, RoleUser, user.Role)
@@ -43,6 +44,60 @@ func TestAdminService_CreateUser_Success(t *testing.T) {
 	require.True(t, user.CheckPassword(input.Password))
 	require.Len(t, repo.created, 1)
 	require.Equal(t, user, repo.created[0])
+}
+
+func TestAdminService_CreateUser_APIKeyLimitDefaultsAndExplicitZero(t *testing.T) {
+	repo := &userRepoStub{nextID: 13}
+	settingService := NewSettingService(&settingRepoStub{values: map[string]string{
+		SettingKeyDefaultUserAPIKeyLimit: "45",
+	}}, &config.Config{})
+	svc := &adminServiceImpl{userRepo: repo, settingService: settingService}
+
+	inherited, err := svc.CreateUser(context.Background(), &CreateUserInput{
+		Email:    "inherited-limit@test.com",
+		Password: "strong-pass",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45, inherited.APIKeyLimit)
+
+	unlimited := 0
+	explicit, err := svc.CreateUser(context.Background(), &CreateUserInput{
+		Email:       "unlimited-limit@test.com",
+		Password:    "strong-pass",
+		APIKeyLimit: &unlimited,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, explicit.APIKeyLimit)
+}
+
+func TestAdminService_CreateUser_RejectsNegativeAPIKeyLimit(t *testing.T) {
+	repo := &userRepoStub{}
+	svc := &adminServiceImpl{userRepo: repo}
+	negative := -1
+
+	_, err := svc.CreateUser(context.Background(), &CreateUserInput{
+		Email:       "negative-limit@test.com",
+		Password:    "strong-pass",
+		APIKeyLimit: &negative,
+	})
+
+	require.ErrorIs(t, err, ErrUserAPIKeyLimitInvalid)
+	require.Empty(t, repo.created)
+}
+
+func TestAdminService_CreateUser_RejectsAPIKeyLimitAboveDatabaseRange(t *testing.T) {
+	repo := &userRepoStub{}
+	svc := &adminServiceImpl{userRepo: repo}
+	tooHigh := MaxUserAPIKeyLimit + 1
+
+	_, err := svc.CreateUser(context.Background(), &CreateUserInput{
+		Email:       "too-high-limit@test.com",
+		Password:    "strong-pass",
+		APIKeyLimit: &tooHigh,
+	})
+
+	require.ErrorIs(t, err, ErrUserAPIKeyLimitInvalid)
+	require.Empty(t, repo.created)
 }
 
 func TestAdminService_CreateUser_UsesDefaultBalanceWhenBalanceOmitted(t *testing.T) {

@@ -8,6 +8,7 @@ export interface BackupS3Config {
   secret_access_key?: string
   prefix: string
   force_path_style: boolean
+  upload_mode: 'multipart' | 'spooled_put'
 }
 
 export type BackupStorageType = 'local' | 's3'
@@ -107,6 +108,52 @@ export async function testS3Connection(config: BackupS3Config): Promise<TestS3Re
   return data
 }
 
+// 异步图片对象存储
+//
+// 与备份共用 S3 客户端；`reuse_backup_s3` 会借用已配置的端点与凭证，
+// 仅保留独立的 bucket 和 prefix。
+export interface ImageStorageConfig {
+  enabled: boolean
+  reuse_backup_s3: boolean
+  bucket: string
+  prefix: string
+  public_base_url: string
+  presign_expiry_hours: number
+  max_download_bytes: number
+  endpoint: string
+  region: string
+  access_key_id: string
+  secret_access_key?: string
+  force_path_style: boolean
+}
+
+export interface ImageStorageConfigResponse {
+  config: ImageStorageConfig
+  secret_configured: boolean
+}
+
+export async function getImageStorageConfig(): Promise<ImageStorageConfigResponse> {
+  const { data } = await apiClient.get<ImageStorageConfigResponse>('/admin/backups/image-storage')
+  return data
+}
+
+export async function updateImageStorageConfig(
+  config: ImageStorageConfig,
+): Promise<ImageStorageConfig> {
+  const { data } = await apiClient.put<ImageStorageConfig>('/admin/backups/image-storage', config)
+  return data
+}
+
+export async function testImageStorageConnection(
+  config: ImageStorageConfig,
+): Promise<TestS3Response> {
+  const { data } = await apiClient.post<TestS3Response>(
+    '/admin/backups/image-storage/test',
+    config,
+  )
+  return data
+}
+
 // 定时备份
 export async function getSchedule(): Promise<BackupScheduleConfig> {
   const { data } = await apiClient.get<BackupScheduleConfig>('/admin/backups/schedule')
@@ -165,6 +212,9 @@ export const backupAPI = {
   getS3Config,
   updateS3Config,
   testS3Connection,
+  getImageStorageConfig,
+  updateImageStorageConfig,
+  testImageStorageConnection,
   getSchedule,
   updateSchedule,
   createBackup,

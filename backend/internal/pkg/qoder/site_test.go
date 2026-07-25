@@ -120,3 +120,51 @@ func TestModelsAndAliasesAreSiteAware(t *testing.T) {
 	require.True(t, ModelCompatibleWithSite(SiteCN, "minimax-m2.7"))
 	require.True(t, ModelCompatibleWithSite(SiteGlobal, "unknown-raw-key"))
 }
+
+func TestThinkingCapabilityForSiteUsesCNSnapshot(t *testing.T) {
+	tests := []struct {
+		model string
+		want  ThinkingCapability
+	}{
+		{model: "auto", want: ThinkingUnsupported},
+		{model: "qwen3.8-max-preview", want: ThinkingToggleOnly},
+		{model: "qwen3.7-max", want: ThinkingToggleOnly},
+		{model: "qwen3.7-plus", want: ThinkingToggleOnly},
+		{model: "qwen3.6-flash", want: ThinkingUnsupported},
+		{model: "deepseek-v4-pro", want: ThinkingHighMax},
+		{model: "deepseek-v4-flash", want: ThinkingHighMax},
+		{model: "glm-5.2", want: ThinkingHighMax},
+		{model: "kimi-k2.7-code", want: ThinkingUnsupported},
+		{model: "minimax-m2.7", want: ThinkingUnsupported},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			require.Equal(t, tt.want, ThinkingCapabilityForSite(SiteCN, tt.model))
+		})
+	}
+
+	// route key、空白和大小写必须与公开 alias 得到相同能力。
+	require.Equal(t, ThinkingToggleOnly, ThinkingCapabilityForSite(SiteCN, " QMODEL_LATEST "))
+	require.Equal(t, ThinkingHighMax, ThinkingCapabilityForSite(SiteCN, "dmodel"))
+	// Global 与未知/自定义路由必须保持隔离。
+	require.Equal(t, ThinkingUnsupported, ThinkingCapabilityForSite(SiteGlobal, "qmodel_latest"))
+	require.Equal(t, ThinkingUnsupported, ThinkingCapabilityForSite(SiteCN, "custom-model"))
+}
+
+func TestCNThinkingCapabilitySnapshotCoversEveryModel(t *testing.T) {
+	// 能力表必须显式覆盖所有 CN route key，避免新增模型静默沿用零值能力。
+	wantRoutes := make(map[string]struct{}, len(cnAliases))
+	for _, model := range cnModels {
+		route, ok := cnAliases[model.ID]
+		require.True(t, ok, "CN 模型 %q 缺少 route key", model.ID)
+		wantRoutes[route] = struct{}{}
+	}
+	require.Len(t, cnAliases, len(cnModels), "CN 模型和 alias 数量必须一致")
+
+	gotRoutes := make(map[string]struct{}, len(cnThinkingCapabilities))
+	for route := range cnThinkingCapabilities {
+		gotRoutes[route] = struct{}{}
+	}
+	require.Equal(t, wantRoutes, gotRoutes, "CN Thinking 能力表必须与模型 route key 完全一致")
+}

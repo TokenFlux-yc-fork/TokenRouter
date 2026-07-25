@@ -16,6 +16,13 @@ const (
 	RoleUser  = "user"
 )
 
+const (
+	// DefaultUserAPIKeyLimit 是新用户 API Key 数量上限的内置默认值。
+	DefaultUserAPIKeyLimit = 100
+	// MaxUserAPIKeyLimit 与 PostgreSQL INTEGER 的最大值保持一致。
+	MaxUserAPIKeyLimit = 2_147_483_647
+)
+
 // Platform constants
 const (
 	PlatformAnthropic   = "anthropic"

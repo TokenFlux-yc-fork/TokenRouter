@@ -13,7 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 复现后台删用户的事务编排：删密钥与删用户必须共用外层事务，避免其中一部分提前提交。
+// TestUserRepository_DeleteUser_AtomicWithAPIKeys 复现 AdminService.DeleteUser 的事务编排场景：
+// 把"tombstone 并删 API Key"(apiKeyRepo.DeleteWithAudit) 与"删 User"(userRepo.Delete) 放进同一个外部事务时，
+// userRepo.Delete 必须复用 context 中的事务，而不是用 base client 自起一个独立事务并提前提交。
+//
+// 用例用"回滚外层事务"来模拟 commit 失败 / 中止：
+//   - 修复前：userRepo.Delete 用 base client 自起独立事务并 commit，回滚外层事务后用户仍被删除，
+//     而 API Key 随外层事务回滚 → Case 1 断言失败，暴露原子性缺陷（即 issue #3021 的不可恢复状态）。
+//   - 修复后：两者落在同一事务，回滚后用户与 API Key 一起恢复。
+//
+// 关键点：repo 必须用 base client 构造（NewUserRepository/NewAPIKeyRepository），并由本测试手动
+// 开启外层事务，这与生产环境 wire 注入的方式一致；不能复用 APIKeyRepoSuite 的 testEntTx
+// （那会让 repo 持有 tx client，走的是另一条 ErrTxStarted 复用路径，无法覆盖本场景）。
 func TestUserRepository_DeleteUser_AtomicWithAPIKeys(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
@@ -76,5 +87,5 @@ func TestUserRepository_DeleteUser_AtomicWithAPIKeys(t *testing.T) {
 
 	require.NoError(t, integrationDB.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM deleted_api_key_audits WHERE user_id = $1`, user.ID).Scan(&auditCount))
-	require.Equal(t, 2, auditCount, "提交后每个被删密钥都应写入审计记录")
+	require.Zero(t, auditCount, "提交后也不得保留被删 Key 的凭据材料")
 }

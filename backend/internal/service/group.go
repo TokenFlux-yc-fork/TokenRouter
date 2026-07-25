@@ -13,6 +13,7 @@ import (
 type OpenAIMessagesDispatchModelConfig = domain.OpenAIMessagesDispatchModelConfig
 type GroupModelsListConfig = domain.GroupModelsListConfig
 type GroupAvailabilityProbeConfig = domain.GroupAvailabilityProbeConfig
+type ReasoningEffortMapping = domain.ReasoningEffortMapping
 
 const (
 	HealthStatusUnknown   = "unknown"
@@ -37,6 +38,9 @@ type Group struct {
 	IsDefault          bool
 	Status             string
 	Hydrated           bool // indicates the group was loaded from a trusted repository source
+	// DuplicateOperationID 仅用于恢复已提交的一键复制结果，不得映射到 API DTO。
+	DuplicateOperationID string
+
 	// DataSharingEnabled 表示该分组产生的 Agent session 是否进入数据共享采集流程。
 	DataSharingEnabled bool
 	// SessionIsolationEnabled 表示目标分组是否拒绝其它分组已归属的显式会话切入。
@@ -112,6 +116,12 @@ type Group struct {
 	HealthConsecutiveFailures   int
 	HealthConsecutiveSuccesses  int
 	HealthStatus                string
+
+	// MaxReasoningEffort 限制实际生效的 OpenAI/Codex 推理强度。
+	// 空字符串表示不限制；支持 minimal/low/medium/high/xhigh/max。
+	MaxReasoningEffort string
+	// ReasoningEffortMappings 在应用上限前改写请求中显式指定的值。
+	ReasoningEffortMappings []ReasoningEffortMapping
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

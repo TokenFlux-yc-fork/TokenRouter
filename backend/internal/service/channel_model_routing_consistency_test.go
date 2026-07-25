@@ -256,8 +256,11 @@ func TestModelAvailabilityDiagnosisAcceptsChannelAlias(t *testing.T) {
 		},
 	}
 	account := Account{
-		ID:       75,
-		Platform: PlatformOpenAI,
+		ID:          75,
+		Platform:    PlatformOpenAI,
+		Status:      StatusActive,
+		Schedulable: true,
+		GroupIDs:    []int64{groupID},
 		Credentials: map[string]any{
 			"model_mapping":   map[string]any{"channel-model": "upstream-model"},
 			"model_whitelist": []any{"upstream-model"},

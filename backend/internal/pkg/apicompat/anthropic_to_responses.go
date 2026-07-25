@@ -258,10 +258,11 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 	return out, nil
 }
 
-// anthropicAssistantToResponses handles an Anthropic assistant message.
-// Text content → assistant message with output_text parts.
-// tool_use blocks → function_call items.
-// thinking blocks → ignored (OpenAI doesn't accept them as input).
+// anthropicAssistantToResponses 处理 Anthropic 助手消息。
+// 文本内容转换为带 output_text 分段的助手消息，tool_use 块转换为 function_call 项。
+// 带签名的 thinking 块转换为 reasoning 项（encrypted_content），使 Grok/Codex
+// 多轮提示缓存可以复用之前的推理前缀；无签名的 thinking 仍会被忽略，因为它不能
+// 作为纯文本输入发送。
 func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, error) {
 	// Try plain string.
 	var s string
@@ -280,6 +281,24 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 	}
 
 	var items []ResponsesInputItem
+
+	// 保持轮次顺序：推理、助手文本、工具调用。xAI/Codex 的多轮缓存和工具续接要求
+	// 推理位于其后生成的助手消息之前。
+	for _, b := range blocks {
+		if b.Type != "thinking" {
+			continue
+		}
+		sig := strings.TrimSpace(b.Signature)
+		// 只回放提供方生成的密文。跳过 GPT/Codex 风格的 gAAAA 密文和空占位符，
+		// 因为 xAI 解密外部签名时会返回 400。
+		if sig == "" || strings.HasPrefix(sig, "gAAAA") {
+			continue
+		}
+		items = append(items, ResponsesInputItem{
+			Type:             "reasoning",
+			EncryptedContent: sig,
+		})
+	}
 
 	// Text content → assistant message with output_text content parts.
 	text := extractAnthropicTextFromBlocks(blocks)

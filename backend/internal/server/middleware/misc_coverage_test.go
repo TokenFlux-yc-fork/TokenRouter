@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
@@ -54,7 +55,27 @@ func TestClientRequestID_PreservesExisting(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), ctxkey.ClientRequestID, "keep"))
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Empty(t, w.Header().Get("X-Client-Request-Id"))
+	require.Equal(t, "keep", w.Header().Get(clientRequestIDHeader))
+}
+
+func TestClientRequestID_ReplacesOversizedExistingID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(ClientRequestID())
+	r.GET("/t", func(c *gin.Context) {
+		id, ok := c.Request.Context().Value(ctxkey.ClientRequestID).(string)
+		require.True(t, ok)
+		require.Len(t, id, 36)
+		c.String(http.StatusOK, id)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/t", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxkey.ClientRequestID, strings.Repeat("x", 200)))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, w.Body.String(), w.Header().Get(clientRequestIDHeader))
 }
 
 func TestRequestBodyLimit_LimitsBody(t *testing.T) {

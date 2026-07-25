@@ -183,6 +183,13 @@ const validation = computed(() => {
     if (hourly_metrics_retention_days < 0 || hourly_metrics_retention_days > 365) {
       errors.push(t('admin.ops.settings.validation.retentionDaysRange'))
     }
+    const { cleanup_batch_size, cleanup_pause_ms } = advancedSettings.value.data_retention
+    if (!Number.isInteger(cleanup_batch_size) || cleanup_batch_size < 100 || cleanup_batch_size > 5000) {
+      errors.push(t('admin.ops.settings.validation.cleanupBatchSizeRange'))
+    }
+    if (!Number.isInteger(cleanup_pause_ms) || cleanup_pause_ms < 1 || cleanup_pause_ms > 2000) {
+      errors.push(t('admin.ops.settings.validation.cleanupPauseRange'))
+    }
   }
   const ignoredStatusCodes = parseIgnoredStatusCodes(ignoredStatusCodesInput.value)
   if (!ignoredStatusCodes.valid) {
@@ -467,10 +474,36 @@ async function saveAllSettings() {
                 v-model="advancedSettings.data_retention.cleanup_schedule"
                 type="text"
                 class="input"
-                placeholder="0 2 * * *"
+                placeholder="0 3 * * *"
               />
               <p class="mt-1 text-xs text-gray-500">{{ t('admin.ops.settings.cleanupScheduleHint') }}</p>
             </div>
+
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <label class="input-label">{{ t('admin.ops.settings.cleanupBatchSize') }}</label>
+                <input
+                  v-model.number="advancedSettings.data_retention.cleanup_batch_size"
+                  type="number"
+                  min="100"
+                  max="5000"
+                  step="100"
+                  class="input"
+                />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.ops.settings.cleanupPauseMs') }}</label>
+                <input
+                  v-model.number="advancedSettings.data_retention.cleanup_pause_ms"
+                  type="number"
+                  min="1"
+                  max="2000"
+                  step="50"
+                  class="input"
+                />
+              </div>
+            </div>
+            <p class="text-xs text-gray-500">{{ t('admin.ops.settings.cleanupThrottleHint') }}</p>
 
             <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div>
@@ -565,16 +598,6 @@ async function saveAllSettings() {
                 </p>
               </div>
               <Toggle v-model="advancedSettings.ignore_no_available_accounts" />
-            </div>
-
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.ignoreInvalidApiKeyErrors') }}</label>
-                <p class="mt-1 text-xs text-gray-500">
-                  {{ t('admin.ops.settings.ignoreInvalidApiKeyErrorsHint') }}
-                </p>
-              </div>
-              <Toggle v-model="advancedSettings.ignore_invalid_api_key_errors" />
             </div>
 
             <div class="flex items-center justify-between">

@@ -119,7 +119,7 @@ function formatGatewayAmount(amount: number): string {
 
 onMounted(async () => {
   try {
-    const { loadStripe } = await import('@stripe/stripe-js')
+    const { loadStripe } = await import('@stripe/stripe-js/pure')
     const stripe = await loadStripe(props.publishableKey)
     if (!stripe) { initError.value = t('payment.stripeLoadFailed'); return }
 

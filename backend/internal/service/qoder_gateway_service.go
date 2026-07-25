@@ -386,6 +386,12 @@ type qoderPayloadBuildResult struct {
 	Plan     *qoderConversationPlan
 }
 
+// qoderThinkingDirective 表示下游思考参数归一化后的开关和等级。
+type qoderThinkingDirective struct {
+	Enabled bool
+	Effort  string
+}
+
 type qoderPayloadRequest struct {
 	model           string
 	site            qoder.Site
@@ -393,6 +399,7 @@ type qoderPayloadRequest struct {
 	messages        []qoderMessage
 	tools           []any
 	maxTokens       int
+	thinking        qoderThinkingDirective
 	userType        string
 	explicitSession string
 	promptCacheKey  string
@@ -746,6 +753,7 @@ func parseQoderChatCompletionsPayload(body []byte) (qoderPayloadRequest, error) 
 		messages:        messages,
 		tools:           qoderChatCompletionsTools(req, rawReq),
 		maxTokens:       maxTokens,
+		thinking:        qoderThinkingDirectiveFromBody(body, "reasoning_effort", "reasoning.effort"),
 		explicitSession: firstNonEmptyQoder(qoderStringField(rawReq, "session_id"), qoderStringField(rawReq, "conversation_id")),
 		promptCacheKey:  qoderStringField(rawReq, "prompt_cache_key"),
 		metadataUserID:  qoderMetadataUserID(rawReq["metadata"]),
@@ -817,6 +825,7 @@ func parseQoderResponsesPayload(body []byte) (qoderPayloadRequest, error) {
 		messages:            messages,
 		tools:               qoderResponsesToolsToQoderTools(req.Tools),
 		maxTokens:           maxTokens,
+		thinking:            qoderThinkingDirectiveFromBody(body, "reasoning.effort", "reasoning_effort"),
 		explicitSession:     explicitSession,
 		promptCacheKey:      qoderStringField(rawReq, "prompt_cache_key"),
 		metadataUserID:      qoderMetadataUserID(rawReq["metadata"]),
@@ -842,6 +851,9 @@ func parseQoderAnthropicMessagesPayload(body []byte) (qoderPayloadRequest, error
 	toolReq := req
 	toolReq.System = nil
 	toolReq.Messages = nil
+	// 这里只借用兼容层转换工具定义；思考字段由 Qoder 自行容错和映射。
+	toolReq.Thinking = nil
+	toolReq.OutputConfig = nil
 	responsesReq, err := apicompat.AnthropicToResponses(&toolReq)
 	if err != nil {
 		return qoderPayloadRequest{}, fmt.Errorf("convert anthropic messages request: %w", err)
@@ -863,10 +875,62 @@ func parseQoderAnthropicMessagesPayload(body []byte) (qoderPayloadRequest, error
 		messages:        messages,
 		tools:           qoderResponsesToolsToQoderTools(responsesReq.Tools),
 		maxTokens:       maxTokens,
+		thinking:        qoderThinkingDirectiveFromBody(body, "output_config.effort"),
 		explicitSession: firstNonEmptyQoder(qoderStringField(rawReq, "session_id"), qoderStringField(rawReq, "conversation_id")),
 		promptCacheKey:  qoderStringField(rawReq, "prompt_cache_key"),
 		metadataUserID:  qoderMetadataUserID(rawReq["metadata"]),
 	}, nil
+}
+
+// qoderThinkingDirectiveFromBody 将不同下游协议的思考字段归一为 Qoder 开关和两档等级。
+// 明确关闭的优先级最高；非法等级不会阻断请求，仍可由预算或显式开关启用。
+func qoderThinkingDirectiveFromBody(body []byte, effortPaths ...string) qoderThinkingDirective {
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+	if thinkingType == "disabled" || thinkingType == "none" || thinkingType == "off" {
+		return qoderThinkingDirective{}
+	}
+
+	effort := ""
+	for _, path := range effortPaths {
+		raw := strings.TrimSpace(gjson.GetBytes(body, path).String())
+		if raw == "" {
+			continue
+		}
+		mapped, disabled := normalizeQoderThinkingEffort(raw)
+		if disabled {
+			return qoderThinkingDirective{}
+		}
+		if effort == "" && mapped != "" {
+			effort = mapped
+		}
+	}
+	if effort != "" {
+		return qoderThinkingDirective{Enabled: true, Effort: effort}
+	}
+
+	if gjson.GetBytes(body, "thinking.budget_tokens").Int() > 0 {
+		return qoderThinkingDirective{Enabled: true, Effort: "max"}
+	}
+	if thinkingType == "enabled" || thinkingType == "adaptive" {
+		return qoderThinkingDirective{Enabled: true, Effort: "max"}
+	}
+	return qoderThinkingDirective{}
+}
+
+// normalizeQoderThinkingEffort 将常见下游等级折叠为 Qoder CN 支持的 High 和 Max。
+func normalizeQoderThinkingEffort(raw string) (effort string, disabled bool) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+	switch value {
+	case "none", "disabled", "off":
+		return "", true
+	case "minimal", "low", "medium":
+		return "high", false
+	case "high", "xhigh", "veryhigh", "extrahigh", "max":
+		return "max", false
+	default:
+		return "", false
+	}
 }
 
 type qoderMessage struct {
@@ -1682,6 +1746,7 @@ func buildQoderPayloadWithOptions(request qoderPayloadRequest, sessionID string,
 	chatText["text"] = prompt
 	extraModelConfig["key"] = modelInfo.Key
 	extraModelConfig["source"] = modelInfo.Source
+	applyQoderThinkingDirective(payload, request.site, modelInfo.Key, request.thinking)
 	extraOriginalContent["text"] = prompt
 	payload["business"] = map[string]any{
 		"product":  "cli",
@@ -1708,6 +1773,45 @@ func buildQoderPayloadWithOptions(request qoderPayloadRequest, sessionID string,
 		payload["tools"] = []any{}
 	}
 	return payload, modelInfo.Key
+}
+
+// applyQoderThinkingDirective 同步 Qoder 请求中重复出现的模型配置。
+// reasoning_effort=none 是官方客户端用于关闭可调 Thinking 的运行时覆盖值。
+func applyQoderThinkingDirective(payload map[string]any, site qoder.Site, modelKey string, directive qoderThinkingDirective) {
+	capability := qoder.ThinkingCapabilityForSite(site, modelKey)
+	if capability == qoder.ThinkingUnsupported {
+		return
+	}
+
+	parameters, _ := payload["parameters"].(map[string]any)
+	modelConfig, _ := payload["model_config"].(map[string]any)
+	chatContext, _ := payload["chat_context"].(map[string]any)
+	extra, _ := chatContext["extra"].(map[string]any)
+	extraModelConfig, _ := extra["modelConfig"].(map[string]any)
+	modelConfig["is_reasoning"] = directive.Enabled
+	extraModelConfig["is_reasoning"] = directive.Enabled
+
+	// 仅开关型模型开启时不能携带 High/Max；关闭仍使用 none 明确覆盖上游默认值。
+	if capability == qoder.ThinkingToggleOnly && directive.Enabled {
+		return
+	}
+
+	effort := "none"
+	if directive.Enabled {
+		effort = directive.Effort
+		if effort == "" {
+			effort = "max"
+		}
+	}
+	parameters["reasoning_effort"] = effort
+	modelConfig["reasoning_effort"] = effort
+	extraModelConfig["reasoning_effort"] = effort
+	runtimeOverride, _ := extra["ideModelConfigOverride"].(map[string]any)
+	if runtimeOverride == nil {
+		runtimeOverride = map[string]any{}
+		extra["ideModelConfigOverride"] = runtimeOverride
+	}
+	runtimeOverride["reasoning_effort"] = effort
 }
 
 func addQoderEphemeralCacheControl(messages []any) {
