@@ -18,6 +18,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai_compat"
 	"github.com/TokenFlux/TokenRouter/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -531,7 +532,7 @@ func (s *OpenAIGatewayService) handleAnthropicErrorResponse(
 	account *Account,
 	requestedModel ...string,
 ) (*OpenAIForwardResult, error) {
-	return s.handleCompatErrorResponse(resp, c, account, writeAnthropicError, requestedModel...)
+	return s.handleCompatErrorResponse(resp, c, account, writeAnthropicError, writeAnthropicErrorBody, requestedModel...)
 }
 
 // handleAnthropicBufferedStreamingResponse reads all Responses SSE events from
@@ -1275,6 +1276,17 @@ func writeAnthropicError(c *gin.Context, statusCode int, errType, message string
 			"message": message,
 		},
 	})
+}
+
+// writeAnthropicErrorBody 在 Anthropic 外层信封中保留 OpenAI error 对象的全部字段。
+func writeAnthropicErrorBody(c *gin.Context, statusCode int, body []byte) {
+	errorObject := gjson.GetBytes(body, "error")
+	if !errorObject.Exists() || !gjson.Valid(errorObject.Raw) {
+		c.Data(statusCode, "application/json; charset=utf-8", body)
+		return
+	}
+	wrapped := []byte(`{"type":"error","error":` + errorObject.Raw + `}`)
+	c.Data(statusCode, "application/json; charset=utf-8", wrapped)
 }
 
 func copyOpenAIUsageFromResponsesUsage(usage *apicompat.ResponsesUsage) OpenAIUsage {

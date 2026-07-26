@@ -393,7 +393,7 @@ func (s *OpenAIGatewayService) handleChatCompletionsErrorResponse(
 	account *Account,
 	requestedModel ...string,
 ) (*OpenAIForwardResult, error) {
-	return s.handleCompatErrorResponse(resp, c, account, writeChatCompletionsError, requestedModel...)
+	return s.handleCompatErrorResponse(resp, c, account, writeChatCompletionsError, writeChatCompletionsErrorBody, requestedModel...)
 }
 
 // handleChatBufferedStreamingResponse reads all Responses SSE events from the
@@ -980,6 +980,12 @@ func writeChatCompletionsError(c *gin.Context, statusCode int, errType, message 
 			"message": message,
 		},
 	})
+}
+
+// writeChatCompletionsErrorBody 保留 OpenAI 错误对象的全部结构化字段。
+func writeChatCompletionsErrorBody(c *gin.Context, statusCode int, body []byte) {
+	MarkResponseCommitted(c)
+	c.Data(statusCode, "application/json; charset=utf-8", body)
 }
 
 // buildChatStreamErrorSSE 构造一个 Chat Completions SSE 错误帧，用于终止 cyber_policy 流。

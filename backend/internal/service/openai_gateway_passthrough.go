@@ -645,9 +645,10 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
+	clientInvalidRequest := isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, body)
 	// 错误体虽不会原样透传，运行态账号状态仍需更新，避免粘性路由继续复用
 	// 刚被限流的账号。cyber 例外：不冷却账号。
-	if !cyberHit {
+	if !cyberHit && !clientInvalidRequest {
 		reqModel, _, _ := extractOpenAIRequestMetaFromBody(requestBody)
 		canonicalModel := canonicalOpenAIAccountSchedulingModel(account, reqModel)
 		_ = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, canonicalModel)
@@ -664,6 +665,12 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		Detail:               upstreamDetail,
 		UpstreamResponseBody: upstreamDetail,
 	})
+	if clientInvalidRequest {
+		// 参数型 400 使用安全响应头并透传完整脱敏错误对象，不再改写成 upstream_error。
+		writeOpenAIPassthroughErrorHeaders(c.Writer.Header(), resp.Header)
+		c.Data(http.StatusBadRequest, "application/json; charset=utf-8", body)
+		return fmt.Errorf("upstream invalid request: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
 	downstreamStatus, clientMsg := sanitizedOpenAIPassthroughError(resp.StatusCode)
 	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
 		downstreamStatus = resp.StatusCode

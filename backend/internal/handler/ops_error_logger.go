@@ -1566,9 +1566,12 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	routingCapacityLimited := isOpsRoutingCapacityLimited(c)
 	clientBusinessLimited := service.HasOpsClientBusinessLimited(c)
 	upstreamError := hasOpsUpstreamErrorContext(c)
+	upstreamClientInvalidRequest := isOpsUpstreamClientInvalidRequest(c, errType, code, status)
 	accountAuthFailure := hasOpsAccountAuthFailure(c)
 	if accountAuthFailure && !routingCapacityLimited {
 		phase = "account_auth"
+	} else if upstreamClientInvalidRequest && !routingCapacityLimited {
+		phase = "request"
 	} else if upstreamError && !routingCapacityLimited {
 		phase = "upstream"
 	}
@@ -1581,10 +1584,31 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	msg := strings.ToLower(message)
 	localClientAuthError := !upstreamError && phase == "auth" && isOpsClientAuthError(code, msg)
 	localBusinessLimited := !upstreamError && classifyOpsIsBusinessLimited(errType, phase, code, status, message, localClientAuthError)
-	isBusinessLimited = routingCapacityLimited || (clientBusinessLimited && !upstreamError) || localBusinessLimited
+	isBusinessLimited = routingCapacityLimited || upstreamClientInvalidRequest || (clientBusinessLimited && !upstreamError) || localBusinessLimited
 	errorOwner = classifyOpsErrorOwner(phase, message)
 	errorSource = classifyOpsErrorSource(phase, message)
 	return phase, isBusinessLimited, errorOwner, errorSource
+}
+
+// isOpsUpstreamClientInvalidRequest 判断下游和上游均为 400 的参数型错误。
+// 这类记录仍写入错误表用于排障，但不应降低服务 SLA。
+func isOpsUpstreamClientInvalidRequest(c *gin.Context, errType, code string, status int) bool {
+	if c == nil || status != http.StatusBadRequest || errType != "invalid_request_error" ||
+		!strings.EqualFold(strings.TrimSpace(code), service.OpenAIPropertyNameAboveMaxLengthCode) {
+		return false
+	}
+	v, ok := c.Get(service.OpsUpstreamStatusCodeKey)
+	if !ok {
+		return false
+	}
+	switch upstreamStatus := v.(type) {
+	case int:
+		return upstreamStatus == http.StatusBadRequest
+	case int64:
+		return upstreamStatus == http.StatusBadRequest
+	default:
+		return false
+	}
 }
 
 func classifyOpsIsBusinessLimited(errType, phase, code string, status int, message string, localClientAuthError ...bool) bool {

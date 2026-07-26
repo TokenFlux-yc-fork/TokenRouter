@@ -237,6 +237,23 @@ func isOpenAIKnownCyberWarningError(upstreamMsg string, payload []byte) bool {
 	return false
 }
 
+// OpenAIPropertyNameAboveMaxLengthCode 是 OpenAI 对超长参数属性名返回的稳定错误码。
+const OpenAIPropertyNameAboveMaxLengthCode = "property_name_above_max_length"
+
+// isOpenAIClientInvalidRequestError 仅识别已确认由客户端参数触发的 OpenAI 400。
+// 不能只判断 invalid_request_error，否则会把网关字段转换错误也排除出 SLA。
+func isOpenAIClientInvalidRequestError(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if upstreamStatusCode != http.StatusBadRequest || len(upstreamBody) == 0 {
+		return false
+	}
+	if isOpenAITransientProcessingError(upstreamStatusCode, upstreamMsg, upstreamBody) {
+		return false
+	}
+	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.type").String()))
+	errCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.code").String()))
+	return errType == "invalid_request_error" && errCode == OpenAIPropertyNameAboveMaxLengthCode
+}
+
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 	match := func(text string) bool {
 		lower := strings.ToLower(strings.TrimSpace(text))
@@ -620,6 +637,31 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, upstreamMsg)
 	}
 
+	if isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, body) {
+		// 参数型 400 不影响账号健康；保留上游上下文供 Ops 排障，并向客户端透传完整错误结构。
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               "http_error",
+			Message:            upstreamMsg,
+			Detail:             upstreamDetail,
+		})
+		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		contentType := resp.Header.Get("Content-Type")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		MarkResponseCommitted(c)
+		c.Data(http.StatusBadRequest, contentType, body)
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream invalid request: %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream invalid request: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
+
 	// Check custom error codes
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {
 		s.recordOpenAIPassiveAccountFailure(ctx, account, resp.StatusCode, body)
@@ -734,20 +776,19 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 }
 
-// compatErrorWriter is the signature for format-specific error writers used by
-// the compat paths (Chat Completions and Anthropic Messages).
+// compatErrorWriter 由兼容协议路径写入普通错误信封。
 type compatErrorWriter func(c *gin.Context, statusCode int, errType, message string)
 
-// handleCompatErrorResponse is the shared non-failover error handler for the
-// Chat Completions and Anthropic Messages compat paths. It mirrors the logic of
-// handleErrorResponse (passthrough rules, ShouldHandleErrorCode, rate-limit
-// tracking, secondary failover) but delegates the final error write to the
-// format-specific writer function.
+// compatErrorBodyWriter 由兼容协议路径写入包含 code/param 的完整脱敏错误对象。
+type compatErrorBodyWriter func(c *gin.Context, statusCode int, body []byte)
+
+// handleCompatErrorResponse 是 Chat Completions 与 Anthropic Messages 共用的非故障转移错误处理器。
 func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	resp *http.Response,
 	c *gin.Context,
 	account *Account,
 	writeError compatErrorWriter,
+	writeErrorBody compatErrorBodyWriter,
 	requestedModel ...string,
 ) (*OpenAIForwardResult, error) {
 	body := s.readUpstreamErrorBody(resp)
@@ -811,6 +852,23 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			return nil, fmt.Errorf("upstream error: %d (passthrough rule matched)", resp.StatusCode)
 		}
 		return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, upstreamMsg)
+	}
+
+	if isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, body) {
+		// 兼容协议也必须保留上游 error 对象中的 code、param 等结构化详情。
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               "http_error",
+			Message:            upstreamMsg,
+			Detail:             upstreamDetail,
+		})
+		MarkResponseCommitted(c)
+		writeErrorBody(c, http.StatusBadRequest, body)
+		return nil, fmt.Errorf("upstream invalid request: %d message=%s", resp.StatusCode, upstreamMsg)
 	}
 
 	// Check custom error codes — if the account does not handle this status,

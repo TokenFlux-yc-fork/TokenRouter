@@ -1060,6 +1060,67 @@ func TestClassifyOpsClientBusinessLimitedMarkerExcludesCustomPolicyDenialFromSLA
 	require.Equal(t, "client_request", errorSource)
 }
 
+func TestClassifyOpsUpstreamInvalidRequest400ExcludedFromSLA(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	service.SetOpsUpstreamError(c, http.StatusBadRequest, "Invalid property name in input arguments", "")
+
+	errType := normalizeOpsErrorType("invalid_request_error", "property_name_above_max_length")
+	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(
+		c,
+		errType,
+		"Invalid property name in input arguments",
+		"property_name_above_max_length",
+		http.StatusBadRequest,
+	)
+
+	require.Equal(t, "request", phase)
+	require.True(t, isBusinessLimited)
+	require.Equal(t, "client", errorOwner)
+	require.Equal(t, "client_request", errorSource)
+}
+
+func TestClassifyOpsUpstreamServerErrorStillCountsForSLA(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	service.SetOpsUpstreamError(c, http.StatusBadGateway, "Upstream request failed", "")
+
+	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(
+		c,
+		"upstream_error",
+		"Upstream service temporarily unavailable",
+		"",
+		http.StatusBadGateway,
+	)
+
+	require.Equal(t, "upstream", phase)
+	require.False(t, isBusinessLimited)
+	require.Equal(t, "provider", errorOwner)
+	require.Equal(t, "upstream_http", errorSource)
+}
+
+func TestClassifyOpsOtherUpstreamInvalidRequestStillCountsForSLA(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	service.SetOpsUpstreamError(c, http.StatusBadRequest, "Unknown parameter", "")
+
+	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(
+		c,
+		"invalid_request_error",
+		"Unknown parameter: input[0].namespace",
+		"unknown_parameter",
+		http.StatusBadRequest,
+	)
+
+	require.Equal(t, "upstream", phase)
+	require.False(t, isBusinessLimited)
+	require.Equal(t, "provider", errorOwner)
+	require.Equal(t, "upstream_http", errorSource)
+}
+
 func TestClassifyOpsOtherErrorsStillCountForSLA(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
