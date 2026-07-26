@@ -156,6 +156,14 @@ func RegisterGatewayRoutes(
 		}
 		h.OpenAIGateway.ResponsesWebSocket(c)
 	}
+	// Sideband 动态段不能吞掉 fork 已明确移除的旧 Codex models 路由。
+	rejectRemovedCodexRoute := func(c *gin.Context) {
+		if c.Param("call_id") == "models" {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		c.Next()
+	}
 	// API网关（Claude API兼容）
 	gateway := r.Group("/v1")
 	gateway.Use(bodyLimit)
@@ -183,6 +191,8 @@ func RegisterGatewayRoutes(
 		gateway.POST("/messages/count_tokens", countTokensHandler)
 		gateway.GET("/models", h.Gateway.Models)
 		gateway.GET("/usage", h.Gateway.Usage)
+		gateway.POST("/live", h.OpenAIGateway.Live)
+		gateway.GET("/live/:call_id", h.OpenAIGateway.LiveSideband)
 		// OpenAI Responses API: auto-route based on group platform
 		gateway.POST("/responses", func(c *gin.Context) {
 			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
@@ -293,9 +303,21 @@ func RegisterGatewayRoutes(
 	// Codex 客户端会访问不带 v1 前缀的模型列表，保持与 /v1/models 相同的本地模型语义。
 	r.GET("/models", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, h.Gateway.Models)
 	r.POST("/messages/count_tokens", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, countTokensHandler)
+	r.GET(
+		"/backend-api/codex/:call_id",
+		rejectRemovedCodexRoute,
+		bodyLimit,
+		clientRequestID,
+		opsErrorLogger,
+		endpointNorm,
+		gin.HandlerFunc(apiKeyAuth),
+		requireGroupAnthropic,
+		h.OpenAIGateway.LiveSideband,
+	)
 	codexDirect := r.Group("/backend-api/codex")
 	codexDirect.Use(bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic)
 	{
+		codexDirect.POST("/realtime/calls", h.OpenAIGateway.Live)
 		codexDirect.POST("/responses", responsesHandler)
 		codexDirect.POST("/responses/*subpath", responsesHandler)
 		codexDirect.POST("/alpha/search", textBodyLimit, h.OpenAIGateway.AlphaSearch)

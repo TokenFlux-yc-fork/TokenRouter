@@ -257,10 +257,10 @@ func TestAuthService_Register_UsesNormalizedEmailLookupWhenEnabled(t *testing.T)
 		SettingKeyRegistrationEmailNormalization: "true",
 	})
 
-	_, _, err := svc.Register(context.Background(), "Y.o.u.r.N.a.m.e+abc@example.com", "password")
+	_, _, err := svc.Register(context.Background(), "Y.o.u.r.N.a.m.e+abc@googlemail.com.", "password")
 	require.ErrorIs(t, err, ErrEmailExists)
-	require.Equal(t, []string{"Y.o.u.r.N.a.m.e+abc@example.com"}, repo.existsByEmailCalls)
-	require.Equal(t, []string{"yourname@example.com"}, repo.existsByNormalizedCalls)
+	require.Equal(t, []string{"Y.o.u.r.N.a.m.e+abc@googlemail.com."}, repo.existsByEmailCalls)
+	require.Equal(t, []string{"yourname@gmail.com"}, repo.existsByNormalizedCalls)
 	require.Empty(t, repo.createCalls)
 }
 
@@ -342,12 +342,12 @@ func TestAdminService_UpdateUser_UsesNormalizedEmailGuardWhenEnabled(t *testing.
 	}
 
 	updated, err := svc.UpdateUser(context.Background(), 11, &UpdateUserInput{
-		Email: "Y.o.u.r.N.a.m.e+alias@example.com",
+		Email: "Y.o.u.r.N.a.m.e+alias@googlemail.com.",
 	})
 	require.NoError(t, err)
-	require.Equal(t, "Y.o.u.r.N.a.m.e+alias@example.com", updated.Email)
+	require.Equal(t, "Y.o.u.r.N.a.m.e+alias@googlemail.com.", updated.Email)
 	require.Empty(t, repo.existsByEmailCalls)
-	require.Equal(t, []string{"yourname@example.com"}, repo.normalizedUpdateCalls)
+	require.Equal(t, []string{"yourname@gmail.com"}, repo.normalizedUpdateCalls)
 	require.Len(t, repo.normalizedUpdateUsers, 1)
-	require.Equal(t, "Y.o.u.r.N.a.m.e+alias@example.com", repo.normalizedUpdateUsers[0].Email)
+	require.Equal(t, "Y.o.u.r.N.a.m.e+alias@googlemail.com.", repo.normalizedUpdateUsers[0].Email)
 }

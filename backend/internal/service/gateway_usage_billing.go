@@ -47,6 +47,7 @@ type RecordUsageInput struct {
 	UpstreamEndpoint   string             // 上游端点（标准化后的上游路径）
 	UserAgent          string             // 请求的 User-Agent
 	IPAddress          string             // 请求的客户端 IP 地址
+	ClientSessionID    string             // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
 	RequestPayloadHash string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
 	RequestBody        []byte             // 原始请求体，用于数据共享 session 归一化采集
 	SessionID          string             // 当前请求的会话标识，用于数据共享聚合
@@ -438,6 +439,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		UpstreamEndpoint:   input.UpstreamEndpoint,
 		UserAgent:          input.UserAgent,
 		IPAddress:          input.IPAddress,
+		ClientSessionID:    input.ClientSessionID,
 		RequestPayloadHash: input.RequestPayloadHash,
 		RequestBody:        input.RequestBody,
 		SessionID:          input.SessionID,
@@ -459,6 +461,7 @@ type RecordUsageLongContextInput struct {
 	UpstreamEndpoint      string             // 上游端点（标准化后的上游路径）
 	UserAgent             string             // 请求的 User-Agent
 	IPAddress             string             // 请求的客户端 IP 地址
+	ClientSessionID       string             // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
 	RequestPayloadHash    string             // 请求体语义哈希，用于降低 request_id 误复用时的静默误去重风险
 	RequestBody           []byte             // 原始请求体，用于数据共享 session 归一化采集
 	SessionID             string             // 当前请求的会话标识，用于数据共享聚合
@@ -483,6 +486,7 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		UpstreamEndpoint:   input.UpstreamEndpoint,
 		UserAgent:          input.UserAgent,
 		IPAddress:          input.IPAddress,
+		ClientSessionID:    input.ClientSessionID,
 		RequestPayloadHash: input.RequestPayloadHash,
 		RequestBody:        input.RequestBody,
 		SessionID:          input.SessionID,
@@ -507,6 +511,7 @@ type recordUsageCoreInput struct {
 	UpstreamEndpoint   string
 	UserAgent          string
 	IPAddress          string
+	ClientSessionID    string
 	RequestPayloadHash string
 	RequestBody        []byte
 	SessionID          string
@@ -882,6 +887,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		ModelMappingChain:     optionalTrimmedStringPtr(input.ModelMappingChain),
 		UserAgent:             optionalTrimmedStringPtr(input.UserAgent),
 		IPAddress:             optionalTrimmedStringPtr(input.IPAddress),
+		SessionID:             optionalTrimmedStringPtr(input.ClientSessionID),
 		GroupID:               apiKey.GroupID,
 		SubscriptionID:        optionalSubscriptionID(subscription),
 		CreatedAt:             time.Now(),

@@ -96,6 +96,12 @@ func TestGatewayRoutesCodexModelsManifestPathIsRemoved(t *testing.T) {
 	router.ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusNotFound, recorder.Code)
 
+	// 合法 Live call 动态段仍需进入 Sideband handler，而不是被旧路由守卫误判为 404。
+	req = httptest.NewRequest(http.MethodGet, "/backend-api/codex/call_test", nil)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	require.NotEqual(t, http.StatusNotFound, recorder.Code)
+
 	registered := make(map[string]string)
 	for _, route := range router.Routes() {
 		registered[route.Method+" "+route.Path] = route.Handler

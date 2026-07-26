@@ -65,11 +65,17 @@ type AccountHandler struct {
 	tokenCacheInvalidator   service.TokenCacheInvalidator
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
+	ollamaCloudUsage        *service.OllamaCloudUsageService
 }
 
 // SetUpstreamBillingProbeService 注入可选的远端计费倍率探测服务。
 func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamBillingProbeService) {
 	h.upstreamBillingProbe = probe
+}
+
+// SetOllamaCloudUsageService 注入 Ollama Cloud 用量服务。
+func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
+	h.ollamaCloudUsage = usage
 }
 
 type qoderAdminTokenRefresher interface {
@@ -226,10 +232,18 @@ type AccountSchedulerGroupScore struct {
 
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
+func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
+	out := dto.AccountFromService(account)
+	if h != nil && h.ollamaCloudUsage != nil && out != nil {
+		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
+	}
+	return out
+}
+
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	h.applyQuotaAutoPauseState(ctx, account)
 	item := AccountWithConcurrency{
-		Account:            dto.AccountFromService(account),
+		Account:            h.accountResponseFromService(account),
 		CurrentConcurrency: 0,
 	}
 	if account == nil {
@@ -553,6 +567,16 @@ func (h *AccountHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if h.ollamaCloudUsage != nil && len(accounts) > 0 {
+		accountPointers := make([]*service.Account, len(accounts))
+		for index := range accounts {
+			accountPointers[index] = &accounts[index]
+		}
+		if err := h.ollamaCloudUsage.ResolveAccounts(c.Request.Context(), accountPointers); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
 
 	// Get current concurrency counts for all accounts
 	accountIDs := make([]int64, len(accounts))
@@ -657,7 +681,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 		acc := &accounts[i]
 		h.applyQuotaAutoPauseState(c.Request.Context(), acc)
 		item := AccountWithConcurrency{
-			Account:            dto.AccountFromService(acc),
+			Account:            h.accountResponseFromService(acc),
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],
@@ -781,6 +805,12 @@ func (h *AccountHandler) GetByID(c *gin.Context) {
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if h.ollamaCloudUsage != nil {
+		if err := h.ollamaCloudUsage.ResolveAccounts(c.Request.Context(), []*service.Account{account}); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))

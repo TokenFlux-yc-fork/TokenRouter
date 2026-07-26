@@ -327,6 +327,7 @@ export default {
     stream: 'Stream',
     sync: 'Sync',
     cyber: 'Cyber Blocked',
+    live: 'Live',
     unknown: 'Unknown',
     in: 'In',
     out: 'Out',

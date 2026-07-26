@@ -586,6 +586,35 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 		changed = true
 	}
 
+	// ChatGPT internal API 要求 input 必须是条目数组。
+	if inputResult := gjson.GetBytes(normalized, "input"); inputResult.Exists() {
+		switch {
+		case inputResult.Type == gjson.String:
+			text := inputResult.String()
+			var inputValue any
+			if strings.TrimSpace(text) != "" {
+				inputValue = []any{map[string]any{
+					"type": "message", "role": "user", "content": text,
+				}}
+			} else {
+				inputValue = []any{}
+			}
+			next, err := sjson.SetBytes(normalized, "input", inputValue)
+			if err != nil {
+				return body, false, fmt.Errorf("normalize passthrough body input string: %w", err)
+			}
+			normalized = next
+			changed = true
+		case inputResult.Type == gjson.JSON && !inputResult.IsArray():
+			next, err := sjson.SetRawBytes(normalized, "input", []byte("["+inputResult.Raw+"]"))
+			if err != nil {
+				return body, false, fmt.Errorf("normalize passthrough body input object: %w", err)
+			}
+			normalized = next
+			changed = true
+		}
+	}
+
 	if compact {
 		if store := gjson.GetBytes(normalized, "store"); store.Exists() {
 			next, err := sjson.DeleteBytes(normalized, "store")

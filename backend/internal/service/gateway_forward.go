@@ -318,7 +318,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
-
+			// 请求已通过本地校验并进入传输阶段，应计入 Ollama Cloud 活动。
+			if !errors.Is(err, context.Canceled) {
+				scheduleOllamaCloudUsageActivity(s.deferredService, account)
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

@@ -287,6 +287,8 @@ type SystemSettings struct {
 
 	// 支付宝移动端强制使用二维码支付，不再跳转手机网站支付。
 	PaymentAlipayForceQRCode bool `json:"payment_alipay_force_qrcode"`
+	// 移动端使用支付宝当面付预下单，并通过深链接唤起支付宝客户端。
+	PaymentAlipayMobilePrecreateDeepLink bool `json:"payment_alipay_mobile_precreate_deep_link"`
 
 	// 余额、订阅到期与账号限额通知
 	BalanceLowNotifyEnabled         bool               `json:"balance_low_notify_enabled"`

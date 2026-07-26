@@ -605,6 +605,32 @@ func TestResponsesGrok429FailoverIsBounded(t *testing.T) {
 	})
 }
 
+func TestResponsesGrok402FailoverRemainsRequestScoped(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "first_402")
+	defer cleanup()
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "resp_healthy")
+	require.Equal(t, []int64{801, 802}, upstream.accountHits())
+	require.Empty(t, repo.setTempIDs)
+	before := repo.selectorCalls()
+
+	second := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"again","stream":false}`))
+	secondReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(second, secondReq)
+
+	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
+	require.Equal(t, before+2, repo.selectorCalls())
+	require.Equal(t, []int64{801, 802, 801, 802}, upstream.accountHits(), "a 402 must not persist scheduling state across requests")
+}
+
 func TestResponsesGrok429FailoverHandlesMixedStatuses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -847,7 +873,7 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 			Extra: map[string]any{service.GrokMediaEligibleExtraKey: true},
 		},
 	}
-	if mode == "postmap_cancel" || mode == "first_429" || mode == "all_429" || mode == "mixed_429_500" || mode == "mixed_500_429" || mode == "oauth_429_apikey_500" {
+	if mode == "postmap_cancel" || mode == "first_402" || mode == "first_429" || mode == "all_429" || mode == "mixed_429_500" || mode == "mixed_500_429" || mode == "oauth_429_apikey_500" {
 		accounts[0].Credentials["expires_at"] = time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
 	}
 	if mode == "all_429" || mode == "mixed_429_500" || mode == "mixed_500_429" || mode == "oauth_429_apikey_500" {
@@ -890,6 +916,8 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 	}
 	upstream := &grokCredentialHandlerUpstream{}
 	switch mode {
+	case "first_402":
+		upstream.failAccountID = 801
 	case "first_429":
 		upstream.rateLimitIDs = map[int64]bool{801: true}
 	case "all_429":

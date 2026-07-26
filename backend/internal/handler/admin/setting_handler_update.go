@@ -317,6 +317,8 @@ type UpdateSettingsRequest struct {
 
 	// 支付宝移动端强制使用二维码支付，不再跳转手机网站支付。
 	PaymentAlipayForceQRCode *bool `json:"payment_alipay_force_qrcode"`
+	// 移动端使用支付宝当面付预下单，并通过深链接唤起支付宝客户端。
+	PaymentAlipayMobilePrecreateDeepLink *bool `json:"payment_alipay_mobile_precreate_deep_link"`
 
 	// 风控中心功能开关
 	RiskControlEnabled *bool `json:"risk_control_enabled"`
@@ -1849,29 +1851,30 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	// Skip if no payment fields were provided (prevents accidental wipe).
 	if h.paymentConfigService != nil && hasPaymentFields(req) {
 		paymentReq := service.UpdatePaymentConfigRequest{
-			Enabled:                   req.PaymentEnabled,
-			MinAmount:                 req.PaymentMinAmount,
-			MaxAmount:                 req.PaymentMaxAmount,
-			DailyLimit:                req.PaymentDailyLimit,
-			OrderTimeoutMin:           req.PaymentOrderTimeoutMin,
-			MaxPendingOrders:          req.PaymentMaxPendingOrders,
-			EnabledTypes:              req.PaymentEnabledTypes,
-			BalanceDisabled:           req.PaymentBalanceDisabled,
-			BalanceRechargeMultiplier: req.PaymentBalanceRechargeMultiplier,
-			SubscriptionUSDToCNYRate:  req.PaymentSubscriptionUSDToCNYRate,
-			RechargeFeeRate:           req.PaymentRechargeFeeRate,
-			MethodFees:                req.PaymentMethodFees,
-			LoadBalanceStrategy:       req.PaymentLoadBalanceStrat,
-			ProductNamePrefix:         req.PaymentProductNamePrefix,
-			ProductNameSuffix:         req.PaymentProductNameSuffix,
-			HelpImageURL:              req.PaymentHelpImageURL,
-			HelpText:                  req.PaymentHelpText,
-			CancelRateLimitEnabled:    req.PaymentCancelRateLimitEnabled,
-			CancelRateLimitMax:        req.PaymentCancelRateLimitMax,
-			CancelRateLimitWindow:     req.PaymentCancelRateLimitWindow,
-			CancelRateLimitUnit:       req.PaymentCancelRateLimitUnit,
-			CancelRateLimitMode:       req.PaymentCancelRateLimitMode,
-			AlipayForceQRCode:         req.PaymentAlipayForceQRCode,
+			Enabled:                       req.PaymentEnabled,
+			MinAmount:                     req.PaymentMinAmount,
+			MaxAmount:                     req.PaymentMaxAmount,
+			DailyLimit:                    req.PaymentDailyLimit,
+			OrderTimeoutMin:               req.PaymentOrderTimeoutMin,
+			MaxPendingOrders:              req.PaymentMaxPendingOrders,
+			EnabledTypes:                  req.PaymentEnabledTypes,
+			BalanceDisabled:               req.PaymentBalanceDisabled,
+			BalanceRechargeMultiplier:     req.PaymentBalanceRechargeMultiplier,
+			SubscriptionUSDToCNYRate:      req.PaymentSubscriptionUSDToCNYRate,
+			RechargeFeeRate:               req.PaymentRechargeFeeRate,
+			MethodFees:                    req.PaymentMethodFees,
+			LoadBalanceStrategy:           req.PaymentLoadBalanceStrat,
+			ProductNamePrefix:             req.PaymentProductNamePrefix,
+			ProductNameSuffix:             req.PaymentProductNameSuffix,
+			HelpImageURL:                  req.PaymentHelpImageURL,
+			HelpText:                      req.PaymentHelpText,
+			CancelRateLimitEnabled:        req.PaymentCancelRateLimitEnabled,
+			CancelRateLimitMax:            req.PaymentCancelRateLimitMax,
+			CancelRateLimitWindow:         req.PaymentCancelRateLimitWindow,
+			CancelRateLimitUnit:           req.PaymentCancelRateLimitUnit,
+			CancelRateLimitMode:           req.PaymentCancelRateLimitMode,
+			AlipayForceQRCode:             req.PaymentAlipayForceQRCode,
+			AlipayMobilePrecreateDeepLink: req.PaymentAlipayMobilePrecreateDeepLink,
 		}
 		if err := h.paymentConfigService.UpdatePaymentConfig(c.Request.Context(), paymentReq); err != nil {
 			response.ErrorFrom(c, err)
@@ -2145,6 +2148,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		PaymentCancelRateLimitUnit:                             updatedPaymentCfg.CancelRateLimitUnit,
 		PaymentCancelRateLimitMode:                             updatedPaymentCfg.CancelRateLimitMode,
 		PaymentAlipayForceQRCode:                               updatedPaymentCfg.AlipayForceQRCode,
+		PaymentAlipayMobilePrecreateDeepLink:                   updatedPaymentCfg.AlipayMobilePrecreateDeepLink,
 		AllowUserViewErrorRequests:                             updatedSettings.AllowUserViewErrorRequests,
 	}
 	if fastPolicy, err := h.settingService.GetOpenAIFastPolicySettings(c.Request.Context()); err != nil {
@@ -2187,7 +2191,7 @@ func hasPaymentFields(req UpdateSettingsRequest) bool {
 		req.PaymentHelpText != nil || req.PaymentCancelRateLimitEnabled != nil ||
 		req.PaymentCancelRateLimitMax != nil || req.PaymentCancelRateLimitWindow != nil ||
 		req.PaymentCancelRateLimitUnit != nil || req.PaymentCancelRateLimitMode != nil ||
-		req.PaymentAlipayForceQRCode != nil
+		req.PaymentAlipayForceQRCode != nil || req.PaymentAlipayMobilePrecreateDeepLink != nil
 }
 
 // ensureDingTalkSyncAttributes 在保存 settings 后，按 admin 配置的 (attr key, attr name)

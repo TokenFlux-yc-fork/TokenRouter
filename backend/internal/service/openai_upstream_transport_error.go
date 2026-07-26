@@ -100,6 +100,12 @@ func (s *OpenAIGatewayService) handleOpenAIUpstreamTransportError(ctx context.Co
 	if s != nil && s.rateLimitService != nil {
 		s.rateLimitService.RecordUpstreamRequestFailure(ctx, account, err)
 	}
+
+	// 请求已进入网络传输路径，应计入 Ollama Cloud 活动。
+	if s != nil {
+		scheduleOllamaCloudUsageActivity(s.deferredService, account)
+	}
+
 	if classifyOpenAITransportError(err).Persistent {
 		s.tempUnscheduleOpenAITransportError(ctx, account, safeErr)
 	}

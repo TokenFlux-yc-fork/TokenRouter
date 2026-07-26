@@ -454,9 +454,12 @@ func normalizeGrokMediaEligibilityUpdateExtra(account *Account, input *UpdateAcc
 }
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
-	// 探测状态由系统管理，新账号始终以关闭自动探测的状态创建。
+	// 探测和会话状态由系统管理，新账号始终以关闭自动刷新的状态创建。
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingProbeExtraKey)
+	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
+	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
+	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
 	account := &Account{
 		Name:        input.Name,
 		Notes:       normalizeAccountNotes(input.Notes),
@@ -617,6 +620,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
+	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
 	// 安全/身份不变量(影子账号):通用更新路径被 edit/re-auth/refresh/batch 共用,
 	// 必须在此守住,否则仅在创建时的保证可被这些路径绕过。
 	if account.IsCredentialShadow() {
@@ -680,7 +684,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		delete(normalizedExtra, UpstreamBillingProbeEnabledExtraKey)
 		delete(normalizedExtra, UpstreamBillingProbeExtraKey)
-		// 保留配额用量字段，防止编辑账号时意外重置
+		delete(normalizedExtra, OllamaCloudUsageSessionExtraKey)
+		delete(normalizedExtra, OllamaCloudUsageAutoRefreshExtraKey)
+		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
+		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
 			"quota_used",
 			"quota_daily_used",
@@ -690,6 +697,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			grokBillingExtraKey,
 			UpstreamBillingProbeEnabledExtraKey,
 			UpstreamBillingProbeExtraKey,
+			OllamaCloudUsageSessionExtraKey,
+			OllamaCloudUsageAutoRefreshExtraKey,
+			OllamaCloudUsageSnapshotExtraKey,
 		} {
 			if v, ok := account.Extra[key]; ok {
 				normalizedExtra[key] = v
@@ -736,6 +746,17 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(account.Extra, UpstreamBillingProbeExtraKey)
 		if !isUpstreamBillingProbeAccount(account) {
 			delete(account.Extra, UpstreamBillingProbeEnabledExtraKey)
+		}
+	}
+	if account.Extra != nil {
+		if !IsOllamaCloudUsageAccount(account) {
+			delete(account.Extra, OllamaCloudUsageSessionExtraKey)
+			delete(account.Extra, OllamaCloudUsageAutoRefreshExtraKey)
+			delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
+		} else if !reflect.DeepEqual(previousOllamaUsageIdentity, ollamaCloudUsageIdentity(account)) {
+			delete(account.Extra, OllamaCloudUsageSessionExtraKey)
+			delete(account.Extra, OllamaCloudUsageAutoRefreshExtraKey)
+			delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
 		}
 	}
 	// 只在指针非 nil 时更新 Concurrency（支持设置为 0）
@@ -847,6 +868,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 
 // UpdateAccountExtra 仅对账号 Extra JSONB 做 key 级合并，避免覆盖运行态或持久化配置键。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	delete(updates, OllamaCloudUsageSessionExtraKey)
+	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
+	delete(updates, OllamaCloudUsageSnapshotExtraKey)
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
@@ -865,9 +889,12 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts 在单次请求中更新多个账号。
 // 凭据和 extra 使用键级合并，不覆盖整个对象。
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
-	// 受管探测状态只能通过下方专用类型字段更新。
+	// 受管探测和会话状态只能通过专用类型接口更新。
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingProbeExtraKey)
+	delete(input.Extra, OllamaCloudUsageSessionExtraKey)
+	delete(input.Extra, OllamaCloudUsageAutoRefreshExtraKey)
+	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)

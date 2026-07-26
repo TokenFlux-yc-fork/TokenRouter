@@ -104,7 +104,8 @@ func (a *Alipay) MerchantIdentityMetadata() map[string]string {
 }
 
 // CreatePayment 按下列路由创建支付宝支付：
-//   - 移动端（H5）：调用 alipay.trade.wap.pay，让浏览器跳转支付宝。
+//   - 移动端默认：调用 alipay.trade.wap.pay，让浏览器跳转支付宝。
+//   - 移动端开启 AlipayMobilePrecreate：调用 alipay.trade.precreate，返回动态二维码供前端唤起支付宝。
 //   - 桌面端默认模式：优先调用 alipay.trade.precreate（当面付）获取可扫码的二维码内容；
 //     如果商户未开通当面付，则回退到 alipay.trade.page.pay，只返回 pay_url，由前端打开支付宝收银台。
 //   - 桌面端 paymentMode == "redirect"：跳过 precreate，直接调用 alipay.trade.page.pay，
@@ -127,6 +128,9 @@ func (a *Alipay) CreatePayment(ctx context.Context, req payment.CreatePaymentReq
 	}
 
 	if req.IsMobile {
+		if req.AlipayMobilePrecreate {
+			return a.createPrecreateTrade(ctx, client, req, notifyURL)
+		}
 		return a.createWapTrade(client, req, notifyURL, returnURL)
 	}
 	return a.createDesktopTrade(ctx, client, req, notifyURL, returnURL)

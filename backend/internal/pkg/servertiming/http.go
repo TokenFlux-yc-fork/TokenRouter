@@ -53,9 +53,11 @@ func Do(client *http.Client, req *http.Request) (*http.Response, error) {
 		client = http.DefaultClient
 	}
 	if req == nil || !Active(req.Context()) {
+		//nolint:gosec // 此处仅透明执行调用方构造的请求，目标地址由各上游客户端负责校验。
 		return client.Do(req)
 	}
 	startedAt := time.Now()
+	//nolint:gosec // 此处仅透明执行调用方构造的请求，目标地址由各上游客户端负责校验。
 	response, err := client.Do(req)
 	RecordDependency(req.Context(), dependencyModule(req), startedAt, time.Now())
 	return response, err

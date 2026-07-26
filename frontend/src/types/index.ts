@@ -686,6 +686,8 @@ export interface Group {
   unavailable_fallback_group_id: number | null
   // OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
   allow_messages_dispatch?: boolean
+  // OpenAI Live 接口开关
+  allow_live: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   availability_probe_config?: GroupAvailabilityProbeConfig
@@ -860,6 +862,7 @@ export interface CreateGroupRequest {
   health_check_failure_threshold?: number
   health_check_success_threshold?: number
   allow_messages_dispatch?: boolean
+  allow_live?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   model_routing?: Record<string, number[]> | null
@@ -920,6 +923,7 @@ export interface UpdateGroupRequest {
   health_check_failure_threshold?: number
   health_check_success_threshold?: number
   allow_messages_dispatch?: boolean
+  allow_live?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   model_routing?: Record<string, number[]> | null
@@ -1103,6 +1107,56 @@ export interface UpstreamBillingProbeResult {
   error?: string
 }
 
+export type OllamaCloudUsageStatus = 'ok' | 'unauthorized' | 'failed'
+
+export interface OllamaCloudUsageWindow {
+  used_percent: number
+  reset_at?: string
+  reset_text?: string
+}
+
+export interface OllamaCloudUsageModel {
+  model: string
+  window: 'five_hour' | 'seven_day'
+  requests: number
+}
+
+export interface OllamaCloudUsageData {
+  plan?: string
+  five_hour?: OllamaCloudUsageWindow
+  seven_day?: OllamaCloudUsageWindow
+  balance?: string
+  models?: OllamaCloudUsageModel[]
+}
+
+export interface OllamaCloudUsageSnapshot {
+  status: OllamaCloudUsageStatus
+  data?: OllamaCloudUsageData
+  fetched_at?: string
+  last_attempt_at: string
+  next_refresh_at: string
+  failure_count?: number
+  http_status?: number
+  last_error?: string
+}
+
+export interface OllamaCloudUsageState {
+  account_id: number
+  eligible: boolean
+  configured: boolean
+  auto_refresh_enabled: boolean
+  encryption_key_configured: boolean
+  snapshot?: OllamaCloudUsageSnapshot
+}
+
+export interface OllamaCloudUsageSettings {
+  enabled: boolean
+  /** 模型请求持续到达时的最大等待时间（分钟）。 */
+  interval_minutes: number
+  /** 最近一次模型请求后的尾随静默期（分钟）。 */
+  debounce_minutes: number
+}
+
 export interface Account {
   id: number
   name: string
@@ -1115,6 +1169,7 @@ export interface Account {
   // 改为通过 credentials_status.has_<key> 暴露存在性。
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
+  ollama_cloud_usage?: OllamaCloudUsageState
   // Extra 包含 Codex 用量、OpenAI compact 能力和模型级限流状态等扩展字段。
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
@@ -1646,7 +1701,7 @@ export type RedeemCodeType =
   | 'subscription'
   | 'invitation'
   | 'affiliate_balance'
-export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber'
+export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber' | 'live'
 export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 

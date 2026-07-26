@@ -8,7 +8,7 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string) => key
+      t: (key: string, params?: Record<string, string>) => params ? `${key}:${JSON.stringify(params)}` : key
     })
   }
 })
@@ -17,7 +17,8 @@ vi.mock('@/utils/format', async () => {
   const actual = await vi.importActual<typeof import('@/utils/format')>('@/utils/format')
   return {
     ...actual,
-    formatCountdown: () => '1h'
+    formatCountdown: () => '2d 20h',
+    formatDateTimeToMinute: () => '2099/03/15 00:00'
   }
 })
 
@@ -129,6 +130,34 @@ describe('AccountStatusIndicator', () => {
 
     expect(wrapper.text()).toContain('CSon45')
     expect(wrapper.text()).not.toContain('⚡')
+  })
+
+  it('模型限流徽标显示按天倒计时且提示包含完整恢复日期', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          id: 6,
+          name: 'ag-long-limit',
+          extra: {
+            model_rate_limits: {
+              'claude-sonnet-4-5': {
+                rate_limited_at: '2026-03-15T00:00:00Z',
+                rate_limit_reset_at: '2099-03-15T00:00:00Z'
+              }
+            }
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('2d 20h')
+    expect(wrapper.text()).toContain('admin.accounts.status.modelRateLimitedUntil:{"model":"CSon45","time":"2099/03/15 00:00"}')
+    expect(wrapper.find('.whitespace-nowrap').exists()).toBe(true)
   })
 
   it('AICredits key 生效 → 显示积分已用尽 (credits_exhausted)', () => {

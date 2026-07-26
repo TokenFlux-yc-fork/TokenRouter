@@ -145,22 +145,30 @@ describe('AffiliateView', () => {
     expect(showSuccess).toHaveBeenCalledWith('affiliate.transfer.success:积分200.00')
   })
 
-  it('keeps long invite values shrinkable while copy buttons remain visible and functional', async () => {
+  it('stacks long invite values and copy buttons on mobile while retaining desktop rows', async () => {
     const longCode = 'INVITE-' + 'X'.repeat(120)
     getAffiliateDetail.mockResolvedValueOnce({ ...affiliateDetail, aff_code: longCode })
     const wrapper = mountView()
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="affiliate-code-row"]').classes()).toContain('min-w-0')
-    expect(wrapper.get('[data-testid="affiliate-link-row"]').classes()).toContain('min-w-0')
+    expect(wrapper.get('[data-testid="affiliate-code-row"]').classes()).toEqual(
+      expect.arrayContaining(['min-w-0', 'flex-col', 'items-stretch', 'sm:flex-row', 'sm:items-center']),
+    )
+    expect(wrapper.get('[data-testid="affiliate-link-row"]').classes()).toEqual(
+      expect.arrayContaining(['min-w-0', 'flex-col', 'items-stretch', 'sm:flex-row', 'sm:items-center']),
+    )
     expect(wrapper.get('[data-testid="affiliate-code"]').classes()).toEqual(
-      expect.arrayContaining(['min-w-0', 'truncate']),
+      expect.arrayContaining(['min-w-0', 'break-all', 'sm:flex-1', 'sm:truncate']),
     )
     expect(wrapper.get('[data-testid="affiliate-link"]').classes()).toEqual(
-      expect.arrayContaining(['min-w-0', 'truncate']),
+      expect.arrayContaining(['min-w-0', 'break-all', 'sm:flex-1', 'sm:truncate']),
     )
-    expect(wrapper.get('[data-testid="affiliate-copy-code"]').classes()).toContain('flex-shrink-0')
-    expect(wrapper.get('[data-testid="affiliate-copy-link"]').classes()).toContain('flex-shrink-0')
+    expect(wrapper.get('[data-testid="affiliate-copy-code"]').classes()).toEqual(
+      expect.arrayContaining(['w-full', 'sm:w-auto', 'sm:shrink-0']),
+    )
+    expect(wrapper.get('[data-testid="affiliate-copy-link"]').classes()).toEqual(
+      expect.arrayContaining(['w-full', 'sm:w-auto', 'sm:shrink-0']),
+    )
 
     await wrapper.get('[data-testid="affiliate-copy-code"]').trigger('click')
     await wrapper.get('[data-testid="affiliate-copy-link"]').trigger('click')

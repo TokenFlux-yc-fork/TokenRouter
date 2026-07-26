@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -118,6 +119,11 @@ func explicitGrokCacheSeed(c *gin.Context, body []byte, explicitKey string) stri
 func isGrokRequestContext(c *gin.Context) bool {
 	if c == nil {
 		return false
+	}
+	if c.Request != nil {
+		if platform, ok := c.Request.Context().Value(ctxkey.ForcePlatform).(string); ok && strings.TrimSpace(platform) != "" {
+			return platform == PlatformGrok
+		}
 	}
 	v, exists := c.Get("api_key")
 	if !exists {

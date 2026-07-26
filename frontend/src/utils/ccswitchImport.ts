@@ -1,6 +1,7 @@
 import type { GroupPlatform } from '@/types'
 
 export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.5'
+export const GROK_CC_SWITCH_MODEL = 'grok-4.5'
 
 export type CcSwitchClientType = 'claude' | 'gemini'
 
@@ -33,6 +34,12 @@ const encodeBase64Utf8 = (value: string) => {
 
 const stripTrailingV1 = (value: string) => value.replace(/\/+$/, '').replace(/\/v1$/, '')
 
+// 将 Grok Build 端点规范为单个 /v1 后缀。
+function withV1Endpoint(baseUrl: string): string {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')
+  return normalizedBaseUrl.endsWith('/v1') ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`
+}
+
 export function resolveCcSwitchImportConfig(
   platform: GroupPlatform | undefined | null,
   clientType: CcSwitchClientType,
@@ -54,6 +61,12 @@ export function resolveCcSwitchImportConfig(
       return {
         app: 'gemini',
         endpoint: baseUrl
+      }
+    case 'grok':
+      return {
+        app: 'grokbuild',
+        endpoint: withV1Endpoint(baseUrl),
+        model: GROK_CC_SWITCH_MODEL
       }
     default:
       return {

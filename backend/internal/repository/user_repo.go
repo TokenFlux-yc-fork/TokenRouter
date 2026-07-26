@@ -29,7 +29,19 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 )
 
-const normalizedUserEmailSQL = `replace(regexp_replace(split_part(lower(email), '@', 1), '\+.*$', ''), '.', '') || '@' || split_part(lower(email), '@', 2)`
+const (
+	// 以下表达式必须与 service.NormalizeRegistrationEmailAddress 保持一致，
+	// 同时与 220_users_registration_email_normalized_index_notx.sql 的索引表达式一致。
+	normalizedUserEmailValueSQL     = `lower(btrim(email))`
+	normalizedUserEmailLocalSQL     = `split_part(` + normalizedUserEmailValueSQL + `, '@', 1)`
+	normalizedUserEmailDomainSQL    = `rtrim(split_part(` + normalizedUserEmailValueSQL + `, '@', 2), '.')`
+	normalizedUserEmailBaseLocalSQL = `CASE WHEN strpos(` + normalizedUserEmailLocalSQL + `, '+') > 1 ` +
+		`THEN left(` + normalizedUserEmailLocalSQL + `, strpos(` + normalizedUserEmailLocalSQL + `, '+') - 1) ` +
+		`ELSE ` + normalizedUserEmailLocalSQL + ` END`
+	normalizedUserEmailSQL = `CASE WHEN ` + normalizedUserEmailDomainSQL + ` IN ('gmail.com', 'googlemail.com') ` +
+		`THEN coalesce(nullif(replace(` + normalizedUserEmailBaseLocalSQL + `, '.', ''), ''), ` + normalizedUserEmailBaseLocalSQL + `) || '@gmail.com' ` +
+		`ELSE ` + normalizedUserEmailBaseLocalSQL + ` || '@' || ` + normalizedUserEmailDomainSQL + ` END`
+)
 
 const registrationEmailLockNamespace = 148623451
 

@@ -29,6 +29,7 @@ type OpenAIRecordUsageInput struct {
 	UpstreamEndpoint   string
 	UserAgent          string // 请求的 User-Agent
 	IPAddress          string // 请求的客户端 IP 地址
+	ClientSessionID    string // 客户端显式会话标识（session_id / X-Session-Id 等请求头），仅用于用量行会话关联
 	RequestPayloadHash string
 	RequestBody        []byte // 原始请求体，用于数据共享 session 归一化采集
 	SessionID          string // 当前请求的会话标识，用于数据共享聚合
@@ -54,6 +55,7 @@ type CyberPolicyUsageInput struct {
 	UpstreamEndpoint   string
 	UserAgent          string
 	IPAddress          string
+	ClientSessionID    string
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string
@@ -85,6 +87,7 @@ func (s *OpenAIGatewayService) RecordCyberPolicyUsageLog(ctx context.Context, in
 		UpstreamEndpoint:   in.UpstreamEndpoint,
 		UserAgent:          in.UserAgent,
 		IPAddress:          in.IPAddress,
+		ClientSessionID:    in.ClientSessionID,
 		RequestPayloadHash: in.RequestPayloadHash,
 		APIKeyService:      in.APIKeyService,
 		QuotaPlatform:      in.QuotaPlatform,
@@ -354,6 +357,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if input.IPAddress != "" {
 		usageLog.IPAddress = &input.IPAddress
 	}
+
+	// 添加 SessionID（客户端显式会话标识；缺失/无效时保持 nil）
+	usageLog.SessionID = optionalTrimmedStringPtr(input.ClientSessionID)
 
 	if apiKey.GroupID != nil {
 		usageLog.GroupID = apiKey.GroupID

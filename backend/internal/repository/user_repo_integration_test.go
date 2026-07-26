@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -551,24 +552,88 @@ func (s *UserRepoSuite) TestExistsByEmail() {
 }
 
 func (s *UserRepoSuite) TestExistsByNormalizedEmail() {
-	s.mustCreateUser(&service.User{Email: "Y.o.u.r.N.a.m.e+promo@example.com"})
+	s.mustCreateUser(&service.User{Email: " Y.o.u.r.N.a.m.e+promo@GoogleMail.com. "})
+	s.mustCreateUser(&service.User{Email: "first.last+promo@qq.com"})
 
-	exists, err := s.repo.ExistsByNormalizedEmail(s.ctx, "yourname@example.com")
+	exists, err := s.repo.ExistsByNormalizedEmail(s.ctx, "yourname@gmail.com")
 	s.Require().NoError(err, "ExistsByNormalizedEmail")
 	s.Require().True(exists)
+
+	exists, err = s.repo.ExistsByNormalizedEmail(s.ctx, "first.last@qq.com")
+	s.Require().NoError(err)
+	s.Require().True(exists)
+
+	dotDistinct, err := s.repo.ExistsByNormalizedEmail(s.ctx, "firstlast@qq.com")
+	s.Require().NoError(err)
+	s.Require().False(dotDistinct)
 
 	notExists, err := s.repo.ExistsByNormalizedEmail(s.ctx, "other@example.com")
 	s.Require().NoError(err)
 	s.Require().False(notExists)
 }
 
+// TestCreateWithNormalizedEmailGuardSerializesProviderAliases 验证同一收件箱的别名并发注册时只有一个事务成功。
+func (s *UserRepoSuite) TestCreateWithNormalizedEmailGuardSerializesProviderAliases() {
+	candidates := []*service.User{
+		{
+			Email:        "d.axis.2026+first@gmail.com",
+			Username:     "gmail-alias-first",
+			PasswordHash: "hash",
+			Role:         service.RoleUser,
+			Status:       service.StatusActive,
+		},
+		{
+			Email:        "da.xis.2026+second@googlemail.com.",
+			Username:     "gmail-alias-second",
+			PasswordHash: "hash",
+			Role:         service.RoleUser,
+			Status:       service.StatusActive,
+		},
+	}
+
+	errs := make(chan error, len(candidates))
+	var wg sync.WaitGroup
+	for _, candidate := range candidates {
+		candidate := candidate
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- s.repo.CreateWithNormalizedEmailGuard(
+				s.ctx,
+				candidate,
+				service.NormalizeRegistrationEmailAddress(candidate.Email),
+			)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	conflicts := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, service.ErrEmailExists):
+			conflicts++
+		default:
+			s.Require().NoError(err)
+		}
+	}
+	s.Require().Equal(1, successes)
+	s.Require().Equal(1, conflicts)
+	count, err := s.client.User.Query().Count(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Equal(1, count)
+}
+
 func (s *UserRepoSuite) TestUpdateWithNormalizedEmailGuard_RejectsConflict() {
-	s.mustCreateUser(&service.User{Email: "your.name@example.com"})
+	s.mustCreateUser(&service.User{Email: "your.name@gmail.com"})
 	other := s.mustCreateUser(&service.User{Email: "second@example.com"})
 
 	got, err := s.repo.GetByID(s.ctx, other.ID)
 	s.Require().NoError(err)
-	got.Email = "yourname+alias@example.com"
+	got.Email = "yourname+alias@googlemail.com."
 
 	err = s.repo.UpdateWithNormalizedEmailGuard(s.ctx, got, service.NormalizeRegistrationEmailAddress(got.Email))
 	s.Require().ErrorIs(err, service.ErrEmailExists)
@@ -579,18 +644,18 @@ func (s *UserRepoSuite) TestUpdateWithNormalizedEmailGuard_RejectsConflict() {
 }
 
 func (s *UserRepoSuite) TestUpdateWithNormalizedEmailGuard_AllowsSameUser() {
-	user := s.mustCreateUser(&service.User{Email: "your.name+seed@example.com"})
+	user := s.mustCreateUser(&service.User{Email: "your.name+seed@gmail.com"})
 
 	got, err := s.repo.GetByID(s.ctx, user.ID)
 	s.Require().NoError(err)
-	got.Email = "yourname@example.com"
+	got.Email = "yourname@gmail.com"
 
 	err = s.repo.UpdateWithNormalizedEmailGuard(s.ctx, got, service.NormalizeRegistrationEmailAddress(got.Email))
 	s.Require().NoError(err)
 
 	reloaded, err := s.repo.GetByID(s.ctx, user.ID)
 	s.Require().NoError(err)
-	s.Require().Equal("yourname@example.com", reloaded.Email)
+	s.Require().Equal("yourname@gmail.com", reloaded.Email)
 }
 
 // --- RemoveGroupFromAllowedGroups ---

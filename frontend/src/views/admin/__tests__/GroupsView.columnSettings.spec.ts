@@ -10,6 +10,7 @@ const {
   getModelsListCandidates,
   getUsageSummary,
   getCapacitySummary,
+  getLiveCapability,
   listAccounts,
   showError,
   showSuccess,
@@ -21,6 +22,7 @@ const {
   getModelsListCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
+  getLiveCapability: vi.fn(),
   listAccounts: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock('@/api/admin', () => ({
       getModelsListCandidates,
       getUsageSummary,
       getCapacitySummary,
+      getLiveCapability,
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
@@ -121,6 +124,7 @@ const createGroup = (overrides: Partial<AdminGroup> = {}): AdminGroup => ({
   fallback_group_id_on_invalid_request: null,
   unavailable_fallback_group_id: null,
   allow_messages_dispatch: false,
+  allow_live: false,
   default_mapped_model: '',
   messages_dispatch_model_config: undefined,
   availability_probe_config: undefined,
@@ -240,6 +244,7 @@ describe('admin GroupsView column settings', () => {
     getModelsListCandidates.mockReset()
     getUsageSummary.mockReset()
     getCapacitySummary.mockReset()
+    getLiveCapability.mockReset()
     listAccounts.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
@@ -257,12 +262,20 @@ describe('admin GroupsView column settings', () => {
     getModelsListCandidates.mockResolvedValue([])
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
+    getLiveCapability.mockResolvedValue({ supported: false, reason: 'test server unsupported' })
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     isCurrentStep.mockReturnValue(false)
   })
 
   afterEach(() => {
     localStorage.clear()
+  })
+
+  it('loads the Live capability once on mount', async () => {
+    const wrapper = await mountView()
+
+    expect(getLiveCapability).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
   })
 
   it('hides the id column by default while keeping other group columns visible', async () => {

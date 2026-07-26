@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/domain"
+	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
 type User struct {
@@ -146,6 +147,8 @@ type Group struct {
 
 	// OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
 	AllowMessagesDispatch bool `json:"allow_messages_dispatch"`
+	// OpenAI Live 接口开关
+	AllowLive bool `json:"allow_live"`
 
 	HealthCheckEnabled          bool       `json:"health_check_enabled"`
 	HealthStatus                string     `json:"health_status"`
@@ -245,23 +248,24 @@ type Account struct {
 	Type     string  `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
-	Credentials             map[string]any  `json:"credentials"`
-	CredentialsStatus       map[string]bool `json:"credentials_status,omitempty"`
-	Extra                   map[string]any  `json:"extra"`
-	ProxyID                 *int64          `json:"proxy_id"`
-	ProxyFallbackOriginID   *int64          `json:"proxy_fallback_origin_id"`
-	ProxyFallbackOriginName *string         `json:"proxy_fallback_origin_name,omitempty"`
-	Concurrency             int             `json:"concurrency"`
-	LoadFactor              *int            `json:"load_factor,omitempty"`
-	Priority                int             `json:"priority"`
-	RateMultiplier          float64         `json:"rate_multiplier"`
-	Status                  string          `json:"status"`
-	ErrorMessage            string          `json:"error_message"`
-	LastUsedAt              *time.Time      `json:"last_used_at"`
-	ExpiresAt               *int64          `json:"expires_at"`
-	AutoPauseOnExpired      bool            `json:"auto_pause_on_expired"`
-	CreatedAt               time.Time       `json:"created_at"`
-	UpdatedAt               time.Time       `json:"updated_at"`
+	Credentials             map[string]any                 `json:"credentials"`
+	CredentialsStatus       map[string]bool                `json:"credentials_status,omitempty"`
+	Extra                   map[string]any                 `json:"extra"`
+	OllamaCloudUsage        *service.OllamaCloudUsageState `json:"ollama_cloud_usage,omitempty"`
+	ProxyID                 *int64                         `json:"proxy_id"`
+	ProxyFallbackOriginID   *int64                         `json:"proxy_fallback_origin_id"`
+	ProxyFallbackOriginName *string                        `json:"proxy_fallback_origin_name,omitempty"`
+	Concurrency             int                            `json:"concurrency"`
+	LoadFactor              *int                           `json:"load_factor,omitempty"`
+	Priority                int                            `json:"priority"`
+	RateMultiplier          float64                        `json:"rate_multiplier"`
+	Status                  string                         `json:"status"`
+	ErrorMessage            string                         `json:"error_message"`
+	LastUsedAt              *time.Time                     `json:"last_used_at"`
+	ExpiresAt               *int64                         `json:"expires_at"`
+	AutoPauseOnExpired      bool                           `json:"auto_pause_on_expired"`
+	CreatedAt               time.Time                      `json:"created_at"`
+	UpdatedAt               time.Time                      `json:"updated_at"`
 
 	Schedulable bool `json:"schedulable"`
 
@@ -575,6 +579,9 @@ type UsageLog struct {
 	UserAgent *string `json:"user_agent"`
 	// IPAddress 对用量记录所有者可见。
 	IPAddress *string `json:"ip_address,omitempty"`
+	// SessionID 是客户端显式提供的请求关联标识，例如 session_id 或
+	// X-Session-Id 请求头；缺失时不返回该字段。
+	SessionID *string `json:"session_id,omitempty"`
 
 	// Cache TTL Override 标记
 	CacheTTLOverridden bool `json:"cache_ttl_overridden"`

@@ -47,6 +47,23 @@ upstream merge.
   tests pass on the combined tree; the complete baseline gates below remain
   required before the merge is finalized.
 
+## Upstream Review: v0.1.236
+
+- Upstream target: `c5ed5a04ef7362da3c1b5c65f4a883728d92c401` (the
+  post-tag `VERSION=0.1.236` sync commit for `v0.1.236`).
+- Reviewed range: `a6a66544f6acd7b79e40dcccaeee19f4e4478f2c..c5ed5a04ef7362da3c1b5c65f4a883728d92c401`.
+- No active customization is fully upstreamed in this range; all rows remain
+  `local`.
+- OpenAI Live and Ollama Cloud usage are combined with the fork's group health,
+  backup-pool, OAuth capacity, and build-identity fields and routes.
+- Upstream proxy disconnect tracking is combined with the fork's guarded first
+  output, pre-output failover, native compact terminal failure, and hidden
+  preamble semantics.
+- Grok 402 and non-429 5xx responses remain request-scoped in accordance with
+  `grok-inference-error-classification`; only 429 persists scheduling state.
+- The complete baseline gates below remain required before this merge is
+  finalized.
+
 ## Active Customizations
 
 | ID | Behavior | Source commits | Main paths | Status | Verification |

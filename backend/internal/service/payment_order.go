@@ -472,6 +472,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 		BillingInfo: req.BillingInfo,
 	}, sel, outTradeNo, payAmountStr, subject, order.ExpiresAt)
 	providerReq.UserEmail = order.UserEmail
+	providerReq.AlipayMobilePrecreate = shouldUseAlipayMobilePrecreate(req, cfg, sel)
 	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	pr, err := prov.CreatePayment(ctx, providerReq)
 	finishProviderCall()
@@ -501,6 +502,7 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	}
 	resp := buildCreateOrderResponse(order, req, payAmount, sel, pr, resultType)
 	resp.ResumeToken = resumeToken
+	resp.AlipayMobilePrecreateDeepLink = providerReq.AlipayMobilePrecreate && strings.TrimSpace(pr.QRCode) != ""
 	return resp, nil
 }
 
@@ -528,6 +530,15 @@ func (s *PaymentService) persistCreatePaymentResponse(ctx context.Context, order
 		return nil, fmt.Errorf("update order with payment details: %w", err)
 	}
 	return order, nil
+}
+
+// shouldUseAlipayMobilePrecreate 判断当前订单是否应使用官方支付宝移动端当面付。
+func shouldUseAlipayMobilePrecreate(req CreateOrderRequest, cfg *PaymentConfig, sel *payment.InstanceSelection) bool {
+	return cfg != nil &&
+		cfg.AlipayMobilePrecreateDeepLink &&
+		req.IsMobile &&
+		sel != nil &&
+		strings.EqualFold(strings.TrimSpace(sel.ProviderKey), payment.TypeAlipay)
 }
 
 // sanitizeCreatePaymentResponseDetails 清理所有将写入 PostgreSQL text 字段的支付响应值。

@@ -9,9 +9,16 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
+// simpleModeDefaultGroupDescription 标识由简易模式自动创建的默认分组。
+const simpleModeDefaultGroupDescription = "Auto-created default group"
+
 func ensureSimpleModeDefaultGroups(ctx context.Context, client *dbent.Client) error {
 	if client == nil {
 		return fmt.Errorf("nil ent client")
+	}
+
+	if err := backfillSimpleModeGrokDefaultImageGeneration(ctx, client); err != nil {
+		return err
 	}
 
 	requiredByPlatform := map[string]int{
@@ -42,7 +49,7 @@ func ensureSimpleModeDefaultGroups(ctx context.Context, client *dbent.Client) er
 			continue
 		}
 
-		// Non-antigravity platforms: ensure <platform>-default exists.
+		// 非 Antigravity 平台确保存在 <platform>-default 分组。
 		name := platform + "-default"
 		if err := createGroupIfNotExists(ctx, client, name, platform); err != nil {
 			return err
@@ -65,18 +72,38 @@ func createGroupIfNotExists(ctx context.Context, client *dbent.Client, name, pla
 
 	_, err = client.Group.Create().
 		SetName(name).
-		SetDescription("Auto-created default group").
+		SetDescription(simpleModeDefaultGroupDescription).
 		SetPlatform(platform).
 		SetStatus(service.StatusActive).
 		SetRateMultiplier(1.0).
 		SetIsExclusive(false).
+		SetAllowImageGeneration(platform == service.PlatformGrok).
 		Save(ctx)
 	if err != nil {
 		if dbent.IsConstraintError(err) {
-			// Concurrent server startups may race on creation; treat as success.
+			// 多实例并发启动可能竞争创建同名分组，此时按成功处理。
 			return nil
 		}
 		return fmt.Errorf("create default group %s: %w", name, err)
+	}
+	return nil
+}
+
+// backfillSimpleModeGrokDefaultImageGeneration 只修复仍带自动创建标记的活跃 Grok 默认分组。
+func backfillSimpleModeGrokDefaultImageGeneration(ctx context.Context, client *dbent.Client) error {
+	_, err := client.Group.Update().
+		Where(
+			group.NameEQ(service.PlatformGrok+"-default"),
+			group.PlatformEQ(service.PlatformGrok),
+			group.DescriptionEQ(simpleModeDefaultGroupDescription),
+			group.StatusEQ(service.StatusActive),
+			group.AllowImageGenerationEQ(false),
+			group.DeletedAtIsNil(),
+		).
+		SetAllowImageGeneration(true).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("backfill auto-created grok default image generation: %w", err)
 	}
 	return nil
 }

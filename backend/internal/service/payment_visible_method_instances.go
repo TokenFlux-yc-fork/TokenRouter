@@ -247,3 +247,16 @@ func (s *PaymentConfigService) resolveEnabledVisibleMethodInstance(
 	}
 	return selectVisibleMethodInstanceByProviderKey(matching, providerKey), nil
 }
+
+// UsesOfficialAlipayVisibleMethod 判断用户可见的支付宝方式是否解析到已启用的官方支付宝实例。
+func (s *PaymentConfigService) UsesOfficialAlipayVisibleMethod(ctx context.Context) (bool, error) {
+	instance, err := s.resolveEnabledVisibleMethodInstance(ctx, payment.TypeAlipay)
+	if err != nil {
+		return false, err
+	}
+	return isOfficialAlipayProviderInstance(instance), nil
+}
+
+func isOfficialAlipayProviderInstance(instance *dbent.PaymentProviderInstance) bool {
+	return instance != nil && strings.EqualFold(strings.TrimSpace(instance.ProviderKey), payment.TypeAlipay)
+}

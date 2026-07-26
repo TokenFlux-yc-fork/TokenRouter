@@ -90,7 +90,7 @@ dataSharing: {
         emailSuffixWhitelistInputHint: 'Leave empty for no restriction. Use *.edu.cn to match edu.cn and its subdomains.',
         emailNormalization: 'Email Normalization',
         emailNormalizationHint:
-          "When enabled, registration or email updates treat y.o.u.r.n.a.m.e{'@'}example.com and yourname+abc{'@'}example.com as yourname{'@'}example.com and compare against all registered accounts by the normalized address to block alias-based duplicate signups. It does not modify existing account emails.",
+          "When enabled, registration or email updates strip +tags for all domains, treat Gmail/Googlemail dot variants and trailing domain dots as the same inbox, and compare against all registered accounts. Existing stored emails are unchanged.",
         promoCode: 'Promo Code',
         promoCodeHint: 'Allow users to use promo codes during registration',
         invitationCode: 'Invitation Code Registration',
@@ -334,6 +334,18 @@ dataSharing: {
         intervalHint: 'Range: 5–1440 minutes. A successful result remains valid for two detection intervals.',
         saved: 'Upstream rate auto detection settings saved',
         saveFailed: 'Failed to save upstream rate auto detection settings'
+      },
+      ollamaCloudUsage: {
+        title: 'Ollama Cloud Usage Refresh',
+        description: 'Refresh official Ollama settings-page usage driven by model requests for individually opted-in accounts. Disabled by default. Idle accounts are not polled.',
+        enabled: 'Enable global automatic refresh',
+        enabledHint: 'Only accounts with a stored browser session and their own automatic refresh switch enabled are refreshed, and only after subsequent model requests. Manual refresh remains available.',
+        intervalMinutes: 'Max wait while requests continue (minutes)',
+        intervalHint: 'Range: 15–1440 minutes. When continuous requests keep sliding the debounce, force a refresh after this wait.',
+        debounceMinutes: 'Quiet period after last request (minutes)',
+        debounceHint: 'Range: 1–60 minutes. Refresh after the latest model request has been quiet for this long.',
+        saved: 'Ollama Cloud usage refresh settings saved',
+        saveFailed: 'Failed to save Ollama Cloud usage refresh settings'
       },
       gatewayForwarding: {
         title: 'Request Forwarding',
@@ -585,6 +597,8 @@ dataSharing: {
         cancelRateLimitWindowModeFixed: 'Fixed',
         alipayForceQRCode: 'Force Alipay QR Code',
         alipayForceQRCodeHint: 'When enabled, mobile Alipay users always see a QR code instead of being redirected to the mobile payment page',
+        alipayMobilePrecreateDeepLink: 'Mobile Alipay Precreate Handoff',
+        alipayMobilePrecreateDeepLinkHint: 'Use official Alipay precreate on mobile, open the Alipay app, and show the dynamic QR only if handoff fails. This takes priority over Force Alipay QR Code',
         helpText: 'Help Text',
         helpImageUrl: 'Help Image URL',
         manageProviders: 'Manage Providers',

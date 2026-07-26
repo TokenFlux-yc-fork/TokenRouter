@@ -1538,6 +1538,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	}
 	if err := documentScanner.Err(); err != nil {
 		if sawTerminalEvent && !sawFailedEvent {
+			s.clearOpenAIProxyStreamDisconnect(account)
 			return resultWithUsage(), nil
 		}
 		if sawFailedEvent {
@@ -1567,6 +1568,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		if clientDisconnected {
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete after disconnect: %w", err)
 		}
+		s.recordOpenAIProxyStreamDisconnect(account, err, upstreamRequestID)
 		if nativeRemoteCompactionV2 {
 			if writeErr := writeNativeTerminalFailure("OpenAI stream disconnected before completion"); writeErr != nil {
 				return resultWithUsage(), fmt.Errorf("stream read error: %v; write terminal failure: %w", err, writeErr)
@@ -1594,12 +1596,16 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			return resultWithUsage(),
 				s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI stream ended before a terminal event")
 		}
+		s.recordOpenAIProxyStreamDisconnect(account, errors.New("stream ended before terminal event"), upstreamRequestID)
 		if nativeRemoteCompactionV2 {
 			if writeErr := writeNativeTerminalFailure("OpenAI stream ended before a terminal event"); writeErr != nil {
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event; write terminal failure: %w", writeErr)
 			}
 		}
 		return resultWithUsage(), errors.New("stream usage incomplete: missing terminal event")
+	}
+	if sawTerminalEvent && !sawFailedEvent {
+		s.clearOpenAIProxyStreamDisconnect(account)
 	}
 
 	return resultWithUsage(), nil

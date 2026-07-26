@@ -104,19 +104,20 @@ func GetBasePaymentType(t string) string {
 
 // CreatePaymentRequest 保存创建支付单时传给支付渠道的参数。
 type CreatePaymentRequest struct {
-	OrderID            string    // 本地订单号
-	Amount             string    // 按服务商实例配置币种解释的实付金额
-	PaymentType        string    // 支付方式，例如 "alipay"、"wxpay"、"stripe"、"airwallex"
-	Subject            string    // 商品或订单描述
-	NotifyURL          string    // 支付渠道回调地址
-	ReturnURL          string    // 浏览器支付完成后的返回地址
-	OpenID             string    // 微信 JSAPI 支付使用的付款人 OpenID
-	ClientIP           string    // 付款人 IP
-	IsMobile           bool      // 请求是否来自移动端
-	InstanceSubMethods string    // 支付实例 supported_types 中配置的子支付方式
-	ExpiresAt          time.Time // 本地订单过期时间，用于同步渠道账单到期时间
-	UserEmail          string    // 从本地用户资料复制的付款人邮箱
-	BillingInfo        *BillingInfo
+	OrderID               string    // 本地订单号
+	Amount                string    // 按服务商实例配置币种解释的实付金额
+	PaymentType           string    // 支付方式，例如 "alipay"、"wxpay"、"stripe"、"airwallex"
+	Subject               string    // 商品或订单描述
+	NotifyURL             string    // 支付渠道回调地址
+	ReturnURL             string    // 浏览器支付完成后的返回地址
+	OpenID                string    // 微信 JSAPI 支付使用的付款人 OpenID
+	ClientIP              string    // 付款人 IP
+	IsMobile              bool      // 请求是否来自移动端
+	AlipayMobilePrecreate bool      // 移动端支付宝是否改用当面付预下单
+	InstanceSubMethods    string    // 支付实例 supported_types 中配置的子支付方式
+	ExpiresAt             time.Time // 本地订单过期时间，用于同步渠道账单到期时间
+	UserEmail             string    // 从本地用户资料复制的付款人邮箱
+	BillingInfo           *BillingInfo
 }
 
 // BillingAddress 保存付款人填写的可选账单地址。

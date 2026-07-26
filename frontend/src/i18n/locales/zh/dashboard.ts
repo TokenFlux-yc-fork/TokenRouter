@@ -332,6 +332,7 @@ export default {
     stream: '流式',
     sync: '同步',
     cyber: 'Cyber 阻断',
+    live: 'Live',
     unknown: '未知',
     in: '输入',
     out: '输出',

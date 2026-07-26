@@ -87,6 +87,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		zap.Bool("stream", parsed.Stream),
 		zap.Bool("multipart", parsed.Multipart),
 		zap.String("capability", string(parsed.RequiredCapability)),
+		zap.String("img_quality", parsed.Quality),
+		zap.String("img_size", parsed.Size),
 	)
 
 	if !service.GroupAllowsImageGeneration(apiKey.Group) {
@@ -388,6 +390,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+		clientSessionID := service.ExtractClientSessionID(c)
 
 		upstreamModel := ""
 		if result != nil {
@@ -409,6 +412,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				SessionID:          parsed.StickySessionSeed(),
 				APIKeyService:      h.apiKeyService,
 				QuotaPlatform:      quotaPlatform,
+				ClientSessionID:    clientSessionID,
 				ChannelUsageFields: channelMapping.ToUsageFields(requestModel, upstreamModel),
 			}); err != nil {
 				logger.L().With(

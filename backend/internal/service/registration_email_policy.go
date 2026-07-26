@@ -20,15 +20,27 @@ func RegistrationEmailSuffix(email string) string {
 	return "@" + domain
 }
 
+// NormalizeRegistrationEmailAddress 返回用于唯一性检查的收件箱身份，不修改实际保存的邮箱。
 func NormalizeRegistrationEmailAddress(email string) string {
 	local, domain, ok := splitEmailForPolicy(email)
 	if !ok {
 		return ""
 	}
-	if plusIndex := strings.IndexByte(local, '+'); plusIndex >= 0 {
+	domain = strings.TrimRight(domain, ".")
+	if domain == "" {
+		return ""
+	}
+	// 首字符为 + 时没有可安全保留的基础本地部分，不能把不同地址都折叠为空值。
+	if plusIndex := strings.IndexByte(local, '+'); plusIndex > 0 {
 		local = local[:plusIndex]
 	}
-	local = strings.ReplaceAll(local, ".", "")
+	// 只有 Gmail 家族明确忽略本地部分的点号；其他服务商可能把点号视为有效字符。
+	if domain == "gmail.com" || domain == "googlemail.com" {
+		if dotStripped := strings.ReplaceAll(local, ".", ""); dotStripped != "" {
+			local = dotStripped
+		}
+		domain = "gmail.com"
+	}
 	if local == "" {
 		return ""
 	}

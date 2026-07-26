@@ -83,7 +83,7 @@ type OpsInsertErrorLogInput struct {
 	RequestedModel string
 	// UpstreamModel 是映射后实际发给上游的模型名；空值表示未映射。
 	UpstreamModel string
-	// RequestType 是细分请求类型：0=unknown，1=sync，2=stream，3=ws_v2。
+	// RequestType 是细分请求类型：0=unknown，1=sync，2=stream，3=ws_v2，4=cyber，5=live。
 	// 语义与 usage_log.go 中的 service.RequestType 枚举一致。
 	RequestType *int16
 	UserAgent   string

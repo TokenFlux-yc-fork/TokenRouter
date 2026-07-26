@@ -680,12 +680,24 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if msgType == coderws.MessageText {
 		if normalized, changed := normalizeCompletedImageGenerationStatus(payload); changed {
 			payload = normalized
 		}
 	}
-	return c.conn.Write(ctx, msgType, payload)
+	// 控制面取消必须由读路径发送带原因的关闭帧；若直接继承父取消，coder/websocket
+	// 可能在当前帧已经到达客户端但 Write 尚未返回时硬关 TCP。这里保留原 deadline，
+	// 仅让已经开始的写入完成，再由关闭握手统一结束连接。
+	writeCtx := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		writeCtx, cancel = context.WithDeadline(writeCtx, deadline)
+		defer cancel()
+	}
+	return c.conn.Write(writeCtx, msgType, payload)
 }
 
 func (c *openAIWSClientFrameConn) Close() error {

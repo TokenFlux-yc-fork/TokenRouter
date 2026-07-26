@@ -87,6 +87,8 @@ export interface CheckoutInfoResponse {
   stripe_publishable_key: string
   /** 开启后支付宝移动端始终展示二维码，不再跳转手机网站支付。 */
   alipay_force_qrcode?: boolean
+  /** 开启后官方支付宝移动端订单使用预下单，并通过深链接唤起支付宝客户端。 */
+  alipay_mobile_precreate_deep_link?: boolean
 }
 
 // ==================== Orders ====================
@@ -264,6 +266,7 @@ export interface CreateOrderResult {
   out_trade_no?: string
   payment_mode?: string
   resume_token?: string
+  alipay_mobile_precreate_deep_link?: boolean
   oauth?: WechatOAuthInfo
   jsapi?: WechatJSAPIPayload
   jsapi_payload?: WechatJSAPIPayload

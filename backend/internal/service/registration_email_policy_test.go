@@ -44,7 +44,22 @@ func TestIsRegistrationEmailSuffixAllowed(t *testing.T) {
 }
 
 func TestNormalizeRegistrationEmailAddress(t *testing.T) {
-	require.Equal(t, "yourname@example.com", NormalizeRegistrationEmailAddress("Y.o.u.r.N.a.m.e+abc@Example.com"))
-	require.Equal(t, "yourname@example.com", NormalizeRegistrationEmailAddress("yourname@example.com"))
-	require.Empty(t, NormalizeRegistrationEmailAddress("invalid-email"))
+	tests := []struct {
+		name  string
+		email string
+		want  string
+	}{
+		{name: "Gmail 点号与标签", email: "Y.o.u.r.N.a.m.e+abc@Gmail.com", want: "yourname@gmail.com"},
+		{name: "Googlemail 同族与根点", email: "your.name+promo@GoogleMail.com.", want: "yourname@gmail.com"},
+		{name: "非 Gmail 保留点号", email: "First.Last+promo@QQ.com", want: "first.last@qq.com"},
+		{name: "非 Gmail 无点号是不同身份", email: "firstlast@qq.com", want: "firstlast@qq.com"},
+		{name: "首字符加号不折叠", email: "+alice@gmail.com", want: "+alice@gmail.com"},
+		{name: "纯点号本地部分不折叠为空", email: "...@gmail.com", want: "...@gmail.com"},
+		{name: "非法邮箱", email: "invalid-email", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, NormalizeRegistrationEmailAddress(tt.email))
+		})
+	}
 }

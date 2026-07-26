@@ -167,6 +167,16 @@ describe('admin AccountsView usage windows hint', () => {
     expect(getAllGroupsIncludingInactive).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps Ollama Cloud in the single usage column and ignores legacy column preferences', async () => {
+    localStorage.setItem('account-hidden-columns', JSON.stringify(['ollama_cloud_usage']))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const columns = wrapper.getComponent(DataTableStub).props('columns') as Array<{ key: string }>
+    expect(columns.filter(column => column.key === 'usage')).toHaveLength(1)
+    expect(columns.some(column => column.key === 'ollama_cloud_usage')).toBe(false)
+  })
+
   it('renders the upstream billing trust warning next to the declared-rate column', async () => {
     const wrapper = mountView()
     await flushPromises()

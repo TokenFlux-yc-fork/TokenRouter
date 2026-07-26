@@ -550,6 +550,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// ForceCacheBilling 提前拍成标量，避免 worker 闭包保活 failover 状态里的响应体。
 			forceCacheBilling := fs.ForceCacheBilling
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+			clientSessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -562,6 +563,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UpstreamEndpoint:   upstreamEndpoint,
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
+					ClientSessionID:    clientSessionID,
 					RequestPayloadHash: requestPayloadHash,
 					RequestBody:        append([]byte(nil), body...),
 					SessionID:          sessionKey,
@@ -986,6 +988,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// ForceCacheBilling 提前拍成标量，避免 worker 闭包保活 failover 状态里的响应体。
 			forceCacheBilling := fs.ForceCacheBilling
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), currentAPIKey)
+			clientSessionID := service.ExtractClientSessionID(c)
 			h.submitUsageRecordTask(c, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
 					Result:             result,
@@ -998,6 +1001,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					UpstreamEndpoint:   upstreamEndpoint,
 					UserAgent:          userAgent,
 					IPAddress:          clientIP,
+					ClientSessionID:    clientSessionID,
 					RequestPayloadHash: requestPayloadHash,
 					RequestBody:        append([]byte(nil), body...),
 					SessionID:          sessionKey,

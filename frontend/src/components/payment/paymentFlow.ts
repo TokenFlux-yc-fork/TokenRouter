@@ -23,6 +23,7 @@ export type VisiblePaymentMethod = 'alipay' | 'wxpay' | 'stripe' | 'airwallex'
 export type StripeVisibleMethod = 'alipay' | 'wechat_pay'
 export type PaymentLaunchKind =
   | 'qr_waiting'
+  | 'alipay_deep_link'
   | 'redirect_waiting'
   | 'stripe_popup'
   | 'stripe_route'
@@ -48,6 +49,7 @@ export interface PaymentRecoverySnapshot {
   orderType: OrderType | ''
   paymentMode: string
   resumeToken: string
+  alipayMobilePrecreateDeepLink?: boolean
   createdAt: number
 }
 
@@ -58,6 +60,8 @@ export interface PaymentLaunchContext {
   isWechatBrowser?: boolean
   /** 开启后支付宝不再按移动端跳转，始终走二维码等待流程。 */
   forceQRCode?: boolean
+  /** 开启后移动端支付宝预下单流程优先于强制二维码设置。 */
+  mobilePrecreateDeepLink?: boolean
   now?: number
   stripePopupUrl?: string
   stripeRouteUrl?: string
@@ -84,6 +88,8 @@ export interface BuildCreateOrderPayloadInput {
   billingInfo?: BillingInfo
   /** 开启后支付宝下单向后端传 is_mobile=false，以生成二维码。 */
   forceQRCode?: boolean
+  /** 开启后保留真实移动端标记，让后端选择预下单流程。 */
+  mobilePrecreateDeepLink?: boolean
 }
 
 type CreateOrderFlowResult = CreateOrderResult & {
@@ -117,8 +123,8 @@ export function getVisibleMethods(methods: Record<string, MethodLimit>): Record<
 export function buildCreateOrderPayload(input: BuildCreateOrderPayloadInput): CreateOrderRequest {
   const visibleMethod = normalizeVisibleMethod(input.paymentType) || input.paymentType.trim()
   const normalizedOrigin = (input.origin || '').trim().replace(/\/+$/, '')
-  // 支付宝强制二维码时，后端必须按桌面请求生成扫码链接。
-  const effectiveMobile = (input.forceQRCode && visibleMethod === 'alipay')
+  // 支付宝强制二维码时按桌面请求生成扫码链接；移动端当面付开关优先保留真实设备信号。
+  const effectiveMobile = (input.forceQRCode && !input.mobilePrecreateDeepLink && visibleMethod === 'alipay')
     ? false
     : input.isMobile
   const payload: CreateOrderRequest = {
@@ -168,6 +174,7 @@ export function decidePaymentLaunch(
     orderType: context.orderType,
     paymentMode: (result.payment_mode || '').trim(),
     resumeToken: result.resume_token || '',
+    alipayMobilePrecreateDeepLink: result.alipay_mobile_precreate_deep_link === true,
   }, context.now)
 
   // Stripe Checkout 返回的是 pay_url，应优先打开托管收银台；invoice_url 只作为旧账单模式兜底。
@@ -214,9 +221,18 @@ export function decidePaymentLaunch(
     return { kind: 'wechat_jsapi', paymentState: baseState, recovery: baseState, jsapi: jsapiPayload }
   }
 
+  if (
+    visibleMethod === 'alipay'
+    && context.isMobile
+    && baseState.alipayMobilePrecreateDeepLink
+    && baseState.qrCode
+  ) {
+    return { kind: 'alipay_deep_link', paymentState: baseState, recovery: baseState }
+  }
+
   const normalizedPaymentMode = baseState.paymentMode.trim().toLowerCase()
-  // 支付宝强制二维码时，跳过移动端 pay_url 优先分支，继续走扫码等待。
-  const effectiveMobile = (context.forceQRCode && visibleMethod === 'alipay')
+  // 支付宝强制二维码时跳过移动 pay_url；移动端当面付订单则优先进入 deep link 流程。
+  const effectiveMobile = (context.forceQRCode && !context.mobilePrecreateDeepLink && visibleMethod === 'alipay')
     ? false
     : context.isMobile
   const prefersRedirect = normalizedPaymentMode === 'redirect'
@@ -294,6 +310,7 @@ export function readPaymentRecoverySnapshot(
       || typeof parsed.payAmount !== 'number'
       || typeof parsed.paymentMode !== 'string'
       || typeof parsed.resumeToken !== 'string'
+      || (parsed.alipayMobilePrecreateDeepLink != null && typeof parsed.alipayMobilePrecreateDeepLink !== 'boolean')
       || typeof parsed.createdAt !== 'number'
     ) {
       return null
@@ -325,6 +342,7 @@ export function readPaymentRecoverySnapshot(
       orderType: parsed.orderType === 'subscription' ? 'subscription' : 'balance',
       paymentMode: parsed.paymentMode,
       resumeToken: parsed.resumeToken,
+      alipayMobilePrecreateDeepLink: parsed.alipayMobilePrecreateDeepLink === true,
       createdAt: parsed.createdAt,
     }
   } catch {
