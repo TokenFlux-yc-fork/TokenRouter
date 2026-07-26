@@ -1448,31 +1448,37 @@ func (s *UsageLogRepoSuite) TestGetModelStatsWithFilters() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-modelfilters"})
 
 	base := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	accountRate1, accountStatsCost1 := 2.0, 0.4
+	accountRate2, accountStatsCost2 := 1.5, 0.1
 
 	log1 := &service.UsageLog{
-		UserID:       user.ID,
-		APIKeyID:     apiKey.ID,
-		AccountID:    account.ID,
-		Model:        "claude-3-opus",
-		InputTokens:  100,
-		OutputTokens: 200,
-		TotalCost:    0.5,
-		ActualCost:   0.5,
-		CreatedAt:    base,
+		UserID:                user.ID,
+		APIKeyID:              apiKey.ID,
+		AccountID:             account.ID,
+		Model:                 "claude-3-opus",
+		InputTokens:           100,
+		OutputTokens:          200,
+		TotalCost:             0.5,
+		ActualCost:            25,
+		AccountRateMultiplier: &accountRate1,
+		AccountStatsCost:      &accountStatsCost1,
+		CreatedAt:             base,
 	}
 	_, err := s.repo.Create(s.ctx, log1)
 	s.Require().NoError(err)
 
 	log2 := &service.UsageLog{
-		UserID:       user.ID,
-		APIKeyID:     apiKey.ID,
-		AccountID:    account.ID,
-		Model:        "claude-3-sonnet",
-		InputTokens:  50,
-		OutputTokens: 100,
-		TotalCost:    0.2,
-		ActualCost:   0.2,
-		CreatedAt:    base.Add(1 * time.Hour),
+		UserID:                user.ID,
+		APIKeyID:              apiKey.ID,
+		AccountID:             account.ID,
+		Model:                 "claude-3-sonnet",
+		InputTokens:           50,
+		OutputTokens:          100,
+		TotalCost:             0.2,
+		ActualCost:            10,
+		AccountRateMultiplier: &accountRate2,
+		AccountStatsCost:      &accountStatsCost2,
+		CreatedAt:             base.Add(1 * time.Hour),
 	}
 	_, err = s.repo.Create(s.ctx, log2)
 	s.Require().NoError(err)
@@ -1490,10 +1496,64 @@ func (s *UsageLogRepoSuite) TestGetModelStatsWithFilters() {
 	s.Require().NoError(err, "GetModelStatsWithFilters apiKey filter")
 	s.Require().Len(stats, 2)
 
-	// Test with account filter
+	// 账号筛选时仍分别返回用户实际扣费、账号成本和标准费用。
 	stats, err = s.repo.GetModelStatsWithFilters(s.ctx, startTime, endTime, 0, 0, account.ID, 0, nil, nil, nil)
 	s.Require().NoError(err, "GetModelStatsWithFilters account filter")
 	s.Require().Len(stats, 2)
+	s.Require().InDelta(25, stats[0].ActualCost, 0.000001)
+	s.Require().InDelta(0.8, stats[0].AccountCost, 0.000001)
+	s.Require().InDelta(0.5, stats[0].Cost, 0.000001)
+}
+
+func (s *UsageLogRepoSuite) TestGetGeminiUsageTotalsBatchUsesAccountCost() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "gemini-cost@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-gemini-cost", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-gemini-cost"})
+	base := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	proRate, proStatsCost := 2.0, 0.4
+	flashRate, flashStatsCost := 1.5, 0.1
+
+	// 两条记录的用户扣费远高于账号成本，用于锁定批量聚合口径。
+	logs := []*service.UsageLog{
+		{
+			UserID:                user.ID,
+			APIKeyID:              apiKey.ID,
+			AccountID:             account.ID,
+			Model:                 "gemini-2.5-pro",
+			InputTokens:           100,
+			OutputTokens:          200,
+			TotalCost:             0.5,
+			ActualCost:            25,
+			AccountRateMultiplier: &proRate,
+			AccountStatsCost:      &proStatsCost,
+			CreatedAt:             base,
+		},
+		{
+			UserID:                user.ID,
+			APIKeyID:              apiKey.ID,
+			AccountID:             account.ID,
+			Model:                 "gemini-2.5-flash",
+			InputTokens:           50,
+			OutputTokens:          100,
+			TotalCost:             0.2,
+			ActualCost:            10,
+			AccountRateMultiplier: &flashRate,
+			AccountStatsCost:      &flashStatsCost,
+			CreatedAt:             base.Add(time.Minute),
+		},
+	}
+	for _, log := range logs {
+		_, err := s.repo.Create(s.ctx, log)
+		s.Require().NoError(err)
+	}
+
+	totals, err := s.repo.GetGeminiUsageTotalsBatch(s.ctx, []int64{account.ID}, base.Add(-time.Hour), base.Add(time.Hour))
+
+	s.Require().NoError(err)
+	s.Require().InDelta(0.8, totals[account.ID].ProCost, 0.000001)
+	s.Require().InDelta(0.15, totals[account.ID].FlashCost, 0.000001)
+	s.Require().Equal(int64(1), totals[account.ID].ProRequests)
+	s.Require().Equal(int64(1), totals[account.ID].FlashRequests)
 }
 
 // --- GetAccountUsageStats ---
