@@ -97,6 +97,59 @@ func TestIsGrokContentPolicyRejection(t *testing.T) {
 	}
 }
 
+func TestIsGrokResponsesTransientNotFound(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{
+			name:   "matching response",
+			status: http.StatusNotFound,
+			body:   `{"error":{"message":"Not Found","type":"bad_response_status_code","param":"","code":"bad_response_status_code"}}`,
+			want:   true,
+		},
+		{
+			name:   "message whitespace and case are normalized",
+			status: http.StatusNotFound,
+			body:   `{"error":{"message":"  not FOUND  ","type":" bad_response_status_code ","code":" bad_response_status_code "}}`,
+			want:   true,
+		},
+		{
+			name:   "wrong status",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"message":"Not Found","type":"bad_response_status_code","code":"bad_response_status_code"}}`,
+		},
+		{
+			name:   "generic not found",
+			status: http.StatusNotFound,
+			body:   `{"error":{"message":"model not found","type":"invalid_request_error","code":"model_not_found"}}`,
+		},
+		{
+			name:   "missing code",
+			status: http.StatusNotFound,
+			body:   `{"error":{"message":"Not Found","type":"bad_response_status_code"}}`,
+		},
+		{
+			name:   "different message",
+			status: http.StatusNotFound,
+			body:   `{"error":{"message":"endpoint Not Found","type":"bad_response_status_code","code":"bad_response_status_code"}}`,
+		},
+		{
+			name:   "malformed response",
+			status: http.StatusNotFound,
+			body:   `{"error":`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isGrokResponsesTransientNotFound(tt.status, []byte(tt.body)))
+		})
+	}
+}
+
 func TestGrokContentPolicy403DoesNotMutateOrFailover(t *testing.T) {
 	repo := &grokQuotaAccountRepo{}
 	svc := &OpenAIGatewayService{accountRepo: repo}

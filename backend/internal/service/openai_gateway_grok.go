@@ -111,7 +111,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 
 	upstreamStart := time.Now()
 	var resp *http.Response
-	for attempt := 0; ; attempt++ {
+	retriedInvalidEncryptedContent := false
+	retriedTransientNotFound := false
+	for {
 		upstreamReq, buildErr := buildGrokResponsesRequest(upstreamCtx, c, account, patchedBody, token, cacheIdentity, s.cfg)
 		if buildErr != nil {
 			return nil, buildErr
@@ -125,41 +127,61 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 
 		// xAI 可能拒绝从其他账号或缓存标识响应中复制的加密 reasoning。
 		// 仅移除被拒绝的加密 reasoning 载荷后，使用相同路由与凭据重试一次。
-		if attempt > 0 || resp.StatusCode != http.StatusBadRequest {
-			break
-		}
-		respBody := s.readUpstreamErrorBody(resp)
-		if resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-		if !isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) {
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
-			break
+		if !retriedInvalidEncryptedContent && resp.StatusCode == http.StatusBadRequest {
+			respBody := s.readUpstreamErrorBody(resp)
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			if !isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) {
+				resp.Body = io.NopCloser(bytes.NewReader(respBody))
+				break
+			}
+
+			retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(patchedBody)
+			if trimErr != nil {
+				return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
+			}
+			if !changed {
+				resp.Body = io.NopCloser(bytes.NewReader(respBody))
+				break
+			}
+
+			patchedBody = retryBody
+			retriedInvalidEncryptedContent = true
+			slog.Info("grok_invalid_encrypted_content_retry", "account_id", account.ID, "cache_identity_present", cacheIdentity != "")
+			continue
 		}
 
-		retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(patchedBody)
-		if trimErr != nil {
-			return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
-		}
-		if !changed {
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
-			break
+		if !retriedTransientNotFound && resp.StatusCode == http.StatusNotFound {
+			respBody := s.readUpstreamErrorBody(resp)
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			if !isGrokResponsesTransientNotFound(resp.StatusCode, respBody) {
+				resp.Body = io.NopCloser(bytes.NewReader(respBody))
+				break
+			}
+
+			retriedTransientNotFound = true
+			slog.Info("grok_responses_transient_not_found_retry", "account_id", account.ID)
+			continue
 		}
 
-		patchedBody = retryBody
-		slog.Info("grok_invalid_encrypted_content_retry", "account_id", account.ID, "cache_identity_present", cacheIdentity != "")
+		break
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		transientNotFound := isGrokResponsesTransientNotFound(resp.StatusCode, respBody)
+		shouldFailover := transientNotFound || s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
 		upstreamMsg := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(respBody))
 		if upstreamMsg == "" {
 			upstreamMsg = fmt.Sprintf("xAI upstream returned status %d", resp.StatusCode)
 		}
 		kind := "http_error"
-		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
+		if shouldFailover {
 			kind = "failover"
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -172,12 +194,12 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			Message:            upstreamMsg,
 		})
 		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
+		if shouldFailover {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
 				ResponseHeaders:        resp.Header.Clone(),
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: !transientNotFound && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
