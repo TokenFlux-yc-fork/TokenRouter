@@ -309,7 +309,7 @@ func TestOpenAIGatewayServiceForwardAPIKeyRemoteCompactV2PreservesResponsesWire(
 				"gpt-5.6-sol": "gpt-5.6-sol-openai-compact",
 			},
 		},
-		Extra:       map[string]any{"use_responses_api": true},
+		Extra:       map[string]any{"openai_responses_supported": true},
 		Status:      StatusActive,
 		Schedulable: true,
 	}
@@ -318,6 +318,7 @@ func TestOpenAIGatewayServiceForwardAPIKeyRemoteCompactV2PreservesResponsesWire(
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	MarkOpenAINativeRemoteCompactionV2(c)
 
 	body := []byte(`{"model":"gpt-5.6-sol","stream":true,"instructions":"response-test","input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}],"reasoning":{"effort":"max","context":"all_turns"}}`)
 	result, err := svc.Forward(context.Background(), c, account, body)

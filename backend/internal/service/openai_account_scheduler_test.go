@@ -633,9 +633,9 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_Embeddi
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 }
 
-// 生图意图的 /v1/responses 请求要求 OpenAIEndpointCapabilityResponses：探测确认
-// 不支持 Responses API 的 APIKey 账号必须被排除，避免 forward 阶段降级为无法生图
-// 的 Chat Completions 直转（#4417）。
+// 依赖原生 /v1/responses 语义的请求要求 OpenAIEndpointCapabilityResponses：探测确认
+// 不支持 Responses API 的 APIKey 账号必须被排除，避免 forward 阶段降级为语义不兼容
+// 的 Chat Completions 直转。
 func TestOpenAIGatewayService_SelectAccountWithScheduler_ResponsesCapabilityExcludesUnsupportedAPIKey(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 
@@ -656,6 +656,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_ResponsesCapabilityExcl
 	supported := Account{
 		ID: 37001, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
 		Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0,
+		Extra: map[string]any{"openai_responses_supported": true},
 	}
 	// 更高优先级但探测确认不支持 Responses——若门控失效会被优先选中。
 	unsupported := Account{
@@ -699,6 +700,23 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_ResponsesCapabilityExcl
 		require.NotNil(t, selection)
 		require.NotNil(t, selection.Account)
 		require.Equal(t, int64(37002), selection.Account.ID)
+	})
+
+	t.Run("OAuth 失败后 native compact 可切到支持 responses 的 APIKey", func(t *testing.T) {
+		oauth := Account{
+			ID: 37003, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+			Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 10,
+		}
+		svc := newSvc([]Account{oauth, supported, unsupported})
+		selection, _, err := svc.SelectAccountWithSchedulerForCapability(
+			ctx, &groupID, "", "", "gpt-5.6-sol", map[int64]struct{}{oauth.ID: {}},
+			OpenAIUpstreamTransportAny, OpenAIEndpointCapabilityResponses,
+			false, false, true,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, selection)
+		require.NotNil(t, selection.Account)
+		require.Equal(t, supported.ID, selection.Account.ID)
 	})
 }
 

@@ -107,6 +107,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+		if IsOpenAINativeRemoteCompactionV2(c) {
+			return nil, errors.New("native remote compaction v2 requires a Responses-capable account")
+		}
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, tlsRouterMatch)
 	}
 	if account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey {

@@ -191,9 +191,9 @@ func openAICompatibleRequestPlatform(apiKey *service.APIKey) string {
 	return service.PlatformOpenAI
 }
 
-// openAIResponsesRequiredCapability 根据显式生图意图选择账号必须支持的端点能力。
-func openAIResponsesRequiredCapability(imageIntent bool, platform string) service.OpenAIEndpointCapability {
-	if imageIntent && platform == service.PlatformOpenAI {
+// openAIResponsesRequiredCapability 根据请求语义选择账号必须支持的端点能力。
+func openAIResponsesRequiredCapability(imageIntent bool, nativeRemoteCompactionV2 bool, platform string) service.OpenAIEndpointCapability {
+	if platform == service.PlatformOpenAI && (imageIntent || nativeRemoteCompactionV2) {
 		return service.OpenAIEndpointCapabilityResponses
 	}
 	return service.OpenAIEndpointCapabilityChatCompletions
@@ -450,6 +450,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 	}
 	requireCompact := isOpenAIRemoteCompactPath(c)
+	nativeRemoteCompactionV2 := service.IsOpenAINativeRemoteCompactionV2(c)
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
@@ -459,13 +460,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 
-	// 生图意图的 /v1/responses 请求必须调度到确实支持 Responses API 的账号，否则
-	// 会在 forward 阶段被静默降级为无法生图的 Chat Completions 直转（#4417）。
+	// 生图意图与 native remote compaction v2 请求必须调度到确实支持 Responses API
+	// 的账号，否则会在 forward 阶段被静默降级为语义不兼容的 Chat Completions 直转。
 	// 仅对 OpenAI 平台生效：Grok 生图走独立的 forwardGrokResponses 路径，不应被过滤。
 	// 复用前置权限与并发阶段按渠道模型 C 和未再修改的 forwardBody 确认的显式生图意图，
 	// 避免大 tools 请求重复扫描。
 	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
-	requiredCapability := openAIResponsesRequiredCapability(imageIntent, requestPlatform)
+	requiredCapability := openAIResponsesRequiredCapability(imageIntent, nativeRemoteCompactionV2, requestPlatform)
 
 	for {
 		// 流式 Forward 会主动分离上游请求，以便客户端断开后继续回收用量；每次账号尝试前

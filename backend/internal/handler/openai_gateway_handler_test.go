@@ -169,10 +169,11 @@ func TestOpenAIForwardSucceededForScheduling(t *testing.T) {
 
 func TestOpenAIResponsesRequiredCapability(t *testing.T) {
 	tests := []struct {
-		name        string
-		imageIntent bool
-		platform    string
-		want        service.OpenAIEndpointCapability
+		name                     string
+		imageIntent              bool
+		nativeRemoteCompactionV2 bool
+		platform                 string
+		want                     service.OpenAIEndpointCapability
 	}{
 		{
 			name:        "OpenAI explicit image intent requires Responses",
@@ -181,10 +182,22 @@ func TestOpenAIResponsesRequiredCapability(t *testing.T) {
 			want:        service.OpenAIEndpointCapabilityResponses,
 		},
 		{
+			name:                     "OpenAI native remote compaction v2 requires Responses",
+			nativeRemoteCompactionV2: true,
+			platform:                 service.PlatformOpenAI,
+			want:                     service.OpenAIEndpointCapabilityResponses,
+		},
+		{
 			name:        "Grok explicit image intent keeps chat capability",
 			imageIntent: true,
 			platform:    service.PlatformGrok,
 			want:        service.OpenAIEndpointCapabilityChatCompletions,
+		},
+		{
+			name:                     "Grok native remote compaction v2 keeps chat capability",
+			nativeRemoteCompactionV2: true,
+			platform:                 service.PlatformGrok,
+			want:                     service.OpenAIEndpointCapabilityChatCompletions,
 		},
 		{
 			name:     "non-image intent keeps chat capability",
@@ -195,7 +208,7 @@ func TestOpenAIResponsesRequiredCapability(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, openAIResponsesRequiredCapability(tt.imageIntent, tt.platform))
+			require.Equal(t, tt.want, openAIResponsesRequiredCapability(tt.imageIntent, tt.nativeRemoteCompactionV2, tt.platform))
 		})
 	}
 }
