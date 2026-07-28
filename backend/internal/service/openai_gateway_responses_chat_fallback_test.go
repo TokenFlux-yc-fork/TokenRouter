@@ -102,6 +102,45 @@ func TestForwardResponses_ForceChatCompletionsRoutesStreamingToChatCompletions(t
 	require.NotNil(t, result.FirstTokenMs)
 }
 
+func TestForwardResponses_NativeRemoteCompactV2RejectsChatCompletionsFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.6-sol","stream":true,"input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}]}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+	MarkOpenAINativeRemoteCompactionV2(c)
+
+	upstreamBody := strings.Join([]string{
+		`data: {"id":"chatcmpl_compact","object":"chat.completion.chunk","model":"gpt-5.6-sol","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		"",
+		`data: {"id":"chatcmpl_compact","object":"chat.completion.chunk","model":"gpt-5.6-sol","choices":[{"index":0,"delta":{"content":"ordinary answer"},"finish_reason":null}]}`,
+		"",
+		`data: {"id":"chatcmpl_compact","object":"chat.completion.chunk","model":"gpt-5.6-sol","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+
+	require.EqualError(t, err, "native remote compaction v2 requires a Responses-capable account")
+	require.Nil(t, result)
+	require.Nil(t, upstream.lastReq)
+	require.Empty(t, rec.Body.String())
+}
+
 func TestForwardResponses_DeepSeekReasoningOnlyStreamProducesVisibleText(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

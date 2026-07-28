@@ -21,7 +21,7 @@ func BenchmarkOpenAIResponsesImageIntentRouting_LargeToolsBody(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
 			imageIntent := service.IsExplicitImageGenerationIntent("/v1/responses", "gpt-5.4", body)
-			openAIResponsesImageIntentRoutingBenchmarkSink = openAIResponsesRequiredCapability(imageIntent, platform)
+			openAIResponsesImageIntentRoutingBenchmarkSink = openAIResponsesRequiredCapability(imageIntent, false, platform)
 		}
 	})
 
