@@ -6,6 +6,27 @@ import (
 	"strings"
 )
 
+func isGrokResponsesTransientNotFound(statusCode int, responseBody []byte) bool {
+	if statusCode != http.StatusNotFound || len(responseBody) == 0 {
+		return false
+	}
+
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(responseBody, &payload); err != nil {
+		return false
+	}
+
+	return strings.EqualFold(strings.TrimSpace(payload.Error.Message), "Not Found") &&
+		strings.TrimSpace(payload.Error.Type) == "bad_response_status_code" &&
+		strings.TrimSpace(payload.Error.Code) == "bad_response_status_code"
+}
+
 // isGrokContentPolicyRejection 识别 xAI 针对单次请求的内容安全拒绝。
 // 这类失败由提示词或媒体内容引起，切换 OAuth 账号无法改变结果，反而会错误消耗账号池。
 // 匹配条件必须保持严格：账号权益或封禁消息也可能提到策略，但仍应走正常的账号故障转移路径。
