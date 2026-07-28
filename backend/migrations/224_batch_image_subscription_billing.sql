@@ -1,3 +1,4 @@
+SET LOCAL lock_timeout = '1s';
 ALTER TABLE batch_image_jobs
     ADD COLUMN IF NOT EXISTS balance_hold_amount DECIMAL(20,10) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS subscription_hold_allocations JSONB NOT NULL DEFAULT '[]'::jsonb,

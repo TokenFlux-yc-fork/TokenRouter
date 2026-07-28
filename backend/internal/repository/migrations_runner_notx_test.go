@@ -155,6 +155,27 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_usage_logs_api_key_latest_ip
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestPrepareNonTransactionalMigration_TeamAttributionIndexesDropInvalidBeforeRetry(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	for i, indexName := range teamAttributionIndexes {
+		invalid := i == 1
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(indexName).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(invalid))
+		if invalid {
+			mock.ExpectExec("DROP INDEX CONCURRENTLY IF EXISTS " + indexName).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+
+	err = prepareNonTransactionalMigration(context.Background(), db, teamAttributionIndexMigration)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestApplyMigrationsFS_PaymentOrdersOutTradeNoUniqueMigration_FailsFastOnDuplicatePrecheck(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

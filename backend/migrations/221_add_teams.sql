@@ -1,4 +1,6 @@
 -- 单团队功能：团队、成员、邀请、所有权转让及团队计费归因字段。
+-- 只做在线扩展：迁移期间不回写历史大表，也不申请长期强校验锁。
+SET LOCAL lock_timeout = '1s';
 CREATE TABLE IF NOT EXISTS teams (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -97,37 +99,50 @@ BEGIN
         SELECT 1 FROM pg_constraint WHERE conname = 'api_keys_team_id_fkey'
     ) THEN
         ALTER TABLE api_keys
-            ADD CONSTRAINT api_keys_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT;
+            ADD CONSTRAINT api_keys_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT NOT VALID;
     END IF;
 END $$;
-CREATE INDEX IF NOT EXISTS api_keys_team_id_idx
-    ON api_keys (team_id) WHERE team_id IS NOT NULL AND deleted_at IS NULL;
 
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS billing_user_id BIGINT;
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS team_id BIGINT NULL;
-UPDATE usage_logs SET billing_user_id = user_id WHERE billing_user_id IS NULL;
-ALTER TABLE usage_logs ALTER COLUMN billing_user_id SET NOT NULL;
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'usage_logs_billing_user_id_fkey') THEN
-        ALTER TABLE usage_logs ADD CONSTRAINT usage_logs_billing_user_id_fkey FOREIGN KEY (billing_user_id) REFERENCES users(id) ON DELETE RESTRICT;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'usage_logs'::regclass AND conname = 'usage_logs_billing_user_id_fkey'
+    ) THEN
+        ALTER TABLE usage_logs
+            ADD CONSTRAINT usage_logs_billing_user_id_fkey
+            FOREIGN KEY (billing_user_id) REFERENCES users(id) ON DELETE RESTRICT NOT VALID;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'usage_logs_team_id_fkey') THEN
-        ALTER TABLE usage_logs ADD CONSTRAINT usage_logs_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'usage_logs'::regclass AND conname = 'usage_logs_team_id_fkey'
+    ) THEN
+        ALTER TABLE usage_logs
+            ADD CONSTRAINT usage_logs_team_id_fkey
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'usage_logs'::regclass AND conname = 'usage_logs_billing_user_id_present_check'
+    ) THEN
+        ALTER TABLE usage_logs
+            ADD CONSTRAINT usage_logs_billing_user_id_present_check
+            CHECK (billing_user_id IS NOT NULL) NOT VALID;
     END IF;
 END $$;
-CREATE INDEX IF NOT EXISTS usage_logs_billing_user_created_idx
-    ON usage_logs (billing_user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS usage_logs_team_created_idx
-    ON usage_logs (team_id, created_at DESC) WHERE team_id IS NOT NULL;
 
--- 现有 usage 日志写入器列数较多，由触发器集中补齐团队归因，避免所有批处理路径发生列序漂移。
+-- 旧版本实例仍可能不认识新增列；仅在付款人缺失时补齐，避免给新写入增加额外查询。
 CREATE OR REPLACE FUNCTION fill_usage_log_team_attribution()
 RETURNS TRIGGER AS $$
 DECLARE
     resolved_team_id BIGINT;
     resolved_billing_user_id BIGINT;
 BEGIN
+    IF NEW.billing_user_id IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
     SELECT ak.team_id INTO resolved_team_id FROM api_keys ak WHERE ak.id = NEW.api_key_id;
     NEW.team_id := COALESCE(NEW.team_id, resolved_team_id);
     IF NEW.team_id IS NOT NULL THEN
@@ -143,24 +158,65 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS usage_logs_fill_team_attribution ON usage_logs;
 CREATE TRIGGER usage_logs_fill_team_attribution
-    BEFORE INSERT ON usage_logs
+    BEFORE INSERT OR UPDATE ON usage_logs
     FOR EACH ROW EXECUTE FUNCTION fill_usage_log_team_attribution();
 
 ALTER TABLE batch_image_jobs ADD COLUMN IF NOT EXISTS billing_user_id BIGINT;
 ALTER TABLE batch_image_jobs ADD COLUMN IF NOT EXISTS team_id BIGINT NULL;
-UPDATE batch_image_jobs SET billing_user_id = user_id WHERE billing_user_id IS NULL;
-ALTER TABLE batch_image_jobs ALTER COLUMN billing_user_id SET NOT NULL;
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'batch_image_jobs_billing_user_id_fkey') THEN
-        ALTER TABLE batch_image_jobs ADD CONSTRAINT batch_image_jobs_billing_user_id_fkey FOREIGN KEY (billing_user_id) REFERENCES users(id) ON DELETE RESTRICT;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'batch_image_jobs'::regclass AND conname = 'batch_image_jobs_billing_user_id_fkey'
+    ) THEN
+        ALTER TABLE batch_image_jobs
+            ADD CONSTRAINT batch_image_jobs_billing_user_id_fkey
+            FOREIGN KEY (billing_user_id) REFERENCES users(id) ON DELETE RESTRICT NOT VALID;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'batch_image_jobs_team_id_fkey') THEN
-        ALTER TABLE batch_image_jobs ADD CONSTRAINT batch_image_jobs_team_id_fkey FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'batch_image_jobs'::regclass AND conname = 'batch_image_jobs_team_id_fkey'
+    ) THEN
+        ALTER TABLE batch_image_jobs
+            ADD CONSTRAINT batch_image_jobs_team_id_fkey
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'batch_image_jobs'::regclass AND conname = 'batch_image_jobs_billing_user_id_present_check'
+    ) THEN
+        ALTER TABLE batch_image_jobs
+            ADD CONSTRAINT batch_image_jobs_billing_user_id_present_check
+            CHECK (billing_user_id IS NOT NULL) NOT VALID;
     END IF;
 END $$;
-CREATE INDEX IF NOT EXISTS batch_image_jobs_team_created_idx
-    ON batch_image_jobs (team_id, created_at DESC) WHERE team_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION fill_batch_image_job_team_attribution()
+RETURNS TRIGGER AS $$
+DECLARE
+    resolved_team_id BIGINT;
+    resolved_billing_user_id BIGINT;
+BEGIN
+    IF NEW.billing_user_id IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+    SELECT ak.team_id INTO resolved_team_id FROM api_keys ak WHERE ak.id = NEW.api_key_id;
+    NEW.team_id := COALESCE(NEW.team_id, resolved_team_id);
+    IF NEW.team_id IS NOT NULL THEN
+        SELECT tm.user_id INTO resolved_billing_user_id
+        FROM team_memberships tm
+        WHERE tm.team_id = NEW.team_id AND tm.left_at IS NULL AND tm.role = 'owner'
+        LIMIT 1;
+    END IF;
+    NEW.billing_user_id := COALESCE(resolved_billing_user_id, NEW.user_id);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS batch_image_jobs_fill_team_attribution ON batch_image_jobs;
+CREATE TRIGGER batch_image_jobs_fill_team_attribution
+    BEFORE INSERT OR UPDATE ON batch_image_jobs
+    FOR EACH ROW EXECUTE FUNCTION fill_batch_image_job_team_attribution();
 
 -- 活跃团队 Owner 必须先转让所有权或解散团队，数据库层同时保护软删除和硬删除路径。
 CREATE OR REPLACE FUNCTION prevent_active_team_owner_deletion()

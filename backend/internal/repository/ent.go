@@ -42,27 +42,10 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 		return nil, nil, err
 	}
 
-	// 构建包含时区信息的数据库连接字符串 (DSN)。
-	// 时区信息会传递给 PostgreSQL，确保数据库层面的时间处理正确。
-	dsn := cfg.Database.DSNWithTimezone(cfg.Timezone)
-
-	// 使用 Ent 的 SQL 驱动打开 PostgreSQL 连接。
-	// dialect.Postgres 指定使用 PostgreSQL 方言进行 SQL 生成。
-	var drv *entsql.Driver
-	if cfg.Server.EnableServerTiming {
-		connector, err := pq.NewConnector(dsn)
-		if err != nil {
-			return nil, nil, err
-		}
-		drv = entsql.OpenDB(dialect.Postgres, sql.OpenDB(newServerTimingConnector(connector)))
-	} else {
-		var err error
-		drv, err = entsql.Open(dialect.Postgres, dsn)
-		if err != nil {
-			return nil, nil, err
-		}
+	drv, err := openEntDriver(cfg)
+	if err != nil {
+		return nil, nil, err
 	}
-	applyDBPoolSettings(drv.DB(), cfg)
 
 	// 确保数据库 schema 已准备就绪。
 	// SQL 迁移文件是 schema 的权威来源（source of truth）。
@@ -106,4 +89,41 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	}
 
 	return client, drv.DB(), nil
+}
+
+// ApplyConfiguredMigrations opens only PostgreSQL and applies the embedded migrations.
+// It deliberately skips application wiring so a deployment can migrate before starting workers.
+func ApplyConfiguredMigrations(ctx context.Context, cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("nil config")
+	}
+	if err := timezone.Init(cfg.Timezone); err != nil {
+		return err
+	}
+	drv, err := openEntDriver(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = drv.Close() }()
+	return applyMigrationsFS(ctx, drv.DB(), migrations.FS)
+}
+
+func openEntDriver(cfg *config.Config) (*entsql.Driver, error) {
+	dsn := cfg.Database.DSNWithTimezone(cfg.Timezone)
+	if cfg.Server.EnableServerTiming {
+		connector, err := pq.NewConnector(dsn)
+		if err != nil {
+			return nil, err
+		}
+		drv := entsql.OpenDB(dialect.Postgres, sql.OpenDB(newServerTimingConnector(connector)))
+		applyDBPoolSettings(drv.DB(), cfg)
+		return drv, nil
+	}
+
+	drv, err := entsql.Open(dialect.Postgres, dsn)
+	if err != nil {
+		return nil, err
+	}
+	applyDBPoolSettings(drv.DB(), cfg)
+	return drv, nil
 }

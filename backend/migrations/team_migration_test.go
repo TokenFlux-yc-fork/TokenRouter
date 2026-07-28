@@ -31,6 +31,33 @@ func TestTeamMigrationContainsIsolationAndAttributionConstraints(t *testing.T) {
 	require.Contains(t, sql, "users_prevent_active_team_owner_hard_delete")
 }
 
+func TestTeamMigrationKeepsHistoricalAttributionOnlineCompatible(t *testing.T) {
+	content, err := FS.ReadFile("221_add_teams.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(content))
+	normalized := strings.Join(strings.Fields(sql), " ")
+
+	require.Contains(t, normalized, "set local lock_timeout = '1s'")
+	require.NotContains(t, normalized, "update usage_logs set billing_user_id")
+	require.NotContains(t, normalized, "update batch_image_jobs set billing_user_id")
+	require.NotContains(t, normalized, "alter table usage_logs alter column billing_user_id set not null")
+	require.NotContains(t, normalized, "alter table batch_image_jobs alter column billing_user_id set not null")
+	require.Contains(t, normalized, "usage_logs_billing_user_id_present_check")
+	require.Contains(t, normalized, "batch_image_jobs_billing_user_id_present_check")
+	require.Contains(t, normalized, "before insert or update on usage_logs")
+	require.Contains(t, normalized, "before insert or update on batch_image_jobs")
+	require.Contains(t, normalized, "not valid")
+
+	indexContent, err := FS.ReadFile("221a_team_attribution_indexes_notx.sql")
+	require.NoError(t, err)
+	indexSQL := strings.ToLower(string(indexContent))
+	require.Contains(t, indexSQL, "create index concurrently if not exists usage_logs_billing_user_created_idx")
+	require.Contains(t, indexSQL, "where billing_user_id is not null")
+	require.Contains(t, indexSQL, "create index concurrently if not exists usage_logs_team_created_idx")
+	require.Contains(t, indexSQL, "create index concurrently if not exists batch_image_jobs_team_created_idx")
+	require.NotContains(t, sql, "create index if not exists usage_logs_billing_user_created_idx")
+}
+
 func TestTeamDefaultMemberLimitsMigration(t *testing.T) {
 	content, err := FS.ReadFile("222_add_team_default_member_limits.sql")
 	require.NoError(t, err)
@@ -47,6 +74,7 @@ func TestTeamLifecycleAndAllowanceMigration(t *testing.T) {
 	content, err := FS.ReadFile("223_harden_team_lifecycle_and_allowance.sql")
 	require.NoError(t, err)
 	sql := strings.ToLower(string(content))
+	require.Contains(t, sql, "set local lock_timeout = '1s'")
 
 	// 两个轻量字段分别承载 Owner 锁定和批任务额度预记，不引入额外预留表。
 	require.Contains(t, sql, "team_owner_disabled")
@@ -57,4 +85,10 @@ func TestTeamLifecycleAndAllowanceMigration(t *testing.T) {
 	require.Contains(t, sql, "team_owner_transfer_required")
 	require.Contains(t, sql, "update team_memberships")
 	require.Contains(t, sql, "update api_keys")
+}
+
+func TestBatchImageSubscriptionMigrationUsesBoundedLockWait(t *testing.T) {
+	content, err := FS.ReadFile("224_batch_image_subscription_billing.sql")
+	require.NoError(t, err)
+	require.Contains(t, strings.ToLower(string(content)), "set local lock_timeout = '1s'")
 }

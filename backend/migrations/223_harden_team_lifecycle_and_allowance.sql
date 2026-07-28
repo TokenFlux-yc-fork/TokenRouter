@@ -1,4 +1,5 @@
 -- 团队 Key Owner 锁定、批任务额度预记和用户删除生命周期修复。
+SET LOCAL lock_timeout = '1s';
 ALTER TABLE api_keys
     ADD COLUMN IF NOT EXISTS team_owner_disabled BOOLEAN NOT NULL DEFAULT FALSE;
 
