@@ -93,6 +93,7 @@ type Config struct {
 	TokenRefresh            TokenRefreshConfig            `mapstructure:"token_refresh"`
 	RunMode                 string                        `mapstructure:"run_mode" yaml:"run_mode"`
 	Timezone                string                        `mapstructure:"timezone"` // e.g. "Asia/Shanghai", "UTC"
+	ScheduledRunnerEnabled  bool                          `mapstructure:"scheduled_test_runner_enabled"`
 	Gemini                  GeminiConfig                  `mapstructure:"gemini"`
 	Update                  UpdateConfig                  `mapstructure:"update"`
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
@@ -2177,6 +2178,7 @@ func setDefaults() {
 
 	// Timezone (default to Asia/Shanghai for Chinese users)
 	viper.SetDefault("timezone", "Asia/Shanghai")
+	viper.SetDefault("scheduled_test_runner_enabled", true)
 	viper.SetDefault("team.enabled", true)
 	viper.SetDefault("team.self_service_enabled", true)
 	viper.SetDefault("team.default_member_limit", 10)
