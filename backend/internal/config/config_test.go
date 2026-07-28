@@ -46,6 +46,23 @@ func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	require.Equal(t, "app-user", cfg.Redis.Username)
 }
 
+func TestLoadScheduledTestRunnerEnabled(t *testing.T) {
+	t.Run("enabled by default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.ScheduledRunnerEnabled)
+	})
+
+	t.Run("disabled by environment", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("SCHEDULED_TEST_RUNNER_ENABLED", "false")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.False(t, cfg.ScheduledRunnerEnabled)
+	})
+}
+
 func TestLoadImageStorageConfigFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("IMAGE_STORAGE_ENABLED", "true")

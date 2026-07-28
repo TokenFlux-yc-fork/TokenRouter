@@ -60,6 +60,10 @@ func (s *ScheduledTestRunnerService) Start() {
 	if s == nil {
 		return
 	}
+	if s.cfg != nil && !s.cfg.ScheduledRunnerEnabled {
+		logger.LegacyPrintf("service.scheduled_test_runner", "[ScheduledTestRunner] not started (disabled)")
+		return
+	}
 	s.startOnce.Do(func() {
 		loc := time.Local
 		if s.cfg != nil {
