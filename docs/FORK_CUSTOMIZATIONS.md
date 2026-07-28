@@ -75,6 +75,9 @@ upstream merge.
   fork's group health, backup-pool, OAuth capacity, and build-identity fields.
   Native compact, Responses routing, and pre-output failover behavior remain
   local and unchanged by this upstream range.
+- The team attribution migration is locally hardened for the production usage
+  history: legacy rows remain nullable, existing-table indexes are concurrent,
+  and a migration-only process supports blue-green rollout without workers.
 - The only merge conflict was generated Ent runtime field indexing. Ent was
   regenerated from the combined schema after resolving the field order.
 - The complete baseline gates, repository integration tests, Compose parsing,
@@ -98,6 +101,7 @@ upstream merge.
 | `openai-oauth-pool-capacity` | Estimate and expose aggregate OpenAI OAuth pool capacity. | `4cdb5f0e9` | admin capacity service/API and capacity UI | `local` | Admin capacity service/API, locale, router and UI tests. |
 | `openai-oauth-group-capacity` | Break OpenAI OAuth capacity down by group and expose group management controls. | `daedbb5eb` | admin capacity service/API and capacity UI | `local` | Group-capacity service/API and UI tests. |
 | `fork-build-identity` | Publish upstream version and stable `yc-fork` identity as separate build metadata and UI values. | `65b2f15a7` | Docker/build files, settings API, version UI | `local` | Build identity backend/frontend tests plus binary and browser identity probes. |
+| `team-online-migration` | Keep the upstream team attribution schema backward-compatible with historical NULL rows and apply it independently from application workers. | `6f2bbe4c6` | team migrations, migration runner, usage/batch repositories, server CLI | `local` | Team migration assertions, non-transactional retry tests, isolated-schema PostgreSQL rehearsal, full backend tests, lint and build. |
 | `responses-lite-validation` | Reject residual unsupported Responses Lite fields and preserve event/tool validation semantics. | `6a73e12df` | OpenAI gateway handler/forwarder, Responses Lite tools | `local` | Responses Lite unit tests and production protocol probes. |
 | `grok-inference-error-classification` | Persist Grok inference scheduling state only for 429; other inference errors fail over for the current request only. | `6f31ce627` | `openai_gateway_grok*` | `local` | Grok gateway tests, refresh race tests and account-state production probe. |
 | `frontend-build-heap` | Give the containerized frontend build enough heap for the fork UI. | `fe599ead3` | `deploy/Dockerfile` | `local` | Container image build. |

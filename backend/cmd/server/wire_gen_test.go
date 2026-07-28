@@ -10,6 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRunMigrationsOnlyRejectsNonPositiveTimeout(t *testing.T) {
+	require.EqualError(t, runMigrationsOnly(0), "migration timeout must be positive")
+	require.EqualError(t, runMigrationsOnly(-time.Second), "migration timeout must be positive")
+}
+
 func TestProvideServiceBuildInfo(t *testing.T) {
 	in := handler.BuildInfo{
 		Version:   "v-test",

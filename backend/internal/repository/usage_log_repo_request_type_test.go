@@ -298,6 +298,10 @@ func TestCoalesceTrimmedString(t *testing.T) {
 	require.Equal(t, "value", coalesceTrimmedString(sql.NullString{Valid: true, String: "value"}, "fallback"))
 }
 
+func TestUsageLogSelectColumnsCoalescesLegacyBillingUser(t *testing.T) {
+	require.Contains(t, usageLogSelectColumns, "COALESCE(billing_user_id, user_id) AS billing_user_id")
+}
+
 func TestAppendUsageLogBillingModeWhereCondition(t *testing.T) {
 	tests := []struct {
 		name          string

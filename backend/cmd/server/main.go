@@ -19,6 +19,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/handler"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+	"github.com/TokenFlux/TokenRouter/internal/repository"
 	"github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/setup"
 	"github.com/TokenFlux/TokenRouter/internal/web"
@@ -60,10 +61,19 @@ func main() {
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
 	showVersion := flag.Bool("version", false, "Show version information")
+	migrateOnly := flag.Bool("migrate-only", false, "Apply database migrations and exit")
+	migrationTimeout := flag.Duration("migration-timeout", time.Hour, "Timeout for --migrate-only")
 	flag.Parse()
 
 	if *showVersion {
 		log.Printf("Sub2API %s (commit: %s, built: %s)\n", Version, Commit, Date)
+		return
+	}
+	if *migrateOnly {
+		if err := runMigrationsOnly(*migrationTimeout); err != nil {
+			log.Fatalf("Database migration failed: %v", err)
+		}
+		log.Println("Database migrations completed")
 		return
 	}
 
@@ -93,6 +103,19 @@ func main() {
 
 	// Normal server mode
 	runMainServer()
+}
+
+func runMigrationsOnly(timeout time.Duration) error {
+	if timeout <= 0 {
+		return errors.New("migration timeout must be positive")
+	}
+	cfg, err := config.LoadForBootstrap()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return repository.ApplyConfiguredMigrations(ctx, cfg)
 }
 
 func runSetupServer() {

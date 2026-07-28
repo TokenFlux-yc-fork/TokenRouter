@@ -826,7 +826,7 @@ type rowScanner interface {
 }
 
 const batchImageJobColumns = `
-id, batch_id, user_id, billing_user_id, team_id, api_key_id, account_id, provider, model, task_name, parent_batch_id, status,
+id, batch_id, user_id, COALESCE(billing_user_id, user_id) AS billing_user_id, team_id, api_key_id, account_id, provider, model, task_name, parent_batch_id, status,
 provider_job_name, provider_input_ref, provider_output_ref, gcs_input_uri, gcs_output_uri,
 item_count, success_count, fail_count, cancelled_count,
 estimated_cost, hold_amount, actual_cost, allowance_reserved,
