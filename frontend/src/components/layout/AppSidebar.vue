@@ -117,7 +117,7 @@
             class="sidebar-link mb-1"
             :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
             :title="sidebarCollapsed ? item.label : undefined"
-            :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
+            :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : item.path === '/usage' ? 'sidebar-usage' : undefined"
             @click="handleMenuItemClick(item.path)"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
@@ -137,7 +137,7 @@
             class="sidebar-link mb-1"
             :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
             :title="sidebarCollapsed ? item.label : undefined"
-            :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : undefined"
+            :data-tour="item.path === '/keys' ? 'sidebar-my-keys' : item.path === '/usage' ? 'sidebar-usage' : undefined"
             @click="handleMenuItemClick(item.path)"
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
@@ -652,6 +652,7 @@ const ChevronDownIcon = {
 
 // 批量图片入口还需要用户 API Key 和分组权限同时满足。
 const flagBatchImageAccess = () => canUseBatchImage.value
+const flagTeamAccess = () => appStore.cachedPublicSettings?.team_enabled !== false
 
 // 普通用户导航项。
 const userNavItems = computed((): NavItem[] => {
@@ -660,6 +661,7 @@ const userNavItems = computed((): NavItem[] => {
     { path: '/models', label: t('nav.modelMarketplace'), icon: ModelMarketplaceIcon },
     { path: '/usage-ranking', label: t('nav.usageRanking'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
+    { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/data-sharing', label: t('nav.dataSharing'), icon: DatabaseIcon, hideInSimpleMode: true },
@@ -714,6 +716,7 @@ const personalNavItems = computed((): NavItem[] => {
     { path: '/models', label: t('nav.modelMarketplace'), icon: ModelMarketplaceIcon },
     { path: '/usage-ranking', label: t('nav.usageRanking'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
+    { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/data-sharing', label: t('nav.dataSharing'), icon: DatabaseIcon, hideInSimpleMode: true },
@@ -783,6 +786,7 @@ const adminNavItems = computed((): NavItem[] => {
       ? [{ path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon }]
       : []),
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
+    { path: '/admin/teams', label: t('nav.teams'), icon: UsersIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
     { path: '/admin/channels', label: t('nav.channels', '渠道管理'), icon: ChannelIcon, hideInSimpleMode: true },
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
@@ -874,7 +878,8 @@ function handleMenuItemClick(itemPath: string) {
   const pathToSelector: Record<string, string> = {
     '/admin/groups': '#sidebar-group-manage',
     '/admin/accounts': '#sidebar-channel-manage',
-    '/keys': '[data-tour="sidebar-my-keys"]'
+    '/keys': '[data-tour="sidebar-my-keys"]',
+    '/usage': '[data-tour="sidebar-usage"]'
   }
 
   const selector = pathToSelector[itemPath]

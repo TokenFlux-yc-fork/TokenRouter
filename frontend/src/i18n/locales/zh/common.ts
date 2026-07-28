@@ -102,6 +102,8 @@ export default {
     usageRanking: '用量排行',
     announcements: '公告',
     apiKeys: 'API 密钥',
+    team: '团队',
+    teams: '团队管理',
     batchImage: '批量生图',
     usage: '使用记录',
     dataSharing: '数据共享',

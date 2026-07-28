@@ -27,20 +27,35 @@
         @sort="(key, order) => $emit('sort', key, order)"
       >
         <template #cell-user="{ row }">
-          <div class="text-sm">
+          <div
+            class="flex items-center text-sm"
+            :class="compactUserColumn ? 'w-32 min-w-0 gap-1' : ''"
+            data-test="usage-user-cell"
+          >
             <button
-              v-if="row.user?.email"
+              v-if="usageUserDisplayName(row) && userClickable"
               class="font-medium text-primary-600 underline decoration-dashed underline-offset-2 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+              :class="compactUserColumn ? 'min-w-0 truncate' : ''"
               @click="$emit('userClick', row.user_id, row.user?.email)"
-              :title="t('admin.usage.clickToViewBalance')"
+              :title="compactUserColumn ? usageUserTitle(row) : t('admin.usage.clickToViewBalance')"
+              data-test="usage-user-email"
             >
-              {{ row.user.email }}
+              {{ usageUserDisplayName(row) }}
             </button>
+            <span
+              v-else-if="usageUserDisplayName(row)"
+              class="font-medium text-gray-900 dark:text-white"
+              :class="compactUserColumn ? 'min-w-0 truncate' : ''"
+              :title="compactUserColumn ? usageUserTitle(row) : undefined"
+              data-test="usage-user-email"
+            >
+              {{ usageUserDisplayName(row) }}
+            </span>
             <span v-else class="font-medium text-gray-900 dark:text-white">-</span>
-            <span v-if="row.user?.deleted_at" class="ml-1 inline-flex items-center rounded px-1 py-px text-[10px] font-medium leading-tight bg-rose-100 text-rose-600 ring-1 ring-inset ring-rose-200 dark:bg-rose-500/20 dark:text-rose-400 dark:ring-rose-500/30">
+            <span v-if="row.user?.deleted_at" class="ml-1 inline-flex shrink-0 items-center rounded px-1 py-px text-[10px] font-medium leading-tight bg-rose-100 text-rose-600 ring-1 ring-inset ring-rose-200 dark:bg-rose-500/20 dark:text-rose-400 dark:ring-rose-500/30">
               {{ t('admin.usage.userDeletedBadge') }}
             </span>
-            <span class="ml-1 text-gray-500 dark:text-gray-400">#{{ row.user_id }}</span>
+            <span class="ml-1 shrink-0 text-gray-500 dark:text-gray-400">#{{ row.user_id }}</span>
           </div>
         </template>
 
@@ -562,6 +577,10 @@ interface Props {
   defaultSortOrder?: 'asc' | 'desc'
   showAccountBilling?: boolean
   showUpstreamEndpoint?: boolean
+  /** 用户端只展示成员归因，不提供管理端余额入口。 */
+  userClickable?: boolean
+  /** 团队用量表固定成员列宽，长邮箱在单元格内省略。 */
+  compactUserColumn?: boolean
   /** 嵌入统一卡片内使用：去掉自身卡片外观 */
   flat?: boolean
 }
@@ -573,6 +592,8 @@ const props = withDefaults(defineProps<Props>(), {
   defaultSortOrder: 'asc',
   showAccountBilling: true,
   showUpstreamEndpoint: true,
+  userClickable: true,
+  compactUserColumn: false,
   flat: false
 })
 const emit = defineEmits<{
@@ -584,7 +605,32 @@ const { t } = useI18n()
 const { balanceUnitSymbol, usdUnitSymbol, formatBalanceAmount, formatUsdAmount } = useBalanceDisplay()
 const showAccountBilling = props.showAccountBilling
 const showUpstreamEndpoint = props.showUpstreamEndpoint
+const userClickable = props.userClickable
+const compactUserColumn = computed(() => props.compactUserColumn)
 const ipGeoBatchLoading = ref(false)
+
+// 未设置用户名时仅展示邮箱本地部分的首尾字符，减少成员列占用空间。
+const maskEmailLocalPart = (email: string): string => {
+  const localPart = email.split('@', 1)[0]?.trim() || ''
+  if (!localPart) return ''
+  const characters = Array.from(localPart)
+  return `${characters[0]}***${characters[characters.length - 1]}`
+}
+
+// 用量归因优先展示用户自定义名称，完整邮箱保留在悬停提示中。
+const usageUserDisplayName = (row: AdminUsageLog): string => {
+  const username = row.user?.username?.trim() || ''
+  if (username) return username
+  const email = row.user?.email?.trim() || ''
+  return email ? maskEmailLocalPart(email) : ''
+}
+
+const usageUserTitle = (row: AdminUsageLog): string => {
+  const username = row.user?.username?.trim() || ''
+  const email = row.user?.email?.trim() || ''
+  if (username && email && username !== email) return `${username} (${email})`
+  return username || email
+}
 
 const showIpGeoToolbar = computed(() => props.columns.some((col) => col.key === 'ip_address'))
 

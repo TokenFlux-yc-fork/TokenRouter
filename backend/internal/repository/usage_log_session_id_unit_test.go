@@ -31,7 +31,7 @@ func newSessionIDUsageLog(sessionID *string) *service.UsageLog {
 // TestPrepareUsageLogInsert_SessionIDArgWiring 固定 session_id 在参数切片和类型表
 // 中的位置，确保所有 INSERT 列表保持同步；session_id 倒数第二，created_at 始终最后。
 func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
-	require.Len(t, usageLogInsertArgTypes, 60, "arg-type table must include session_id")
+	require.Len(t, usageLogInsertArgTypes, 62, "arg-type table must include team attribution and session_id")
 
 	sessionID := "sess-persisted-123"
 	prepared := prepareUsageLogInsert(newSessionIDUsageLog(&sessionID))
@@ -70,6 +70,10 @@ func TestPrepareUsageLogInsert_SessionIDNullWhenAbsent(t *testing.T) {
 func TestUsageLogInsertQueries_IncludeSessionID(t *testing.T) {
 	require.Contains(t, usageLogSelectColumns, "session_id",
 		"SELECT column list must include session_id")
+	require.Contains(t, usageLogSelectColumns, "billing_user_id",
+		"SELECT column list must include billing attribution")
+	require.Contains(t, usageLogSelectColumns, "team_id",
+		"SELECT column list must include team attribution")
 
 	sessionID := "sess-in-query"
 	log := newSessionIDUsageLog(&sessionID)

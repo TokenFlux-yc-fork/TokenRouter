@@ -35,6 +35,9 @@ func (UsageLog) Fields() []ent.Field {
 	return []ent.Field{
 		// 关联字段
 		field.Int64("user_id"),
+		// 原始 SQL 写入由触发器兼容旧路径，仓储层仍会显式写入付款人快照。
+		field.Int64("billing_user_id").Optional(),
+		field.Int64("team_id").Optional().Nillable(),
 		field.Int64("api_key_id"),
 		field.Int64("account_id"),
 		field.String("request_id").
@@ -215,6 +218,10 @@ func (UsageLog) Edges() []ent.Edge {
 			Ref("usage_logs").
 			Field("subscription_id").
 			Unique(),
+		edge.From("team", Team.Type).
+			Ref("usage_logs").
+			Field("team_id").
+			Unique(),
 	}
 }
 
@@ -222,6 +229,8 @@ func (UsageLog) Edges() []ent.Edge {
 func (UsageLog) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("user_id"),
+		index.Fields("billing_user_id"),
+		index.Fields("team_id"),
 		index.Fields("api_key_id"),
 		index.Fields("account_id"),
 		index.Fields("group_id"),

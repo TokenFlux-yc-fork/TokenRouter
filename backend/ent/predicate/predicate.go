@@ -93,6 +93,18 @@ type TLSFingerprintProfile func(*sql.Selector)
 // TLSFingerprintRouter is the predicate function for tlsfingerprintrouter builders.
 type TLSFingerprintRouter func(*sql.Selector)
 
+// Team is the predicate function for team builders.
+type Team func(*sql.Selector)
+
+// TeamInvitation is the predicate function for teaminvitation builders.
+type TeamInvitation func(*sql.Selector)
+
+// TeamMembership is the predicate function for teammembership builders.
+type TeamMembership func(*sql.Selector)
+
+// TeamOwnershipTransfer is the predicate function for teamownershiptransfer builders.
+type TeamOwnershipTransfer func(*sql.Selector)
+
 // UsageCleanupTask is the predicate function for usagecleanuptask builders.
 type UsageCleanupTask func(*sql.Selector)
 

@@ -55,7 +55,7 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Equal(t, "files/gemini_api/output", batchImageDerefString(job.ProviderOutputRef))
 		require.NotNil(t, job.AccountID)
 		require.Equal(t, int64(202), *job.AccountID)
-		require.Equal(t, 1, job.PricingSnapshotVersion)
+		require.Equal(t, 2, job.PricingSnapshotVersion)
 		require.InDelta(t, 0.25, job.BaseUnitPrice, 1e-12)
 		require.InDelta(t, 1.0, job.GroupRateMultiplier, 1e-12)
 		require.InDelta(t, 1.0, job.AccountRateMultiplier, 1e-12)
@@ -90,6 +90,10 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		got, err := svc.Submit(ctx, BatchImageOwner{UserID: 11, APIKeyID: 22, GroupID: &groupID}, validBatchImageSubmitRequest(), "")
 		require.NoError(t, err)
 		require.InDelta(t, 0.25, got.EstimatedCost, 1e-12)
+		billing := svc.BillingRepo.(*fakeBatchImageBillingRepo)
+		require.Len(t, billing.reserves, 1)
+		require.NotNil(t, billing.reserves[0].GroupID)
+		require.Equal(t, groupID, *billing.reserves[0].GroupID)
 
 		job := repo.jobs[got.ID]
 		require.InDelta(t, 0.25, job.BaseUnitPrice, 1e-12)
@@ -102,6 +106,50 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.InDelta(t, 0.125, job.BillableUnitPrice, 1e-12)
 		require.InDelta(t, 0.125, job.HoldUnitPrice, 1e-12)
 		require.InDelta(t, 0.25, *job.HoldAmount, 1e-12)
+	})
+
+	t.Run("uses subscription plan group rate before user balance rate", func(t *testing.T) {
+		svc, repo, _, _, _ := newTestBatchImagePublicService(true)
+		groupID := int64(7)
+		svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{
+			groupID: {
+				ID:                           groupID,
+				Platform:                     PlatformGemini,
+				RateMultiplier:               2,
+				AllowImageGeneration:         true,
+				AllowBatchImageGeneration:    true,
+				BatchImageDiscountMultiplier: 0.5,
+				BatchImageHoldMultiplier:     0.6,
+			},
+		}}
+		userRate := 0.25
+		svc.UserGroupRateRepo = &publicBatchImageUserGroupRateRepo{rates: map[int64]*float64{groupID: &userRate}}
+		billing := svc.BillingRepo.(*fakeBatchImageBillingRepo)
+		billing.usableSubscription = &UserSubscription{
+			ID:     101,
+			UserID: 11,
+			Plan: &SubscriptionPlan{
+				ID:                   202,
+				GroupIDs:             []int64{groupID},
+				GroupRateMultipliers: map[int64]float64{groupID: 0.8},
+			},
+		}
+
+		got, err := svc.Submit(ctx, BatchImageOwner{UserID: 11, APIKeyID: 22, GroupID: &groupID}, validBatchImageSubmitRequest(), "")
+
+		require.NoError(t, err)
+		require.InDelta(t, 0.2, got.EstimatedCost, 1e-12)
+		job := repo.jobs[got.ID]
+		require.InDelta(t, 0.8, job.GroupRateMultiplier, 1e-12)
+		require.InDelta(t, 0.1, job.BillableUnitPrice, 1e-12)
+		require.InDelta(t, 0.12, job.HoldUnitPrice, 1e-12)
+		require.InDelta(t, 0.24, *job.HoldAmount, 1e-12)
+		require.Len(t, billing.reserves, 1)
+		require.InDelta(t, 0.5, billing.reserves[0].BaseAmountUSD, 1e-12)
+		require.InDelta(t, 1.2, billing.reserves[0].SubscriptionRateMultiplier, 1e-12)
+		require.InDelta(t, 0.6, billing.reserves[0].SubscriptionRateMultiplierScale, 1e-12)
+		require.InDelta(t, 0.15, billing.reserves[0].BalanceRateMultiplier, 1e-12)
+		require.False(t, billing.reserves[0].DisablePlanGroupRateMultiplier)
 	})
 
 	t.Run("uses configured group 1k image price for batch image base price", func(t *testing.T) {

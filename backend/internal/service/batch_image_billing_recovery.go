@@ -82,8 +82,8 @@ func (s *BatchImageBillingRecoveryService) ReleaseStaleUnsubmittedOnce(ctx conte
 			lastErr = err
 			continue
 		}
-		if s.AuthCache != nil && job.UserID > 0 {
-			s.AuthCache.InvalidateAuthCacheByUserID(ctx, job.UserID)
+		if billingUserID := batchImageBillingUserID(job); s.AuthCache != nil && billingUserID > 0 {
+			s.AuthCache.InvalidateAuthCacheByUserID(ctx, billingUserID)
 		}
 		released++
 	}

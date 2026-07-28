@@ -79,6 +79,13 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireIndex(t, tx, "user_subscriptions", "idx_user_subscriptions_user_status_starts_expires")
 	requireIndex(t, tx, "user_subscriptions", "idx_user_subscriptions_user_plan_starts")
 
+	// batch_image_jobs: 异步任务必须持久化订阅与余额预占拆分。
+	requireColumn(t, tx, "batch_image_jobs", "balance_hold_amount", "numeric", 0, false)
+	requireColumn(t, tx, "batch_image_jobs", "subscription_hold_allocations", "jsonb", 0, false)
+	requireColumn(t, tx, "batch_image_jobs", "subscription_rate_multiplier", "numeric", 0, false)
+	requireColumn(t, tx, "batch_image_jobs", "balance_rate_multiplier", "numeric", 0, false)
+	requireColumn(t, tx, "batch_image_jobs", "plan_group_rate_multiplier_enabled", "boolean", 0, false)
+
 	// payment_orders: subscription order snapshot fields
 	requireColumn(t, tx, "payment_orders", "plan_id", "bigint", 0, true)
 	requireColumn(t, tx, "payment_orders", "plan_snapshot", "jsonb", 0, true)

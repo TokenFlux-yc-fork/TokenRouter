@@ -44,6 +44,7 @@ func ProvideAdminHandlers(
 	dataSharingHandler *admin.DataSharingHandler,
 	codexInviteResetHandler *admin.CodexInviteResetHandler,
 	auditLogHandler *admin.AuditLogHandler,
+	teamHandler *admin.TeamHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 ) *AdminHandlers {
@@ -84,6 +85,7 @@ func ProvideAdminHandlers(
 		DataSharing:           dataSharingHandler,
 		CodexInviteReset:      codexInviteResetHandler,
 		AuditLog:              auditLogHandler,
+		Team:                  teamHandler,
 	}
 }
 
@@ -159,6 +161,7 @@ func ProvideHandlers(
 	dataSharingHandler *DataSharingHandler,
 	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
+	teamHandler *TeamHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -182,6 +185,7 @@ func ProvideHandlers(
 		DataSharing:      dataSharingHandler,
 		AsyncImage:       asyncImageHandler,
 		BatchImage:       batchImageHandler,
+		Team:             teamHandler,
 	}
 }
 
@@ -206,6 +210,7 @@ var ProviderSet = wire.NewSet(
 	NewDataSharingHandler,
 	NewAsyncImageHandler,
 	NewBatchImageHandler,
+	NewTeamHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
@@ -242,6 +247,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewDataSharingHandler,
 	admin.NewCodexInviteResetHandler,
 	admin.NewAuditLogHandler,
+	admin.NewTeamHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

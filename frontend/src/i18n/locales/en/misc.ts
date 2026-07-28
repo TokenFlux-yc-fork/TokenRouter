@@ -230,10 +230,6 @@ marketplace: {
     confirmDontShow: "Are you sure you don't want to see the onboarding guide again?\n\nYou can restart it anytime from the user menu in the top right corner.",
     confirmExit: 'Are you sure you want to exit the onboarding guide? You can restart it anytime from the top right menu.',
     interactiveHint: 'Press Enter or Click to continue',
-    navigation: {
-      flipPage: 'Flip Page',
-      exit: 'Exit'
-    },
     // Admin tour steps
     admin: {
       welcome: {
@@ -364,6 +360,63 @@ marketplace: {
         title: '🎉 Complete Creation',
         description: '<div style="line-height: 1.7;"><p style="margin-bottom: 12px;">Click to confirm and create your API key.</p><div style="padding: 8px 12px; background: #fee2e2; border-left: 3px solid #ef4444; border-radius: 4px; font-size: 13px; margin-bottom: 12px;"><b>⚠️ Important:</b><ul style="margin: 8px 0 0 16px;"><li>Copy the key (sk-xxx) immediately after creation</li><li>Key is only shown once, need to regenerate if lost</li></ul></div><p style="padding: 8px 12px; background: #f0fdf4; border-left: 3px solid #10b981; border-radius: 4px; font-size: 13px;"><b>🚀 How to Use:</b><br/>Configure the key in any OpenAI-compatible client (like ChatBox, OpenCat, etc.) and start using!</p><p style="margin-top: 12px; color: #10b981; font-weight: 600;">👉 Click "Create" button</p></div>'
       }
+    },
+    // 团队功能导览步骤
+    team: {
+      welcome: {
+        title: 'Team feature guide',
+        ownerDescription: '<div class="tour-step-description"><p>This guide covers the main owner workflows:</p><ul><li>Manage members and send targeted invitations</li><li>Configure default limits for new members</li><li>Create team keys billed to the team owner</li><li>Compare member usage and spending trends</li></ul></div>',
+        memberDescription: '<div class="tour-step-description"><p>This guide covers the features available to team members:</p><ul><li>Review your daily, weekly, and monthly limits</li><li>Create team keys that use team entitlements</li><li>Review your team requests in usage records</li></ul></div>',
+        noTeamDescription: '<div class="tour-step-description"><p>A team lets each member create separate keys while sharing the owner\'s balance, subscription, and group entitlements.</p><p>Create a team first, then invite members, configure limits, and review usage by member.</p></div>',
+        nextBtn: 'Start guide'
+      },
+      createTeam: {
+        title: 'Create a team',
+        description: '<div class="tour-step-description"><p>Enter a team name to create it. The creator becomes the sole owner and is billed for team key usage.</p><p class="tour-info-box">Member invitations and default limit settings appear on this page after creation.</p></div>'
+      },
+      members: {
+        title: 'Members and limits',
+        description: '<div class="tour-step-description"><p>Owners can review every member here and set individual daily, weekly, and monthly limits.</p><p class="tour-info-box">Removing a member immediately disables their team keys without affecting personal keys.</p></div>'
+      },
+      invitations: {
+        title: 'Invite members',
+        description: '<div class="tour-step-description"><p>Enter an email address to send a targeted invitation valid for seven days. You can also review its status, resend it, or revoke a pending invitation.</p></div>'
+      },
+      settings: {
+        title: 'Team settings',
+        description: '<div class="tour-step-description"><p>Settings let you rename the team and define the daily, weekly, and monthly limits inherited by new members.</p><p class="tour-info-box">Default limits only affect future members and do not overwrite existing custom limits.</p></div>'
+      },
+      limits: {
+        title: 'My team limits',
+        description: '<div class="tour-step-description"><p>Members can monitor daily, weekly, and monthly usage here. New team requests are rejected after any limit is reached.</p></div>'
+      },
+      keyPage: {
+        title: 'Open API keys',
+        description: '<div class="tour-step-description"><p>Personal and team keys share the same management page. The next step opens the team key list automatically.</p></div>',
+        noTeamDescription: '<div class="tour-step-description"><p>After creating a team, the API key page adds a Personal keys / Team keys menu. Select Team keys to create keys that use team entitlements.</p></div>'
+      },
+      keyScope: {
+        title: 'Switch to team keys',
+        description: '<div class="tour-step-description"><p>This menu switches between personal and team keys. The team scope is now active, so new keys use the owner\'s balance, subscription, and group entitlements.</p></div>'
+      },
+      createKey: {
+        title: 'Create a team key',
+        description: '<div class="tour-step-description"><p>Select “Create key” to add a team key. Its creator manages it, while the owner can see its name and member and can disable or delete it.</p><p class="tour-warning-box">A key cannot be converted between personal and team scope after creation.</p></div>'
+      },
+      usagePage: {
+        title: 'Open usage records',
+        description: '<div class="tour-step-description"><p>Personal and team requests are combined in usage records. The next step opens the team usage area.</p></div>',
+        noTeamDescription: '<div class="tour-step-description"><p>After the team starts generating usage, usage records add member spending trends and comparisons, and the details table identifies the member behind each request.</p></div>'
+      },
+      ownerUsage: {
+        title: 'Member usage',
+        description: '<div class="tour-step-description"><p>Owners can compare member spending and trends over time. The details table below also identifies the member who made each request.</p></div>'
+      },
+      memberUsage: {
+        title: 'Review team requests',
+        description: '<div class="tour-step-description"><p>Members can only review their own team and personal requests. Other members\' usage and the owner\'s balance and subscription details remain private.</p></div>'
+      },
+      done: 'Finish guide'
     }
   },
 // Payment System

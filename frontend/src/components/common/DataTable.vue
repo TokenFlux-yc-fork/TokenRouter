@@ -391,6 +391,9 @@ const attachDesktopTableTracking = () => {
       checkActionsColumnWidth()
     })
     resizeObserver.observe(tableWrapperRef.value)
+    // 外层尺寸不变时，异步数据仍可能撑宽表格；同时观察内容宽度才能及时恢复固定列阴影。
+    const table = tableWrapperRef.value.querySelector('table')
+    if (table) resizeObserver.observe(table)
   } else {
     // 降级方案：不支持 ResizeObserver 时使用 window resize
     resizeHandler = () => {

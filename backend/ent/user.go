@@ -105,13 +105,15 @@ type UserEdges struct {
 	PendingAuthSessions []*PendingAuthSession `json:"pending_auth_sessions,omitempty"`
 	// PlatformQuotas holds the value of the platform_quotas edge.
 	PlatformQuotas []*UserPlatformQuota `json:"platform_quotas,omitempty"`
+	// TeamMemberships holds the value of the team_memberships edge.
+	TeamMemberships []*TeamMembership `json:"team_memberships,omitempty"`
 	// UserAllowedGroups holds the value of the user_allowed_groups edge.
 	UserAllowedGroups []*UserAllowedGroup `json:"user_allowed_groups,omitempty"`
 	// UserDisabledPublicGroups holds the value of the user_disabled_public_groups edge.
 	UserDisabledPublicGroups []*UserDisabledPublicGroup `json:"user_disabled_public_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [17]bool
+	loadedTypes [18]bool
 }
 
 // APIKeysOrErr returns the APIKeys value or an error if the edge
@@ -249,10 +251,19 @@ func (e UserEdges) PlatformQuotasOrErr() ([]*UserPlatformQuota, error) {
 	return nil, &NotLoadedError{edge: "platform_quotas"}
 }
 
+// TeamMembershipsOrErr returns the TeamMemberships value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) TeamMembershipsOrErr() ([]*TeamMembership, error) {
+	if e.loadedTypes[15] {
+		return e.TeamMemberships, nil
+	}
+	return nil, &NotLoadedError{edge: "team_memberships"}
+}
+
 // UserAllowedGroupsOrErr returns the UserAllowedGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
-	if e.loadedTypes[15] {
+	if e.loadedTypes[16] {
 		return e.UserAllowedGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_allowed_groups"}
@@ -261,7 +272,7 @@ func (e UserEdges) UserAllowedGroupsOrErr() ([]*UserAllowedGroup, error) {
 // UserDisabledPublicGroupsOrErr returns the UserDisabledPublicGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) UserDisabledPublicGroupsOrErr() ([]*UserDisabledPublicGroup, error) {
-	if e.loadedTypes[16] {
+	if e.loadedTypes[17] {
 		return e.UserDisabledPublicGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "user_disabled_public_groups"}
@@ -545,6 +556,11 @@ func (_m *User) QueryPendingAuthSessions() *PendingAuthSessionQuery {
 // QueryPlatformQuotas queries the "platform_quotas" edge of the User entity.
 func (_m *User) QueryPlatformQuotas() *UserPlatformQuotaQuery {
 	return NewUserClient(_m.config).QueryPlatformQuotas(_m)
+}
+
+// QueryTeamMemberships queries the "team_memberships" edge of the User entity.
+func (_m *User) QueryTeamMemberships() *TeamMembershipQuery {
+	return NewUserClient(_m.config).QueryTeamMemberships(_m)
 }
 
 // QueryUserAllowedGroups queries the "user_allowed_groups" edge of the User entity.

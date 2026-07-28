@@ -102,6 +102,8 @@ export default {
     usageRanking: 'Usage Ranking',
     announcements: 'Announcements',
     apiKeys: 'API Keys',
+    team: 'Team',
+    teams: 'Teams',
     batchImage: 'Batch Images',
     usage: 'Usage',
     dataSharing: 'Data Sharing',

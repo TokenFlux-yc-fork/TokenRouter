@@ -15,6 +15,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
 	"github.com/TokenFlux/TokenRouter/ent/group"
 	"github.com/TokenFlux/TokenRouter/ent/predicate"
+	"github.com/TokenFlux/TokenRouter/ent/team"
 	"github.com/TokenFlux/TokenRouter/ent/usagelog"
 	"github.com/TokenFlux/TokenRouter/ent/user"
 	"github.com/TokenFlux/TokenRouter/ent/usersubscription"
@@ -45,6 +46,53 @@ func (_u *UsageLogUpdate) SetNillableUserID(v *int64) *UsageLogUpdate {
 	if v != nil {
 		_u.SetUserID(*v)
 	}
+	return _u
+}
+
+// SetBillingUserID sets the "billing_user_id" field.
+func (_u *UsageLogUpdate) SetBillingUserID(v int64) *UsageLogUpdate {
+	_u.mutation.ResetBillingUserID()
+	_u.mutation.SetBillingUserID(v)
+	return _u
+}
+
+// SetNillableBillingUserID sets the "billing_user_id" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableBillingUserID(v *int64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetBillingUserID(*v)
+	}
+	return _u
+}
+
+// AddBillingUserID adds value to the "billing_user_id" field.
+func (_u *UsageLogUpdate) AddBillingUserID(v int64) *UsageLogUpdate {
+	_u.mutation.AddBillingUserID(v)
+	return _u
+}
+
+// ClearBillingUserID clears the value of the "billing_user_id" field.
+func (_u *UsageLogUpdate) ClearBillingUserID() *UsageLogUpdate {
+	_u.mutation.ClearBillingUserID()
+	return _u
+}
+
+// SetTeamID sets the "team_id" field.
+func (_u *UsageLogUpdate) SetTeamID(v int64) *UsageLogUpdate {
+	_u.mutation.SetTeamID(v)
+	return _u
+}
+
+// SetNillableTeamID sets the "team_id" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableTeamID(v *int64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetTeamID(*v)
+	}
+	return _u
+}
+
+// ClearTeamID clears the value of the "team_id" field.
+func (_u *UsageLogUpdate) ClearTeamID() *UsageLogUpdate {
+	_u.mutation.ClearTeamID()
 	return _u
 }
 
@@ -994,6 +1042,11 @@ func (_u *UsageLogUpdate) SetSubscription(v *UserSubscription) *UsageLogUpdate {
 	return _u.SetSubscriptionID(v.ID)
 }
 
+// SetTeam sets the "team" edge to the Team entity.
+func (_u *UsageLogUpdate) SetTeam(v *Team) *UsageLogUpdate {
+	return _u.SetTeamID(v.ID)
+}
+
 // Mutation returns the UsageLogMutation object of the builder.
 func (_u *UsageLogUpdate) Mutation() *UsageLogMutation {
 	return _u.mutation
@@ -1026,6 +1079,12 @@ func (_u *UsageLogUpdate) ClearGroup() *UsageLogUpdate {
 // ClearSubscription clears the "subscription" edge to the UserSubscription entity.
 func (_u *UsageLogUpdate) ClearSubscription() *UsageLogUpdate {
 	_u.mutation.ClearSubscription()
+	return _u
+}
+
+// ClearTeam clears the "team" edge to the Team entity.
+func (_u *UsageLogUpdate) ClearTeam() *UsageLogUpdate {
+	_u.mutation.ClearTeam()
 	return _u
 }
 
@@ -1151,6 +1210,15 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.BillingUserID(); ok {
+		_spec.SetField(usagelog.FieldBillingUserID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedBillingUserID(); ok {
+		_spec.AddField(usagelog.FieldBillingUserID, field.TypeInt64, value)
+	}
+	if _u.mutation.BillingUserIDCleared() {
+		_spec.ClearField(usagelog.FieldBillingUserID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.RequestID(); ok {
 		_spec.SetField(usagelog.FieldRequestID, field.TypeString, value)
@@ -1554,6 +1622,35 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.TeamCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usagelog.TeamTable,
+			Columns: []string{usagelog.TeamColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(team.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TeamIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usagelog.TeamTable,
+			Columns: []string{usagelog.TeamColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(team.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{usagelog.Label}
@@ -1585,6 +1682,53 @@ func (_u *UsageLogUpdateOne) SetNillableUserID(v *int64) *UsageLogUpdateOne {
 	if v != nil {
 		_u.SetUserID(*v)
 	}
+	return _u
+}
+
+// SetBillingUserID sets the "billing_user_id" field.
+func (_u *UsageLogUpdateOne) SetBillingUserID(v int64) *UsageLogUpdateOne {
+	_u.mutation.ResetBillingUserID()
+	_u.mutation.SetBillingUserID(v)
+	return _u
+}
+
+// SetNillableBillingUserID sets the "billing_user_id" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableBillingUserID(v *int64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetBillingUserID(*v)
+	}
+	return _u
+}
+
+// AddBillingUserID adds value to the "billing_user_id" field.
+func (_u *UsageLogUpdateOne) AddBillingUserID(v int64) *UsageLogUpdateOne {
+	_u.mutation.AddBillingUserID(v)
+	return _u
+}
+
+// ClearBillingUserID clears the value of the "billing_user_id" field.
+func (_u *UsageLogUpdateOne) ClearBillingUserID() *UsageLogUpdateOne {
+	_u.mutation.ClearBillingUserID()
+	return _u
+}
+
+// SetTeamID sets the "team_id" field.
+func (_u *UsageLogUpdateOne) SetTeamID(v int64) *UsageLogUpdateOne {
+	_u.mutation.SetTeamID(v)
+	return _u
+}
+
+// SetNillableTeamID sets the "team_id" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableTeamID(v *int64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetTeamID(*v)
+	}
+	return _u
+}
+
+// ClearTeamID clears the value of the "team_id" field.
+func (_u *UsageLogUpdateOne) ClearTeamID() *UsageLogUpdateOne {
+	_u.mutation.ClearTeamID()
 	return _u
 }
 
@@ -2534,6 +2678,11 @@ func (_u *UsageLogUpdateOne) SetSubscription(v *UserSubscription) *UsageLogUpdat
 	return _u.SetSubscriptionID(v.ID)
 }
 
+// SetTeam sets the "team" edge to the Team entity.
+func (_u *UsageLogUpdateOne) SetTeam(v *Team) *UsageLogUpdateOne {
+	return _u.SetTeamID(v.ID)
+}
+
 // Mutation returns the UsageLogMutation object of the builder.
 func (_u *UsageLogUpdateOne) Mutation() *UsageLogMutation {
 	return _u.mutation
@@ -2566,6 +2715,12 @@ func (_u *UsageLogUpdateOne) ClearGroup() *UsageLogUpdateOne {
 // ClearSubscription clears the "subscription" edge to the UserSubscription entity.
 func (_u *UsageLogUpdateOne) ClearSubscription() *UsageLogUpdateOne {
 	_u.mutation.ClearSubscription()
+	return _u
+}
+
+// ClearTeam clears the "team" edge to the Team entity.
+func (_u *UsageLogUpdateOne) ClearTeam() *UsageLogUpdateOne {
+	_u.mutation.ClearTeam()
 	return _u
 }
 
@@ -2721,6 +2876,15 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 				ps[i](selector)
 			}
 		}
+	}
+	if value, ok := _u.mutation.BillingUserID(); ok {
+		_spec.SetField(usagelog.FieldBillingUserID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedBillingUserID(); ok {
+		_spec.AddField(usagelog.FieldBillingUserID, field.TypeInt64, value)
+	}
+	if _u.mutation.BillingUserIDCleared() {
+		_spec.ClearField(usagelog.FieldBillingUserID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.RequestID(); ok {
 		_spec.SetField(usagelog.FieldRequestID, field.TypeString, value)
@@ -3117,6 +3281,35 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.TeamCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usagelog.TeamTable,
+			Columns: []string{usagelog.TeamColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(team.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TeamIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usagelog.TeamTable,
+			Columns: []string{usagelog.TeamColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(team.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

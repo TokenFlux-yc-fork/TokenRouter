@@ -160,7 +160,9 @@ func liveCallIdentity(
 	}
 	return service.LiveCallIdentity{
 		APIKeyID:        apiKey.ID,
+		ActorUserID:     apiKey.UserID,
 		UserID:          userID,
+		TeamID:          apiKey.TeamID,
 		GroupID:         apiKey.GroupID,
 		SubscriptionID:  subscriptionID,
 		UserAgent:       c.GetHeader("User-Agent"),
@@ -211,9 +213,11 @@ func (h *OpenAIGatewayHandler) LiveSideband(c *gin.Context) {
 		return
 	}
 	identity := service.LiveCallIdentity{
-		APIKeyID: apiKey.ID,
-		UserID:   subject.UserID,
-		GroupID:  apiKey.GroupID,
+		APIKeyID:    apiKey.ID,
+		ActorUserID: apiKey.UserID,
+		UserID:      subject.UserID,
+		TeamID:      apiKey.TeamID,
+		GroupID:     apiKey.GroupID,
 	}
 	record, err := h.gatewayService.GetLiveCallForIdentity(c.Request.Context(), c.Param("call_id"), identity)
 	if err != nil {

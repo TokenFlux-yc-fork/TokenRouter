@@ -41,6 +41,7 @@ type dashboardSnapshotV2Filters struct {
 	APIKeyID    int64
 	AccountID   int64
 	GroupID     int64
+	TeamID      int64
 	Model       string
 	RequestType *int16
 	Stream      *bool
@@ -55,6 +56,7 @@ type dashboardSnapshotV2CacheKey struct {
 	APIKeyID          int64  `json:"api_key_id"`
 	AccountID         int64  `json:"account_id"`
 	GroupID           int64  `json:"group_id"`
+	TeamID            int64  `json:"team_id"`
 	Model             string `json:"model"`
 	RequestType       *int16 `json:"request_type"`
 	Stream            *bool  `json:"stream"`
@@ -100,6 +102,7 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		APIKeyID:          filters.APIKeyID,
 		AccountID:         filters.AccountID,
 		GroupID:           filters.GroupID,
+		TeamID:            filters.TeamID,
 		Model:             filters.Model,
 		RequestType:       filters.RequestType,
 		Stream:            filters.Stream,
@@ -180,6 +183,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.APIKeyID,
 			filters.AccountID,
 			filters.GroupID,
+			filters.TeamID,
 			filters.Model,
 			filters.RequestType,
 			filters.Stream,
@@ -200,6 +204,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.APIKeyID,
 			filters.AccountID,
 			filters.GroupID,
+			filters.TeamID,
 			usagestats.ModelSourceRequested,
 			filters.RequestType,
 			filters.Stream,
@@ -220,6 +225,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.APIKeyID,
 			filters.AccountID,
 			filters.GroupID,
+			filters.TeamID,
 			filters.RequestType,
 			filters.Stream,
 			filters.BillingType,
@@ -273,6 +279,13 @@ func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filter
 			return nil, err
 		}
 		filters.GroupID = id
+	}
+	if teamIDStr := strings.TrimSpace(c.Query("team_id")); teamIDStr != "" {
+		id, err := strconv.ParseInt(teamIDStr, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		filters.TeamID = id
 	}
 
 	if requestTypeStr := strings.TrimSpace(c.Query("request_type")); requestTypeStr != "" {

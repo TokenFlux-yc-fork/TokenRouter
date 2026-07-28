@@ -53,6 +53,7 @@ export interface TrendParams {
   model?: string
   account_id?: number
   group_id?: number
+  team_id?: number
   request_type?: UsageRequestType
   stream?: boolean
   billing_type?: number | null
@@ -84,6 +85,7 @@ export interface ModelStatsParams {
   model_source?: 'requested' | 'upstream' | 'mapping'
   account_id?: number
   group_id?: number
+  team_id?: number
   request_type?: UsageRequestType
   stream?: boolean
   billing_type?: number | null
@@ -112,6 +114,7 @@ export interface GroupStatsParams {
   api_key_id?: number
   account_id?: number
   group_id?: number
+  team_id?: number
   request_type?: UsageRequestType
   stream?: boolean
   billing_type?: number | null

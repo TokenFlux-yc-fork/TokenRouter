@@ -1770,6 +1770,33 @@ describe("admin SettingsView security tab controls", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
+  it("shows and saves frontend URL when password reset is disabled", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      email_verify_enabled: false,
+      password_reset_enabled: false,
+      frontend_url: "https://router.example",
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const input = wrapper.get('[data-testid="frontend-url-input"]');
+    expect((input.element as HTMLInputElement).value).toBe("https://router.example");
+
+    await input.setValue("https://new-router.example");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        frontend_url: "https://new-router.example",
+      }),
+    );
+  });
+
   it("renders and submits registration email normalization settings", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

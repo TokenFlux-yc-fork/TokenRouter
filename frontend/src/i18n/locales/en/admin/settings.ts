@@ -99,7 +99,7 @@ dataSharing: {
         passwordResetHint: 'Allow users to reset their password via email',
         frontendUrl: 'Frontend URL',
         frontendUrlPlaceholder: 'https://example.com',
-        frontendUrlHint: 'Used to generate password reset links in emails. Example: https://example.com',
+        frontendUrlHint: 'Used to generate external links in emails, including password resets and team invitations. Example: https://example.com',
         totp: 'Two-Factor Authentication (2FA)',
         totpHint: 'Allow users to use authenticator apps like Google Authenticator',
         totpKeyNotConfigured:

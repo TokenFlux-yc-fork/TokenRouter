@@ -33,6 +33,7 @@ import adminPaymentAPI from './payment'
 import riskControlAPI from './riskControl'
 import adminDataSharingAPI from './dataSharing'
 import auditAPI from './audit'
+import teamsAPI from './teams'
 
 /**
  * Unified admin API object for convenient access
@@ -67,7 +68,8 @@ export const adminAPI = {
   payment: adminPaymentAPI,
   riskControl: riskControlAPI,
   dataSharing: adminDataSharingAPI,
-  audit: auditAPI
+  audit: auditAPI,
+  teams: teamsAPI
 }
 
 export {
@@ -100,7 +102,8 @@ export {
   adminPaymentAPI,
   riskControlAPI,
   adminDataSharingAPI,
-  auditAPI
+  auditAPI,
+  teamsAPI
 }
 
 export default adminAPI

@@ -64,6 +64,24 @@ upstream merge.
 - The complete baseline gates below remain required before this merge is
   finalized.
 
+## Upstream Review: v0.1.238
+
+- Upstream target: `003dd01a24c41ace1c36eb399c692a0401ae9c7d` (the
+  post-tag `VERSION=0.1.238` sync commit for `v0.1.238`).
+- Reviewed range: `96edeacb2b348efa78fbd909d9a853d5a7a0084a..003dd01a24c41ace1c36eb399c692a0401ae9c7d`.
+- No active customization is fully upstreamed in this range; all rows remain
+  `local`.
+- Upstream team and batch-image billing attribution is combined with the
+  fork's group health, backup-pool, OAuth capacity, and build-identity fields.
+  Native compact, Responses routing, and pre-output failover behavior remain
+  local and unchanged by this upstream range.
+- The only merge conflict was generated Ent runtime field indexing. Ent was
+  regenerated from the combined schema after resolving the field order.
+- The complete baseline gates, repository integration tests, Compose parsing,
+  handler race tests, and serial service race tests pass. The default parallel
+  service race test still reports concurrent Gin `SetMode` calls; the same
+  four-test reproducer fails on the canonical upstream target.
+
 ## Active Customizations
 
 | ID | Behavior | Source commits | Main paths | Status | Verification |

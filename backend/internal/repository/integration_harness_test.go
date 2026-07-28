@@ -211,9 +211,14 @@ func testTx(t *testing.T) *sql.Tx {
 }
 
 // testEntClient 返回全局的 ent client，用于测试需要内部管理事务的代码（如 Create/Update 方法）。
-// 注意：此 client 的操作会真正写入数据库，测试结束后不会自动回滚。
+// 这类操作会真实提交，因此测试结束后统一截断核心业务表，避免新增外键让后续用例的手工 DELETE 静默失败。
 func testEntClient(t *testing.T) *dbent.Client {
 	t.Helper()
+	t.Cleanup(func() {
+		// 只以 users 为根清理其依赖数据，保留迁移预置的默认分组等全局基线。
+		_, err := integrationDB.ExecContext(context.Background(), "TRUNCATE users RESTART IDENTITY CASCADE")
+		require.NoError(t, err, "清理集成测试提交的数据")
+	})
 	return integrationEntClient
 }
 

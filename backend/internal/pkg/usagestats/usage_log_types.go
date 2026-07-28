@@ -293,7 +293,12 @@ type UsageLogFilters struct {
 	APIKeyID  int64
 	AccountID int64
 	GroupID   int64
-	Model     string
+	TeamID    int64
+	// IncludeOwnedTeam 在查询当前用户记录时，同时纳入其作为 Owner 的团队记录。
+	IncludeOwnedTeam bool
+	// PersonalOnly 仅查询个人 Key 产生的记录，团队作用域使用独立接口。
+	PersonalOnly bool
+	Model        string
 	// ModelFilterSource 控制 Model 的匹配维度；为空时保留 usage_logs.model 原始语义。
 	ModelFilterSource string
 	RequestType       *int16

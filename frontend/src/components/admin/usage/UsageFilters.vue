@@ -1,9 +1,13 @@
 <template>
   <div :class="flat ? 'p-4 sm:p-6' : 'card p-6'">
-    <!-- Toolbar: left filters (multi-line) + right actions -->
-    <div class="flex flex-wrap items-end justify-between gap-4">
-      <!-- Left: filters (allowed to wrap to multiple rows) -->
-      <div class="flex flex-1 flex-wrap items-end gap-4">
+    <!-- 筛选条件在上、操作按钮在下，避免多行筛选时左上区域出现大块空白。 -->
+    <div class="space-y-4">
+      <div class="flex flex-wrap items-end gap-4">
+        <div v-if="mode === 'usage'" class="w-full sm:w-auto sm:min-w-[200px]">
+          <label class="input-label">{{ t('admin.usage.teamFilter') }}</label>
+          <Select v-model="filters.team_id" :options="teamOptions" searchable @change="emitChange" />
+        </div>
+
         <!-- User Search -->
         <div ref="userSearchRef" class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]">
           <label class="input-label">{{ t('admin.usage.userFilter') }}</label>
@@ -165,8 +169,7 @@
 
       </div>
 
-      <!-- Right: actions -->
-      <div v-if="showActions" class="flex w-full flex-wrap items-center justify-end gap-3 sm:w-auto">
+      <div v-if="showActions" class="flex w-full flex-wrap items-center justify-end gap-3 border-t border-gray-100 pt-4 dark:border-dark-700">
         <button type="button" @click="$emit('refresh')" class="btn btn-secondary">
           {{ t('common.refresh') }}
         </button>
@@ -259,6 +262,7 @@ const modelOptions = computed<SelectOption[]>(() => [
   ...(props.modelOptions ?? []).map((m) => ({ value: m, label: m })),
 ])
 const groupOptions = ref<SelectOption[]>([{ value: null, label: t('admin.usage.allGroups') }])
+const teamOptions = ref<SelectOption[]>([{ value: null, label: t('admin.usage.allTeams') }])
 
 const requestTypeOptions = ref<SelectOption[]>([
   { value: null, label: t('admin.usage.allTypes') },
@@ -502,12 +506,15 @@ watch(
 
 onMounted(async () => {
   document.addEventListener('click', onDocumentClick)
-  try {
-    const gs = await adminAPI.groups.list(1, 1000)
-    groupOptions.value.push(...gs.items.map((g: any) => ({ value: g.id, label: g.name })))
-  } catch {
-    // Ignore filter option loading errors (page still usable)
-  }
+  // 团队和分组选项相互独立，任一加载失败都不影响其他筛选器使用。
+  await Promise.allSettled([
+    adminAPI.groups.list(1, 1000).then((gs) => {
+      groupOptions.value.push(...gs.items.map((g: any) => ({ value: g.id, label: g.name })))
+    }),
+    adminAPI.teams.list().then((teams) => {
+      teamOptions.value.push(...teams.map((team) => ({ value: team.id, label: team.name })))
+    }),
+  ])
 })
 
 onUnmounted(() => {

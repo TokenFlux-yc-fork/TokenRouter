@@ -73,6 +73,19 @@ func TestAdminUsageListUsesRequestedModelForDisplayModelFilter(t *testing.T) {
 	require.Equal(t, usagestats.ModelSourceRequested, repo.listFilters.ModelFilterSource)
 }
 
+// 团队筛选必须原样传入列表仓储，避免管理员看到其他团队的记录。
+func TestAdminUsageListTeamFilter(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage?team_id=27", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, int64(27), repo.listFilters.TeamID)
+}
+
 func TestAdminUsageListInvalidRequestType(t *testing.T) {
 	repo := &adminUsageRepoCapture{}
 	router := newAdminUsageRequestTypeTestRouter(repo)
@@ -143,6 +156,19 @@ func TestAdminUsageStatsUsesRequestedModelForDisplayModelFilter(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "grok-imagine-video-1.5", repo.statsFilters.Model)
 	require.Equal(t, usagestats.ModelSourceRequested, repo.statsFilters.ModelFilterSource)
+}
+
+// 汇总统计必须与列表使用同一团队条件。
+func TestAdminUsageStatsTeamFilter(t *testing.T) {
+	repo := &adminUsageRepoCapture{}
+	router := newAdminUsageRequestTypeTestRouter(repo)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage/stats?team_id=31", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, int64(31), repo.statsFilters.TeamID)
 }
 
 func TestAdminUsageStatsInvalidRequestType(t *testing.T) {

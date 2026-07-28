@@ -4,6 +4,7 @@ import dashboard from './dashboard'
 import batchImage from './batchImage'
 import admin from './admin'
 import misc from './misc'
+import team from './team'
 
 export default {
   ...landing,
@@ -12,4 +13,5 @@ export default {
   ...batchImage,
   admin,
   ...misc,
+  ...team,
 }

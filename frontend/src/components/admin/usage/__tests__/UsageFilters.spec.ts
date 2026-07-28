@@ -7,6 +7,8 @@ import UsageFilters from '../UsageFilters.vue'
 const messages: Record<string, string> = {
   'admin.usage.userDeletedBadge': 'deleted',
   'admin.usage.userFilter': 'User',
+  'admin.usage.teamFilter': 'Team',
+  'admin.usage.allTeams': 'All Teams',
   'admin.usage.searchUserPlaceholder': 'Search user...',
   'usage.apiKeyFilter': 'API Key',
   'admin.usage.searchApiKeyPlaceholder': 'Search API key...',
@@ -52,6 +54,7 @@ vi.mock('vue-i18n', async () => {
 const mockSearchUsers = vi.fn()
 const mockSearchApiKeys = vi.fn().mockResolvedValue([])
 const mockGroupsList = vi.fn().mockResolvedValue({ items: [] })
+const mockTeamsList = vi.fn().mockResolvedValue([])
 const mockGetModelStats = vi.fn().mockResolvedValue({ models: [] })
 const mockAccountsList = vi.fn().mockResolvedValue({ items: [] })
 
@@ -62,6 +65,7 @@ vi.mock('@/api/admin', () => ({
       searchApiKeys: (...args: any[]) => mockSearchApiKeys(...args),
     },
     groups: { list: (...args: any[]) => mockGroupsList(...args) },
+    teams: { list: (...args: any[]) => mockTeamsList(...args) },
     dashboard: { getModelStats: (...args: any[]) => mockGetModelStats(...args) },
     accounts: { list: (...args: any[]) => mockAccountsList(...args) },
   },
@@ -77,6 +81,7 @@ const defaultFilters = () => ({
   billing_type: null,
   billing_mode: null,
   group_id: null,
+  team_id: null,
   start_date: '',
   end_date: '',
 })
@@ -118,6 +123,7 @@ describe('UsageFilters — user search dropdown', () => {
     mockSearchApiKeys.mockResolvedValue([])
     mockGetModelStats.mockClear()
     mockGroupsList.mockClear()
+    mockTeamsList.mockClear()
     mockAccountsList.mockClear()
   })
 
@@ -227,6 +233,7 @@ describe('UsageFilters — model options come from prop (no dup request)', () =>
     vi.useFakeTimers()
     mockGetModelStats.mockClear()
     mockGroupsList.mockClear()
+    mockTeamsList.mockClear()
   })
 
   afterEach(() => {
@@ -256,5 +263,22 @@ describe('UsageFilters — model options come from prop (no dup request)', () =>
 
     const opts = (wrapper.vm as any).modelOptions as Array<{ value: string | null; label: string }>
     expect(opts.map((o) => o.value)).toEqual([null, 'claude-3', 'gpt-4o'])
+  })
+})
+
+describe('UsageFilters — team options', () => {
+  it('loads admin teams into the project Select options', async () => {
+    mockTeamsList.mockResolvedValueOnce([
+      { id: 9, name: 'Platform Team' },
+    ])
+
+    const wrapper = mountFilters()
+    await flushPromises()
+
+    const options = (wrapper.vm as any).teamOptions as Array<{ value: number | null; label: string }>
+    expect(options).toEqual([
+      { value: null, label: 'All Teams' },
+      { value: 9, label: 'Platform Team' },
+    ])
   })
 })

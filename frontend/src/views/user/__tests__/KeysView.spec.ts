@@ -19,6 +19,9 @@ const {
   getDataSharingNotice,
   confirmDataSharingNotice,
   createKey,
+  updateKey,
+  toggleStatus,
+  replaceRoute,
 } = vi.hoisted(() => ({
   listKeys: vi.fn(),
   getPublicSettings: vi.fn(),
@@ -33,6 +36,9 @@ const {
   getDataSharingNotice: vi.fn(),
   confirmDataSharingNotice: vi.fn(),
   createKey: vi.fn(),
+  updateKey: vi.fn(),
+  toggleStatus: vi.fn(),
+  replaceRoute: vi.fn(),
 }))
 
 const messages: Record<string, string> = {
@@ -40,11 +46,15 @@ const messages: Record<string, string> = {
   'common.name': 'Name',
   'common.refresh': 'Refresh',
   'common.status': 'Status',
+  'common.edit': 'Edit',
+  'common.more': 'More',
   'keys.apiKey': 'API Key',
   'keys.allGroups': 'All Groups',
   'keys.allStatus': 'All Status',
   'keys.columnSettings': 'Column Settings',
   'keys.createKey': 'Create API Key',
+  'keys.disable': 'Disable',
+  'keys.enable': 'Enable',
   'keys.apiKeyLimitReached': 'API key limit reached',
   'keys.created': 'Created',
   'keys.expiresAt': 'Expires',
@@ -56,10 +66,17 @@ const messages: Record<string, string> = {
   'keys.rateLimitColumn': 'Rate Limit',
   'keys.searchPlaceholder': 'Search name or key...',
   'keys.status.active': 'Active',
+  'keys.status.disabled': 'Disabled',
+  'keys.status.team_owner_disabled': 'Disabled by team admin',
   'keys.status.expired': 'Expired',
   'keys.status.inactive': 'Inactive',
   'keys.status.quota_exhausted': 'Quota exhausted',
   'keys.usage': 'Usage',
+  'keys.teamOwnerLocked': 'Admin locked',
+  'keys.teamOwnerDisabledHint': 'Only the team administrator can enable this key again.',
+  'team.personalKeys': 'Personal keys',
+  'team.teamKeys': 'Team keys',
+  'team.scopeSwitch': 'Switch key scope',
 }
 
 vi.mock('@/api', () => ({
@@ -67,9 +84,9 @@ vi.mock('@/api', () => ({
     list: listKeys,
     create: vi.fn(),
     createWithPayload: createKey,
-    update: vi.fn(),
+    update: updateKey,
     delete: vi.fn(),
-    toggleStatus: vi.fn(),
+    toggleStatus,
   },
   authAPI: {
     getPublicSettings,
@@ -114,6 +131,11 @@ vi.mock('@/composables/useBalanceDisplay', () => ({
     formatBalanceAmount: (value: number | null | undefined, options?: { fractionDigits?: number }) =>
       `$${Number(value ?? 0).toFixed(options?.fractionDigits ?? 2)}`,
   }),
+}))
+
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: { scope: 'personal' } }),
+  useRouter: () => ({ replace: replaceRoute }),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -200,6 +222,12 @@ const DataTableStub = {
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
         </div>
+        <div data-test="status">
+          <slot name="cell-status" :value="row.status" :row="row" />
+        </div>
+        <div data-test="actions">
+          <slot name="cell-actions" :value="row" :row="row" />
+        </div>
         <div
           v-if="columns.some((column) => column.key === 'last_used_ip')"
           data-test="last-used-ip"
@@ -214,9 +242,9 @@ const DataTableStub = {
 
 const SelectStub = {
   name: 'Select',
-  props: ['modelValue', 'options'],
+  props: ['modelValue', 'options', 'disabled'],
   emits: ['update:modelValue'],
-  template: '<button type="button" @click="$emit(\'update:modelValue\', options?.[0]?.value ?? null)"></button>',
+  template: '<button type="button" :disabled="disabled" @click="$emit(\'update:modelValue\', options?.[0]?.value ?? null)"></button>',
 }
 
 const SearchInputStub = {
@@ -301,6 +329,9 @@ describe('user KeysView column settings', () => {
     getDataSharingNotice.mockReset()
     confirmDataSharingNotice.mockReset()
     createKey.mockReset()
+    updateKey.mockReset()
+    toggleStatus.mockReset()
+    replaceRoute.mockReset()
 
     listKeys.mockResolvedValue({
       items: [createApiKey()],
@@ -315,6 +346,7 @@ describe('user KeysView column settings', () => {
     getUserGroupRates.mockResolvedValue({})
     isCurrentStep.mockReturnValue(false)
     createKey.mockResolvedValue(createApiKey())
+    updateKey.mockResolvedValue(createApiKey())
   })
 
   it('uses the default API key columns with low-frequency columns hidden', async () => {
@@ -335,6 +367,26 @@ describe('user KeysView column settings', () => {
     expect(visibleColumnKeys(wrapper)).not.toContain('last_used_at')
     expect(visibleColumnKeys(wrapper)).not.toContain('last_used_ip')
     expect(visibleColumnKeys(wrapper)).not.toContain('id')
+  })
+
+  it('places the key scope dropdown directly after the refresh action', async () => {
+    const wrapper = await mountView()
+
+    const refreshButton = wrapper.get('button[title="Refresh"]').element
+    const scopeTrigger = wrapper.get('[data-test="scope-dropdown-trigger"]').element
+
+    expect(refreshButton.nextElementSibling?.contains(scopeTrigger)).toBe(true)
+    expect(wrapper.find('.mb-6').exists()).toBe(false)
+  })
+
+  it('keeps only edit, status and more as primary row actions', async () => {
+    const wrapper = await mountView()
+
+    const actionButtons = wrapper.get('[data-test="actions"]').findAll('button')
+    expect(actionButtons).toHaveLength(3)
+    expect(actionButtons.some((button) => button.text().includes('Edit'))).toBe(true)
+    expect(actionButtons.some((button) => button.text().includes('Disable'))).toBe(true)
+    expect(actionButtons.some((button) => button.text().includes('More'))).toBe(true)
   })
 
   it('shows a hidden column when toggled and persists the preference', async () => {
@@ -440,6 +492,58 @@ describe('user KeysView column settings', () => {
     expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
   })
 
+  it('renders a localized disabled status for team keys', async () => {
+    listKeys.mockResolvedValueOnce({
+      items: [{ ...createApiKey(), status: 'disabled', scope: 'team', team_id: 1 }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = await mountView()
+
+    expect(wrapper.get('[data-test="status"]').text()).toBe('Disabled')
+    expect(wrapper.text()).not.toContain('keys.status.disabled')
+  })
+
+  it('marks owner-disabled team keys and prevents members from enabling them', async () => {
+    listKeys.mockResolvedValueOnce({
+      items: [{
+        ...createApiKey(),
+        status: 'disabled',
+        scope: 'team',
+        team_id: 1,
+        group_id: 42,
+        team_owner_disabled: true,
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = await mountView()
+
+    expect(wrapper.get('[data-test="status"]').text()).toContain('Disabled by team admin')
+    expect(wrapper.get('[data-test="actions"]').text()).toContain('Admin locked')
+    expect(getButtonByText(wrapper, 'Edit').exists()).toBe(true)
+    expect(wrapper.findAll('button').some((button) => button.text() === 'Enable')).toBe(false)
+
+    await getButtonByText(wrapper, 'Edit').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('[data-test="key-status-select"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('Only the team administrator can enable this key again.')
+
+    await wrapper.get('form#key-form').trigger('submit')
+    await flushPromises()
+
+    expect(toggleStatus).not.toHaveBeenCalled()
+    expect(updateKey).toHaveBeenCalledTimes(1)
+    expect(updateKey.mock.calls[0][1]).not.toHaveProperty('status')
+  })
+
   it('marks current concurrency as sortable', async () => {
     const wrapper = await mountView()
 
@@ -491,6 +595,7 @@ describe('user KeysView column settings', () => {
         search: 'target',
         status: 'active',
         group_id: 42,
+        scope: 'personal',
         sort_by: 'current_concurrency',
         sort_order: 'asc',
       },

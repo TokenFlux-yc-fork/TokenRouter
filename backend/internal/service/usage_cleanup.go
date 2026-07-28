@@ -32,6 +32,7 @@ type UsageCleanupFilters struct {
 	APIKeyID    *int64    `json:"api_key_id,omitempty"`
 	AccountID   *int64    `json:"account_id,omitempty"`
 	GroupID     *int64    `json:"group_id,omitempty"`
+	TeamID      *int64    `json:"team_id,omitempty"`
 	Model       *string   `json:"model,omitempty"`
 	RequestType *int16    `json:"request_type,omitempty"`
 	Stream      *bool     `json:"stream,omitempty"`

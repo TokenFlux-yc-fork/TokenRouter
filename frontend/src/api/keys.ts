@@ -23,6 +23,7 @@ export async function list(
     group_id?: number | string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
+    scope?: 'personal' | 'team'
   },
   options?: {
     signal?: AbortSignal

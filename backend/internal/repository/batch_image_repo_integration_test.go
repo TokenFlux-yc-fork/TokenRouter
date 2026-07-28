@@ -16,19 +16,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newBatchImageRepositoryWithSQL(sqlq batchImageSQLExecutor) *batchImageRepository {
-	return &batchImageRepository{sql: sqlq}
+func newBatchImageRepositoryWithSQL(t *testing.T, sqlq batchImageSQLExecutor) (*batchImageRepository, int64) {
+	t.Helper()
+	// billing_user_id 新增外键后，每个事务都创建真实付款用户，避免用悬空固定 ID 掩盖数据契约。
+	var userID int64
+	err := sqlq.QueryRowContext(context.Background(), `
+		INSERT INTO users (email, password_hash, role, status)
+		VALUES ($1, 'test-password-hash', 'user', 'active')
+		RETURNING id
+	`, batchImageTestID(t, "user")+"@example.com").Scan(&userID)
+	require.NoError(t, err)
+	return &batchImageRepository{sql: sqlq}, userID
 }
 
 func TestBatchImageRepository_CreateJobAndDuplicates(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	batchID := batchImageTestID(t, "create")
 
 	job, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
 		BatchID:       batchID,
-		UserID:        1001,
+		UserID:        userID,
+		BillingUserID: userID,
 		Provider:      service.BatchImageProviderGeminiAPI,
 		Model:         "gemini-2.5-flash-image",
 		ItemCount:     2,
@@ -40,11 +50,12 @@ func TestBatchImageRepository_CreateJobAndDuplicates(t *testing.T) {
 	require.Equal(t, "USD", job.Currency)
 
 	_, err = repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
-		BatchID:   batchID,
-		UserID:    1001,
-		Provider:  service.BatchImageProviderGeminiAPI,
-		Model:     "gemini-2.5-flash-image",
-		ItemCount: 1,
+		BatchID:       batchID,
+		UserID:        userID,
+		BillingUserID: userID,
+		Provider:      service.BatchImageProviderGeminiAPI,
+		Model:         "gemini-2.5-flash-image",
+		ItemCount:     1,
 	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, service.ErrBatchImageJobExists))
@@ -52,14 +63,15 @@ func TestBatchImageRepository_CreateJobAndDuplicates(t *testing.T) {
 
 func TestBatchImageRepository_InvalidProvider(t *testing.T) {
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 
 	_, err := repo.CreateBatchImageJob(context.Background(), service.CreateBatchImageJobParams{
-		BatchID:   batchImageTestID(t, "provider"),
-		UserID:    1001,
-		Provider:  "unknown",
-		Model:     "gemini-2.5-flash-image",
-		ItemCount: 1,
+		BatchID:       batchImageTestID(t, "provider"),
+		UserID:        userID,
+		BillingUserID: userID,
+		Provider:      "unknown",
+		Model:         "gemini-2.5-flash-image",
+		ItemCount:     1,
 	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, service.ErrBatchImageInvalidProvider))
@@ -68,16 +80,17 @@ func TestBatchImageRepository_InvalidProvider(t *testing.T) {
 func TestBatchImageRepository_TransitionIncrementsVersionAndEvents(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	batchID := batchImageTestID(t, "transition")
 	now := time.Date(2026, 7, 3, 8, 0, 0, 0, time.UTC)
 
 	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
-		BatchID:   batchID,
-		UserID:    1001,
-		Provider:  service.BatchImageProviderVertex,
-		Model:     "gemini-2.5-flash-image",
-		ItemCount: 1,
+		BatchID:       batchID,
+		UserID:        userID,
+		BillingUserID: userID,
+		Provider:      service.BatchImageProviderVertex,
+		Model:         "gemini-2.5-flash-image",
+		ItemCount:     1,
 	})
 	require.NoError(t, err)
 
@@ -102,15 +115,16 @@ func TestBatchImageRepository_TransitionIncrementsVersionAndEvents(t *testing.T)
 func TestBatchImageRepository_InvalidTransition(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	batchID := batchImageTestID(t, "invalid-transition")
 
 	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
-		BatchID:   batchID,
-		UserID:    1001,
-		Provider:  service.BatchImageProviderGeminiAPI,
-		Model:     "gemini-2.5-flash-image",
-		ItemCount: 1,
+		BatchID:       batchID,
+		UserID:        userID,
+		BillingUserID: userID,
+		Provider:      service.BatchImageProviderGeminiAPI,
+		Model:         "gemini-2.5-flash-image",
+		ItemCount:     1,
 	})
 	require.NoError(t, err)
 
@@ -122,16 +136,17 @@ func TestBatchImageRepository_InvalidTransition(t *testing.T) {
 func TestBatchImageRepository_TerminalStatusCannotMoveBack(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	batchID := batchImageTestID(t, "terminal")
 
 	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
-		BatchID:   batchID,
-		UserID:    1001,
-		Provider:  service.BatchImageProviderGeminiAPI,
-		Model:     "gemini-2.5-flash-image",
-		Status:    service.BatchImageJobStatusCompleted,
-		ItemCount: 1,
+		BatchID:       batchID,
+		UserID:        userID,
+		BillingUserID: userID,
+		Provider:      service.BatchImageProviderGeminiAPI,
+		Model:         "gemini-2.5-flash-image",
+		Status:        service.BatchImageJobStatusCompleted,
+		ItemCount:     1,
 	})
 	require.NoError(t, err)
 
@@ -143,17 +158,18 @@ func TestBatchImageRepository_TerminalStatusCannotMoveBack(t *testing.T) {
 func TestBatchImageRepository_ItemCustomIDUniqueness(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	firstBatchID := batchImageTestID(t, "items-a")
 	secondBatchID := batchImageTestID(t, "items-b")
 
 	for _, batchID := range []string{firstBatchID, secondBatchID} {
 		_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
-			BatchID:   batchID,
-			UserID:    1001,
-			Provider:  service.BatchImageProviderGeminiAPI,
-			Model:     "gemini-2.5-flash-image",
-			ItemCount: 1,
+			BatchID:       batchID,
+			UserID:        userID,
+			BillingUserID: userID,
+			Provider:      service.BatchImageProviderGeminiAPI,
+			Model:         "gemini-2.5-flash-image",
+			ItemCount:     1,
 		})
 		require.NoError(t, err)
 	}
@@ -194,17 +210,18 @@ func TestBatchImageRepository_ItemCustomIDUniqueness(t *testing.T) {
 func TestBatchImageRepository_ReplaceBatchImageItemsForJob(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	batchID := batchImageTestID(t, "replace-items")
 	lineOne := 1
 	lineTwo := 2
 
 	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
-		BatchID:   batchID,
-		UserID:    1001,
-		Provider:  service.BatchImageProviderGeminiAPI,
-		Model:     "gemini-2.5-flash-image",
-		ItemCount: 2,
+		BatchID:       batchID,
+		UserID:        userID,
+		BillingUserID: userID,
+		Provider:      service.BatchImageProviderGeminiAPI,
+		Model:         "gemini-2.5-flash-image",
+		ItemCount:     2,
 	})
 	require.NoError(t, err)
 
@@ -244,7 +261,7 @@ func TestBatchImageRepository_ReplaceBatchImageItemsForJob(t *testing.T) {
 func TestBatchImageRepository_MarkBatchImageJobSettled(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	batchID := batchImageTestID(t, "settled")
 	apiKeyID := int64(2001)
 	accountID := int64(3001)
@@ -254,7 +271,8 @@ func TestBatchImageRepository_MarkBatchImageJobSettled(t *testing.T) {
 
 	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
 		BatchID:           batchID,
-		UserID:            1001,
+		UserID:            userID,
+		BillingUserID:     userID,
 		APIKeyID:          &apiKeyID,
 		AccountID:         &accountID,
 		Provider:          service.BatchImageProviderGeminiAPI,
@@ -295,17 +313,18 @@ func TestBatchImageRepository_MarkBatchImageJobSettled(t *testing.T) {
 func TestBatchImageRepository_SetBatchImageJobSettlementFailed(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	batchID := batchImageTestID(t, "settlement-failed")
 
 	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
-		BatchID:      batchID,
-		UserID:       1001,
-		Provider:     service.BatchImageProviderGeminiAPI,
-		Model:        "gemini-image",
-		Status:       service.BatchImageJobStatusSettling,
-		ItemCount:    1,
-		SuccessCount: 1,
+		BatchID:       batchID,
+		UserID:        userID,
+		BillingUserID: userID,
+		Provider:      service.BatchImageProviderGeminiAPI,
+		Model:         "gemini-image",
+		Status:        service.BatchImageJobStatusSettling,
+		ItemCount:     1,
+		SuccessCount:  1,
 	})
 	require.NoError(t, err)
 
@@ -324,15 +343,16 @@ func TestBatchImageRepository_SetBatchImageJobSettlementFailed(t *testing.T) {
 func TestBatchImageRepository_AppendEvent(t *testing.T) {
 	ctx := context.Background()
 	tx := testTx(t)
-	repo := newBatchImageRepositoryWithSQL(tx)
+	repo, userID := newBatchImageRepositoryWithSQL(t, tx)
 	batchID := batchImageTestID(t, "event")
 
 	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
-		BatchID:   batchID,
-		UserID:    1001,
-		Provider:  service.BatchImageProviderVertex,
-		Model:     "gemini-2.5-flash-image",
-		ItemCount: 1,
+		BatchID:       batchID,
+		UserID:        userID,
+		BillingUserID: userID,
+		Provider:      service.BatchImageProviderVertex,
+		Model:         "gemini-2.5-flash-image",
+		ItemCount:     1,
 	})
 	require.NoError(t, err)
 

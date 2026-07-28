@@ -135,9 +135,17 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *usageBill
 		RequestID:          requestID,
 		APIKeyID:           p.APIKey.ID,
 		UserID:             p.User.ID,
+		ActorUserID:        p.User.ID,
 		AccountID:          p.Account.ID,
 		AccountType:        p.Account.Type,
 		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
+	}
+	if p.APIKey.ActorUser != nil {
+		cmd.ActorUserID = p.APIKey.ActorUser.ID
+	}
+	if p.APIKey.TeamID != nil {
+		teamID := *p.APIKey.TeamID
+		cmd.TeamID = &teamID
 	}
 	if p.APIKey.GroupID != nil && *p.APIKey.GroupID > 0 {
 		groupID := *p.APIKey.GroupID
@@ -851,7 +859,9 @@ func (s *GatewayService) buildRecordUsageLog(
 	durationMs := int(result.Duration.Milliseconds())
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
 	usageLog := &UsageLog{
-		UserID:                user.ID,
+		UserID:                usageActorUserID(apiKey, user),
+		BillingUserID:         user.ID,
+		TeamID:                apiKey.TeamID,
 		APIKeyID:              apiKey.ID,
 		AccountID:             account.ID,
 		RequestID:             requestID,

@@ -272,7 +272,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	usageLog := &UsageLog{
-		UserID:              user.ID,
+		UserID:              usageActorUserID(apiKey, user),
+		BillingUserID:       user.ID,
+		TeamID:              apiKey.TeamID,
 		APIKeyID:            apiKey.ID,
 		AccountID:           account.ID,
 		RequestID:           requestID,

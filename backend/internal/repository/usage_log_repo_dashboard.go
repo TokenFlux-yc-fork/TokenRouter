@@ -11,8 +11,8 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
-// getPerformanceStats 获取 RPM 和 TPM（近5分钟平均值，可选按用户过滤）
-func (r *usageLogRepository) getPerformanceStats(ctx context.Context, userID int64) (rpm, tpm int64, err error) {
+// getPerformanceStats 获取 RPM 和 TPM（近5分钟平均值，可选纳入 Owner 团队）。
+func (r *usageLogRepository) getPerformanceStats(ctx context.Context, userID int64, includeOwnedTeam bool) (rpm, tpm int64, err error) {
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 	query := `
 		SELECT
@@ -21,10 +21,7 @@ func (r *usageLogRepository) getPerformanceStats(ctx context.Context, userID int
 		FROM usage_logs
 		WHERE created_at >= $1`
 	args := []any{fiveMinutesAgo}
-	if userID > 0 {
-		query += " AND user_id = $2"
-		args = append(args, userID)
-	}
+	query, args = appendUserUsageScopeQueryFilter(query, args, userID, includeOwnedTeam, "")
 
 	var requestCount int64
 	var tokenCount int64
@@ -90,7 +87,7 @@ func (r *usageLogRepository) GetDashboardStats(ctx context.Context) (*DashboardS
 		return nil, err
 	}
 
-	rpm, tpm, err := r.getPerformanceStats(ctx, 0)
+	rpm, tpm, err := r.getPerformanceStats(ctx, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +115,7 @@ func (r *usageLogRepository) GetDashboardStatsWithRange(ctx context.Context, sta
 		return nil, err
 	}
 
-	rpm, tpm, err := r.getPerformanceStats(ctx, 0)
+	rpm, tpm, err := r.getPerformanceStats(ctx, 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +383,12 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
-		"SELECT COUNT(*) FROM api_keys WHERE user_id = $1 AND deleted_at IS NULL",
+		`SELECT COUNT(*) FROM api_keys
+		 WHERE deleted_at IS NULL
+		   AND (user_id = $1 OR team_id IN (
+		       SELECT tm.team_id FROM team_memberships tm
+		       WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
+		   ))`,
 		[]any{userID},
 		&stats.TotalAPIKeys,
 	); err != nil {
@@ -395,7 +397,12 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
-		"SELECT COUNT(*) FROM api_keys WHERE user_id = $1 AND status = $2 AND deleted_at IS NULL",
+		`SELECT COUNT(*) FROM api_keys
+		 WHERE status = $2 AND deleted_at IS NULL
+		   AND (user_id = $1 OR team_id IN (
+		       SELECT tm.team_id FROM team_memberships tm
+		       WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
+		   ))`,
 		[]any{userID, service.StatusActive},
 		&stats.ActiveAPIKeys,
 	); err != nil {
@@ -414,7 +421,10 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
 			COALESCE(AVG(duration_ms), 0) as avg_duration_ms
 		FROM usage_logs
-		WHERE user_id = $1
+		WHERE user_id = $1 OR team_id IN (
+			SELECT tm.team_id FROM team_memberships tm
+			WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
+		)
 	`
 	if err := scanSingleRow(
 		ctx,
@@ -445,7 +455,11 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 			COALESCE(SUM(total_cost), 0) as today_cost,
 			COALESCE(SUM(actual_cost), 0) as today_actual_cost
 		FROM usage_logs
-		WHERE user_id = $1 AND created_at >= $2
+		WHERE created_at >= $2
+		  AND (user_id = $1 OR team_id IN (
+			SELECT tm.team_id FROM team_memberships tm
+			WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
+		  ))
 	`
 	if err := scanSingleRow(
 		ctx,
@@ -464,64 +478,13 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 	}
 	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
 
-	// 性能指标：RPM 和 TPM（最近1分钟，仅统计该用户的请求）
-	rpm, tpm, err := r.getPerformanceStats(ctx, userID)
+	// 性能指标：RPM 和 TPM（最近5分钟，包含 Owner 团队请求）。
+	rpm, tpm, err := r.getPerformanceStats(ctx, userID, true)
 	if err != nil {
 		return nil, err
 	}
 	stats.Rpm = rpm
 	stats.Tpm = tpm
-
-	// 按"有效平台"维度拆分（group.platform 优先，否则 account.platform）。
-	// 与 ops 路径口径一致；HAVING 过滤掉无法确定平台的行（避免出现空字符串平台）。
-	// 与上面 totalStatsQuery/todayStatsQuery 的总值可能略微差异，原因有二：
-	//   1) 无平台归属的极少数行（group/account 都没 platform）会被 HAVING 排除；
-	//   2) usageLogSuccessFilterUL 会把 actual_cost = 0 的失败 placeholder 行排除，
-	//      而 totalStatsQuery/todayStatsQuery 没有这层过滤、会把这些行的 request 计数算进去。
-	platformQuery := `
-		SELECT
-			` + usageLogEffectivePlatformExpr + ` as platform,
-			COUNT(*) as total_requests,
-			COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) as total_tokens,
-			COALESCE(SUM(ul.actual_cost), 0) as total_actual_cost,
-			COUNT(*) FILTER (WHERE ul.created_at >= $2) as today_requests,
-			COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens) FILTER (WHERE ul.created_at >= $2), 0) as today_tokens,
-			COALESCE(SUM(ul.actual_cost) FILTER (WHERE ul.created_at >= $2), 0) as today_actual_cost
-		FROM usage_logs ul
-		LEFT JOIN groups g ON g.id = ul.group_id
-		LEFT JOIN accounts a ON a.id = ul.account_id
-		WHERE ul.user_id = $1
-		  AND ` + usageLogSuccessFilterUL + `
-		GROUP BY ` + usageLogEffectivePlatformExpr + `
-		HAVING ` + usageLogEffectivePlatformExpr + ` IS NOT NULL AND ` + usageLogEffectivePlatformExpr + ` <> ''
-		ORDER BY total_actual_cost DESC
-	`
-	rows, err := r.sql.QueryContext(ctx, platformQuery, userID, today)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var p PlatformDashboardStats
-		if err := rows.Scan(
-			&p.Platform,
-			&p.TotalRequests,
-			&p.TotalTokens,
-			&p.TotalActualCost,
-			&p.TodayRequests,
-			&p.TodayTokens,
-			&p.TodayActualCost,
-		); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		stats.ByPlatform = append(stats.ByPlatform, p)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
 
 	return stats, nil
 }

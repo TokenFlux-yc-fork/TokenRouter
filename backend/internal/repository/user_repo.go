@@ -466,6 +466,10 @@ func (r *userRepository) deleteUser(ctx context.Context, exec *dbent.Client, id 
 
 	affected, err := exec.User.Delete().Where(dbuser.IDEQ(id)).Exec(ctx)
 	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && strings.Contains(pqErr.Message, "TEAM_OWNER_TRANSFER_REQUIRED") {
+			return service.ErrTeamOwnerTransferRequired
+		}
 		return translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
 	if affected == 0 {

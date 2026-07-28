@@ -64,8 +64,8 @@
           <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
         </div>
       </div>
-      <!-- 明细区：tab 栏 + 筛选 + 内容收进同一张卡片，消除割裂感 -->
-      <div class="card">
+      <!-- 标签和筛选保留在同一卡片，数据内容使用下方独立卡片。 -->
+      <div class="card" data-testid="admin-usage-filters-card">
         <div class="flex flex-wrap items-center border-b border-gray-200 px-2 dark:border-dark-700 sm:px-4">
           <button
             v-for="tab in detailTabs"
@@ -83,7 +83,7 @@
           </button>
         </div>
 
-        <UsageFilters v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" class="border-b border-gray-100 dark:border-dark-700/50" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
+        <UsageFilters v-model="filters" ref="usageFiltersRef" flat :mode="activeTab" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
           <template #after-reset>
             <div v-if="activeTab !== 'ranking'" class="relative" ref="columnDropdownRef">
               <button
@@ -119,47 +119,48 @@
             </div>
           </template>
         </UsageFilters>
+      </div>
 
-        <div v-show="activeTab === 'usage'" class="overflow-hidden rounded-b-2xl">
-          <UsageTable
-            flat
-            :data="usageLogs"
-            :loading="loading"
-            :columns="visibleColumns"
-            :server-side-sort="true"
-            :default-sort-key="'created_at'"
-            :default-sort-order="'desc'"
-            @sort="handleSort"
-            @userClick="handleUserClick"
-            @ipGeoBatchFailed="handleIpGeoBatchFailed"
-          />
-          <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
-        </div>
-        <div v-show="activeTab === 'errors'" class="overflow-hidden rounded-b-2xl">
-          <OpsErrorLogTable
-            flat
-            :rows="errRows" :total="errTotal" :loading="errLoading"
-            :page="errPage" :page-size="errPageSize"
-            :visible-column-keys="errVisibleColumnKeys"
-            user-clickable
-            @userClick="handleUserClick"
-            @openErrorDetail="openError"
-            @sort="onErrSort"
-            @update:page="onErrPage"
-            @update:pageSize="onErrPageSize"
-            @ipGeoBatchFailed="handleIpGeoBatchFailed" />
-        </div>
-        <!-- 懒挂载：首次切到该 tab 才请求排行数据，之后随筛选自动刷新 -->
-        <div v-if="rankingMounted" v-show="activeTab === 'ranking'" class="overflow-hidden rounded-b-2xl">
-          <UserTokenRanking
-            ref="rankingRef"
-            :start-date="startDate"
-            :end-date="endDate"
-            :filters="breakdownFilters"
-            :model="filters.model"
-            @select-user="handleRankingSelectUser"
-          />
-        </div>
+      <div v-show="activeTab === 'usage'" class="space-y-4" data-testid="admin-usage-table-section">
+        <UsageTable
+          :data="usageLogs"
+          :loading="loading"
+          :columns="visibleColumns"
+          compact-user-column
+          :server-side-sort="true"
+          :default-sort-key="'created_at'"
+          :default-sort-order="'desc'"
+          @sort="handleSort"
+          @userClick="handleUserClick"
+          @ipGeoBatchFailed="handleIpGeoBatchFailed"
+        />
+        <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
+      </div>
+
+      <div v-show="activeTab === 'errors'" data-testid="admin-usage-errors-section">
+        <OpsErrorLogTable
+          :rows="errRows" :total="errTotal" :loading="errLoading"
+          :page="errPage" :page-size="errPageSize"
+          :visible-column-keys="errVisibleColumnKeys"
+          user-clickable
+          @userClick="handleUserClick"
+          @openErrorDetail="openError"
+          @sort="onErrSort"
+          @update:page="onErrPage"
+          @update:pageSize="onErrPageSize"
+          @ipGeoBatchFailed="handleIpGeoBatchFailed" />
+      </div>
+
+      <!-- 懒挂载：首次切到该 tab 才请求排行数据，之后随筛选自动刷新。 -->
+      <div v-if="rankingMounted" v-show="activeTab === 'ranking'" class="card overflow-hidden" data-testid="admin-usage-ranking-section">
+        <UserTokenRanking
+          ref="rankingRef"
+          :start-date="startDate"
+          :end-date="endDate"
+          :filters="breakdownFilters"
+          :model="filters.model"
+          @select-user="handleRankingSelectUser"
+        />
       </div>
       <OpsErrorDetailModal v-model:show="showErrorModal" :error-id="selectedErrorId" :error-type="'request'" />
     </div>
@@ -243,6 +244,7 @@ const breakdownFilters = computed(() => {
   if (filters.value.api_key_id) f.api_key_id = filters.value.api_key_id
   if (filters.value.account_id) f.account_id = filters.value.account_id
   if (filters.value.group_id) f.group_id = filters.value.group_id
+  if (filters.value.team_id) f.team_id = filters.value.team_id
   if (filters.value.request_type != null) f.request_type = filters.value.request_type
   if (filters.value.billing_type != null) f.billing_type = filters.value.billing_type
   return f
@@ -431,6 +433,7 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
       api_key_id: filters.value.api_key_id,
       account_id: filters.value.account_id,
       group_id: filters.value.group_id,
+      team_id: filters.value.team_id,
       request_type: requestType,
       stream: legacyStream === null ? undefined : legacyStream,
       billing_type: filters.value.billing_type,
@@ -480,6 +483,7 @@ const loadChartData = async () => {
       api_key_id: filters.value.api_key_id,
       account_id: filters.value.account_id,
       group_id: filters.value.group_id,
+      team_id: filters.value.team_id,
       request_type: requestType,
       stream: legacyStream === null ? undefined : legacyStream,
       billing_type: filters.value.billing_type,
@@ -611,7 +615,7 @@ const DEFAULT_HIDDEN_COLUMNS = ['reasoning_effort', 'user_agent']
 const HIDDEN_COLUMNS_KEY = 'usage-hidden-columns'
 
 const allColumns = computed(() => [
-  { key: 'user', label: t('admin.usage.user'), sortable: false },
+  { key: 'user', label: t('admin.usage.user'), sortable: false, class: 'w-36 min-w-36 max-w-36' },
   { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
   { key: 'account', label: t('admin.usage.account'), sortable: false },
   { key: 'model', label: t('usage.model'), sortable: true },

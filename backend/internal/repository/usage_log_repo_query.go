@@ -19,7 +19,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
-const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, subscription_amount_usd, balance_amount_usd, billing_allocations, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, session_id, created_at"
+const usageLogSelectColumns = "id, user_id, billing_user_id, team_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, subscription_amount_usd, balance_amount_usd, billing_allocations, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, session_id, created_at"
 
 func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *service.UsageLog, err error) {
 	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE id = $1"
@@ -100,10 +100,7 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
-	if filters.UserID > 0 {
-		conditions = append(conditions, fmt.Sprintf("user_id = $%d", len(args)+1))
-		args = append(args, filters.UserID)
-	}
+	conditions, args = appendUserUsageScopeWhereCondition(conditions, args, filters.UserID, filters.IncludeOwnedTeam, "")
 	if filters.APIKeyID > 0 {
 		conditions = append(conditions, fmt.Sprintf("api_key_id = $%d", len(args)+1))
 		args = append(args, filters.APIKeyID)
@@ -115,6 +112,13 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 	if filters.GroupID > 0 {
 		conditions = append(conditions, fmt.Sprintf("group_id = $%d", len(args)+1))
 		args = append(args, filters.GroupID)
+	}
+	if filters.TeamID > 0 {
+		conditions = append(conditions, fmt.Sprintf("team_id = $%d", len(args)+1))
+		args = append(args, filters.TeamID)
+	}
+	if filters.PersonalOnly {
+		conditions = append(conditions, "team_id IS NULL")
 	}
 	conditions, args = appendUsageLogModelWhereCondition(conditions, args, filters.Model, filters.ModelFilterSource)
 	conditions, args = appendRequestTypeOrStreamWhereCondition(conditions, args, filters.RequestType, filters.Stream)
@@ -158,7 +162,39 @@ func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
 		return false
 	}
 	// 强选择过滤下记录集通常较小，保留精确总数。
-	return filters.UserID == 0 && filters.APIKeyID == 0 && filters.AccountID == 0
+	return filters.UserID == 0 && filters.APIKeyID == 0 && filters.AccountID == 0 && filters.TeamID == 0
+}
+
+// appendUserUsageScopeWhereCondition 统一构造用户用量可见范围，避免列表与统计口径漂移。
+func appendUserUsageScopeWhereCondition(conditions []string, args []any, userID int64, includeOwnedTeam bool, alias string) ([]string, []any) {
+	if userID <= 0 {
+		return conditions, args
+	}
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	placeholder := len(args) + 1
+	if includeOwnedTeam {
+		conditions = append(conditions, fmt.Sprintf(
+			"(%[1]suser_id = $%[2]d OR %[1]steam_id IN (SELECT tm.team_id FROM team_memberships tm WHERE tm.user_id = $%[2]d AND tm.role = 'owner' AND tm.left_at IS NULL))",
+			prefix,
+			placeholder,
+		))
+	} else {
+		conditions = append(conditions, fmt.Sprintf("%suser_id = $%d", prefix, placeholder))
+	}
+	args = append(args, userID)
+	return conditions, args
+}
+
+// appendUserUsageScopeQueryFilter 将统一可见范围附加到已有 WHERE 查询。
+func appendUserUsageScopeQueryFilter(query string, args []any, userID int64, includeOwnedTeam bool, alias string) (string, []any) {
+	conditions, nextArgs := appendUserUsageScopeWhereCondition(nil, args, userID, includeOwnedTeam, alias)
+	if len(conditions) == 0 {
+		return query, nextArgs
+	}
+	return query + " AND " + conditions[0], nextArgs
 }
 
 func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
@@ -427,6 +463,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	var (
 		id                        int64
 		userID                    int64
+		billingUserID             int64
+		teamID                    sql.NullInt64
 		apiKeyID                  int64
 		accountID                 int64
 		requestID                 sql.NullString
@@ -491,6 +529,8 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	if err := scanner.Scan(
 		&id,
 		&userID,
+		&billingUserID,
+		&teamID,
 		&apiKeyID,
 		&accountID,
 		&requestID,
@@ -557,6 +597,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	log := &service.UsageLog{
 		ID:                        id,
 		UserID:                    userID,
+		BillingUserID:             billingUserID,
 		APIKeyID:                  apiKeyID,
 		AccountID:                 accountID,
 		Model:                     model,
@@ -601,6 +642,10 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	if groupID.Valid {
 		value := groupID.Int64
 		log.GroupID = &value
+	}
+	if teamID.Valid {
+		value := teamID.Int64
+		log.TeamID = &value
 	}
 	if subscriptionID.Valid {
 		value := subscriptionID.Int64

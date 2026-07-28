@@ -46,7 +46,9 @@ type LiveCallRequest struct {
 // LiveCallIdentity 保存创建者身份和 fork 路由所需的入站元数据。
 type LiveCallIdentity struct {
 	APIKeyID        int64
+	ActorUserID     int64
 	UserID          int64
+	TeamID          *int64
 	GroupID         *int64
 	SubscriptionID  *int64
 	UserAgent       string
@@ -61,7 +63,9 @@ type LiveCallRecord struct {
 	CallHash        string
 	AccountID       int64
 	APIKeyID        int64
+	ActorUserID     int64
 	UserID          int64
+	TeamID          int64
 	GroupID         int64
 	SubscriptionID  int64
 	LeaseID         string

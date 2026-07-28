@@ -18,8 +18,11 @@ const (
 )
 
 type BillingAllocation struct {
-	Type           BillingAllocationType `json:"type"`
-	AmountUSD      float64               `json:"amount_usd"`
-	SubscriptionID *int64                `json:"subscription_id,omitempty"`
-	PlanID         *int64                `json:"plan_id,omitempty"`
+	Type      BillingAllocationType `json:"type"`
+	AmountUSD float64               `json:"amount_usd"`
+	// BaseAmountUSD 和 RateMultiplier 用于还原分来源计费，旧记录缺省时仍按 AmountUSD 兼容。
+	BaseAmountUSD  float64 `json:"base_amount_usd,omitempty"`
+	RateMultiplier float64 `json:"rate_multiplier,omitempty"`
+	SubscriptionID *int64  `json:"subscription_id,omitempty"`
+	PlanID         *int64  `json:"plan_id,omitempty"`
 }

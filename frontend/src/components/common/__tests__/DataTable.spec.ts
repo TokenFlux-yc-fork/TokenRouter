@@ -102,6 +102,59 @@ describe('DataTable', () => {
     expect(wrapper.findAll('tbody tr[aria-hidden="true"]')).toHaveLength(0)
   })
 
+  it('rechecks horizontal overflow when asynchronous content changes the table width', async () => {
+    const observers: Array<{
+      callback: ResizeObserverCallback
+      elements: Element[]
+    }> = []
+    class TrackingResizeObserver {
+      callback: ResizeObserverCallback
+      elements: Element[] = []
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+        observers.push(this)
+      }
+
+      observe = vi.fn((element: Element) => this.elements.push(element))
+      disconnect = vi.fn()
+      unobserve = vi.fn()
+    }
+    const originalResizeObserver = globalThis.ResizeObserver
+    globalThis.ResizeObserver = TrackingResizeObserver as unknown as typeof ResizeObserver
+
+    try {
+      const wrapper = mount(DataTable, {
+        props: {
+          columns: [
+            { key: 'name', label: 'Name' },
+            { key: 'actions', label: 'Actions' }
+          ],
+          data: [{ id: 1, name: 'Key' }]
+        }
+      })
+      await wrapper.vm.$nextTick()
+
+      const tableWrapper = wrapper.get('.table-wrapper').element
+      const table = wrapper.get('table').element
+      const tableObserver = observers.find(observer =>
+        observer.elements.includes(tableWrapper) && observer.elements.includes(table)
+      )
+      expect(tableObserver).toBeDefined()
+
+      // 模拟外层宽度不变，但接口数据渲染后内部表格变宽。
+      Object.defineProperty(tableWrapper, 'clientWidth', { configurable: true, value: 800 })
+      Object.defineProperty(tableWrapper, 'scrollWidth', { configurable: true, value: 1200 })
+      tableObserver?.callback([], tableObserver as unknown as ResizeObserver)
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.get('.table-wrapper').classes()).toContain('is-scrollable')
+      wrapper.unmount()
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver
+    }
+  })
+
   it('switches to windowed rendering once row count exceeds virtualizeThreshold', async () => {
     const data = Array.from({ length: 12 }, (_, i) => ({ id: i + 1, name: `Row ${i + 1}` }))
     const wrapper = mount(DataTable, {

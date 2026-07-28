@@ -85,6 +85,8 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 	out := &APIKey{
 		ID:                                    k.ID,
 		UserID:                                k.UserID,
+		TeamID:                                k.TeamID,
+		TeamOwnerDisabled:                     k.TeamOwnerDisabled,
 		Key:                                   k.Key,
 		Name:                                  k.Name,
 		GroupID:                               k.GroupID,
@@ -113,8 +115,12 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		DataSharingConfirmedAt:                k.DataSharingConfirmedAt,
 		FallbackToDefaultGroupWhenUnavailable: k.FallbackToDefaultGroupWhenUnavailable,
 		CurrentConcurrency:                    k.CurrentConcurrency,
-		User:                                  UserFromServiceShallow(k.User),
 		Group:                                 GroupFromServiceShallow(k.Group),
+	}
+	if k.TeamID != nil {
+		out.Scope = "team"
+	} else {
+		out.Scope = "personal"
 	}
 	if k.Window5hStart != nil && !service.IsWindowExpired(k.Window5hStart, service.RateLimitWindow5h) {
 		t := k.Window5hStart.Add(service.RateLimitWindow5h)
@@ -712,6 +718,7 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 	return UsageLog{
 		ID:                        l.ID,
 		UserID:                    l.UserID,
+		TeamID:                    l.TeamID,
 		APIKeyID:                  l.APIKeyID,
 		AccountID:                 l.AccountID,
 		RequestID:                 l.RequestID,

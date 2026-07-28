@@ -116,6 +116,19 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+
+		// 团队运维管理。
+		teams := admin.Group("/teams")
+		{
+			teams.GET("", h.Admin.Team.List)
+			teams.POST("", h.Admin.Team.Create)
+			teams.GET("/:id", h.Admin.Team.Get)
+			teams.GET("/:id/members", h.Admin.Team.ListMembers)
+			teams.GET("/:id/usage", h.Admin.Team.GetUsage)
+			teams.PATCH("/:id", h.Admin.Team.Update)
+			teams.POST("/:id/force-transfer", gin.HandlerFunc(stepUpAuth), h.Admin.Team.ForceTransfer)
+			teams.DELETE("/:id", gin.HandlerFunc(stepUpAuth), h.Admin.Team.Dissolve)
+		}
 	}
 }
 

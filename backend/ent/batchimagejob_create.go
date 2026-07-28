@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/TokenFlux/TokenRouter/ent/batchimagejob"
+	"github.com/TokenFlux/TokenRouter/internal/domain"
 )
 
 // BatchImageJobCreate is the builder for creating a BatchImageJob entity.
@@ -31,6 +32,34 @@ func (_c *BatchImageJobCreate) SetBatchID(v string) *BatchImageJobCreate {
 // SetUserID sets the "user_id" field.
 func (_c *BatchImageJobCreate) SetUserID(v int64) *BatchImageJobCreate {
 	_c.mutation.SetUserID(v)
+	return _c
+}
+
+// SetBillingUserID sets the "billing_user_id" field.
+func (_c *BatchImageJobCreate) SetBillingUserID(v int64) *BatchImageJobCreate {
+	_c.mutation.SetBillingUserID(v)
+	return _c
+}
+
+// SetNillableBillingUserID sets the "billing_user_id" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableBillingUserID(v *int64) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetBillingUserID(*v)
+	}
+	return _c
+}
+
+// SetTeamID sets the "team_id" field.
+func (_c *BatchImageJobCreate) SetTeamID(v int64) *BatchImageJobCreate {
+	_c.mutation.SetTeamID(v)
+	return _c
+}
+
+// SetNillableTeamID sets the "team_id" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableTeamID(v *int64) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetTeamID(*v)
+	}
 	return _c
 }
 
@@ -258,6 +287,82 @@ func (_c *BatchImageJobCreate) SetActualCost(v float64) *BatchImageJobCreate {
 func (_c *BatchImageJobCreate) SetNillableActualCost(v *float64) *BatchImageJobCreate {
 	if v != nil {
 		_c.SetActualCost(*v)
+	}
+	return _c
+}
+
+// SetBalanceHoldAmount sets the "balance_hold_amount" field.
+func (_c *BatchImageJobCreate) SetBalanceHoldAmount(v float64) *BatchImageJobCreate {
+	_c.mutation.SetBalanceHoldAmount(v)
+	return _c
+}
+
+// SetNillableBalanceHoldAmount sets the "balance_hold_amount" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableBalanceHoldAmount(v *float64) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetBalanceHoldAmount(*v)
+	}
+	return _c
+}
+
+// SetSubscriptionHoldAllocations sets the "subscription_hold_allocations" field.
+func (_c *BatchImageJobCreate) SetSubscriptionHoldAllocations(v []domain.BillingAllocation) *BatchImageJobCreate {
+	_c.mutation.SetSubscriptionHoldAllocations(v)
+	return _c
+}
+
+// SetSubscriptionRateMultiplier sets the "subscription_rate_multiplier" field.
+func (_c *BatchImageJobCreate) SetSubscriptionRateMultiplier(v float64) *BatchImageJobCreate {
+	_c.mutation.SetSubscriptionRateMultiplier(v)
+	return _c
+}
+
+// SetNillableSubscriptionRateMultiplier sets the "subscription_rate_multiplier" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableSubscriptionRateMultiplier(v *float64) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetSubscriptionRateMultiplier(*v)
+	}
+	return _c
+}
+
+// SetBalanceRateMultiplier sets the "balance_rate_multiplier" field.
+func (_c *BatchImageJobCreate) SetBalanceRateMultiplier(v float64) *BatchImageJobCreate {
+	_c.mutation.SetBalanceRateMultiplier(v)
+	return _c
+}
+
+// SetNillableBalanceRateMultiplier sets the "balance_rate_multiplier" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableBalanceRateMultiplier(v *float64) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetBalanceRateMultiplier(*v)
+	}
+	return _c
+}
+
+// SetPlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field.
+func (_c *BatchImageJobCreate) SetPlanGroupRateMultiplierEnabled(v bool) *BatchImageJobCreate {
+	_c.mutation.SetPlanGroupRateMultiplierEnabled(v)
+	return _c
+}
+
+// SetNillablePlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillablePlanGroupRateMultiplierEnabled(v *bool) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetPlanGroupRateMultiplierEnabled(*v)
+	}
+	return _c
+}
+
+// SetAllowanceReserved sets the "allowance_reserved" field.
+func (_c *BatchImageJobCreate) SetAllowanceReserved(v bool) *BatchImageJobCreate {
+	_c.mutation.SetAllowanceReserved(v)
+	return _c
+}
+
+// SetNillableAllowanceReserved sets the "allowance_reserved" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableAllowanceReserved(v *bool) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetAllowanceReserved(*v)
 	}
 	return _c
 }
@@ -601,6 +706,30 @@ func (_c *BatchImageJobCreate) defaults() {
 		v := batchimagejob.DefaultEstimatedCost
 		_c.mutation.SetEstimatedCost(v)
 	}
+	if _, ok := _c.mutation.BalanceHoldAmount(); !ok {
+		v := batchimagejob.DefaultBalanceHoldAmount
+		_c.mutation.SetBalanceHoldAmount(v)
+	}
+	if _, ok := _c.mutation.SubscriptionHoldAllocations(); !ok {
+		v := batchimagejob.DefaultSubscriptionHoldAllocations()
+		_c.mutation.SetSubscriptionHoldAllocations(v)
+	}
+	if _, ok := _c.mutation.SubscriptionRateMultiplier(); !ok {
+		v := batchimagejob.DefaultSubscriptionRateMultiplier
+		_c.mutation.SetSubscriptionRateMultiplier(v)
+	}
+	if _, ok := _c.mutation.BalanceRateMultiplier(); !ok {
+		v := batchimagejob.DefaultBalanceRateMultiplier
+		_c.mutation.SetBalanceRateMultiplier(v)
+	}
+	if _, ok := _c.mutation.PlanGroupRateMultiplierEnabled(); !ok {
+		v := batchimagejob.DefaultPlanGroupRateMultiplierEnabled
+		_c.mutation.SetPlanGroupRateMultiplierEnabled(v)
+	}
+	if _, ok := _c.mutation.AllowanceReserved(); !ok {
+		v := batchimagejob.DefaultAllowanceReserved
+		_c.mutation.SetAllowanceReserved(v)
+	}
 	if _, ok := _c.mutation.Currency(); !ok {
 		v := batchimagejob.DefaultCurrency
 		_c.mutation.SetCurrency(v)
@@ -708,6 +837,24 @@ func (_c *BatchImageJobCreate) check() error {
 	if _, ok := _c.mutation.EstimatedCost(); !ok {
 		return &ValidationError{Name: "estimated_cost", err: errors.New(`ent: missing required field "BatchImageJob.estimated_cost"`)}
 	}
+	if _, ok := _c.mutation.BalanceHoldAmount(); !ok {
+		return &ValidationError{Name: "balance_hold_amount", err: errors.New(`ent: missing required field "BatchImageJob.balance_hold_amount"`)}
+	}
+	if _, ok := _c.mutation.SubscriptionHoldAllocations(); !ok {
+		return &ValidationError{Name: "subscription_hold_allocations", err: errors.New(`ent: missing required field "BatchImageJob.subscription_hold_allocations"`)}
+	}
+	if _, ok := _c.mutation.SubscriptionRateMultiplier(); !ok {
+		return &ValidationError{Name: "subscription_rate_multiplier", err: errors.New(`ent: missing required field "BatchImageJob.subscription_rate_multiplier"`)}
+	}
+	if _, ok := _c.mutation.BalanceRateMultiplier(); !ok {
+		return &ValidationError{Name: "balance_rate_multiplier", err: errors.New(`ent: missing required field "BatchImageJob.balance_rate_multiplier"`)}
+	}
+	if _, ok := _c.mutation.PlanGroupRateMultiplierEnabled(); !ok {
+		return &ValidationError{Name: "plan_group_rate_multiplier_enabled", err: errors.New(`ent: missing required field "BatchImageJob.plan_group_rate_multiplier_enabled"`)}
+	}
+	if _, ok := _c.mutation.AllowanceReserved(); !ok {
+		return &ValidationError{Name: "allowance_reserved", err: errors.New(`ent: missing required field "BatchImageJob.allowance_reserved"`)}
+	}
 	if _, ok := _c.mutation.Currency(); !ok {
 		return &ValidationError{Name: "currency", err: errors.New(`ent: missing required field "BatchImageJob.currency"`)}
 	}
@@ -788,6 +935,14 @@ func (_c *BatchImageJobCreate) createSpec() (*BatchImageJob, *sqlgraph.CreateSpe
 		_spec.SetField(batchimagejob.FieldUserID, field.TypeInt64, value)
 		_node.UserID = value
 	}
+	if value, ok := _c.mutation.BillingUserID(); ok {
+		_spec.SetField(batchimagejob.FieldBillingUserID, field.TypeInt64, value)
+		_node.BillingUserID = value
+	}
+	if value, ok := _c.mutation.TeamID(); ok {
+		_spec.SetField(batchimagejob.FieldTeamID, field.TypeInt64, value)
+		_node.TeamID = &value
+	}
 	if value, ok := _c.mutation.APIKeyID(); ok {
 		_spec.SetField(batchimagejob.FieldAPIKeyID, field.TypeInt64, value)
 		_node.APIKeyID = &value
@@ -859,6 +1014,30 @@ func (_c *BatchImageJobCreate) createSpec() (*BatchImageJob, *sqlgraph.CreateSpe
 	if value, ok := _c.mutation.ActualCost(); ok {
 		_spec.SetField(batchimagejob.FieldActualCost, field.TypeFloat64, value)
 		_node.ActualCost = &value
+	}
+	if value, ok := _c.mutation.BalanceHoldAmount(); ok {
+		_spec.SetField(batchimagejob.FieldBalanceHoldAmount, field.TypeFloat64, value)
+		_node.BalanceHoldAmount = value
+	}
+	if value, ok := _c.mutation.SubscriptionHoldAllocations(); ok {
+		_spec.SetField(batchimagejob.FieldSubscriptionHoldAllocations, field.TypeJSON, value)
+		_node.SubscriptionHoldAllocations = value
+	}
+	if value, ok := _c.mutation.SubscriptionRateMultiplier(); ok {
+		_spec.SetField(batchimagejob.FieldSubscriptionRateMultiplier, field.TypeFloat64, value)
+		_node.SubscriptionRateMultiplier = value
+	}
+	if value, ok := _c.mutation.BalanceRateMultiplier(); ok {
+		_spec.SetField(batchimagejob.FieldBalanceRateMultiplier, field.TypeFloat64, value)
+		_node.BalanceRateMultiplier = value
+	}
+	if value, ok := _c.mutation.PlanGroupRateMultiplierEnabled(); ok {
+		_spec.SetField(batchimagejob.FieldPlanGroupRateMultiplierEnabled, field.TypeBool, value)
+		_node.PlanGroupRateMultiplierEnabled = value
+	}
+	if value, ok := _c.mutation.AllowanceReserved(); ok {
+		_spec.SetField(batchimagejob.FieldAllowanceReserved, field.TypeBool, value)
+		_node.AllowanceReserved = value
 	}
 	if value, ok := _c.mutation.Currency(); ok {
 		_spec.SetField(batchimagejob.FieldCurrency, field.TypeString, value)
@@ -1007,6 +1186,54 @@ func (u *BatchImageJobUpsert) UpdateUserID() *BatchImageJobUpsert {
 // AddUserID adds v to the "user_id" field.
 func (u *BatchImageJobUpsert) AddUserID(v int64) *BatchImageJobUpsert {
 	u.Add(batchimagejob.FieldUserID, v)
+	return u
+}
+
+// SetBillingUserID sets the "billing_user_id" field.
+func (u *BatchImageJobUpsert) SetBillingUserID(v int64) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldBillingUserID, v)
+	return u
+}
+
+// UpdateBillingUserID sets the "billing_user_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateBillingUserID() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldBillingUserID)
+	return u
+}
+
+// AddBillingUserID adds v to the "billing_user_id" field.
+func (u *BatchImageJobUpsert) AddBillingUserID(v int64) *BatchImageJobUpsert {
+	u.Add(batchimagejob.FieldBillingUserID, v)
+	return u
+}
+
+// ClearBillingUserID clears the value of the "billing_user_id" field.
+func (u *BatchImageJobUpsert) ClearBillingUserID() *BatchImageJobUpsert {
+	u.SetNull(batchimagejob.FieldBillingUserID)
+	return u
+}
+
+// SetTeamID sets the "team_id" field.
+func (u *BatchImageJobUpsert) SetTeamID(v int64) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldTeamID, v)
+	return u
+}
+
+// UpdateTeamID sets the "team_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateTeamID() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldTeamID)
+	return u
+}
+
+// AddTeamID adds v to the "team_id" field.
+func (u *BatchImageJobUpsert) AddTeamID(v int64) *BatchImageJobUpsert {
+	u.Add(batchimagejob.FieldTeamID, v)
+	return u
+}
+
+// ClearTeamID clears the value of the "team_id" field.
+func (u *BatchImageJobUpsert) ClearTeamID() *BatchImageJobUpsert {
+	u.SetNull(batchimagejob.FieldTeamID)
 	return u
 }
 
@@ -1331,6 +1558,96 @@ func (u *BatchImageJobUpsert) AddActualCost(v float64) *BatchImageJobUpsert {
 // ClearActualCost clears the value of the "actual_cost" field.
 func (u *BatchImageJobUpsert) ClearActualCost() *BatchImageJobUpsert {
 	u.SetNull(batchimagejob.FieldActualCost)
+	return u
+}
+
+// SetBalanceHoldAmount sets the "balance_hold_amount" field.
+func (u *BatchImageJobUpsert) SetBalanceHoldAmount(v float64) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldBalanceHoldAmount, v)
+	return u
+}
+
+// UpdateBalanceHoldAmount sets the "balance_hold_amount" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateBalanceHoldAmount() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldBalanceHoldAmount)
+	return u
+}
+
+// AddBalanceHoldAmount adds v to the "balance_hold_amount" field.
+func (u *BatchImageJobUpsert) AddBalanceHoldAmount(v float64) *BatchImageJobUpsert {
+	u.Add(batchimagejob.FieldBalanceHoldAmount, v)
+	return u
+}
+
+// SetSubscriptionHoldAllocations sets the "subscription_hold_allocations" field.
+func (u *BatchImageJobUpsert) SetSubscriptionHoldAllocations(v []domain.BillingAllocation) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldSubscriptionHoldAllocations, v)
+	return u
+}
+
+// UpdateSubscriptionHoldAllocations sets the "subscription_hold_allocations" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateSubscriptionHoldAllocations() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldSubscriptionHoldAllocations)
+	return u
+}
+
+// SetSubscriptionRateMultiplier sets the "subscription_rate_multiplier" field.
+func (u *BatchImageJobUpsert) SetSubscriptionRateMultiplier(v float64) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldSubscriptionRateMultiplier, v)
+	return u
+}
+
+// UpdateSubscriptionRateMultiplier sets the "subscription_rate_multiplier" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateSubscriptionRateMultiplier() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldSubscriptionRateMultiplier)
+	return u
+}
+
+// AddSubscriptionRateMultiplier adds v to the "subscription_rate_multiplier" field.
+func (u *BatchImageJobUpsert) AddSubscriptionRateMultiplier(v float64) *BatchImageJobUpsert {
+	u.Add(batchimagejob.FieldSubscriptionRateMultiplier, v)
+	return u
+}
+
+// SetBalanceRateMultiplier sets the "balance_rate_multiplier" field.
+func (u *BatchImageJobUpsert) SetBalanceRateMultiplier(v float64) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldBalanceRateMultiplier, v)
+	return u
+}
+
+// UpdateBalanceRateMultiplier sets the "balance_rate_multiplier" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateBalanceRateMultiplier() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldBalanceRateMultiplier)
+	return u
+}
+
+// AddBalanceRateMultiplier adds v to the "balance_rate_multiplier" field.
+func (u *BatchImageJobUpsert) AddBalanceRateMultiplier(v float64) *BatchImageJobUpsert {
+	u.Add(batchimagejob.FieldBalanceRateMultiplier, v)
+	return u
+}
+
+// SetPlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field.
+func (u *BatchImageJobUpsert) SetPlanGroupRateMultiplierEnabled(v bool) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldPlanGroupRateMultiplierEnabled, v)
+	return u
+}
+
+// UpdatePlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdatePlanGroupRateMultiplierEnabled() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldPlanGroupRateMultiplierEnabled)
+	return u
+}
+
+// SetAllowanceReserved sets the "allowance_reserved" field.
+func (u *BatchImageJobUpsert) SetAllowanceReserved(v bool) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldAllowanceReserved, v)
+	return u
+}
+
+// UpdateAllowanceReserved sets the "allowance_reserved" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateAllowanceReserved() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldAllowanceReserved)
 	return u
 }
 
@@ -1733,6 +2050,62 @@ func (u *BatchImageJobUpsertOne) UpdateUserID() *BatchImageJobUpsertOne {
 	})
 }
 
+// SetBillingUserID sets the "billing_user_id" field.
+func (u *BatchImageJobUpsertOne) SetBillingUserID(v int64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetBillingUserID(v)
+	})
+}
+
+// AddBillingUserID adds v to the "billing_user_id" field.
+func (u *BatchImageJobUpsertOne) AddBillingUserID(v int64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddBillingUserID(v)
+	})
+}
+
+// UpdateBillingUserID sets the "billing_user_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateBillingUserID() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateBillingUserID()
+	})
+}
+
+// ClearBillingUserID clears the value of the "billing_user_id" field.
+func (u *BatchImageJobUpsertOne) ClearBillingUserID() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.ClearBillingUserID()
+	})
+}
+
+// SetTeamID sets the "team_id" field.
+func (u *BatchImageJobUpsertOne) SetTeamID(v int64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetTeamID(v)
+	})
+}
+
+// AddTeamID adds v to the "team_id" field.
+func (u *BatchImageJobUpsertOne) AddTeamID(v int64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddTeamID(v)
+	})
+}
+
+// UpdateTeamID sets the "team_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateTeamID() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateTeamID()
+	})
+}
+
+// ClearTeamID clears the value of the "team_id" field.
+func (u *BatchImageJobUpsertOne) ClearTeamID() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.ClearTeamID()
+	})
+}
+
 // SetAPIKeyID sets the "api_key_id" field.
 func (u *BatchImageJobUpsertOne) SetAPIKeyID(v int64) *BatchImageJobUpsertOne {
 	return u.Update(func(s *BatchImageJobUpsert) {
@@ -2108,6 +2481,111 @@ func (u *BatchImageJobUpsertOne) UpdateActualCost() *BatchImageJobUpsertOne {
 func (u *BatchImageJobUpsertOne) ClearActualCost() *BatchImageJobUpsertOne {
 	return u.Update(func(s *BatchImageJobUpsert) {
 		s.ClearActualCost()
+	})
+}
+
+// SetBalanceHoldAmount sets the "balance_hold_amount" field.
+func (u *BatchImageJobUpsertOne) SetBalanceHoldAmount(v float64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetBalanceHoldAmount(v)
+	})
+}
+
+// AddBalanceHoldAmount adds v to the "balance_hold_amount" field.
+func (u *BatchImageJobUpsertOne) AddBalanceHoldAmount(v float64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddBalanceHoldAmount(v)
+	})
+}
+
+// UpdateBalanceHoldAmount sets the "balance_hold_amount" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateBalanceHoldAmount() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateBalanceHoldAmount()
+	})
+}
+
+// SetSubscriptionHoldAllocations sets the "subscription_hold_allocations" field.
+func (u *BatchImageJobUpsertOne) SetSubscriptionHoldAllocations(v []domain.BillingAllocation) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetSubscriptionHoldAllocations(v)
+	})
+}
+
+// UpdateSubscriptionHoldAllocations sets the "subscription_hold_allocations" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateSubscriptionHoldAllocations() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateSubscriptionHoldAllocations()
+	})
+}
+
+// SetSubscriptionRateMultiplier sets the "subscription_rate_multiplier" field.
+func (u *BatchImageJobUpsertOne) SetSubscriptionRateMultiplier(v float64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetSubscriptionRateMultiplier(v)
+	})
+}
+
+// AddSubscriptionRateMultiplier adds v to the "subscription_rate_multiplier" field.
+func (u *BatchImageJobUpsertOne) AddSubscriptionRateMultiplier(v float64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddSubscriptionRateMultiplier(v)
+	})
+}
+
+// UpdateSubscriptionRateMultiplier sets the "subscription_rate_multiplier" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateSubscriptionRateMultiplier() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateSubscriptionRateMultiplier()
+	})
+}
+
+// SetBalanceRateMultiplier sets the "balance_rate_multiplier" field.
+func (u *BatchImageJobUpsertOne) SetBalanceRateMultiplier(v float64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetBalanceRateMultiplier(v)
+	})
+}
+
+// AddBalanceRateMultiplier adds v to the "balance_rate_multiplier" field.
+func (u *BatchImageJobUpsertOne) AddBalanceRateMultiplier(v float64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddBalanceRateMultiplier(v)
+	})
+}
+
+// UpdateBalanceRateMultiplier sets the "balance_rate_multiplier" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateBalanceRateMultiplier() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateBalanceRateMultiplier()
+	})
+}
+
+// SetPlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field.
+func (u *BatchImageJobUpsertOne) SetPlanGroupRateMultiplierEnabled(v bool) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetPlanGroupRateMultiplierEnabled(v)
+	})
+}
+
+// UpdatePlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdatePlanGroupRateMultiplierEnabled() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdatePlanGroupRateMultiplierEnabled()
+	})
+}
+
+// SetAllowanceReserved sets the "allowance_reserved" field.
+func (u *BatchImageJobUpsertOne) SetAllowanceReserved(v bool) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetAllowanceReserved(v)
+	})
+}
+
+// UpdateAllowanceReserved sets the "allowance_reserved" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateAllowanceReserved() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateAllowanceReserved()
 	})
 }
 
@@ -2731,6 +3209,62 @@ func (u *BatchImageJobUpsertBulk) UpdateUserID() *BatchImageJobUpsertBulk {
 	})
 }
 
+// SetBillingUserID sets the "billing_user_id" field.
+func (u *BatchImageJobUpsertBulk) SetBillingUserID(v int64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetBillingUserID(v)
+	})
+}
+
+// AddBillingUserID adds v to the "billing_user_id" field.
+func (u *BatchImageJobUpsertBulk) AddBillingUserID(v int64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddBillingUserID(v)
+	})
+}
+
+// UpdateBillingUserID sets the "billing_user_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateBillingUserID() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateBillingUserID()
+	})
+}
+
+// ClearBillingUserID clears the value of the "billing_user_id" field.
+func (u *BatchImageJobUpsertBulk) ClearBillingUserID() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.ClearBillingUserID()
+	})
+}
+
+// SetTeamID sets the "team_id" field.
+func (u *BatchImageJobUpsertBulk) SetTeamID(v int64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetTeamID(v)
+	})
+}
+
+// AddTeamID adds v to the "team_id" field.
+func (u *BatchImageJobUpsertBulk) AddTeamID(v int64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddTeamID(v)
+	})
+}
+
+// UpdateTeamID sets the "team_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateTeamID() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateTeamID()
+	})
+}
+
+// ClearTeamID clears the value of the "team_id" field.
+func (u *BatchImageJobUpsertBulk) ClearTeamID() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.ClearTeamID()
+	})
+}
+
 // SetAPIKeyID sets the "api_key_id" field.
 func (u *BatchImageJobUpsertBulk) SetAPIKeyID(v int64) *BatchImageJobUpsertBulk {
 	return u.Update(func(s *BatchImageJobUpsert) {
@@ -3106,6 +3640,111 @@ func (u *BatchImageJobUpsertBulk) UpdateActualCost() *BatchImageJobUpsertBulk {
 func (u *BatchImageJobUpsertBulk) ClearActualCost() *BatchImageJobUpsertBulk {
 	return u.Update(func(s *BatchImageJobUpsert) {
 		s.ClearActualCost()
+	})
+}
+
+// SetBalanceHoldAmount sets the "balance_hold_amount" field.
+func (u *BatchImageJobUpsertBulk) SetBalanceHoldAmount(v float64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetBalanceHoldAmount(v)
+	})
+}
+
+// AddBalanceHoldAmount adds v to the "balance_hold_amount" field.
+func (u *BatchImageJobUpsertBulk) AddBalanceHoldAmount(v float64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddBalanceHoldAmount(v)
+	})
+}
+
+// UpdateBalanceHoldAmount sets the "balance_hold_amount" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateBalanceHoldAmount() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateBalanceHoldAmount()
+	})
+}
+
+// SetSubscriptionHoldAllocations sets the "subscription_hold_allocations" field.
+func (u *BatchImageJobUpsertBulk) SetSubscriptionHoldAllocations(v []domain.BillingAllocation) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetSubscriptionHoldAllocations(v)
+	})
+}
+
+// UpdateSubscriptionHoldAllocations sets the "subscription_hold_allocations" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateSubscriptionHoldAllocations() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateSubscriptionHoldAllocations()
+	})
+}
+
+// SetSubscriptionRateMultiplier sets the "subscription_rate_multiplier" field.
+func (u *BatchImageJobUpsertBulk) SetSubscriptionRateMultiplier(v float64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetSubscriptionRateMultiplier(v)
+	})
+}
+
+// AddSubscriptionRateMultiplier adds v to the "subscription_rate_multiplier" field.
+func (u *BatchImageJobUpsertBulk) AddSubscriptionRateMultiplier(v float64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddSubscriptionRateMultiplier(v)
+	})
+}
+
+// UpdateSubscriptionRateMultiplier sets the "subscription_rate_multiplier" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateSubscriptionRateMultiplier() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateSubscriptionRateMultiplier()
+	})
+}
+
+// SetBalanceRateMultiplier sets the "balance_rate_multiplier" field.
+func (u *BatchImageJobUpsertBulk) SetBalanceRateMultiplier(v float64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetBalanceRateMultiplier(v)
+	})
+}
+
+// AddBalanceRateMultiplier adds v to the "balance_rate_multiplier" field.
+func (u *BatchImageJobUpsertBulk) AddBalanceRateMultiplier(v float64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddBalanceRateMultiplier(v)
+	})
+}
+
+// UpdateBalanceRateMultiplier sets the "balance_rate_multiplier" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateBalanceRateMultiplier() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateBalanceRateMultiplier()
+	})
+}
+
+// SetPlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field.
+func (u *BatchImageJobUpsertBulk) SetPlanGroupRateMultiplierEnabled(v bool) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetPlanGroupRateMultiplierEnabled(v)
+	})
+}
+
+// UpdatePlanGroupRateMultiplierEnabled sets the "plan_group_rate_multiplier_enabled" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdatePlanGroupRateMultiplierEnabled() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdatePlanGroupRateMultiplierEnabled()
+	})
+}
+
+// SetAllowanceReserved sets the "allowance_reserved" field.
+func (u *BatchImageJobUpsertBulk) SetAllowanceReserved(v bool) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetAllowanceReserved(v)
+	})
+}
+
+// UpdateAllowanceReserved sets the "allowance_reserved" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateAllowanceReserved() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateAllowanceReserved()
 	})
 }
 

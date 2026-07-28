@@ -137,6 +137,7 @@ func TestNotificationEmailAdditionalEventsAreListedAndPreviewable(t *testing.T) 
 		placeholder string
 	}{
 		{NotificationEmailEventNotificationEmailVerifyCode, "verification_code"},
+		{NotificationEmailEventTeamInvitation, "invitation_url"},
 		{NotificationEmailEventAccountQuotaAlert, "account_name"},
 		{NotificationEmailEventContentModerationViolation, "moderation_category"},
 		{NotificationEmailEventContentModerationDisabled, "violation_count"},
@@ -154,6 +155,35 @@ func TestNotificationEmailAdditionalEventsAreListedAndPreviewable(t *testing.T) 
 		require.NoError(t, err)
 		require.NotEmpty(t, preview.Subject)
 		require.NotEmpty(t, preview.HTML)
+	}
+}
+
+func TestNotificationEmailTeamInvitationTemplates(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+
+	for _, locale := range []string{"en", "zh"} {
+		tmpl, err := svc.GetTemplate(ctx, NotificationEmailEventTeamInvitation, locale)
+		require.NoError(t, err)
+		require.False(t, tmpl.IsCustom)
+		require.Contains(t, tmpl.Placeholders, "team_name")
+		require.Contains(t, tmpl.Placeholders, "invitation_url")
+		require.Contains(t, tmpl.Placeholders, "expires_at")
+
+		preview, err := svc.PreviewTemplate(ctx, NotificationEmailPreviewInput{
+			Event:  NotificationEmailEventTeamInvitation,
+			Locale: locale,
+			Variables: map[string]string{
+				"team_name":      "Codex Review",
+				"invitation_url": "https://example.com/team?invitation=test-token",
+				"expires_at":     "2026-08-03T12:00:00+09:00",
+			},
+		})
+		require.NoError(t, err)
+		require.Contains(t, preview.Subject, "Codex Review")
+		require.Contains(t, preview.HTML, "Codex Review")
+		require.Contains(t, preview.HTML, "https://example.com/team?invitation=test-token")
+		require.NotContains(t, preview.HTML, "{{invitation_url}}")
 	}
 }
 

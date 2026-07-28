@@ -144,7 +144,7 @@ const (
 	SettingKeyRegistrationEmailNormalization   = "registration_email_normalization"    // 注册邮箱地址归一化唯一性开关
 	SettingKeyPromoCodeEnabled                 = "promo_code_enabled"                  // 是否启用优惠码功能
 	SettingKeyPasswordResetEnabled             = "password_reset_enabled"              // 是否启用忘记密码功能（需要先开启邮件验证）
-	SettingKeyFrontendURL                      = "frontend_url"                        // 前端基础URL，用于生成邮件中的重置密码链接
+	SettingKeyFrontendURL                      = "frontend_url"                        // 前端基础URL，用于生成密码重置、团队邀请等邮件外部链接
 	SettingKeyInvitationCodeEnabled            = "invitation_code_enabled"             // 是否启用邀请码注册
 	SettingKeyAffiliateEnabled                 = "affiliate_enabled"                   // 邀请返利功能总开关
 	SettingKeyAffiliateRebateRate              = "affiliate_rebate_rate"               // 邀请返利比例（百分比）

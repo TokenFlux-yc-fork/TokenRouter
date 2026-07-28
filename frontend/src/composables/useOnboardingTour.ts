@@ -2,9 +2,10 @@ import { onMounted, onUnmounted, nextTick } from 'vue'
 import { driver, type Driver, type DriveStep } from 'driver.js'
 import 'driver.js/dist/driver.css'
 import { useAuthStore as useUserStore } from '@/stores/auth'
-import { useOnboardingStore } from '@/stores/onboarding'
+import { useOnboardingStore, type TeamGuideOptions } from '@/stores/onboarding'
 import { useI18n } from 'vue-i18n'
-import { getAdminSteps, getUserSteps } from '@/components/Guide/steps'
+import { useRouter } from 'vue-router'
+import { getAdminSteps, getTeamSteps, getUserSteps, type RoutedDriveStep } from '@/components/Guide/steps'
 
 export interface OnboardingOptions {
   storageKey?: string
@@ -15,7 +16,9 @@ export function useOnboardingTour(options: OnboardingOptions) {
   const { t } = useI18n()
   const userStore = useUserStore()
   const onboardingStore = useOnboardingStore()
+  const router = useRouter()
   const storageVersion = 'v4_interactive' // Bump version for new tour type
+  const teamStorageVersion = 'v1_routed'
 
   // Timing constants for better maintainability
   const TIMING = {
@@ -76,6 +79,11 @@ export function useOnboardingTour(options: OnboardingOptions) {
     localStorage.removeItem(getStorageKey())
   }
 
+  const markTeamGuideAsSeen = () => {
+    const userId = userStore.user?.id ?? 'guest'
+    localStorage.setItem(`team_guide_${userId}_${teamStorageVersion}`, 'true')
+  }
+
   /**
    * 检查元素是否存在，如果不存在则重试
    */
@@ -91,11 +99,15 @@ export function useOnboardingTour(options: OnboardingOptions) {
     return false
   }
 
-  const startTour = async (startIndex = 0) => {
+  const startTour = async (startIndex = 0, flow: 'default' | 'team' = 'default', teamOptions?: TeamGuideOptions) => {
     // 动态获取当前用户角色和步骤
     const isAdmin = userStore.user?.role === 'admin'
     const isSimpleMode = userStore.isSimpleMode
-    const steps = isAdmin ? getAdminSteps(t, isSimpleMode) : getUserSteps(t)
+    const steps: RoutedDriveStep[] = flow === 'team'
+      ? getTeamSteps(t, teamOptions?.isOwner ?? false, teamOptions?.hasTeam ?? false)
+      : (isAdmin ? getAdminSteps(t, isSimpleMode) : getUserSteps(t))
+    const driverSteps = steps.map(({ route: _route, ...step }) => step)
+    const markCurrentTourAsSeen = flow === 'team' ? markTeamGuideAsSeen : markAsSeen
 
     // 确保 DOM 就绪
     await nextTick()
@@ -113,7 +125,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
     // 创建新的 driver 实例并存储到 store
     driverInstance = driver({
       showProgress: true,
-      steps,
+      steps: driverSteps,
       animate: true,
       allowClose: false, // 禁止点击遮罩关闭
       stagePadding: 4,
@@ -126,7 +138,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
       onNextClick: async (_el, _step, { config, state }) => {
         // 如果是最后一步，点击则是"完成"
         if (state.activeIndex === (config.steps?.length ?? 0) - 1) {
-          markAsSeen()
+          markCurrentTourAsSeen()
           driverInstance?.destroy()
           onboardingStore.setDriverInstance(null)
         } else {
@@ -147,39 +159,21 @@ export function useOnboardingTour(options: OnboardingOptions) {
               }
             }
           }
-          driverInstance?.moveNext()
+          await moveToStep(currentIndex + 1)
         }
       },
-      onPrevClick: () => {
-        driverInstance?.movePrevious()
+      onPrevClick: async (_el, _step, { state }) => {
+        await moveToStep((state.activeIndex ?? 0) - 1)
       },
       onCloseClick: () => {
-        markAsSeen()
+        markCurrentTourAsSeen()
         driverInstance?.destroy()
         onboardingStore.setDriverInstance(null)
       },
 
-      // 渲染时重组 Footer 布局
-      onPopoverRender: (popover, { config, state }) => {
-        // Class name constants for easier maintenance
-        const CLASS_REORGANIZED = 'reorganized'
-        const CLASS_FOOTER_LEFT = 'footer-left'
-        const CLASS_FOOTER_RIGHT = 'footer-right'
-        const CLASS_DONE_BTN = 'driver-popover-done-btn'
-        const CLASS_PROGRESS_TEXT = 'driver-popover-progress-text'
-        const CLASS_NEXT_BTN = 'driver-popover-next-btn'
-        const CLASS_PREV_BTN = 'driver-popover-prev-btn'
-
+      // 渲染时只补充交互步骤提示，底部保留 Driver.js 原生操作按钮。
+      onPopoverRender: (popover, { state }) => {
         try {
-          const { title: titleEl, footer: footerEl, nextButton, previousButton } = popover
-
-          // Defensive check: ensure popover elements exist
-          if (!titleEl || !footerEl) {
-            console.warn('Onboarding: Missing popover elements')
-            return
-          }
-
-          // 1.5 交互式步骤提示
           const currentStep = steps[state.activeIndex ?? 0]
 
           if (currentStep && isInteractiveStep(currentStep) && popover.description) {
@@ -199,70 +193,6 @@ export function useOnboardingTour(options: OnboardingOptions) {
               hint.appendChild(textNode)
               popover.description.appendChild(hint)
             }
-          }
-
-          // 2. 底部：DOM 重组
-          if (!footerEl.classList.contains(CLASS_REORGANIZED)) {
-            footerEl.classList.add(CLASS_REORGANIZED)
-
-            const progressEl = footerEl.querySelector(`.${CLASS_PROGRESS_TEXT}`)
-            const nextBtnEl = nextButton || footerEl.querySelector(`.${CLASS_NEXT_BTN}`)
-            const prevBtnEl = previousButton || footerEl.querySelector(`.${CLASS_PREV_BTN}`)
-
-            const leftContainer = document.createElement('div')
-            leftContainer.className = CLASS_FOOTER_LEFT
-
-            const rightContainer = document.createElement('div')
-            rightContainer.className = CLASS_FOOTER_RIGHT
-
-            if (progressEl) leftContainer.appendChild(progressEl)
-
-            const shortcutsEl = document.createElement('div')
-            shortcutsEl.className = 'footer-shortcuts'
-
-            const shortcut1 = document.createElement('span')
-            shortcut1.className = 'shortcut-item'
-            const kbd1 = document.createElement('kbd')
-            kbd1.textContent = '←'
-            const kbd2 = document.createElement('kbd')
-            kbd2.textContent = '→'
-            shortcut1.appendChild(kbd1)
-            shortcut1.appendChild(kbd2)
-            shortcut1.appendChild(
-              document.createTextNode(` ${t('onboarding.navigation.flipPage')}`),
-            )
-
-            const shortcut2 = document.createElement('span')
-            shortcut2.className = 'shortcut-item'
-            const kbd3 = document.createElement('kbd')
-            kbd3.textContent = 'ESC'
-            shortcut2.appendChild(kbd3)
-            shortcut2.appendChild(
-              document.createTextNode(` ${t('onboarding.navigation.exit')}`),
-            )
-
-            shortcutsEl.appendChild(shortcut1)
-            shortcutsEl.appendChild(shortcut2)
-            leftContainer.appendChild(shortcutsEl)
-
-            if (prevBtnEl) rightContainer.appendChild(prevBtnEl)
-            if (nextBtnEl) rightContainer.appendChild(nextBtnEl)
-
-            footerEl.innerHTML = ''
-            footerEl.appendChild(leftContainer)
-            footerEl.appendChild(rightContainer)
-          }
-
-          // 3. 状态更新
-          const isLastStep = state.activeIndex === (config.steps?.length ?? 0) - 1
-          const activeNextBtn = nextButton || footerEl.querySelector(`.${CLASS_NEXT_BTN}`)
-
-          if (activeNextBtn) {
-             if (isLastStep) {
-               activeNextBtn.classList.add(CLASS_DONE_BTN)
-             } else {
-               activeNextBtn.classList.remove(CLASS_DONE_BTN)
-             }
           }
         } catch (e) {
           console.error('Onboarding Tour Render Error:', e)
@@ -339,19 +269,9 @@ export function useOnboardingTour(options: OnboardingOptions) {
               return
             }
 
-            const nextStep = steps[currentIndex + 1]
-
-            if (nextStep?.element && typeof nextStep.element === 'string') {
-              const exists = await ensureElement(nextStep.element, TIMING.ELEMENT_TIMEOUT_MS)
-              if (!exists) {
-                console.warn(`Onboarding: Next step element not found: ${nextStep.element}`)
-                return
-              }
-            }
-
             // Final check before moving
             if (driverInstance && driverInstance.isActive()) {
-              driverInstance.moveNext()
+              await moveToStep(currentIndex + 1)
             }
           }
 
@@ -417,7 +337,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
-        markAsSeen()
+        markCurrentTourAsSeen()
         driverInstance.destroy()
         onboardingStore.setDriverInstance(null)
         return
@@ -453,7 +373,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
         }
 
         // 非交互式步骤才允许箭头键翻页
-        driverInstance!.moveNext()
+        void moveToStep((driverInstance!.getActiveIndex() ?? 0) + 1)
       }
       else if (e.key === 'Enter') {
         const target = e.target as HTMLElement
@@ -482,7 +402,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
             }
           }
         }
-        driverInstance!.moveNext()
+        void moveToStep((driverInstance!.getActiveIndex() ?? 0) + 1)
       }
       else if (e.key === 'ArrowLeft') {
         const target = e.target as HTMLElement
@@ -493,12 +413,38 @@ export function useOnboardingTour(options: OnboardingOptions) {
 
         e.preventDefault()
         e.stopPropagation()
-        driverInstance.movePrevious()
+        void moveToStep((driverInstance.getActiveIndex() ?? 0) - 1)
       }
     }
 
     document.addEventListener('keydown', globalKeyboardHandler, { capture: true })
     driverInstance.drive(startIndex)
+
+    /**
+     * 团队导览跨页面时先完成路由切换，再定位目标元素。
+     */
+    async function moveToStep(targetIndex: number): Promise<void> {
+      const targetStep = steps[targetIndex]
+      if (!targetStep || !driverInstance?.isActive()) return
+
+      if (targetStep.route) {
+        const targetRoute = router.resolve(targetStep.route)
+        if (router.currentRoute.value.fullPath !== targetRoute.fullPath) {
+          await router.push(targetStep.route)
+          await nextTick()
+        }
+      }
+
+      if (targetStep.element && typeof targetStep.element === 'string') {
+        const exists = await ensureElement(targetStep.element, TIMING.ELEMENT_TIMEOUT_MS)
+        if (!exists) {
+          console.warn(`Onboarding: Target step element not found: ${targetStep.element}`)
+          return
+        }
+      }
+
+      if (driverInstance?.isActive()) driverInstance.moveTo(targetIndex)
+    }
   }
 
   const nextStep = async (delay = 300) => {
@@ -518,6 +464,10 @@ export function useOnboardingTour(options: OnboardingOptions) {
   const replayTour = () => {
     clearSeen()
     void startTour()
+  }
+
+  const startTeamTour = (teamOptions: TeamGuideOptions) => {
+    void startTour(0, 'team', teamOptions)
   }
 
   onMounted(async () => {
@@ -560,6 +510,7 @@ export function useOnboardingTour(options: OnboardingOptions) {
   return {
     startTour,
     replayTour,
+    startTeamTour,
     nextStep,
     isCurrentStep,
     hasSeen,

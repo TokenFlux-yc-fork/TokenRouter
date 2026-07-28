@@ -50,6 +50,7 @@ type CreateUsageCleanupTaskRequest struct {
 	APIKeyID    *int64  `json:"api_key_id"`
 	AccountID   *int64  `json:"account_id"`
 	GroupID     *int64  `json:"group_id"`
+	TeamID      *int64  `json:"team_id"`
 	Model       *string `json:"model"`
 	RequestType *string `json:"request_type"`
 	Stream      *bool   `json:"stream"`
@@ -72,7 +73,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 	}
 
 	// Parse filters
-	var userID, apiKeyID, accountID, groupID int64
+	var userID, apiKeyID, accountID, groupID, teamID int64
 	if userIDStr := c.Query("user_id"); userIDStr != "" {
 		id, err := strconv.ParseInt(userIDStr, 10, 64)
 		if err != nil {
@@ -107,6 +108,14 @@ func (h *UsageHandler) List(c *gin.Context) {
 			return
 		}
 		groupID = id
+	}
+	if teamIDStr := c.Query("team_id"); teamIDStr != "" {
+		id, err := strconv.ParseInt(teamIDStr, 10, 64)
+		if err != nil {
+			response.BadRequest(c, "Invalid team_id")
+			return
+		}
+		teamID = id
 	}
 
 	model := c.Query("model")
@@ -178,6 +187,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		APIKeyID:          apiKeyID,
 		AccountID:         accountID,
 		GroupID:           groupID,
+		TeamID:            teamID,
 		Model:             model,
 		ModelFilterSource: usagestats.ModelSourceRequested,
 		RequestType:       requestType,
@@ -206,7 +216,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 // GET /api/v1/admin/usage/stats
 func (h *UsageHandler) Stats(c *gin.Context) {
 	// Parse filters - same as List endpoint
-	var userID, apiKeyID, accountID, groupID int64
+	var userID, apiKeyID, accountID, groupID, teamID int64
 	if userIDStr := c.Query("user_id"); userIDStr != "" {
 		id, err := strconv.ParseInt(userIDStr, 10, 64)
 		if err != nil {
@@ -241,6 +251,14 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 			return
 		}
 		groupID = id
+	}
+	if teamIDStr := c.Query("team_id"); teamIDStr != "" {
+		id, err := strconv.ParseInt(teamIDStr, 10, 64)
+		if err != nil {
+			response.BadRequest(c, "Invalid team_id")
+			return
+		}
+		teamID = id
 	}
 
 	model := c.Query("model")
@@ -322,6 +340,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		APIKeyID:          apiKeyID,
 		AccountID:         accountID,
 		GroupID:           groupID,
+		TeamID:            teamID,
 		Model:             model,
 		ModelFilterSource: usagestats.ModelSourceRequested,
 		RequestType:       requestType,
@@ -516,6 +535,7 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		APIKeyID:    req.APIKeyID,
 		AccountID:   req.AccountID,
 		GroupID:     req.GroupID,
+		TeamID:      req.TeamID,
 		Model:       req.Model,
 		RequestType: requestType,
 		Stream:      stream,

@@ -567,6 +567,69 @@ const DataTableStubWithUser = {
 }
 
 describe('admin UsageTable deleted-user badge', () => {
+  it('constrains long member emails in compact mode and keeps the full address in the title', () => {
+    const email = 'member.with.a.very.long.address@sub2api.example.com'
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ request_id: 'req-long-email', user_id: 3559, user: { id: 3559, email } }],
+        loading: false,
+        columns: [{ key: 'user', label: 'User' }],
+        userClickable: false,
+        compactUserColumn: true,
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStubWithUser,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.get('[data-test="usage-user-cell"]').classes()).toContain('w-32')
+    expect(wrapper.get('[data-test="usage-user-email"]').classes()).toContain('truncate')
+    expect(wrapper.get('[data-test="usage-user-email"]').text()).toBe('m***s')
+    expect(wrapper.get('[data-test="usage-user-email"]').attributes('title')).toBe(email)
+    expect(wrapper.text()).toContain('#3559')
+  })
+
+  it('uses the same first-and-last masking rule for a one-character email local part', () => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ request_id: 'req-short-email', user_id: 8, user: { id: 8, email: 'a@example.com' } }],
+        loading: false,
+        columns: [{ key: 'user', label: 'User' }],
+        userClickable: false,
+        compactUserColumn: true,
+      },
+      global: {
+        stubs: { DataTable: DataTableStubWithUser, EmptyState: true, Icon: true, Teleport: true },
+      },
+    })
+
+    expect(wrapper.get('[data-test="usage-user-email"]').text()).toBe('a***a')
+    expect(wrapper.get('[data-test="usage-user-email"]').attributes('title')).toBe('a@example.com')
+  })
+
+  it('prefers a custom username while preserving the email in the title', () => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ request_id: 'req-username', user_id: 7, user: { id: 7, username: 'Ada', email: 'ada@example.com' } }],
+        loading: false,
+        columns: [{ key: 'user', label: 'User' }],
+        userClickable: false,
+        compactUserColumn: true,
+      },
+      global: {
+        stubs: { DataTable: DataTableStubWithUser, EmptyState: true, Icon: true, Teleport: true },
+      },
+    })
+
+    expect(wrapper.get('[data-test="usage-user-email"]').text()).toBe('Ada')
+    expect(wrapper.get('[data-test="usage-user-email"]').attributes('title')).toBe('Ada (ada@example.com)')
+  })
+
   it('renders deleted badge for a soft-deleted user row', () => {
     const row = {
       request_id: 'req-deleted-user-1',
@@ -599,7 +662,7 @@ describe('admin UsageTable deleted-user badge', () => {
     })
 
     expect(wrapper.text()).toContain('Deleted')
-    expect(wrapper.text()).toContain('d@test.com')
+    expect(wrapper.text()).toContain('d***d')
   })
 
   it('does NOT render deleted badge for an active user row', () => {
@@ -634,6 +697,6 @@ describe('admin UsageTable deleted-user badge', () => {
     })
 
     expect(wrapper.text()).not.toContain('Deleted')
-    expect(wrapper.text()).toContain('active@test.com')
+    expect(wrapper.text()).toContain('a***e')
   })
 })

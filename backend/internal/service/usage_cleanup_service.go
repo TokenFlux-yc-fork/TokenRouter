@@ -65,6 +65,9 @@ func describeUsageCleanupFilters(filters UsageCleanupFilters) string {
 	if filters.GroupID != nil {
 		parts = append(parts, fmt.Sprintf("group_id=%d", *filters.GroupID))
 	}
+	if filters.TeamID != nil {
+		parts = append(parts, fmt.Sprintf("team_id=%d", *filters.TeamID))
+	}
 	if filters.Model != nil {
 		parts = append(parts, "model="+strings.TrimSpace(*filters.Model))
 	}
@@ -362,6 +365,9 @@ func sanitizeUsageCleanupFilters(filters *UsageCleanupFilters) {
 	}
 	if filters.GroupID != nil && *filters.GroupID <= 0 {
 		filters.GroupID = nil
+	}
+	if filters.TeamID != nil && *filters.TeamID <= 0 {
+		filters.TeamID = nil
 	}
 	if filters.Model != nil {
 		model := strings.TrimSpace(*filters.Model)

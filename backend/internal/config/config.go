@@ -98,6 +98,14 @@ type Config struct {
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
+	Team                    TeamConfig                    `mapstructure:"team"`
+}
+
+// TeamConfig 控制团队功能的默认开放策略。
+type TeamConfig struct {
+	Enabled            bool `mapstructure:"enabled"`
+	SelfServiceEnabled bool `mapstructure:"self_service_enabled"`
+	DefaultMemberLimit int  `mapstructure:"default_member_limit"`
 }
 
 type LogConfig struct {
@@ -2169,6 +2177,9 @@ func setDefaults() {
 
 	// Timezone (default to Asia/Shanghai for Chinese users)
 	viper.SetDefault("timezone", "Asia/Shanghai")
+	viper.SetDefault("team.enabled", true)
+	viper.SetDefault("team.self_service_enabled", true)
+	viper.SetDefault("team.default_member_limit", 10)
 
 	// API Key auth cache
 	viper.SetDefault("api_key_auth_cache.l1_size", 65535)

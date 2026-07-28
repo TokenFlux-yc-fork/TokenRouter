@@ -1771,6 +1771,44 @@ func TestAPIKeyAuthQuotaErrorKeepsLegacyFormatOutsideResponses(t *testing.T) {
 	requireAPIKeyAuthError(t, w, "API_KEY_QUOTA_EXHAUSTED", "API key 额度已用完")
 }
 
+func TestAPIKeyAuthAllowsBatchManagementAfterQuotaExhaustion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	user := &service.User{ID: 11, Role: service.RoleUser, Status: service.StatusActive, Balance: 0}
+	apiKey := &service.APIKey{
+		ID: 106, UserID: user.ID, Key: "batch-management-exhausted", Status: service.StatusAPIKeyQuotaExhausted,
+		User: user, Quota: 1, QuotaUsed: 1,
+	}
+	apiKeyRepo := &stubApiKeyRepo{getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
+		if key != apiKey.Key {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		clone := *apiKey
+		userClone := *user
+		clone.User = &userClone
+		return &clone, nil
+	}}
+
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	router := newAuthTestRouter(service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg), nil, cfg)
+	requests := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/v1/images/batches"},
+		{method: http.MethodGet, path: "/v1/images/batches/batch-1"},
+		{method: http.MethodPost, path: "/v1/images/batches/batch-1/cancel"},
+		{method: http.MethodDelete, path: "/v1/images/batches/batch-1"},
+	}
+	for _, request := range requests {
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(request.method, request.path, nil)
+		req.Header.Set("x-api-key", apiKey.Key)
+		router.ServeHTTP(response, req)
+		require.Equal(t, http.StatusOK, response.Code, "%s %s", request.method, request.path)
+	}
+}
+
 func newAuthTestRouter(apiKeyService *service.APIKeyService, subscriptionService *service.SubscriptionService, cfg *config.Config) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, cfg)))
@@ -1782,6 +1820,10 @@ func newAuthTestRouter(apiKeyService *service.APIKeyService, subscriptionService
 	router.POST("/v1/messages", ok)
 	router.GET("/v1/usage", ok)
 	router.GET("/v1/sub2api/billing", ok)
+	router.GET("/v1/images/batches", ok)
+	router.GET("/v1/images/batches/:id", ok)
+	router.POST("/v1/images/batches/:id/cancel", ok)
+	router.DELETE("/v1/images/batches/:id", ok)
 	return router
 }
 

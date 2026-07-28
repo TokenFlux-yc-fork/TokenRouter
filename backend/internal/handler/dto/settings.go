@@ -364,6 +364,8 @@ type PublicSettings struct {
 	SoraClientEnabled                bool                     `json:"sora_client_enabled"`
 	BackendModeEnabled               bool                     `json:"backend_mode_enabled"`
 	PaymentEnabled                   bool                     `json:"payment_enabled"`
+	TeamEnabled                      bool                     `json:"team_enabled"`
+	TeamSelfServiceEnabled           bool                     `json:"team_self_service_enabled"`
 	Version                          string                   `json:"version"`
 	ForkID                           string                   `json:"fork_id"`
 	// 服务器全局时区与当前 UTC 偏移，供前端标注高峰计费窗口等服务端本地时间。

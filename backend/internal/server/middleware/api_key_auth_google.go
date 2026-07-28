@@ -76,6 +76,10 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 				abortWithGoogleError(c, 503, "API key authentication is temporarily unavailable")
 				return
 			}
+			if status, message, ok := googleTeamAPIKeyError(err); ok {
+				abortWithGoogleError(c, status, message)
+				return
+			}
 			abortWithGoogleError(c, 500, "Failed to validate API key")
 			return
 		}
@@ -92,6 +96,24 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			MarkIngressRejected(c, IngressRejectAPIKeyDisabled)
 			abortWithGoogleError(c, 401, "API key is disabled")
 			return
+		}
+		if err := apiKeyService.ValidateTeamKeyLifecycle(apiKey); err != nil {
+			if status, message, ok := googleTeamAPIKeyError(err); ok {
+				abortWithGoogleError(c, status, message)
+				return
+			}
+			abortWithGoogleError(c, 500, "Failed to validate team API key")
+			return
+		}
+		if !isAPIKeyNonConsumingRequest(c.Request.Method, c.Request.URL.Path) {
+			if err := apiKeyService.CheckTeamMemberLimits(apiKey); err != nil {
+				if status, message, ok := googleTeamAPIKeyError(err); ok {
+					abortWithGoogleError(c, status, message)
+					return
+				}
+				abortWithGoogleError(c, 500, "Failed to validate team member limits")
+				return
+			}
 		}
 
 		// 检查 IP 限制（白名单/黑名单）。与主中间件保持一致，避免 Gemini 端点绕过 Key 的 IP ACL。
@@ -273,4 +295,24 @@ func abortWithGoogleError(c *gin.Context, status int, message string) {
 		},
 	})
 	c.Abort()
+}
+
+// googleTeamAPIKeyError 返回 Google 风格团队鉴权错误需要的状态码和消息。
+func googleTeamAPIKeyError(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, service.ErrTeamMemberDailyExceeded), errors.Is(err, service.ErrTeamMemberWeeklyExceeded), errors.Is(err, service.ErrTeamMemberMonthlyExceeded):
+		return 429, "Team member usage limit exceeded", true
+	case errors.Is(err, service.ErrTeamFeatureDisabled):
+		return 403, "Team feature is disabled", true
+	case errors.Is(err, service.ErrTeamSuspended):
+		return 403, "Team is suspended", true
+	case errors.Is(err, service.ErrTeamMembershipRequired):
+		return 403, "Team membership is no longer valid", true
+	case errors.Is(err, service.ErrTeamActorInactive):
+		return 403, "Team key member is inactive", true
+	case errors.Is(err, service.ErrTeamBillingOwnerInactive):
+		return 403, "Team billing owner is inactive", true
+	default:
+		return 0, "", false
+	}
 }

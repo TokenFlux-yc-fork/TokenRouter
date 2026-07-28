@@ -45,6 +45,7 @@ export interface UsageCleanupFilters {
   api_key_id?: number
   account_id?: number
   group_id?: number
+  team_id?: number
   model?: string | null
   request_type?: UsageRequestType | null
   stream?: boolean | null
@@ -73,6 +74,7 @@ export interface CreateUsageCleanupTaskRequest {
   api_key_id?: number
   account_id?: number
   group_id?: number
+  team_id?: number
   model?: string | null
   request_type?: UsageRequestType | null
   stream?: boolean | null
@@ -82,6 +84,7 @@ export interface CreateUsageCleanupTaskRequest {
 
 export interface AdminUsageQueryParams extends UsageQueryParams {
   user_id?: number
+  team_id?: number
   exact_total?: boolean
   billing_mode?: string
   sort_by?: string
@@ -117,6 +120,7 @@ export async function list(
  */
 export async function getStats(params: {
   user_id?: number
+  team_id?: number
   api_key_id?: number
   account_id?: number
   group_id?: number

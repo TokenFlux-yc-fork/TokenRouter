@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/domain"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -64,13 +65,16 @@ type BatchImageSettlementService struct {
 }
 
 type BatchImageSettlementResult struct {
-	BatchID        string
-	SuccessCount   int
-	FailCount      int
-	ActualCost     float64
-	ManifestHash   string
-	RequestID      string
-	AlreadySettled bool
+	BatchID               string
+	SuccessCount          int
+	FailCount             int
+	ActualCost            float64
+	ManifestHash          string
+	RequestID             string
+	SubscriptionAmountUSD float64
+	BalanceAmountUSD      float64
+	BillingAllocations    []domain.BillingAllocation
+	AlreadySettled        bool
 }
 
 func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string) (*BatchImageSettlementResult, error) {
@@ -135,13 +139,19 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 		}
 		return nil, err
 	}
-	actualCost := float64(job.SuccessCount) * unitPrice
-	result.ActualCost = actualCost
+	actualBillingInput := float64(job.SuccessCount) * unitPrice
+	actualCost := actualBillingInput
+	if job.PricingSnapshotVersion >= 2 {
+		if job.BaseUnitPrice < 0 {
+			return nil, ErrBatchImageSettlementPricingMissing
+		}
+		actualBillingInput = float64(job.SuccessCount) * job.BaseUnitPrice
+	}
 	holdAmount := job.EstimatedCost
 	if job.HoldAmount != nil {
 		holdAmount = *job.HoldAmount
 	}
-	if actualCost-holdAmount > batchImageCostEpsilon {
+	if job.PricingSnapshotVersion < 2 && actualCost-holdAmount > batchImageCostEpsilon {
 		msg := fmt.Sprintf("actual cost %.10f exceeds held amount %.10f", actualCost, holdAmount)
 		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_COST_EXCEEDS_HOLD", msg); failErr != nil {
 			return nil, failErr
@@ -149,14 +159,24 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 		return nil, ErrBatchImageSettlementCostExceedsHold
 	}
 
-	if err := captureBatchImageBalanceHold(ctx, s.BillingRepo, job, actualCost, manifestHash); err != nil {
+	billingResult, err := captureBatchImageBalanceHold(ctx, s.BillingRepo, job, actualBillingInput, manifestHash)
+	if err != nil {
 		msg := truncateBatchImageMessage(err.Error(), batchImageMaxErrorMessageLength)
 		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_BILLING_FAILED", msg); failErr != nil {
 			return nil, failErr
 		}
 		return nil, err
 	}
-	s.invalidateAuthCache(ctx, job.UserID)
+	if billingResult != nil {
+		if job.PricingSnapshotVersion >= 2 {
+			actualCost = billingResult.ActualAmountUSD
+		}
+		result.SubscriptionAmountUSD = billingResult.SubscriptionAmountUSD
+		result.BalanceAmountUSD = billingResult.BalanceAmountUSD
+		result.BillingAllocations = cloneBillingAllocations(billingResult.BillingAllocations)
+	}
+	result.ActualCost = actualCost
+	s.invalidateAuthCache(ctx, batchImageBillingUserID(job))
 
 	now := time.Now()
 	outputExpiresAt := now.Add(s.outputRetentionAfterTerminal())
@@ -177,7 +197,7 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 	}); err != nil {
 		return nil, err
 	}
-	s.recordUsageLog(ctx, job, actualCost, result.RequestID, now)
+	s.recordUsageLog(ctx, job, actualCost, result.RequestID, now, billingResult)
 
 	return result, nil
 }
@@ -230,7 +250,7 @@ func (s *BatchImageSettlementService) failExhaustedSettlement(ctx context.Contex
 		}
 		return ErrBatchImageSettlementBillingFailed.WithCause(err)
 	}
-	s.invalidateAuthCache(ctx, job.UserID)
+	s.invalidateAuthCache(ctx, batchImageBillingUserID(job))
 	msg := strings.TrimSpace(message)
 	if msg == "" {
 		msg = "settlement billing retry limit reached"
@@ -249,7 +269,7 @@ func (s *BatchImageSettlementService) failExhaustedSettlement(ctx context.Contex
 	return ErrBatchImageSettlementBillingFailed
 }
 
-func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *BatchImageJob, actualCost float64, requestID string, createdAt time.Time) {
+func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *BatchImageJob, actualCost float64, requestID string, createdAt time.Time, billingResult *BatchImageBalanceHoldResult) {
 	if s == nil || s.UsageLogRepo == nil || job == nil || job.APIKeyID == nil || job.AccountID == nil {
 		return
 	}
@@ -258,8 +278,30 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 	inboundEndpoint := "/v1/images/batches"
 	upstreamEndpoint := "vertex:batchPredictionJobs"
 	imageSize := "1K"
+	billingType := BillingTypeBalance
+	subscriptionAmount := 0.0
+	balanceAmount := actualCost
+	allocations := []domain.BillingAllocation(nil)
+	if billingResult != nil {
+		subscriptionAmount = billingResult.SubscriptionAmountUSD
+		balanceAmount = billingResult.BalanceAmountUSD
+		allocations = cloneBillingAllocations(billingResult.BillingAllocations)
+	}
+	if subscriptionAmount > batchImageCostEpsilon {
+		billingType = BillingTypeSubscription
+	}
+	if len(allocations) == 0 && actualCost > 0 {
+		allocations = []domain.BillingAllocation{{Type: domain.BillingAllocationTypeBalance, AmountUSD: actualCost}}
+	}
+	rateMultiplier := job.GroupRateMultiplier * job.BatchDiscountMultiplier
+	if job.PricingSnapshotVersion >= 2 && job.SuccessCount > 0 && job.BaseUnitPrice > 0 && accountRateMultiplier > 0 {
+		// 混合结算没有单一来源倍率，日志记录本次实际生效的等效分组倍率。
+		rateMultiplier = actualCost / (job.BaseUnitPrice * float64(job.SuccessCount) * accountRateMultiplier)
+	}
 	usageLog := &UsageLog{
 		UserID:                job.UserID,
+		BillingUserID:         job.BillingUserID,
+		TeamID:                job.TeamID,
 		APIKeyID:              *job.APIKeyID,
 		AccountID:             *job.AccountID,
 		RequestID:             strings.TrimSpace(requestID),
@@ -271,9 +313,13 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		ImageOutputCost:       actualCost,
 		TotalCost:             actualCost,
 		ActualCost:            actualCost,
-		RateMultiplier:        job.GroupRateMultiplier * job.BatchDiscountMultiplier,
+		SubscriptionAmountUSD: subscriptionAmount,
+		BalanceAmountUSD:      balanceAmount,
+		BillingAllocations:    allocations,
+		SubscriptionID:        firstAllocatedSubscriptionID(allocations),
+		RateMultiplier:        rateMultiplier,
 		AccountRateMultiplier: &accountRateMultiplier,
-		BillingType:           BillingTypeBalance,
+		BillingType:           billingType,
 		RequestType:           RequestTypeSync,
 		BillingMode:           &billingMode,
 		ImageSize:             &imageSize,

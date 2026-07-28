@@ -48,12 +48,15 @@ func IsWindowExpired(windowStart *time.Time, duration time.Duration) bool {
 }
 
 type APIKey struct {
-	ID      int64
-	UserID  int64
-	Key     string
-	Name    string
-	GroupID *int64
-	Status  string
+	ID     int64
+	UserID int64
+	TeamID *int64
+	// TeamOwnerDisabled 表示团队 Owner 已锁定该 Key，Member 无权解除。
+	TeamOwnerDisabled bool
+	Key               string
+	Name              string
+	GroupID           *int64
+	Status            string
 	// FastModePolicy 控制该 Key 的请求级 Fast 模式，系统策略仍拥有更高优先级。
 	FastModePolicy string
 	IPWhitelist    []string
@@ -65,8 +68,13 @@ type APIKey struct {
 	LastUsedIP          *string // 来自该 Key 最新一条带 IP 的用量日志。
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
-	User                *User
-	Group               *Group
+	// User 表示实际承担权限和费用的用户；团队 Key 中为当前 Owner。
+	User *User
+	// ActorUser 表示创建并实际使用该 Key 的成员；个人 Key 与 User 相同。
+	ActorUser      *User
+	Team           *Team
+	TeamMembership *TeamMembership
+	Group          *Group
 	// DataSharingNoticeVersion 记录当前 Key 最近确认的数据共享须知版本。
 	DataSharingNoticeVersion int
 	// DataSharingConfirmedGroupID 记录最近一次确认对应的数据共享分组。
@@ -96,7 +104,7 @@ type APIKey struct {
 }
 
 func (k *APIKey) IsActive() bool {
-	return k.Status == StatusActive
+	return k.Status == StatusActive && !k.TeamOwnerDisabled
 }
 
 // HasRateLimits returns true if any rate limit window is configured
@@ -173,4 +181,5 @@ type APIKeyListFilters struct {
 	Search  string
 	Status  string
 	GroupID *int64 // nil=不筛选, 0=无分组, >0=指定分组
+	Scope   string // personal 或 team；空值兼容历史调用并返回全部
 }

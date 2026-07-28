@@ -237,10 +237,16 @@ func batchImageOwnerFromContext(c *gin.Context) (service.BatchImageOwner, bool) 
 	if !ok || apiKey == nil || apiKey.ID <= 0 || apiKey.UserID <= 0 {
 		return service.BatchImageOwner{}, false
 	}
+	billingUserID := apiKey.UserID
+	if apiKey.User != nil && apiKey.User.ID > 0 {
+		billingUserID = apiKey.User.ID
+	}
 	return service.BatchImageOwner{
-		UserID:   apiKey.UserID,
-		APIKeyID: apiKey.ID,
-		GroupID:  apiKey.GroupID,
+		UserID:        apiKey.UserID,
+		BillingUserID: billingUserID,
+		TeamID:        apiKey.TeamID,
+		APIKeyID:      apiKey.ID,
+		GroupID:       apiKey.GroupID,
 	}, true
 }
 

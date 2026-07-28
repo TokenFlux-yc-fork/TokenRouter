@@ -63,17 +63,21 @@ func (h *GatewayHandler) KeyBillingInfo(c *gin.Context) {
 
 func (h *GatewayHandler) resolveKeyBillingRate(c *gin.Context, apiKey *service.APIKey) (float64, bool) {
 	groupRate := apiKey.Group.RateMultiplier
+	billingUserID := apiKey.UserID
+	if apiKey.User != nil {
+		billingUserID = apiKey.User.ID
+	}
 	switch apiKey.Group.Platform {
 	case service.PlatformOpenAI, service.PlatformGrok:
 		if h.openAIGatewayService == nil {
 			return 0, false
 		}
-		return h.openAIGatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), apiKey.UserID, *apiKey.GroupID, groupRate), true
+		return h.openAIGatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), billingUserID, *apiKey.GroupID, groupRate), true
 	default:
 		if h.gatewayService == nil {
 			return 0, false
 		}
-		return h.gatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), apiKey.UserID, *apiKey.GroupID, groupRate), true
+		return h.gatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), billingUserID, *apiKey.GroupID, groupRate), true
 	}
 }
 

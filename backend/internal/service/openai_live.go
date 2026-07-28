@@ -226,7 +226,9 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			CallHash:              hashLiveCallID(created.CallID),
 			AccountID:             account.ID,
 			APIKeyID:              identity.APIKeyID,
+			ActorUserID:           identity.ActorUserID,
 			UserID:                identity.UserID,
+			TeamID:                liveGroupID(identity.TeamID),
 			GroupID:               liveGroupID(identity.GroupID),
 			SubscriptionID:        liveGroupID(identity.SubscriptionID),
 			LeaseID:               leaseID,
@@ -837,8 +839,14 @@ func (s *OpenAIGatewayService) finalizeLiveCall(record *LiveCallRecord) {
 	if record.SubscriptionID > 0 {
 		billingType = BillingTypeSubscription
 	}
+	actorUserID := record.ActorUserID
+	if actorUserID <= 0 {
+		actorUserID = record.UserID
+	}
 	_, _ = s.usageLogRepo.Create(context.Background(), &UsageLog{
-		UserID:           record.UserID,
+		UserID:           actorUserID,
+		BillingUserID:    record.UserID,
+		TeamID:           liveOptionalID(record.TeamID),
 		APIKeyID:         record.APIKeyID,
 		AccountID:        record.AccountID,
 		RequestID:        record.CallHash,

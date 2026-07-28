@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect/sql"
+	"github.com/TokenFlux/TokenRouter/internal/domain"
 )
 
 const (
@@ -17,6 +18,10 @@ const (
 	FieldBatchID = "batch_id"
 	// FieldUserID holds the string denoting the user_id field in the database.
 	FieldUserID = "user_id"
+	// FieldBillingUserID holds the string denoting the billing_user_id field in the database.
+	FieldBillingUserID = "billing_user_id"
+	// FieldTeamID holds the string denoting the team_id field in the database.
+	FieldTeamID = "team_id"
 	// FieldAPIKeyID holds the string denoting the api_key_id field in the database.
 	FieldAPIKeyID = "api_key_id"
 	// FieldAccountID holds the string denoting the account_id field in the database.
@@ -53,6 +58,18 @@ const (
 	FieldHoldAmount = "hold_amount"
 	// FieldActualCost holds the string denoting the actual_cost field in the database.
 	FieldActualCost = "actual_cost"
+	// FieldBalanceHoldAmount holds the string denoting the balance_hold_amount field in the database.
+	FieldBalanceHoldAmount = "balance_hold_amount"
+	// FieldSubscriptionHoldAllocations holds the string denoting the subscription_hold_allocations field in the database.
+	FieldSubscriptionHoldAllocations = "subscription_hold_allocations"
+	// FieldSubscriptionRateMultiplier holds the string denoting the subscription_rate_multiplier field in the database.
+	FieldSubscriptionRateMultiplier = "subscription_rate_multiplier"
+	// FieldBalanceRateMultiplier holds the string denoting the balance_rate_multiplier field in the database.
+	FieldBalanceRateMultiplier = "balance_rate_multiplier"
+	// FieldPlanGroupRateMultiplierEnabled holds the string denoting the plan_group_rate_multiplier_enabled field in the database.
+	FieldPlanGroupRateMultiplierEnabled = "plan_group_rate_multiplier_enabled"
+	// FieldAllowanceReserved holds the string denoting the allowance_reserved field in the database.
+	FieldAllowanceReserved = "allowance_reserved"
 	// FieldCurrency holds the string denoting the currency field in the database.
 	FieldCurrency = "currency"
 	// FieldHoldID holds the string denoting the hold_id field in the database.
@@ -102,6 +119,8 @@ var Columns = []string{
 	FieldID,
 	FieldBatchID,
 	FieldUserID,
+	FieldBillingUserID,
+	FieldTeamID,
 	FieldAPIKeyID,
 	FieldAccountID,
 	FieldProvider,
@@ -120,6 +139,12 @@ var Columns = []string{
 	FieldEstimatedCost,
 	FieldHoldAmount,
 	FieldActualCost,
+	FieldBalanceHoldAmount,
+	FieldSubscriptionHoldAllocations,
+	FieldSubscriptionRateMultiplier,
+	FieldBalanceRateMultiplier,
+	FieldPlanGroupRateMultiplierEnabled,
+	FieldAllowanceReserved,
 	FieldCurrency,
 	FieldHoldID,
 	FieldIdempotencyKey,
@@ -185,6 +210,18 @@ var (
 	DefaultCancelledCount int
 	// DefaultEstimatedCost holds the default value on creation for the "estimated_cost" field.
 	DefaultEstimatedCost float64
+	// DefaultBalanceHoldAmount holds the default value on creation for the "balance_hold_amount" field.
+	DefaultBalanceHoldAmount float64
+	// DefaultSubscriptionHoldAllocations holds the default value on creation for the "subscription_hold_allocations" field.
+	DefaultSubscriptionHoldAllocations func() []domain.BillingAllocation
+	// DefaultSubscriptionRateMultiplier holds the default value on creation for the "subscription_rate_multiplier" field.
+	DefaultSubscriptionRateMultiplier float64
+	// DefaultBalanceRateMultiplier holds the default value on creation for the "balance_rate_multiplier" field.
+	DefaultBalanceRateMultiplier float64
+	// DefaultPlanGroupRateMultiplierEnabled holds the default value on creation for the "plan_group_rate_multiplier_enabled" field.
+	DefaultPlanGroupRateMultiplierEnabled bool
+	// DefaultAllowanceReserved holds the default value on creation for the "allowance_reserved" field.
+	DefaultAllowanceReserved bool
 	// DefaultCurrency holds the default value on creation for the "currency" field.
 	DefaultCurrency string
 	// CurrencyValidator is a validator for the "currency" field. It is called by the builders before save.
@@ -227,6 +264,16 @@ func ByBatchID(opts ...sql.OrderTermOption) OrderOption {
 // ByUserID orders the results by the user_id field.
 func ByUserID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUserID, opts...).ToFunc()
+}
+
+// ByBillingUserID orders the results by the billing_user_id field.
+func ByBillingUserID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBillingUserID, opts...).ToFunc()
+}
+
+// ByTeamID orders the results by the team_id field.
+func ByTeamID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTeamID, opts...).ToFunc()
 }
 
 // ByAPIKeyID orders the results by the api_key_id field.
@@ -317,6 +364,31 @@ func ByHoldAmount(opts ...sql.OrderTermOption) OrderOption {
 // ByActualCost orders the results by the actual_cost field.
 func ByActualCost(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldActualCost, opts...).ToFunc()
+}
+
+// ByBalanceHoldAmount orders the results by the balance_hold_amount field.
+func ByBalanceHoldAmount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBalanceHoldAmount, opts...).ToFunc()
+}
+
+// BySubscriptionRateMultiplier orders the results by the subscription_rate_multiplier field.
+func BySubscriptionRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSubscriptionRateMultiplier, opts...).ToFunc()
+}
+
+// ByBalanceRateMultiplier orders the results by the balance_rate_multiplier field.
+func ByBalanceRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBalanceRateMultiplier, opts...).ToFunc()
+}
+
+// ByPlanGroupRateMultiplierEnabled orders the results by the plan_group_rate_multiplier_enabled field.
+func ByPlanGroupRateMultiplierEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlanGroupRateMultiplierEnabled, opts...).ToFunc()
+}
+
+// ByAllowanceReserved orders the results by the allowance_reserved field.
+func ByAllowanceReserved(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowanceReserved, opts...).ToFunc()
 }
 
 // ByCurrency orders the results by the currency field.

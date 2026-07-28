@@ -25,4 +25,9 @@ func TestUsageStatsCacheKey_StableAndDistinct(t *testing.T) {
 	withUser := base
 	withUser.UserID = 7
 	require.NotEqual(t, k1, usageStatsCacheKey(withUser), "different user must change key")
+
+	// 团队维度必须参与缓存键，防止切换团队后复用旧汇总。
+	withTeam := base
+	withTeam.TeamID = 11
+	require.NotEqual(t, k1, usageStatsCacheKey(withTeam), "different team must change key")
 }

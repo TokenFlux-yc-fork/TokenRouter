@@ -4,9 +4,8 @@
       <!-- 筛选条件 -->
       <template #filters>
         <div class="card p-4 sm:p-6">
-          <div class="flex flex-wrap items-end justify-between gap-4">
-            <!-- 左侧：筛选字段 -->
-            <div class="flex flex-1 flex-wrap items-end gap-4">
+          <div class="space-y-4">
+            <div class="flex flex-wrap items-end gap-4">
               <div class="w-full sm:w-auto sm:min-w-[240px]">
                 <label class="input-label">{{ t('admin.audit.filters.q') }}</label>
                 <div class="relative">
@@ -65,8 +64,7 @@
               </div>
             </div>
 
-            <!-- 右侧：操作按钮 -->
-            <div class="flex w-full flex-wrap items-center justify-end gap-3 sm:w-auto">
+            <div class="flex w-full flex-wrap items-center justify-end gap-3 border-t border-gray-100 pt-4 dark:border-dark-700">
               <button type="button" class="btn btn-primary" :disabled="loading" @click="search">
                 {{ t('common.search') }}
               </button>

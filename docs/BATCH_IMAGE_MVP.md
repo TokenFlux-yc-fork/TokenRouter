@@ -161,9 +161,12 @@ The worker does not perform DB scan polling. Database reads happen only after a 
 MVP billing rules:
 
 - Submit may estimate cost.
+- Submit reserves applicable subscription quota first and freezes wallet balance only for the uncovered remainder.
+- Pricing snapshots follow normal image billing: each subscription allocation uses its plan group multiplier, while any base cost left after subscription coverage uses the snapshotted user-specific pay-as-you-go multiplier.
 - Settlement runs after result indexing.
 - Only successful images are charged.
 - Failed items are not charged.
+- Settlement keeps subscription usage first, captures wallet balance only after the reserved subscription amount is exhausted, and releases every unused reservation on failure or cancellation.
 - Reference images are sent to Gemini as input and can create small upstream input-token and temporary storage cost. They are counted once per expanded output request when `output_count > 1`, but the public MVP billing model does not add a separate reference-image surcharge. User-facing estimated, held, and settled amounts are still based on the output image count and configured batch image unit price.
 - Settlement request id is `batch_image_settlement:{batch_id}`.
 - Settlement is idempotent; re-running settlement must not double charge.

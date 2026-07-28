@@ -310,6 +310,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		PromoCodeEnabled:                 settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
 		PasswordResetEnabled:             passwordResetEnabled,
 		InvitationCodeEnabled:            settings[SettingKeyInvitationCodeEnabled] == "true",
+		TeamEnabled:                      s.cfg == nil || s.cfg.Team.Enabled,
+		TeamSelfServiceEnabled:           s.cfg == nil || s.cfg.Team.SelfServiceEnabled,
 		AffiliateEnabled:                 settings[SettingKeyAffiliateEnabled] == "true",
 		TotpEnabled:                      settings[SettingKeyTotpEnabled] == "true",
 		LoginAgreementEnabled:            settings[SettingKeyLoginAgreementEnabled] == "true" && len(loginAgreementDocuments) > 0,

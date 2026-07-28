@@ -86,15 +86,12 @@ func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) 
 			response.InternalError(c, "API key service not available")
 			return nil, false
 		}
-		apiKey, err := h.apiKeyService.GetByID(c.Request.Context(), id)
+		_, err = h.apiKeyService.GetByID(c.Request.Context(), id)
 		if err != nil {
 			response.ErrorFrom(c, err)
 			return nil, false
 		}
-		if apiKey.UserID != subject.UserID {
-			response.Forbidden(c, "Not authorized to access this API key's usage records")
-			return nil, false
-		}
+		// 最终可见性由统一用量范围约束；Owner 可以筛选团队内其他成员的 Key。
 		apiKeyID = id
 	}
 
@@ -203,6 +200,7 @@ func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) 
 			UserID:            subject.UserID,
 			APIKeyID:          apiKeyID,
 			GroupID:           groupID,
+			IncludeOwnedTeam:  true,
 			Model:             strings.TrimSpace(c.Query("model")),
 			ModelFilterSource: usagestats.ModelSourceRequested,
 			RequestType:       requestType,
@@ -388,7 +386,7 @@ func (h *UsageHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	// 验证所有权
+	// 单条详情仅允许实际请求人查看，避免 Member 读取其他成员的请求元数据。
 	if record.UserID != subject.UserID {
 		response.Forbidden(c, "Not authorized to access this record")
 		return

@@ -232,6 +232,8 @@ export interface PublicSettings {
   home_content: string
   hide_ccs_import_button: boolean
   payment_enabled: boolean
+  team_enabled?: boolean
+  team_self_service_enabled?: boolean
   table_default_page_size: number
   table_page_size_options: number[]
   usage_ranking_limit: number
@@ -746,10 +748,13 @@ export type ApiKeyFastModePolicy = 'follow_request' | 'force_on' | 'force_off'
 export interface ApiKey {
   id: number
   user_id: number
+  team_id?: number | null
+  scope?: 'personal' | 'team'
+  team_owner_disabled?: boolean // 团队管理员锁定后，成员不能自行恢复该 Key。
   key: string
   name: string
   group_id: number | null
-  status: 'active' | 'inactive' | 'quota_exhausted' | 'expired'
+  status: 'active' | 'inactive' | 'disabled' | 'quota_exhausted' | 'expired'
   fast_mode_policy: ApiKeyFastModePolicy
   ip_whitelist: string[]
   ip_blacklist: string[]
@@ -782,6 +787,7 @@ export interface ApiKey {
 
 export interface CreateApiKeyRequest {
   name: string
+  scope?: 'personal' | 'team'
   group_id?: number | null
   fast_mode_policy?: ApiKeyFastModePolicy
   custom_key?: string // Optional custom API Key
@@ -1708,6 +1714,7 @@ export type ImageSizeBreakdown = Record<string, number>
 export interface UsageLog {
   id: number
   user_id: number
+  team_id?: number | null
   api_key_id: number
   account_id: number | null
   request_id: string

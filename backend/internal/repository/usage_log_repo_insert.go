@@ -25,6 +25,8 @@ import (
 // 新增 usage_logs 列时必须同步更新以上所有调用点。
 var usageLogInsertArgTypes = [...]string{
 	"bigint",      // user_id
+	"bigint",      // billing_user_id
+	"bigint",      // team_id
 	"bigint",      // api_key_id
 	"bigint",      // account_id
 	"text",        // request_id
@@ -224,6 +226,8 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 	query := `
 		INSERT INTO usage_logs (
 			user_id,
+			billing_user_id,
+			team_id,
 			api_key_id,
 			account_id,
 			request_id,
@@ -284,16 +288,16 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			session_id,
 			created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9,
-			$10, $11, $12, $13,
-			$14, $15, $16, $17,
-			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30,
-			$31, $32, $33, $34, $35, $36, $37,
-			$38, $39, $40, $41, $42, $43, $44,
-			$45, $46, $47, $48, $49, $50, $51,
-			$52, $53, $54, $55, $56, $57, $58, $59, $60
+			$1, $2, $3, $4, $5, $6, $7, $8, $9,
+			$10, $11,
+			$12, $13, $14, $15,
+			$16, $17, $18, $19,
+			$20, $21, $22, $23, $24, $25,
+			$26, $27, $28, $29, $30, $31, $32,
+			$33, $34, $35, $36, $37, $38, $39,
+			$40, $41, $42, $43, $44, $45, $46,
+			$47, $48, $49, $50, $51, $52, $53,
+			$54, $55, $56, $57, $58, $59, $60, $61, $62
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -686,6 +690,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 		WITH input (
 			input_idx,
 			user_id,
+			billing_user_id,
+			team_id,
 			api_key_id,
 			account_id,
 			request_id,
@@ -777,6 +783,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 		inserted AS (
 			INSERT INTO usage_logs (
 				user_id,
+				billing_user_id,
+				team_id,
 				api_key_id,
 				account_id,
 				request_id,
@@ -839,6 +847,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			)
 			SELECT
 				user_id,
+				billing_user_id,
+				team_id,
 				api_key_id,
 				account_id,
 				request_id,
@@ -941,6 +951,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 	_, _ = query.WriteString(`
 		WITH input (
 			user_id,
+			billing_user_id,
+			team_id,
 			api_key_id,
 			account_id,
 			request_id,
@@ -1029,6 +1041,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 		)
 		INSERT INTO usage_logs (
 			user_id,
+			billing_user_id,
+			team_id,
 			api_key_id,
 			account_id,
 			request_id,
@@ -1091,6 +1105,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 		)
 		SELECT
 			user_id,
+			billing_user_id,
+			team_id,
 			api_key_id,
 			account_id,
 			request_id,
@@ -1161,6 +1177,8 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 	_, err := sqlq.ExecContext(ctx, `
 		INSERT INTO usage_logs (
 			user_id,
+			billing_user_id,
+			team_id,
 			api_key_id,
 			account_id,
 			request_id,
@@ -1221,16 +1239,16 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			session_id,
 			created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9,
-			$10, $11, $12, $13,
-			$14, $15, $16, $17,
-			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30,
-			$31, $32, $33, $34, $35, $36, $37,
-			$38, $39, $40, $41, $42, $43, $44,
-			$45, $46, $47, $48, $49, $50, $51,
-			$52, $53, $54, $55, $56, $57, $58, $59, $60
+			$1, $2, $3, $4, $5, $6, $7, $8, $9,
+			$10, $11,
+			$12, $13, $14, $15,
+			$16, $17, $18, $19,
+			$20, $21, $22, $23, $24, $25,
+			$26, $27, $28, $29, $30, $31, $32,
+			$33, $34, $35, $36, $37, $38, $39,
+			$40, $41, $42, $43, $44, $45, $46,
+			$47, $48, $49, $50, $51, $52, $53,
+			$54, $55, $56, $57, $58, $59, $60, $61, $62
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1293,6 +1311,10 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	if requestID != "" {
 		requestIDArg = requestID
 	}
+	billingUserID := log.BillingUserID
+	if billingUserID <= 0 {
+		billingUserID = log.UserID
+	}
 
 	return usageLogInsertPrepared{
 		createdAt:      createdAt,
@@ -1301,6 +1323,8 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 		requestType:    requestType,
 		args: []any{
 			log.UserID,
+			billingUserID,
+			nullInt64(log.TeamID),
 			log.APIKeyID,
 			log.AccountID,
 			requestIDArg,

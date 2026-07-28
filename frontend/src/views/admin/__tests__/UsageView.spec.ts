@@ -187,6 +187,27 @@ describe('admin UsageView distribution metric toggles', () => {
     expect((wrapper.vm as any).requestedModelStats).toEqual([{ model: 'B', total_tokens: 20 }])
   })
 
+  it('renders filters and the usage table in separate sections', async () => {
+    const wrapper = mount(UsageView, {
+      global: { stubs: {
+        AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+        UsageTable: UsageTableStub, UsageExportProgress: true, UsageCleanupDialog: true,
+        UserBalanceHistoryModal: true, Pagination: true, Select: true,
+        DateRangePicker: true, Icon: true, TokenUsageTrend: true,
+        ModelDistributionChart: true, GroupDistributionChart: true,
+        EndpointDistributionChart: true, UserTokenRanking: true,
+      } },
+    })
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    const filtersCard = wrapper.get('[data-testid="admin-usage-filters-card"]')
+    const tableSection = wrapper.get('[data-testid="admin-usage-table-section"]')
+    expect(filtersCard.classes()).toContain('card')
+    expect(filtersCard.find('[data-test="usage-table"]').exists()).toBe(false)
+    expect(tableSection.find('[data-test="usage-table"]').exists()).toBe(true)
+  })
+
   it('keeps model and group metric toggles independent without refetching chart data', async () => {
     const wrapper = mount(UsageView, {
       global: {

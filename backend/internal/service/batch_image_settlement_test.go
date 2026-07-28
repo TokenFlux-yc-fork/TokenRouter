@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/TokenFlux/TokenRouter/internal/domain"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,6 +48,59 @@ func TestBatchImageSettlementService_SettlesAndChargesSuccessfulImagesOnly(t *te
 	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), batchImageTestData)
 	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), "gs://")
 	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), "prompt")
+}
+
+func TestBatchImageSettlementService_RecordsSubscriptionFirstBilling(t *testing.T) {
+	repo := newFakeBatchImageRepository()
+	job := testSettlingBatchImageJob("imgbatch_subscription_settle")
+	job.SuccessCount = 3
+	job.FailCount = 2
+	job.ItemCount = 5
+	subscriptionID := int64(77)
+	planID := int64(88)
+	job.SubscriptionHoldAllocations = []domain.BillingAllocation{
+		{
+			Type:           domain.BillingAllocationTypeSubscription,
+			AmountUSD:      0.6,
+			SubscriptionID: &subscriptionID,
+			PlanID:         &planID,
+		},
+	}
+	job.BalanceHoldAmount = 0.65
+	repo.jobs[job.BatchID] = job
+	usageLogs := &openAIRecordUsageLogRepoStub{}
+	svc := &BatchImageSettlementService{
+		Repo: repo, BillingRepo: &fakeBatchImageBillingRepo{}, Pricing: &fakeBatchImagePricingResolver{unitPrice: 0.25},
+		UsageLogRepo: usageLogs,
+	}
+
+	result, err := svc.Settle(context.Background(), job.BatchID)
+
+	require.NoError(t, err)
+	require.InDelta(t, 0.6, result.SubscriptionAmountUSD, 0.000001)
+	require.InDelta(t, 0.15, result.BalanceAmountUSD, 0.000001)
+	require.NotNil(t, usageLogs.lastLog)
+	require.Equal(t, BillingTypeSubscription, usageLogs.lastLog.BillingType)
+	require.NotNil(t, usageLogs.lastLog.SubscriptionID)
+	require.Equal(t, subscriptionID, *usageLogs.lastLog.SubscriptionID)
+	require.InDelta(t, 0.6, usageLogs.lastLog.SubscriptionAmountUSD, 0.000001)
+	require.InDelta(t, 0.15, usageLogs.lastLog.BalanceAmountUSD, 0.000001)
+	require.Len(t, usageLogs.lastLog.BillingAllocations, 2)
+}
+
+func TestBuildBatchImageHoldCommandKeepsTeamBillingSnapshot(t *testing.T) {
+	job := testSettlingBatchImageJob("imgbatch_team_snapshot")
+	teamID := int64(77)
+	job.UserID = 23
+	job.BillingUserID = 11
+	job.TeamID = &teamID
+
+	cmd, err := buildBatchImageHoldCommand(job, BatchImageCaptureRequestID(job.BatchID), 0.5, "payload-hash")
+	require.NoError(t, err)
+	require.Equal(t, int64(11), cmd.UserID)
+	require.Equal(t, int64(23), cmd.ActorUserID)
+	require.NotNil(t, cmd.TeamID)
+	require.Equal(t, teamID, *cmd.TeamID)
 }
 
 func TestBatchImageSettlementService_ZeroSuccessCanComplete(t *testing.T) {
@@ -432,16 +486,18 @@ func (r *fakeBatchImagePricingResolver) BatchImageUnitPrice(_ context.Context, j
 }
 
 type fakeBatchImageBillingRepo struct {
-	commands       []*UsageBillingCommand
-	reserves       []*BatchImageBalanceHoldCommand
-	captures       []*BatchImageBalanceHoldCommand
-	releases       []*BatchImageBalanceHoldCommand
-	seen           map[string]struct{}
-	alreadyApplied map[string]bool
-	err            error
-	reserveErr     error
-	captureErr     error
-	releaseErr     error
+	commands           []*UsageBillingCommand
+	reserves           []*BatchImageBalanceHoldCommand
+	captures           []*BatchImageBalanceHoldCommand
+	releases           []*BatchImageBalanceHoldCommand
+	seen               map[string]struct{}
+	alreadyApplied     map[string]bool
+	usableSubscription *UserSubscription
+	subscriptionErr    error
+	err                error
+	reserveErr         error
+	captureErr         error
+	releaseErr         error
 }
 
 func (r *fakeBatchImageBillingRepo) Apply(_ context.Context, cmd *UsageBillingCommand) (*UsageBillingApplyResult, error) {
@@ -464,12 +520,28 @@ func (r *fakeBatchImageBillingRepo) Apply(_ context.Context, cmd *UsageBillingCo
 	return &UsageBillingApplyResult{Applied: true}, nil
 }
 
+func (r *fakeBatchImageBillingRepo) ResolveUsableSubscriptionForGroup(_ context.Context, _, _ int64) (*UserSubscription, error) {
+	return r.usableSubscription, r.subscriptionErr
+}
+
 func (r *fakeBatchImageBillingRepo) ReserveBatchImageBalance(_ context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
 	if r.reserveErr != nil {
 		r.reserves = append(r.reserves, cmd)
 		return nil, r.reserveErr
 	}
-	return r.applyHold(cmd, &r.reserves)
+	result, err := r.applyHold(cmd, &r.reserves)
+	if err == nil && result != nil {
+		result.BalanceAmountUSD = cmd.HoldAmount
+		result.HoldAmountUSD = cmd.HoldAmount
+		result.EstimatedAmountUSD = cmd.HoldAmount
+		if cmd.PricingSnapshotVersion >= 2 {
+			result.EstimatedAmountUSD = cmd.HoldAmount * cmd.SettlementRateScale
+		}
+		if cmd.HoldAmount > 0 {
+			result.BillingAllocations = []domain.BillingAllocation{{Type: domain.BillingAllocationTypeBalance, AmountUSD: cmd.HoldAmount}}
+		}
+	}
+	return result, err
 }
 
 func (r *fakeBatchImageBillingRepo) CaptureBatchImageBalance(_ context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {
@@ -477,7 +549,20 @@ func (r *fakeBatchImageBillingRepo) CaptureBatchImageBalance(_ context.Context, 
 		r.captures = append(r.captures, cmd)
 		return nil, r.captureErr
 	}
-	return r.applyHold(cmd, &r.captures)
+	result, err := r.applyHold(cmd, &r.captures)
+	if err != nil || result == nil {
+		return result, err
+	}
+	plan, err := PlanBatchImageBillingCapture(cmd)
+	if err != nil {
+		return nil, err
+	}
+	cmd.ActualAmount = plan.ActualAmountUSD
+	result.SubscriptionAmountUSD = plan.SubscriptionAmountUSD
+	result.BalanceAmountUSD = plan.BalanceAmountUSD
+	result.ActualAmountUSD = plan.ActualAmountUSD
+	result.BillingAllocations = plan.BillingAllocations
+	return result, nil
 }
 
 func (r *fakeBatchImageBillingRepo) ReleaseBatchImageBalance(_ context.Context, cmd *BatchImageBalanceHoldCommand) (*BatchImageBalanceHoldResult, error) {

@@ -305,6 +305,15 @@ func (s *UsageService) GetAPIKeyModelStats(ctx context.Context, apiKeyID int64, 
 
 // GetAPIKeyDailyUsage 返回用户指定 API Key 的按日用量统计。
 func (s *UsageService) GetAPIKeyDailyUsage(ctx context.Context, userID, apiKeyID int64, startTime, endTime time.Time) ([]usagestats.APIKeyDailyUsagePoint, error) {
+	return s.getAPIKeyDailyUsage(ctx, userID, apiKeyID, startTime, endTime)
+}
+
+// GetAPIKeyDailyUsageByKey 供已由当前 Key 完成鉴权的网关自省使用。
+func (s *UsageService) GetAPIKeyDailyUsageByKey(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) ([]usagestats.APIKeyDailyUsagePoint, error) {
+	return s.getAPIKeyDailyUsage(ctx, 0, apiKeyID, startTime, endTime)
+}
+
+func (s *UsageService) getAPIKeyDailyUsage(ctx context.Context, userID, apiKeyID int64, startTime, endTime time.Time) ([]usagestats.APIKeyDailyUsagePoint, error) {
 	trend, err := s.usageRepo.GetUsageTrendWithFilters(ctx, startTime, endTime, "day", userID, apiKeyID, 0, 0, "", nil, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get api key daily usage: %w", err)

@@ -42,6 +42,8 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 	mock.ExpectQuery("INSERT INTO usage_logs").
 		WithArgs(
 			log.UserID,
+			log.UserID,       // billing_user_id 默认与调用者一致
+			sqlmock.AnyArg(), // team_id
 			log.APIKeyID,
 			log.AccountID,
 			log.RequestID,
@@ -135,6 +137,8 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 	mock.ExpectQuery("INSERT INTO usage_logs").
 		WithArgs(
 			log.UserID,
+			log.UserID,       // billing_user_id 默认与调用者一致
+			sqlmock.AnyArg(), // team_id
 			log.APIKeyID,
 			log.AccountID,
 			log.RequestID,
@@ -279,11 +283,11 @@ func TestPrepareUsageLogInsert_PersistsImageSizeMetadata(t *testing.T) {
 		CreatedAt:          time.Date(2025, 1, 6, 12, 0, 0, 0, time.UTC),
 	})
 
-	require.Equal(t, sql.NullString{String: imageSize, Valid: true}, prepared.args[39])
-	require.Equal(t, sql.NullString{String: inputSize, Valid: true}, prepared.args[40])
-	require.Equal(t, sql.NullString{String: outputSize, Valid: true}, prepared.args[41])
-	require.Equal(t, sql.NullString{String: source, Valid: true}, prepared.args[42])
-	breakdownJSON, ok := prepared.args[43].(string)
+	require.Equal(t, sql.NullString{String: imageSize, Valid: true}, prepared.args[41])
+	require.Equal(t, sql.NullString{String: inputSize, Valid: true}, prepared.args[42])
+	require.Equal(t, sql.NullString{String: outputSize, Valid: true}, prepared.args[43])
+	require.Equal(t, sql.NullString{String: source, Valid: true}, prepared.args[44])
+	breakdownJSON, ok := prepared.args[45].(string)
 	require.True(t, ok)
 	require.JSONEq(t, `{"1K":1,"4K":1}`, breakdownJSON)
 }
@@ -466,7 +470,7 @@ func TestUsageLogRepositoryGetUserModelStatsUsesRequestedModel(t *testing.T) {
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 
-	mock.ExpectQuery("(?s)SELECT\\s+COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) as model,.*WHERE created_at >= \\$1 AND created_at < \\$2\\s+AND user_id = \\$3.*GROUP BY COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) ORDER BY total_tokens DESC").
+	mock.ExpectQuery("(?s)SELECT\\s+COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) as model,.*WHERE created_at >= \\$1 AND created_at < \\$2\\s+AND \\(user_id = \\$3 OR team_id IN .*tm.role = 'owner'.*GROUP BY COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) ORDER BY total_tokens DESC").
 		WithArgs(start, end, int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model", "requests", "input_tokens", "output_tokens",
@@ -518,6 +522,38 @@ func TestUsageLogRepositoryGetStatsWithFiltersRequestedModelSource(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), stats.TotalRequests)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryListPersonalOnlyExcludesTeamUsage(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM usage_logs WHERE user_id = \\$1 AND team_id IS NULL").
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(0)))
+	mock.ExpectQuery("SELECT .* FROM usage_logs WHERE user_id = \\$1 AND team_id IS NULL ORDER BY id DESC LIMIT \\$2 OFFSET \\$3").
+		WithArgs(int64(7), 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	logs, page, err := repo.ListWithFilters(context.Background(), pagination.PaginationParams{Page: 1, PageSize: 20}, usagestats.UsageLogFilters{
+		UserID:       7,
+		PersonalOnly: true,
+	})
+	require.NoError(t, err)
+	require.Empty(t, logs)
+	require.Zero(t, page.Total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAppendUserUsageScopeIncludesOwnedTeam(t *testing.T) {
+	conditions, args := appendUserUsageScopeWhereCondition(nil, nil, 42, true, "ul")
+
+	require.Equal(t, []any{int64(42)}, args)
+	require.Len(t, conditions, 1)
+	require.Contains(t, conditions[0], "ul.user_id = $1")
+	require.Contains(t, conditions[0], "ul.team_id IN")
+	require.Contains(t, conditions[0], "tm.role = 'owner'")
+	require.Contains(t, conditions[0], "tm.left_at IS NULL")
 }
 
 func TestUsageLogRepositoryGetStatsWithFiltersRequestTypePriority(t *testing.T) {
@@ -879,6 +915,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 		log, err := scanUsageLog(usageLogScannerStub{values: []any{
 			int64(4),
 			int64(13),
+			int64(13),
+			sql.NullInt64{},
 			int64(23),
 			int64(33),
 			sql.NullString{Valid: true, String: "req-image-metadata"},
@@ -941,10 +979,12 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 	t.Run("request_type_ws_v2_overrides_legacy", func(t *testing.T) {
 		now := time.Now().UTC()
 		log, err := scanUsageLog(usageLogScannerStub{values: []any{
-			int64(1),  // id
-			int64(10), // user_id
-			int64(20), // api_key_id
-			int64(30), // account_id
+			int64(1),        // id
+			int64(10),       // user_id
+			int64(10),       // billing_user_id
+			sql.NullInt64{}, // team_id
+			int64(20),       // api_key_id
+			int64(30),       // account_id
 			sql.NullString{Valid: true, String: "req-1"},
 			"gpt-5", // model
 			sql.NullString{Valid: true, String: "gpt-5"}, // requested_model
@@ -1016,6 +1056,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 		log, err := scanUsageLog(usageLogScannerStub{values: []any{
 			int64(2),
 			int64(11),
+			int64(11),
+			sql.NullInt64{},
 			int64(21),
 			int64(31),
 			sql.NullString{Valid: true, String: "req-2"},
@@ -1075,6 +1117,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 		log, err := scanUsageLog(usageLogScannerStub{values: []any{
 			int64(3),
 			int64(12),
+			int64(12),
+			sql.NullInt64{},
 			int64(22),
 			int64(32),
 			sql.NullString{Valid: true, String: "req-3"},

@@ -62,6 +62,7 @@ export interface TrendParams {
   api_key_id?: number
   model?: string
   group_id?: number
+  team_id?: number
   request_type?: UsageRequestType
   stream?: boolean
   billing_type?: number | null

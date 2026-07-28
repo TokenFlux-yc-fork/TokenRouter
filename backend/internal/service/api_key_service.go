@@ -45,6 +45,8 @@ var (
 	ErrAPIKeyRateLimit5hExceeded = infraerrors.TooManyRequests("API_KEY_RATE_5H_EXCEEDED", "api key 5小时限额已用完")
 	ErrAPIKeyRateLimit1dExceeded = infraerrors.TooManyRequests("API_KEY_RATE_1D_EXCEEDED", "api key 日限额已用完")
 	ErrAPIKeyRateLimit7dExceeded = infraerrors.TooManyRequests("API_KEY_RATE_7D_EXCEEDED", "api key 7天限额已用完")
+	ErrTeamActorInactive         = infraerrors.Forbidden("TEAM_ACTOR_INACTIVE", "团队密钥所属成员已停用")
+	ErrTeamBillingOwnerInactive  = infraerrors.Forbidden("TEAM_BILLING_OWNER_INACTIVE", "团队付款所有者已停用")
 )
 
 // NewAPIKeyLimitReachedError 返回包含当前数量和上限的结构化冲突错误。
@@ -191,6 +193,7 @@ type APIKeyAuthCacheInvalidator interface {
 // CreateAPIKeyRequest 创建API Key请求
 type CreateAPIKeyRequest struct {
 	Name        string   `json:"name"`
+	Scope       string   `json:"scope"`
 	GroupID     *int64   `json:"group_id"`
 	CustomKey   *string  `json:"custom_key"`   // 可选的自定义key
 	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
@@ -265,6 +268,7 @@ type APIKeyService struct {
 	cache                     APIKeyCache
 	rateLimitCacheInvalid     RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
 	concurrencyService        *ConcurrencyService
+	teamRepo                  TeamRepository
 	cfg                       *config.Config
 	authCacheL1               *ristretto.Cache
 	authNegativeCacheL1       *ristretto.Cache
@@ -348,6 +352,11 @@ func (s *APIKeyService) SetDataSharingNoticeReader(reader DataSharingNoticeReade
 // SetConcurrencyService 注入 API Key 实时并发统计服务。
 func (s *APIKeyService) SetConcurrencyService(concurrencyService *ConcurrencyService) {
 	s.concurrencyService = concurrencyService
+}
+
+// SetTeamRepository 注入团队解析能力，避免 Key 服务依赖团队 HTTP 服务。
+func (s *APIKeyService) SetTeamRepository(repo TeamRepository) {
+	s.teamRepo = repo
 }
 
 func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
@@ -460,10 +469,40 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		return nil, ErrInvalidAPIKeyFastModePolicy
 	}
 
-	// 验证用户存在
-	user, err := s.userRepo.GetByID(ctx, userID)
+	// 验证调用成员存在，并根据 Key 作用域解析实际付款用户。
+	actor, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
+	}
+	user := actor
+	var teamID *int64
+	scope := strings.ToLower(strings.TrimSpace(req.Scope))
+	if scope == "" {
+		scope = "personal"
+	}
+	if scope != "personal" && scope != "team" {
+		return nil, infraerrors.BadRequest("API_KEY_SCOPE_INVALID", "api key 作用域必须为 personal 或 team")
+	}
+	if scope == "team" {
+		if s.cfg != nil && !s.cfg.Team.Enabled {
+			return nil, ErrTeamFeatureDisabled
+		}
+		if s.teamRepo == nil {
+			return nil, ErrTeamFeatureDisabled
+		}
+		teamCtx, teamErr := s.teamRepo.GetContextByUserID(ctx, userID)
+		if teamErr != nil {
+			return nil, teamErr
+		}
+		if teamCtx.Team.Status != TeamStatusActive {
+			return nil, ErrTeamSuspended
+		}
+		user, err = s.userRepo.GetByID(ctx, teamCtx.Owner.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("get team owner: %w", err)
+		}
+		id := teamCtx.Team.ID
+		teamID = &id
 	}
 
 	// 验证 IP 白名单格式
@@ -549,6 +588,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 	// 创建API Key记录
 	apiKey := &APIKey{
 		UserID:                                userID,
+		TeamID:                                teamID,
 		Key:                                   key,
 		Name:                                  html.EscapeString(req.Name),
 		GroupID:                               req.GroupID,
@@ -566,6 +606,8 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		DataSharingConfirmedGroupID:           dataSharingConfirmedGroupID,
 		DataSharingConfirmedAt:                dataSharingConfirmedAt,
 	}
+	apiKey.ActorUser = actor
+	apiKey.User = user
 
 	// Set expiration time if specified
 	if req.ExpiresInDays != nil && *req.ExpiresInDays > 0 {
@@ -893,10 +935,10 @@ func (s *APIKeyService) refreshFallbackUserGroupRPMOverride(ctx context.Context,
 		return
 	}
 	apiKey.User.UserGroupRPMOverride = nil
-	if s.userGroupRateRepo == nil || apiKey.UserID <= 0 || groupID <= 0 {
+	if s.userGroupRateRepo == nil || apiKey.User.ID <= 0 || groupID <= 0 {
 		return
 	}
-	override, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, apiKey.UserID, groupID)
+	override, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, apiKey.User.ID, groupID)
 	if err == nil {
 		apiKey.User.UserGroupRPMOverride = override
 	}
@@ -944,6 +986,12 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	if apiKey.UserID != userID {
 		return nil, ErrInsufficientPerms
 	}
+	if apiKey.TeamID != nil {
+		apiKey, err = s.hydrateTeamAPIKey(ctx, apiKey, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// 验证 IP 白名单格式
 	if req.IPWhitelist != nil && len(*req.IPWhitelist) > 0 {
@@ -973,7 +1021,18 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 
 	if req.GroupID != nil {
 		// 验证分组权限
-		user, err := s.userRepo.GetByID(ctx, userID)
+		billingUserID := userID
+		if apiKey.TeamID != nil {
+			if s.teamRepo == nil {
+				return nil, ErrTeamFeatureDisabled
+			}
+			teamCtx, teamErr := s.teamRepo.GetContextByUserID(ctx, userID)
+			if teamErr != nil || teamCtx.Team.ID != *apiKey.TeamID {
+				return nil, ErrTeamMembershipRequired
+			}
+			billingUserID = teamCtx.Owner.UserID
+		}
+		user, err := s.userRepo.GetByID(ctx, billingUserID)
 		if err != nil {
 			return nil, fmt.Errorf("get user: %w", err)
 		}
@@ -1000,6 +1059,9 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 
 	if req.Status != nil {
+		if apiKey.TeamOwnerDisabled && *req.Status == StatusAPIKeyActive {
+			return nil, ErrInsufficientPerms
+		}
 		apiKey.Status = *req.Status
 		// 如果状态改变，清除Redis缓存
 		if s.cache != nil {
@@ -1156,18 +1218,79 @@ func (s *APIKeyService) ValidateKey(ctx context.Context, key string) (*APIKey, *
 		return nil, nil, infraerrors.Unauthorized("API_KEY_INACTIVE", "api key is not active")
 	}
 
-	// 获取用户信息
-	user, err := s.userRepo.GetByID(ctx, apiKey.UserID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("get user: %w", err)
+	// 团队 Key 的 User 已在认证加载阶段替换为当前付款 Owner。
+	user := apiKey.User
+	if user == nil {
+		user, err = s.userRepo.GetByID(ctx, apiKey.UserID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get user: %w", err)
+		}
 	}
 
 	// 检查用户状态
 	if !user.IsActive() {
 		return nil, nil, ErrUserNotActive
 	}
+	if apiKey.TeamID != nil {
+		if err := s.ValidateTeamKeyLifecycle(apiKey); err != nil {
+			return nil, nil, err
+		}
+		if err := checkTeamMemberLimitSnapshot(apiKey.TeamMembership); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	return apiKey, user, nil
+}
+
+// ValidateTeamKeyLifecycle 校验团队 Key 当前仍属于有效团队关系。
+func (s *APIKeyService) ValidateTeamKeyLifecycle(apiKey *APIKey) error {
+	if apiKey == nil || apiKey.TeamID == nil {
+		return nil
+	}
+	if s != nil && s.cfg != nil && !s.cfg.Team.Enabled {
+		return ErrTeamFeatureDisabled
+	}
+	if apiKey.Team == nil || apiKey.TeamMembership == nil || apiKey.Team.ID != *apiKey.TeamID || apiKey.TeamMembership.TeamID != *apiKey.TeamID {
+		return ErrTeamMembershipRequired
+	}
+	if apiKey.TeamMembership.UserID != apiKey.UserID || apiKey.TeamMembership.JoinedAt.After(apiKey.CreatedAt) {
+		return ErrTeamMembershipRequired
+	}
+	if apiKey.Team.Status != TeamStatusActive {
+		return ErrTeamSuspended
+	}
+	if apiKey.ActorUser == nil || !apiKey.ActorUser.IsActive() {
+		return ErrTeamActorInactive
+	}
+	if apiKey.User == nil || !apiKey.User.IsActive() {
+		return ErrTeamBillingOwnerInactive
+	}
+	return nil
+}
+
+// CheckTeamMemberLimits 使用本次认证读取的只读快照检查成员自然周期限额。
+func (s *APIKeyService) CheckTeamMemberLimits(apiKey *APIKey) error {
+	if err := s.ValidateTeamKeyLifecycle(apiKey); err != nil {
+		return err
+	}
+	return checkTeamMemberLimitSnapshot(apiKey.TeamMembership)
+}
+
+func checkTeamMemberLimitSnapshot(member *TeamMembership) error {
+	if member == nil || member.Role == TeamRoleOwner {
+		return nil
+	}
+	if member.DailyLimitUSD > 0 && member.DailyUsageUSD >= member.DailyLimitUSD {
+		return ErrTeamMemberDailyExceeded
+	}
+	if member.WeeklyLimitUSD > 0 && member.WeeklyUsageUSD >= member.WeeklyLimitUSD {
+		return ErrTeamMemberWeeklyExceeded
+	}
+	if member.MonthlyLimitUSD > 0 && member.MonthlyUsageUSD >= member.MonthlyLimitUSD {
+		return ErrTeamMemberMonthlyExceeded
+	}
+	return nil
 }
 
 // TouchLastUsed 通过防抖更新 api_keys.last_used_at，减少高频写放大。
@@ -1242,6 +1365,24 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 	return availableGroups, nil
 }
 
+// GetAvailableGroupsForScope 让团队 Key 使用 Owner 的分组授权。
+func (s *APIKeyService) GetAvailableGroupsForScope(ctx context.Context, userID int64, scope string) ([]Group, error) {
+	if strings.EqualFold(strings.TrimSpace(scope), "team") {
+		if s.cfg != nil && !s.cfg.Team.Enabled {
+			return nil, ErrTeamFeatureDisabled
+		}
+		if s.teamRepo == nil {
+			return nil, ErrTeamFeatureDisabled
+		}
+		teamCtx, err := s.teamRepo.GetContextByUserID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		return s.GetAvailableGroups(ctx, teamCtx.Owner.UserID)
+	}
+	return s.GetAvailableGroups(ctx, userID)
+}
+
 // canUserBindGroupInternal 内部方法，检查用户是否可以绑定分组。
 func (s *APIKeyService) canUserBindGroupInternal(user *User, group *Group) bool {
 	return user.CanBindGroup(group.ID, group.IsExclusive)
@@ -1266,6 +1407,24 @@ func (s *APIKeyService) GetUserGroupRates(ctx context.Context, userID int64) (ma
 		return nil, fmt.Errorf("get user group rates: %w", err)
 	}
 	return rates, nil
+}
+
+// GetUserGroupRatesForScope 让团队 Key 配置界面读取当前 Billing Owner 的倍率。
+func (s *APIKeyService) GetUserGroupRatesForScope(ctx context.Context, userID int64, scope string) (map[int64]float64, error) {
+	if !strings.EqualFold(strings.TrimSpace(scope), "team") {
+		return s.GetUserGroupRates(ctx, userID)
+	}
+	if s.cfg != nil && !s.cfg.Team.Enabled {
+		return nil, ErrTeamFeatureDisabled
+	}
+	if s.teamRepo == nil {
+		return nil, ErrTeamFeatureDisabled
+	}
+	teamCtx, err := s.teamRepo.GetContextByUserID(ctx, userID)
+	if err != nil || teamCtx == nil || teamCtx.Owner == nil {
+		return nil, ErrTeamMembershipRequired
+	}
+	return s.GetUserGroupRates(ctx, teamCtx.Owner.UserID)
 }
 
 // CheckAPIKeyQuotaAndExpiry checks if the API key is valid for use (not expired, quota not exhausted)

@@ -36,6 +36,10 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/securitysecret"
 	"github.com/TokenFlux/TokenRouter/ent/setting"
 	"github.com/TokenFlux/TokenRouter/ent/subscriptionplan"
+	"github.com/TokenFlux/TokenRouter/ent/team"
+	"github.com/TokenFlux/TokenRouter/ent/teaminvitation"
+	"github.com/TokenFlux/TokenRouter/ent/teammembership"
+	"github.com/TokenFlux/TokenRouter/ent/teamownershiptransfer"
 	"github.com/TokenFlux/TokenRouter/ent/tlsfingerprintprofile"
 	"github.com/TokenFlux/TokenRouter/ent/tlsfingerprintrouter"
 	"github.com/TokenFlux/TokenRouter/ent/usagecleanuptask"
@@ -888,6 +892,114 @@ func (f TraverseTLSFingerprintRouter) Traverse(ctx context.Context, q ent.Query)
 	return fmt.Errorf("unexpected query type %T. expect *ent.TLSFingerprintRouterQuery", q)
 }
 
+// The TeamFunc type is an adapter to allow the use of ordinary function as a Querier.
+type TeamFunc func(context.Context, *ent.TeamQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f TeamFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.TeamQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.TeamQuery", q)
+}
+
+// The TraverseTeam type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseTeam func(context.Context, *ent.TeamQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseTeam) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseTeam) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.TeamQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.TeamQuery", q)
+}
+
+// The TeamInvitationFunc type is an adapter to allow the use of ordinary function as a Querier.
+type TeamInvitationFunc func(context.Context, *ent.TeamInvitationQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f TeamInvitationFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.TeamInvitationQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.TeamInvitationQuery", q)
+}
+
+// The TraverseTeamInvitation type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseTeamInvitation func(context.Context, *ent.TeamInvitationQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseTeamInvitation) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseTeamInvitation) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.TeamInvitationQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.TeamInvitationQuery", q)
+}
+
+// The TeamMembershipFunc type is an adapter to allow the use of ordinary function as a Querier.
+type TeamMembershipFunc func(context.Context, *ent.TeamMembershipQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f TeamMembershipFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.TeamMembershipQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.TeamMembershipQuery", q)
+}
+
+// The TraverseTeamMembership type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseTeamMembership func(context.Context, *ent.TeamMembershipQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseTeamMembership) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseTeamMembership) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.TeamMembershipQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.TeamMembershipQuery", q)
+}
+
+// The TeamOwnershipTransferFunc type is an adapter to allow the use of ordinary function as a Querier.
+type TeamOwnershipTransferFunc func(context.Context, *ent.TeamOwnershipTransferQuery) (ent.Value, error)
+
+// Query calls f(ctx, q).
+func (f TeamOwnershipTransferFunc) Query(ctx context.Context, q ent.Query) (ent.Value, error) {
+	if q, ok := q.(*ent.TeamOwnershipTransferQuery); ok {
+		return f(ctx, q)
+	}
+	return nil, fmt.Errorf("unexpected query type %T. expect *ent.TeamOwnershipTransferQuery", q)
+}
+
+// The TraverseTeamOwnershipTransfer type is an adapter to allow the use of ordinary function as Traverser.
+type TraverseTeamOwnershipTransfer func(context.Context, *ent.TeamOwnershipTransferQuery) error
+
+// Intercept is a dummy implementation of Intercept that returns the next Querier in the pipeline.
+func (f TraverseTeamOwnershipTransfer) Intercept(next ent.Querier) ent.Querier {
+	return next
+}
+
+// Traverse calls f(ctx, q).
+func (f TraverseTeamOwnershipTransfer) Traverse(ctx context.Context, q ent.Query) error {
+	if q, ok := q.(*ent.TeamOwnershipTransferQuery); ok {
+		return f(ctx, q)
+	}
+	return fmt.Errorf("unexpected query type %T. expect *ent.TeamOwnershipTransferQuery", q)
+}
+
 // The UsageCleanupTaskFunc type is an adapter to allow the use of ordinary function as a Querier.
 type UsageCleanupTaskFunc func(context.Context, *ent.UsageCleanupTaskQuery) (ent.Value, error)
 
@@ -1192,6 +1304,14 @@ func NewQuery(q ent.Query) (Query, error) {
 		return &query[*ent.TLSFingerprintProfileQuery, predicate.TLSFingerprintProfile, tlsfingerprintprofile.OrderOption]{typ: ent.TypeTLSFingerprintProfile, tq: q}, nil
 	case *ent.TLSFingerprintRouterQuery:
 		return &query[*ent.TLSFingerprintRouterQuery, predicate.TLSFingerprintRouter, tlsfingerprintrouter.OrderOption]{typ: ent.TypeTLSFingerprintRouter, tq: q}, nil
+	case *ent.TeamQuery:
+		return &query[*ent.TeamQuery, predicate.Team, team.OrderOption]{typ: ent.TypeTeam, tq: q}, nil
+	case *ent.TeamInvitationQuery:
+		return &query[*ent.TeamInvitationQuery, predicate.TeamInvitation, teaminvitation.OrderOption]{typ: ent.TypeTeamInvitation, tq: q}, nil
+	case *ent.TeamMembershipQuery:
+		return &query[*ent.TeamMembershipQuery, predicate.TeamMembership, teammembership.OrderOption]{typ: ent.TypeTeamMembership, tq: q}, nil
+	case *ent.TeamOwnershipTransferQuery:
+		return &query[*ent.TeamOwnershipTransferQuery, predicate.TeamOwnershipTransfer, teamownershiptransfer.OrderOption]{typ: ent.TypeTeamOwnershipTransfer, tq: q}, nil
 	case *ent.UsageCleanupTaskQuery:
 		return &query[*ent.UsageCleanupTaskQuery, predicate.UsageCleanupTask, usagecleanuptask.OrderOption]{typ: ent.TypeUsageCleanupTask, tq: q}, nil
 	case *ent.UsageLogQuery:

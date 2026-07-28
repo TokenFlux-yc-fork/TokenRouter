@@ -39,6 +39,10 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/securitysecret"
 	"github.com/TokenFlux/TokenRouter/ent/setting"
 	"github.com/TokenFlux/TokenRouter/ent/subscriptionplan"
+	"github.com/TokenFlux/TokenRouter/ent/team"
+	"github.com/TokenFlux/TokenRouter/ent/teaminvitation"
+	"github.com/TokenFlux/TokenRouter/ent/teammembership"
+	"github.com/TokenFlux/TokenRouter/ent/teamownershiptransfer"
 	"github.com/TokenFlux/TokenRouter/ent/tlsfingerprintprofile"
 	"github.com/TokenFlux/TokenRouter/ent/tlsfingerprintrouter"
 	"github.com/TokenFlux/TokenRouter/ent/usagecleanuptask"
@@ -139,6 +143,10 @@ func checkColumn(t, c string) error {
 			subscriptionplan.Table:         subscriptionplan.ValidColumn,
 			tlsfingerprintprofile.Table:    tlsfingerprintprofile.ValidColumn,
 			tlsfingerprintrouter.Table:     tlsfingerprintrouter.ValidColumn,
+			team.Table:                     team.ValidColumn,
+			teaminvitation.Table:           teaminvitation.ValidColumn,
+			teammembership.Table:           teammembership.ValidColumn,
+			teamownershiptransfer.Table:    teamownershiptransfer.ValidColumn,
 			usagecleanuptask.Table:         usagecleanuptask.ValidColumn,
 			usagelog.Table:                 usagelog.ValidColumn,
 			user.Table:                     user.ValidColumn,

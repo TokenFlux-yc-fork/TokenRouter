@@ -235,6 +235,9 @@ const fallbackPlaceholders = [
   "{{verification_code}}",
   "{{expires_in_minutes}}",
   "{{reset_url}}",
+  "{{team_name}}",
+  "{{invitation_url}}",
+  "{{expires_at}}",
   "{{subscription_group}}",
   "{{subscription_days}}",
   "{{expiry_time}}",
@@ -340,6 +343,11 @@ const eventDisplayMeta: Record<string, EventDisplayMeta> = {
     timing: "用户添加并验证额外通知邮箱时发送。",
     categoryLabel: "认证安全",
   },
+  "team.invitation": {
+    label: "团队邀请",
+    timing: "团队所有者邀请指定邮箱加入团队，或重新发送团队邀请时发送。",
+    categoryLabel: "团队",
+  },
   "subscription.purchase_success": {
     label: "订阅开通成功",
     timing: "订阅订单完成支付并成功开通或续期后发送。",
@@ -402,6 +410,11 @@ const eventDisplayMetaEn: Record<string, EventDisplayMeta> = {
     label: "Notification Email Verification",
     timing: "Sent when a user adds and verifies an extra notification email address.",
     categoryLabel: "Auth",
+  },
+  "team.invitation": {
+    label: "Team Invitation",
+    timing: "Sent when a team owner invites an email address or reissues an existing team invitation.",
+    categoryLabel: "Team",
   },
   "subscription.purchase_success": {
     label: "Subscription Activated",
@@ -487,6 +500,7 @@ function formatCategory(category: string): string {
   if (!normalized) return localText("通知", "Notification");
   const labels: Record<string, { zh: string; en: string }> = {
     auth: { zh: "认证安全", en: "Auth" },
+    team: { zh: "团队", en: "Team" },
     subscription: { zh: "订阅", en: "Subscription" },
     billing: { zh: "计费", en: "Billing" },
     admin: { zh: "管理告警", en: "Admin" },

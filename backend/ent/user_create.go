@@ -20,6 +20,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/promocodeusage"
 	"github.com/TokenFlux/TokenRouter/ent/redeemcode"
 	"github.com/TokenFlux/TokenRouter/ent/redeemcodeusage"
+	"github.com/TokenFlux/TokenRouter/ent/teammembership"
 	"github.com/TokenFlux/TokenRouter/ent/usagelog"
 	"github.com/TokenFlux/TokenRouter/ent/user"
 	"github.com/TokenFlux/TokenRouter/ent/userattributevalue"
@@ -592,6 +593,21 @@ func (_c *UserCreate) AddPlatformQuotas(v ...*UserPlatformQuota) *UserCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddPlatformQuotaIDs(ids...)
+}
+
+// AddTeamMembershipIDs adds the "team_memberships" edge to the TeamMembership entity by IDs.
+func (_c *UserCreate) AddTeamMembershipIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddTeamMembershipIDs(ids...)
+	return _c
+}
+
+// AddTeamMemberships adds the "team_memberships" edges to the TeamMembership entity.
+func (_c *UserCreate) AddTeamMemberships(v ...*TeamMembership) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddTeamMembershipIDs(ids...)
 }
 
 // Mutation returns the UserMutation object of the builder.
@@ -1170,6 +1186,22 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userplatformquota.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.TeamMembershipsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TeamMembershipsTable,
+			Columns: []string{user.TeamMembershipsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(teammembership.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

@@ -40,6 +40,7 @@ type AdminHandlers struct {
 	DataSharing           *admin.DataSharingHandler
 	CodexInviteReset      *admin.CodexInviteResetHandler
 	AuditLog              *admin.AuditLogHandler
+	Team                  *admin.TeamHandler
 }
 
 // Handlers contains all HTTP handlers
@@ -63,6 +64,7 @@ type Handlers struct {
 	DataSharing      *DataSharingHandler
 	AsyncImage       *AsyncImageHandler
 	BatchImage       *BatchImageHandler
+	Team             *TeamHandler
 }
 
 // BuildInfo contains build-time information

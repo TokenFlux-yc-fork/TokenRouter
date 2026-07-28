@@ -72,6 +72,14 @@ type Tx struct {
 	TLSFingerprintProfile *TLSFingerprintProfileClient
 	// TLSFingerprintRouter is the client for interacting with the TLSFingerprintRouter builders.
 	TLSFingerprintRouter *TLSFingerprintRouterClient
+	// Team is the client for interacting with the Team builders.
+	Team *TeamClient
+	// TeamInvitation is the client for interacting with the TeamInvitation builders.
+	TeamInvitation *TeamInvitationClient
+	// TeamMembership is the client for interacting with the TeamMembership builders.
+	TeamMembership *TeamMembershipClient
+	// TeamOwnershipTransfer is the client for interacting with the TeamOwnershipTransfer builders.
+	TeamOwnershipTransfer *TeamOwnershipTransferClient
 	// UsageCleanupTask is the client for interacting with the UsageCleanupTask builders.
 	UsageCleanupTask *UsageCleanupTaskClient
 	// UsageLog is the client for interacting with the UsageLog builders.
@@ -250,6 +258,10 @@ func (tx *Tx) init() {
 	tx.SubscriptionPlan = NewSubscriptionPlanClient(tx.config)
 	tx.TLSFingerprintProfile = NewTLSFingerprintProfileClient(tx.config)
 	tx.TLSFingerprintRouter = NewTLSFingerprintRouterClient(tx.config)
+	tx.Team = NewTeamClient(tx.config)
+	tx.TeamInvitation = NewTeamInvitationClient(tx.config)
+	tx.TeamMembership = NewTeamMembershipClient(tx.config)
+	tx.TeamOwnershipTransfer = NewTeamOwnershipTransferClient(tx.config)
 	tx.UsageCleanupTask = NewUsageCleanupTaskClient(tx.config)
 	tx.UsageLog = NewUsageLogClient(tx.config)
 	tx.User = NewUserClient(tx.config)

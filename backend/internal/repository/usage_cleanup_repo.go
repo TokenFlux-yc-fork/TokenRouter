@@ -354,6 +354,11 @@ func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any)
 		args = append(args, *filters.GroupID)
 		idx++
 	}
+	if filters.TeamID != nil {
+		conditions = append(conditions, fmt.Sprintf("team_id = $%d", idx))
+		args = append(args, *filters.TeamID)
+		idx++
+	}
 	if filters.Model != nil {
 		model := strings.TrimSpace(*filters.Model)
 		if model != "" {
