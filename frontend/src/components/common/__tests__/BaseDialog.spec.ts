@@ -12,7 +12,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('BaseDialog 移动端宽度约束', () => {
+describe('BaseDialog 移动端视口约束', () => {
   it.each([
     ['narrow', 'sm:max-w-md'],
     ['normal', 'sm:max-w-lg'],
@@ -49,10 +49,16 @@ describe('BaseDialog 移动端宽度约束', () => {
     expect(panel).not.toBeNull()
     expect(body).not.toBeNull()
     expect(footer).not.toBeNull()
-    expect(overlay!.classList).toContain('overflow-x-hidden')
+    expect(overlay!.classList).toContain('h-[100dvh]')
+    expect(overlay!.classList).toContain('w-[100dvw]')
+    expect(overlay!.classList).toContain('overflow-hidden')
+    expect(panel!.classList).toContain('min-h-0')
     expect(panel!.classList).toContain('min-w-0')
+    expect(panel!.classList).toContain('max-h-[95dvh]')
+    expect(panel!.classList).toContain('sm:max-h-[90dvh]')
     expect(panel!.classList).toContain('max-w-[calc(100vw-1rem)]')
     expect(panel!.classList).toContain(desktopWidthClass)
+    expect(body!.classList).toContain('min-h-0')
     expect(body!.classList).toContain('min-w-0')
     expect(body!.classList).toContain('max-w-full')
     expect(footer!.classList).toContain('min-w-0')

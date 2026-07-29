@@ -235,6 +235,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse:      "",
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:         "",
 
+		// 页面功能开关默认开启，保持升级前已有功能的可见性。
+		SettingKeyTeamEnabled:        "true",
+		SettingKeyDataSharingEnabled: "true",
+
 		// 风控中心默认关闭，避免升级后未配置审计 Key 时影响现有请求。
 		SettingKeyRiskControlEnabled:          "false",
 		SettingKeyCyberSessionBlockEnabled:    "false",
@@ -296,6 +300,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 			forwardedClientIPHeaders = parsed
 		}
 	}
+	// 页面开关缺少旧版本尚未写入的键时按开启处理，避免升级后入口消失。
 	result := &SystemSettings{
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
 		EmailVerifyEnabled:               emailVerifyEnabled,
@@ -348,6 +353,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		BalanceUnitSymbol:                balanceUnitSymbol,
 		BalanceIconSVG:                   strings.TrimSpace(settings[SettingKeyBalanceIconSVG]),
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
+		TeamEnabled:                      settings[SettingKeyTeamEnabled] != "false",
+		DataSharingEnabled:               settings[SettingKeyDataSharingEnabled] != "false",
 		RiskControlEnabled:               settings[SettingKeyRiskControlEnabled] == "true",
 		CyberSessionBlockEnabled:         settings[SettingKeyCyberSessionBlockEnabled] == "true",
 		DefaultUserAPIKeyLimit:           DefaultUserAPIKeyLimit,

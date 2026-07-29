@@ -322,6 +322,9 @@ type UpdateSettingsRequest struct {
 
 	// 风控中心功能开关
 	RiskControlEnabled *bool `json:"risk_control_enabled"`
+	// 团队和数据共享页面功能开关
+	TeamEnabled        *bool `json:"team_enabled"`
+	DataSharingEnabled *bool `json:"data_sharing_enabled"`
 
 	// cyber 会话屏蔽开关与 TTL
 	CyberSessionBlockEnabled    *bool `json:"cyber_session_block_enabled"`
@@ -1513,6 +1516,18 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		AffiliateRebateDurationDays:            req.AffiliateRebateDurationDays,
 		AffiliateRebatePerInviteeCap:           req.AffiliateRebatePerInviteeCap,
 		AdminRechargeRebateEnabled:             adminRechargeRebateEnabled,
+		TeamEnabled: func() bool {
+			if req.TeamEnabled != nil {
+				return *req.TeamEnabled
+			}
+			return previousSettings.TeamEnabled
+		}(),
+		DataSharingEnabled: func() bool {
+			if req.DataSharingEnabled != nil {
+				return *req.DataSharingEnabled
+			}
+			return previousSettings.DataSharingEnabled
+		}(),
 		RiskControlEnabled: func() bool {
 			if req.RiskControlEnabled != nil {
 				return *req.RiskControlEnabled
@@ -2039,6 +2054,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		FooterText:                                             updatedSettings.FooterText,
 		DefaultConcurrency:                                     updatedSettings.DefaultConcurrency,
 		DefaultBalance:                                         updatedSettings.DefaultBalance,
+		TeamEnabled:                                            updatedSettings.TeamEnabled,
+		DataSharingEnabled:                                     updatedSettings.DataSharingEnabled,
 		RiskControlEnabled:                                     updatedSettings.RiskControlEnabled,
 		CyberSessionBlockEnabled:                               updatedSettings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:                            updatedSettings.CyberSessionBlockTTLSeconds,

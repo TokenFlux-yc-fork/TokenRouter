@@ -279,6 +279,8 @@ func GrokMediaVideoRequestSessionHash(requestID string, userID, apiKeyID int64) 
 	return "grok-video:" + DeriveSessionHashFromSeed(ownerSeed)
 }
 
+const grokMediaVideoRequestOwnerSource = "grok_video_request"
+
 func (s *OpenAIGatewayService) BindGrokMediaVideoRequestAccount(
 	ctx context.Context,
 	groupID *int64,
@@ -297,7 +299,43 @@ func (s *OpenAIGatewayService) BindGrokMediaVideoRequestAccount(
 	if s.cfg != nil && s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds > 0 {
 		ttl = time.Duration(s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds) * time.Second
 	}
-	return s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), cacheKey, accountID, ttl)
+	if err := s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), cacheKey, accountID, ttl); err != nil {
+		return err
+	}
+	if groupID == nil || *groupID <= 0 {
+		return nil
+	}
+	written, err := s.cache.SetSessionOwnerGroupID(ctx, userID, grokMediaVideoRequestOwnerSource, sessionHash, *groupID, ttl)
+	if err != nil {
+		return err
+	}
+	if !written {
+		ownerGroupID, getErr := s.cache.GetSessionOwnerGroupID(ctx, userID, grokMediaVideoRequestOwnerSource, sessionHash)
+		if getErr != nil {
+			return getErr
+		}
+		if ownerGroupID != *groupID {
+			return fmt.Errorf("grok video request binding belongs to another group")
+		}
+		return s.cache.RefreshSessionOwnerTTL(ctx, userID, grokMediaVideoRequestOwnerSource, sessionHash, ttl)
+	}
+	return nil
+}
+
+// ResolveGrokMediaVideoRequestGroup 返回创建视频任务时保存的分组归属。
+func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestGroup(
+	ctx context.Context,
+	requestID string,
+	userID, apiKeyID int64,
+) (int64, error) {
+	if s == nil || s.cache == nil {
+		return 0, fmt.Errorf("grok video request binding cache is unavailable")
+	}
+	sessionHash := GrokMediaVideoRequestSessionHash(requestID, userID, apiKeyID)
+	if sessionHash == "" {
+		return 0, fmt.Errorf("grok video request binding is invalid")
+	}
+	return s.cache.GetSessionOwnerGroupID(ctx, userID, grokMediaVideoRequestOwnerSource, sessionHash)
 }
 
 func (s *OpenAIGatewayService) ResolveGrokMediaVideoRequestAccount(

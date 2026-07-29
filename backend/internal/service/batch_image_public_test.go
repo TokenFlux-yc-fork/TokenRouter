@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -64,6 +65,49 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.InDelta(t, 0.125, job.BillableUnitPrice, 1e-12)
 		require.InDelta(t, 0.15, job.HoldUnitPrice, 1e-12)
 		require.Equal(t, "batch-session-123", batchImageDerefString(job.SessionID))
+	})
+
+	t.Run("persists composite route identity and separates idempotency", func(t *testing.T) {
+		svc, repo, _, _, _ := newTestBatchImagePublicService(true)
+		groupID := int64(7)
+		otherGroupID := int64(8)
+		svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{
+			groupID: {
+				ID:                        groupID,
+				Platform:                  PlatformGemini,
+				RateMultiplier:            1,
+				AllowBatchImageGeneration: true,
+			},
+			otherGroupID: {
+				ID:                        otherGroupID,
+				Platform:                  PlatformGemini,
+				RateMultiplier:            1,
+				AllowBatchImageGeneration: true,
+			},
+		}}
+		owner := BatchImageOwner{UserID: 11, APIKeyID: 22, GroupID: &groupID}
+		compositeCtx := context.WithValue(ctx, ctxkey.ClientModel, "Gemini/gemini-2.5-flash-image")
+
+		got, err := svc.Submit(compositeCtx, owner, validBatchImageSubmitRequest(), "composite-key")
+		require.NoError(t, err)
+		require.Equal(t, "Gemini/gemini-2.5-flash-image", got.Model)
+		job := repo.jobs[got.ID]
+		require.Equal(t, "gemini-2.5-flash-image", job.Model)
+		require.Equal(t, "Gemini/gemini-2.5-flash-image", job.RequestedModel)
+		require.NotNil(t, job.GroupID)
+		require.Equal(t, groupID, *job.GroupID)
+
+		caseInsensitiveCtx := context.WithValue(ctx, ctxkey.ClientModel, "gEmInI/gemini-2.5-flash-image")
+		retried, err := svc.Submit(caseInsensitiveCtx, owner, validBatchImageSubmitRequest(), "composite-key")
+		require.NoError(t, err)
+		require.Equal(t, got.ID, retried.ID)
+
+		otherOwner := owner
+		otherOwner.GroupID = &otherGroupID
+		otherGroupCtx := context.WithValue(ctx, ctxkey.ClientModel, "Backup/gemini-2.5-flash-image")
+		second, err := svc.Submit(otherGroupCtx, otherOwner, validBatchImageSubmitRequest(), "composite-key")
+		require.Nil(t, second)
+		require.ErrorIs(t, err, ErrBatchImageIdempotencyConflict)
 	})
 
 	t.Run("combines user group image rate account rate discount and hold margin", func(t *testing.T) {

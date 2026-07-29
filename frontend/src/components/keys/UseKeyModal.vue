@@ -6,8 +6,32 @@
     @close="emit('close')"
   >
     <div class="space-y-4">
+      <!-- 复合 Key 直接展示所有前缀及可复制调用示例。 -->
+      <div v-if="compositeExamples.length" class="space-y-3">
+        <p class="text-sm text-gray-600 dark:text-gray-400">
+          {{ t('keys.useKeyModal.compositeDescription') }}
+        </p>
+        <div
+          v-for="(item, index) in compositeExamples"
+          :key="`${item.groupId}-${item.prefix}`"
+          class="flex min-w-0 items-center justify-between gap-3 rounded-md border border-gray-200 px-3 py-2.5 dark:border-dark-600"
+        >
+          <div class="min-w-0">
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="shrink-0 rounded bg-primary-50 px-1.5 py-0.5 font-mono text-xs font-semibold text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ item.prefix }}</span>
+              <span class="truncate text-sm text-gray-600 dark:text-dark-300">{{ item.groupName }}</span>
+            </div>
+            <code class="mt-1 block truncate text-xs text-gray-500 dark:text-dark-400">{{ item.example }}</code>
+          </div>
+          <button type="button" class="btn btn-secondary shrink-0 px-2.5" @click="copyContent(item.example, 1000 + index)">
+            <Icon :name="copiedIndex === 1000 + index ? 'check' : 'clipboard'" size="sm" />
+            <span class="ml-1.5">{{ copiedIndex === 1000 + index ? t('keys.useKeyModal.copied') : t('keys.useKeyModal.copy') }}</span>
+          </button>
+        </div>
+      </div>
+
       <!-- No Group Assigned Warning -->
-      <div v-if="!platform" class="flex items-start gap-3 p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+      <div v-else-if="!platform" class="flex items-start gap-3 p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
         <svg class="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
         </svg>
@@ -110,6 +134,57 @@
           </div>
         </div>
 
+        <!-- Codex WebSocket 连接模式 -->
+        <div
+          v-if="showCodexWebSocketMode"
+          class="rounded-lg border border-gray-200 p-3 dark:border-dark-700"
+        >
+          <div class="mb-2">
+            <p class="text-sm font-medium text-gray-900 dark:text-white">
+              {{ t('keys.useKeyModal.openai.websocketTitle') }}
+            </p>
+            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('keys.useKeyModal.openai.websocketDescription') }}
+            </p>
+          </div>
+          <div
+            class="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-dark-700"
+            role="radiogroup"
+            :aria-label="t('keys.useKeyModal.openai.websocketTitle')"
+          >
+            <button
+              type="button"
+              role="radio"
+              data-testid="codex-websocket-disabled"
+              :aria-checked="!codexWebSocketEnabled"
+              :class="[
+                'rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                !codexWebSocketEnabled
+                  ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+              ]"
+              @click="codexWebSocketEnabled = false"
+            >
+              {{ t('keys.useKeyModal.openai.websocketDisabled') }}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              data-testid="codex-websocket-enabled"
+              :aria-checked="codexWebSocketEnabled"
+              :class="[
+                'rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                codexWebSocketEnabled
+                  ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                  : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+              ]"
+              @click="codexWebSocketEnabled = true"
+            >
+              {{ t('keys.useKeyModal.openai.websocketEnabled') }}
+            </button>
+          </div>
+        </div>
+
         <!-- OS/Shell Tabs -->
         <div v-if="showShellTabs" class="overflow-x-auto border-b border-gray-200 dark:border-dark-700">
           <nav class="-mb-px flex min-w-max gap-4" aria-label="Tabs">
@@ -202,7 +277,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { OPENAI_CODEX_DEFAULT_MODEL } from '@/constants/openai'
-import type { GroupPlatform } from '@/types'
+import type { ApiKeyCompositeGroup, GroupPlatform } from '@/types'
 
 interface Props {
   show: boolean
@@ -210,6 +285,7 @@ interface Props {
   baseUrl: string
   platform: GroupPlatform | null
   allowMessagesDispatch?: boolean
+  compositeGroups?: ApiKeyCompositeGroup[]
 }
 
 interface Emits {
@@ -238,8 +314,29 @@ const { copyToClipboard: clipboardCopy } = useClipboard()
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
+
+// compositeExamples 为每个平台提供一个可直接复制后替换模型 ID 的示例。
+const compositeExamples = computed(() => (props.compositeGroups || []).map((binding) => {
+  const platform = binding.group?.platform
+  const model = platform === 'openai'
+    ? 'gpt-5'
+    : platform === 'gemini'
+      ? 'gemini-2.5-pro'
+      : platform === 'grok'
+        ? 'grok-4'
+        : platform === 'qoder'
+          ? 'auto'
+          : 'claude-sonnet-4'
+  return {
+    groupId: binding.group_id,
+    groupName: binding.group?.name || `#${binding.group_id}`,
+    prefix: binding.prefix,
+    example: `${binding.prefix}/${model}`
+  }
+}))
 type CodexAuthMode = 'legacy' | 'api-key'
 const codexAuthMode = ref<CodexAuthMode>('legacy')
+const codexWebSocketEnabled = ref(false)
 
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
@@ -261,12 +358,14 @@ watch(() => props.platform, () => {
   activeTab.value = 'unix'
   activeClientTab.value = defaultClientTab.value
   codexAuthMode.value = 'legacy'
+  codexWebSocketEnabled.value = false
 }, { immediate: true })
 
-// 每次重新打开弹窗都回到兼容模式，避免沿用上一次密钥的临时选择。
+// 每次重新打开弹窗都恢复默认配置，避免沿用上一次密钥的临时选择。
 watch(() => props.show, (show) => {
   if (show) {
     codexAuthMode.value = 'legacy'
+    codexWebSocketEnabled.value = false
   }
 })
 
@@ -344,7 +443,6 @@ const clientTabs = computed((): TabConfig[] => {
     case 'openai': {
       const tabs: TabConfig[] = [
         { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
-        { id: 'codex-ws', label: t('keys.useKeyModal.cliTabs.codexCliWs'), icon: TerminalIcon },
       ]
       if (props.allowMessagesDispatch) {
         tabs.push({ id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon })
@@ -504,12 +602,16 @@ const showShellTabs = computed(() => activeClientTab.value !== 'opencode')
 
 const showCodexAuthMode = computed(() =>
   props.platform === 'openai' &&
-  (activeClientTab.value === 'codex' || activeClientTab.value === 'codex-ws')
+  activeClientTab.value === 'codex'
+)
+
+const showCodexWebSocketMode = computed(() =>
+  props.platform === 'openai' && activeClientTab.value === 'codex'
 )
 
 const currentTabs = computed(() => {
   if (!showShellTabs.value) return []
-  if (activeClientTab.value === 'codex' || activeClientTab.value === 'codex-ws' || activeClientTab.value === 'grok') {
+  if (activeClientTab.value === 'codex' || activeClientTab.value === 'grok') {
     return openaiTabs
   }
   return shellTabs
@@ -636,9 +738,6 @@ const currentFiles = computed((): FileConfig[] => {
     case 'openai':
       if (activeClientTab.value === 'claude') {
         return generateAnthropicFiles(baseUrl, apiKey)
-      }
-      if (activeClientTab.value === 'codex-ws') {
-        return generateOpenAIWsFiles(baseUrl, apiKey)
       }
       return generateOpenAIFiles(baseUrl, apiKey)
     case 'gemini':
@@ -821,6 +920,12 @@ ${keyword('$env:')}${variable('GEMINI_MODEL')}${operator('=')}${string(`"${model
 function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
+  const websocketProviderConfig = codexWebSocketEnabled.value
+    ? '\nsupports_websockets = true'
+    : ''
+  const websocketFeatureConfig = codexWebSocketEnabled.value
+    ? 'responses_websockets_v2 = true\n'
+    : ''
 
   // config.toml content
   const configContent = `model_provider = "OpenAI"
@@ -834,11 +939,11 @@ windows_wsl_setup_acknowledged = true
 [model_providers.OpenAI]
 name = "OpenAI"
 base_url = "${baseUrl}"
-wire_api = "responses"
+wire_api = "responses"${websocketProviderConfig}
 ${generateCodexProviderAuthConfig()}
 
 [features]
-goals = true`
+${websocketFeatureConfig}goals = true`
 
   // auth.json content
   const authContent = `{
@@ -925,48 +1030,6 @@ responses_websockets_v2 = true`
     {
       path: isWindows ? 'PowerShell' : 'Terminal',
       content: environmentContent
-    }
-  ]
-}
-
-function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  const isWindows = activeTab.value === 'windows'
-  const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-
-  // config.toml content with WebSocket v2
-  const configContent = `model_provider = "OpenAI"
-model = "${OPENAI_CODEX_DEFAULT_MODEL}"
-review_model = "${OPENAI_CODEX_DEFAULT_MODEL}"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.OpenAI]
-name = "OpenAI"
-base_url = "${baseUrl}"
-wire_api = "responses"
-supports_websockets = true
-${generateCodexProviderAuthConfig()}
-
-[features]
-responses_websockets_v2 = true
-goals = true`
-
-  // auth.json content
-  const authContent = `{
-  "OPENAI_API_KEY": "${apiKey}"
-}`
-
-  return [
-    {
-      path: `${configDir}/config.toml`,
-      content: configContent,
-      hint: t('keys.useKeyModal.openai.configTomlHint')
-    },
-    {
-      path: `${configDir}/auth.json`,
-      content: authContent
     }
   ]
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	pkghttputil "github.com/TokenFlux/TokenRouter/internal/pkg/httputil"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ip"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
@@ -113,6 +114,24 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	reqLog = reqLog.With(zap.String("model", requestModel))
 	setOpsRequestContext(c, requestModel, false)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
+	boundLookupAccountID := int64(0)
+	compositeIdentityLookup := endpoint.IsVideoLookupRequest() && apiKey.IsComposite && apiKey.GroupID == nil
+	if compositeIdentityLookup {
+		apiKey, boundLookupAccountID, err = h.resolveCompositeGrokVideoAPIKey(
+			c.Request.Context(), apiKey, requestID, subject.UserID,
+		)
+		if err != nil || apiKey == nil || boundLookupAccountID <= 0 {
+			reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
+			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+			return
+		}
+		// 查询请求没有模型，依据创建任务时保存的分组缓存恢复精确路由上下文。
+		c.Set(string(middleware2.ContextKeyAPIKey), apiKey)
+		middleware2.SetOpsFallbackAPIKey(c, apiKey)
+		requestCtx := context.WithValue(c.Request.Context(), ctxkey.Group, apiKey.Group)
+		c.Request = c.Request.WithContext(requestCtx)
+		reqLog = reqLog.With(zap.Any("resolved_group_id", apiKey.GroupID))
+	}
 
 	if endpoint.IsGenerationRequest() {
 		if !service.GroupAllowsImageGeneration(apiKey.Group) {
@@ -150,14 +169,16 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		defer userReleaseFunc()
 	}
 
-	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
-		reqLog.Info("grok_media.billing_eligibility_check_failed", zap.Error(err))
-		status, code, message, retryAfter := billingErrorDetails(err)
-		if retryAfter > 0 {
-			c.Header("Retry-After", strconv.Itoa(retryAfter))
+	if !compositeIdentityLookup {
+		if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
+			reqLog.Info("grok_media.billing_eligibility_check_failed", zap.Error(err))
+			status, code, message, retryAfter := billingErrorDetails(err)
+			if retryAfter > 0 {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+			}
+			h.errorResponse(c, status, code, message)
+			return
 		}
-		h.errorResponse(c, status, code, message)
-		return
 	}
 
 	sessionSeed := body
@@ -165,16 +186,17 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		sessionSeed = []byte(requestID)
 	}
 	sessionHash := h.gatewayService.GenerateExplicitSessionHash(c, sessionSeed)
-	boundLookupAccountID := int64(0)
 	if endpoint.IsVideoLookupRequest() {
 		sessionHash = service.GrokMediaVideoRequestSessionHash(requestID, subject.UserID, apiKey.ID)
-		boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
-			c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
-		)
-		if err != nil || boundLookupAccountID <= 0 {
-			reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
-			h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
-			return
+		if boundLookupAccountID <= 0 {
+			boundLookupAccountID, err = h.gatewayService.ResolveGrokMediaVideoRequestAccount(
+				c.Request.Context(), apiKey.GroupID, requestID, subject.UserID, apiKey.ID,
+			)
+			if err != nil || boundLookupAccountID <= 0 {
+				reqLog.Info("grok_media.video_lookup_owner_binding_missing", zap.Error(err))
+				h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
+				return
+			}
 		}
 	}
 	requestCtx := c.Request.Context()
@@ -414,6 +436,75 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		)
 		return
 	}
+}
+
+// resolveCompositeGrokVideoAPIKey 从任务绑定缓存中找回创建视频时使用的复合映射。
+func (h *OpenAIGatewayHandler) resolveCompositeGrokVideoAPIKey(
+	ctx context.Context,
+	apiKey *service.APIKey,
+	requestID string,
+	userID int64,
+) (*service.APIKey, int64, error) {
+	if h == nil || h.gatewayService == nil || apiKey == nil {
+		return nil, 0, errors.New("grok video request binding is unavailable")
+	}
+	var lookupErr error
+	ownerGroupID, err := h.gatewayService.ResolveGrokMediaVideoRequestGroup(ctx, requestID, userID, apiKey.ID)
+	if err == nil && ownerGroupID > 0 {
+		group := compositeGrokVideoGroupSnapshot(apiKey, ownerGroupID)
+		groupID := ownerGroupID
+		accountID, accountErr := h.gatewayService.ResolveGrokMediaVideoRequestAccount(
+			ctx, &groupID, requestID, userID, apiKey.ID,
+		)
+		if accountErr == nil && accountID > 0 {
+			selected := *apiKey
+			selected.GroupID = &groupID
+			selected.Group = group
+			return &selected, accountID, nil
+		}
+		lookupErr = accountErr
+	} else if err != nil {
+		lookupErr = err
+	}
+	// 兼容新增分组归属记录前创建的任务，最多扫描当前 Key 的 20 个映射。
+	for i := range apiKey.CompositeGroups {
+		binding := &apiKey.CompositeGroups[i]
+		if binding.Group == nil || binding.Group.Platform != service.PlatformGrok {
+			continue
+		}
+		groupID := binding.GroupID
+		accountID, err := h.gatewayService.ResolveGrokMediaVideoRequestAccount(
+			ctx, &groupID, requestID, userID, apiKey.ID,
+		)
+		if err != nil {
+			lookupErr = err
+			continue
+		}
+		if accountID <= 0 {
+			continue
+		}
+		selected := *apiKey
+		selected.GroupID = &groupID
+		selected.Group = binding.Group
+		return &selected, accountID, nil
+	}
+	if lookupErr == nil {
+		lookupErr = errors.New("grok video request binding not found")
+	}
+	return nil, 0, lookupErr
+}
+
+// compositeGrokVideoGroupSnapshot 优先复用鉴权快照，映射已移除时构造仅供旧任务查询的最小分组视图。
+func compositeGrokVideoGroupSnapshot(apiKey *service.APIKey, groupID int64) *service.Group {
+	if apiKey != nil {
+		for i := range apiKey.CompositeGroups {
+			binding := &apiKey.CompositeGroups[i]
+			if binding.GroupID == groupID && binding.Group != nil && binding.Group.Platform == service.PlatformGrok {
+				return binding.Group
+			}
+		}
+	}
+	return &service.Group{ID: groupID, Platform: service.PlatformGrok, Status: service.StatusActive, Hydrated: true}
 }
 
 // ensureGrokMediaAccountEligibility 对尚无观测的 OAuth 账号执行一次请求路径探测。

@@ -9,11 +9,13 @@ type APIKeyAuthSnapshot struct {
 	UserID   int64  `json:"user_id"`
 	TeamID   *int64 `json:"team_id,omitempty"`
 	// TeamOwnerDisabled 表示团队 Owner 的独立锁定状态。
-	TeamOwnerDisabled bool      `json:"team_owner_disabled"`
-	CreatedAt         time.Time `json:"created_at"`
-	GroupID           *int64    `json:"group_id,omitempty"`
-	Name              string    `json:"name"`
-	Status            string    `json:"status"`
+	TeamOwnerDisabled bool                               `json:"team_owner_disabled"`
+	CreatedAt         time.Time                          `json:"created_at"`
+	GroupID           *int64                             `json:"group_id,omitempty"`
+	IsComposite       bool                               `json:"is_composite"`
+	CompositeGroups   []APIKeyAuthCompositeGroupSnapshot `json:"composite_groups,omitempty"`
+	Name              string                             `json:"name"`
+	Status            string                             `json:"status"`
 	// FastModePolicy 随鉴权快照下发，供网关热路径读取。
 	FastModePolicy string                   `json:"fast_mode_policy"`
 	IPWhitelist    []string                 `json:"ip_whitelist,omitempty"`
@@ -37,6 +39,19 @@ type APIKeyAuthSnapshot struct {
 	RateLimit7d float64 `json:"rate_limit_7d"`
 	// FallbackToDefaultGroupWhenUnavailable 控制停用分组请求级回退。
 	FallbackToDefaultGroupWhenUnavailable bool `json:"fallback_to_default_group_when_unavailable"`
+}
+
+// APIKeyAuthCompositeGroupSnapshot 缓存一个复合前缀对应的完整鉴权分组。
+type APIKeyAuthCompositeGroupSnapshot struct {
+	ID                       int64                    `json:"id"`
+	GroupID                  int64                    `json:"group_id"`
+	Prefix                   string                   `json:"prefix"`
+	NormalizedPrefix         string                   `json:"normalized_prefix"`
+	SortOrder                int                      `json:"sort_order"`
+	DataSharingNoticeVersion int                      `json:"data_sharing_notice_version"`
+	DataSharingConfirmedAt   *time.Time               `json:"data_sharing_confirmed_at,omitempty"`
+	UserGroupRPMOverride     *int                     `json:"user_group_rpm_override,omitempty"`
+	Group                    *APIKeyAuthGroupSnapshot `json:"group,omitempty"`
 }
 
 // APIKeyAuthActorSnapshot 只缓存验证成员账号状态所需的字段。

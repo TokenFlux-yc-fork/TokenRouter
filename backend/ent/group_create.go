@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/TokenFlux/TokenRouter/ent/account"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/group"
 	"github.com/TokenFlux/TokenRouter/ent/usagelog"
 	"github.com/TokenFlux/TokenRouter/ent/user"
@@ -906,6 +907,21 @@ func (_c *GroupCreate) AddAPIKeys(v ...*APIKey) *GroupCreate {
 	return _c.AddAPIKeyIDs(ids...)
 }
 
+// AddAPIKeyCompositeGroupIDs adds the "api_key_composite_groups" edge to the APIKeyCompositeGroup entity by IDs.
+func (_c *GroupCreate) AddAPIKeyCompositeGroupIDs(ids ...int64) *GroupCreate {
+	_c.mutation.AddAPIKeyCompositeGroupIDs(ids...)
+	return _c
+}
+
+// AddAPIKeyCompositeGroups adds the "api_key_composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_c *GroupCreate) AddAPIKeyCompositeGroups(v ...*APIKeyCompositeGroup) *GroupCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddAPIKeyCompositeGroupIDs(ids...)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_c *GroupCreate) AddUsageLogIDs(ids ...int64) *GroupCreate {
 	_c.mutation.AddUsageLogIDs(ids...)
@@ -1688,6 +1704,22 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.APIKeyCompositeGroupsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyCompositeGroupsTable,
+			Columns: []string{group.APIKeyCompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

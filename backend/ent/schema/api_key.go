@@ -47,6 +47,10 @@ func (APIKey) Fields() []ent.Field {
 		field.Int64("group_id").
 			Optional().
 			Nillable(),
+		// 复合 Key 不使用单一 group_id，而是通过前缀映射选择请求分组。
+		field.Bool("is_composite").
+			Default(false).
+			Comment("是否通过模型前缀在多个分组之间路由"),
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),
@@ -155,6 +159,8 @@ func (APIKey) Edges() []ent.Edge {
 			Field("group_id").
 			Unique(),
 		edge.To("usage_logs", UsageLog.Type),
+		edge.To("composite_groups", APIKeyCompositeGroup.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.From("team", Team.Type).
 			Ref("api_keys").
 			Field("team_id").

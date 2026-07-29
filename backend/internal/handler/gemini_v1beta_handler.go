@@ -39,6 +39,23 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		googleError(c, http.StatusUnauthorized, "Invalid API key")
 		return
 	}
+	if apiKey.IsComposite {
+		requiredPlatform := service.PlatformGemini
+		if forcePlatform, ok := middleware.GetForcePlatformFromContext(c); ok && forcePlatform == service.PlatformAntigravity {
+			requiredPlatform = service.PlatformAntigravity
+		}
+		models := h.compositeRequestableModels(c.Request.Context(), apiKey, requiredPlatform)
+		out := make([]gemini.Model, 0, len(models))
+		for _, model := range models {
+			out = append(out, gemini.Model{
+				Name:                       "models/" + model,
+				DisplayName:                model,
+				SupportedGenerationMethods: []string{"generateContent", "streamGenerateContent"},
+			})
+		}
+		c.JSON(http.StatusOK, gemini.ModelsListResponse{Models: out})
+		return
+	}
 	// 检查平台：优先使用强制平台（/antigravity 路由），否则要求 gemini 分组
 	forcePlatform, hasForcePlatform := middleware.GetForcePlatformFromContext(c)
 	if !hasForcePlatform && (apiKey.Group == nil || apiKey.Group.Platform != service.PlatformGemini) {
@@ -93,7 +110,7 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		return
 	}
 
-	modelName := strings.TrimSpace(c.Param("model"))
+	modelName := strings.TrimPrefix(strings.TrimSpace(c.Param("model")), "/")
 	if modelName == "" {
 		googleError(c, http.StatusBadRequest, "Missing model in URL")
 		return

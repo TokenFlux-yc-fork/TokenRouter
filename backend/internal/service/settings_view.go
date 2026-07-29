@@ -158,6 +158,9 @@ type SystemSettings struct {
 
 	DefaultConcurrency int
 	DefaultBalance     float64
+	// TeamEnabled 和 DataSharingEnabled 控制对应功能页面的入口与访问。
+	TeamEnabled        bool
+	DataSharingEnabled bool
 	// RiskControlEnabled 控制风控中心入口和网关内容审计总开关。
 	RiskControlEnabled                   bool
 	CyberSessionBlockEnabled             bool
@@ -337,6 +340,7 @@ type PublicSettings struct {
 	PaymentEnabled           bool
 	TeamEnabled              bool
 	TeamSelfServiceEnabled   bool
+	DataSharingEnabled       bool // 暴露给前端用于控制数据共享页面入口
 	OIDCOAuthEnabled         bool
 	OIDCOAuthProviderName    string
 	GitHubOAuthEnabled       bool

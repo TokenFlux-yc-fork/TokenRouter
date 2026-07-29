@@ -836,7 +836,6 @@ affiliates: {
       columns: {
         name: '名称',
         id: 'ID',
-        sortOrder: '排序',
         platform: '接入格式',
         displayBrand: '品牌类型',
         rateMultiplier: '费率倍数',
@@ -872,8 +871,6 @@ affiliates: {
         description: '描述',
         platform: '接入格式',
         displayBrand: '品牌类型',
-        sortOrder: '排序',
-        sortOrderHint: '数值越小越靠前，用于模型广场分组展示顺序',
         rateMultiplier: '费率倍数',
         status: '状态',
         exclusive: '专属分组',

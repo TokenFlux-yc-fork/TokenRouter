@@ -87,7 +87,8 @@ func (r *adminDataShareExportArtifactRepoStub) Create(_ context.Context, artifac
 	item.CreatedAt = time.Now()
 	item.UpdatedAt = item.CreatedAt
 	r.items[item.ID] = &item
-	return &item, nil
+	out := item
+	return &out, nil
 }
 
 func (r *adminDataShareExportArtifactRepoStub) Get(_ context.Context, id int64) (*service.DataShareExportArtifact, error) {

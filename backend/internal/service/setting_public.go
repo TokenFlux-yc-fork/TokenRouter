@@ -234,6 +234,8 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyBalanceLowNotifyThreshold,
 		SettingKeyBalanceLowNotifyRechargeURL,
 		SettingKeyAccountQuotaNotifyEnabled,
+		SettingKeyTeamEnabled,
+		SettingKeyDataSharingEnabled,
 		SettingKeyRiskControlEnabled,
 		SettingKeyAllowUserViewErrorRequests,
 	}
@@ -302,6 +304,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		balanceUnitSymbol = "$"
 	}
 
+	// 团队数据库开关与部署级开关需同时开启，避免在线设置绕过部署限制。
 	return &PublicSettings{
 		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
 		EmailVerifyEnabled:               emailVerifyEnabled,
@@ -310,8 +313,9 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		PromoCodeEnabled:                 settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
 		PasswordResetEnabled:             passwordResetEnabled,
 		InvitationCodeEnabled:            settings[SettingKeyInvitationCodeEnabled] == "true",
-		TeamEnabled:                      s.cfg == nil || s.cfg.Team.Enabled,
+		TeamEnabled:                      settings[SettingKeyTeamEnabled] != "false" && (s.cfg == nil || s.cfg.Team.Enabled),
 		TeamSelfServiceEnabled:           s.cfg == nil || s.cfg.Team.SelfServiceEnabled,
+		DataSharingEnabled:               settings[SettingKeyDataSharingEnabled] != "false",
 		AffiliateEnabled:                 settings[SettingKeyAffiliateEnabled] == "true",
 		TotpEnabled:                      settings[SettingKeyTotpEnabled] == "true",
 		LoginAgreementEnabled:            settings[SettingKeyLoginAgreementEnabled] == "true" && len(loginAgreementDocuments) > 0,
@@ -435,6 +439,9 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		WeChatOAuthMobileEnabled         bool                     `json:"wechat_oauth_mobile_enabled"`
 		BackendModeEnabled               bool                     `json:"backend_mode_enabled"`
 		PaymentEnabled                   bool                     `json:"payment_enabled"`
+		TeamEnabled                      bool                     `json:"team_enabled"`
+		TeamSelfServiceEnabled           bool                     `json:"team_self_service_enabled"`
+		DataSharingEnabled               bool                     `json:"data_sharing_enabled"`
 		OIDCOAuthEnabled                 bool                     `json:"oidc_oauth_enabled"`
 		OIDCOAuthProviderName            string                   `json:"oidc_oauth_provider_name"`
 		GitHubOAuthEnabled               bool                     `json:"github_oauth_enabled"`
@@ -501,6 +508,9 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		WeChatOAuthMobileEnabled:         settings.WeChatOAuthMobileEnabled,
 		BackendModeEnabled:               settings.BackendModeEnabled,
 		PaymentEnabled:                   settings.PaymentEnabled,
+		TeamEnabled:                      settings.TeamEnabled,
+		TeamSelfServiceEnabled:           settings.TeamSelfServiceEnabled,
+		DataSharingEnabled:               settings.DataSharingEnabled,
 		OIDCOAuthEnabled:                 settings.OIDCOAuthEnabled,
 		OIDCOAuthProviderName:            settings.OIDCOAuthProviderName,
 		GitHubOAuthEnabled:               settings.GitHubOAuthEnabled,

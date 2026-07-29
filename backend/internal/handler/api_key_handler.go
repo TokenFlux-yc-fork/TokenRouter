@@ -36,15 +36,18 @@ func (h *APIKeyHandler) SetGroupCapacityService(groupCapacityService *service.Gr
 
 // CreateAPIKeyRequest represents the create API key request payload
 type CreateAPIKeyRequest struct {
-	Name           string   `json:"name" binding:"required"`
-	Scope          string   `json:"scope" binding:"omitempty,oneof=personal team"`
-	GroupID        *int64   `json:"group_id"`         // nullable
-	CustomKey      *string  `json:"custom_key"`       // 可选的自定义key
-	IPWhitelist    []string `json:"ip_whitelist"`     // IP 白名单
-	IPBlacklist    []string `json:"ip_blacklist"`     // IP 黑名单
-	FastModePolicy string   `json:"fast_mode_policy"` // Fast 模式策略，空值表示跟随请求
-	Quota          *float64 `json:"quota"`            // 配额限制 (USD)
-	ExpiresInDays  *int     `json:"expires_in_days"`  // 过期天数
+	Name        string `json:"name" binding:"required"`
+	Scope       string `json:"scope" binding:"omitempty,oneof=personal team"`
+	GroupID     *int64 `json:"group_id"` // nullable
+	IsComposite bool   `json:"is_composite"`
+	// CompositeGroups 是复合 Key 的完整分组前缀映射。
+	CompositeGroups []service.APIKeyCompositeGroupInput `json:"composite_groups"`
+	CustomKey       *string                             `json:"custom_key"`       // 可选的自定义key
+	IPWhitelist     []string                            `json:"ip_whitelist"`     // IP 白名单
+	IPBlacklist     []string                            `json:"ip_blacklist"`     // IP 黑名单
+	FastModePolicy  string                              `json:"fast_mode_policy"` // Fast 模式策略，空值表示跟随请求
+	Quota           *float64                            `json:"quota"`            // 配额限制 (USD)
+	ExpiresInDays   *int                                `json:"expires_in_days"`  // 过期天数
 
 	// Rate limit fields (0 = unlimited)
 	RateLimit5h *float64 `json:"rate_limit_5h"`
@@ -59,15 +62,18 @@ type CreateAPIKeyRequest struct {
 
 // UpdateAPIKeyRequest represents the update API key request payload
 type UpdateAPIKeyRequest struct {
-	Name           string    `json:"name"`
-	GroupID        *int64    `json:"group_id"`
-	Status         string    `json:"status" binding:"omitempty,oneof=active inactive"`
-	IPWhitelist    *[]string `json:"ip_whitelist"`     // IP 白名单（nil 不修改，空数组清空）
-	IPBlacklist    *[]string `json:"ip_blacklist"`     // IP 黑名单（nil 不修改，空数组清空）
-	FastModePolicy *string   `json:"fast_mode_policy"` // nil 表示保持原配置
-	Quota          *float64  `json:"quota"`            // 配额限制 (USD), 0=无限制
-	ExpiresAt      *string   `json:"expires_at"`       // 过期时间 (ISO 8601)
-	ResetQuota     *bool     `json:"reset_quota"`      // 重置已用配额
+	Name        string `json:"name"`
+	GroupID     *int64 `json:"group_id"`
+	IsComposite *bool  `json:"is_composite"`
+	// CompositeGroups 非 nil 时完整替换复合映射。
+	CompositeGroups *[]service.APIKeyCompositeGroupInput `json:"composite_groups"`
+	Status          string                               `json:"status" binding:"omitempty,oneof=active inactive"`
+	IPWhitelist     *[]string                            `json:"ip_whitelist"`     // IP 白名单（nil 不修改，空数组清空）
+	IPBlacklist     *[]string                            `json:"ip_blacklist"`     // IP 黑名单（nil 不修改，空数组清空）
+	FastModePolicy  *string                              `json:"fast_mode_policy"` // nil 表示保持原配置
+	Quota           *float64                             `json:"quota"`            // 配额限制 (USD), 0=无限制
+	ExpiresAt       *string                              `json:"expires_at"`       // 过期时间 (ISO 8601)
+	ResetQuota      *bool                                `json:"reset_quota"`      // 重置已用配额
 
 	// Rate limit fields (nil = no change, 0 = unlimited)
 	RateLimit5h         *float64 `json:"rate_limit_5h"`
@@ -177,6 +183,8 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		Name:                                  req.Name,
 		Scope:                                 req.Scope,
 		GroupID:                               req.GroupID,
+		IsComposite:                           req.IsComposite,
+		CompositeGroups:                       req.CompositeGroups,
 		CustomKey:                             req.CustomKey,
 		IPWhitelist:                           req.IPWhitelist,
 		IPBlacklist:                           req.IPBlacklist,
@@ -230,6 +238,8 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	}
 
 	svcReq := service.UpdateAPIKeyRequest{
+		IsComposite:                           req.IsComposite,
+		CompositeGroups:                       req.CompositeGroups,
 		IPWhitelist:                           req.IPWhitelist,
 		IPBlacklist:                           req.IPBlacklist,
 		FastModePolicy:                        req.FastModePolicy,

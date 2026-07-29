@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"go.uber.org/zap"
@@ -223,7 +224,14 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err := s.ensureGroupAllowsBatchImage(ctx, owner.GroupID); err != nil {
 		return nil, err
 	}
+	requestedModel := normalized.Model
+	if clientModel, ok := ctx.Value(ctxkey.ClientModel).(string); ok && strings.TrimSpace(clientModel) != "" {
+		requestedModel = strings.TrimSpace(clientModel)
+	}
 	requestHash := HashBatchImageSubmitRequest(normalized)
+	if requestedModel != normalized.Model {
+		requestHash = hashCompositeBatchImageSubmitRequest(normalized, owner.GroupID)
+	}
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if idempotencyKey != "" {
 		existing, err := s.Repo.GetBatchImageJobByIdempotencyKey(ctx, owner.UserID, owner.APIKeyID, idempotencyKey)
@@ -277,8 +285,10 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		TeamID:                     owner.TeamID,
 		APIKeyID:                   &apiKeyID,
 		AccountID:                  &accountID,
+		GroupID:                    owner.GroupID,
 		Provider:                   provider.Name(),
 		Model:                      normalized.Model,
+		RequestedModel:             requestedModel,
 		TaskName:                   normalized.TaskName,
 		ParentBatchID:              parentBatchID,
 		Status:                     BatchImageJobStatusCreated,
@@ -1217,7 +1227,7 @@ func BatchImageJobToPublic(job *BatchImageJob) *BatchImagePublicBatch {
 		TaskName:        batchImagePublicTaskName(job),
 		ParentBatchID:   job.ParentBatchID,
 		Status:          PublicBatchImageStatus(job.Status),
-		Model:           job.Model,
+		Model:           batchImageRequestedModel(job),
 		Provider:        job.Provider,
 		ItemCount:       job.ItemCount,
 		SuccessCount:    job.SuccessCount,
@@ -1304,6 +1314,32 @@ func HashBatchImageSubmitRequest(req BatchImageSubmitRequest) string {
 	b, _ := json.Marshal(req)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// hashCompositeBatchImageSubmitRequest 将复合路由分组纳入幂等指纹，前缀大小写不改变请求身份。
+func hashCompositeBatchImageSubmitRequest(req BatchImageSubmitRequest, groupID *int64) string {
+	payload := struct {
+		Request BatchImageSubmitRequest `json:"request"`
+		GroupID *int64                  `json:"group_id"`
+	}{
+		Request: req,
+		GroupID: batchImageCloneInt64Ptr(groupID),
+	}
+	payload.Request.Metadata = sanitizeBatchImageMetadata(payload.Request.Metadata)
+	b, _ := json.Marshal(payload)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// batchImageRequestedModel 优先返回客户端模型，并兼容迁移前仅保存实际模型的任务。
+func batchImageRequestedModel(job *BatchImageJob) string {
+	if job == nil {
+		return ""
+	}
+	if requestedModel := strings.TrimSpace(job.RequestedModel); requestedModel != "" {
+		return requestedModel
+	}
+	return job.Model
 }
 
 func batchImageProviderPlatform(provider string) string {

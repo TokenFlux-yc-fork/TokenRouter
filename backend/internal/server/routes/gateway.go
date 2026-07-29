@@ -80,7 +80,8 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoStatusHandler := func(c *gin.Context) {
-		if getGroupPlatform(c) == service.PlatformGrok {
+		apiKey, _ := middleware.GetAPIKeyFromContext(c)
+		if getGroupPlatform(c) == service.PlatformGrok || (apiKey != nil && apiKey.IsComposite) {
 			h.OpenAIGateway.GrokVideoStatus(c)
 			return
 		}
@@ -93,7 +94,8 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoContentHandler := func(c *gin.Context) {
-		if getGroupPlatform(c) == service.PlatformGrok {
+		apiKey, _ := middleware.GetAPIKeyFromContext(c)
+		if getGroupPlatform(c) == service.PlatformGrok || (apiKey != nil && apiKey.IsComposite) {
 			h.OpenAIGateway.GrokVideoContent(c)
 			return
 		}
@@ -275,7 +277,7 @@ func RegisterGatewayRoutes(
 	gemini.Use(requireGroupGoogle)
 	{
 		gemini.GET("/models", h.Gateway.GeminiV1BetaListModels)
-		gemini.GET("/models/:model", h.Gateway.GeminiV1BetaGetModel)
+		gemini.GET("/models/*model", h.Gateway.GeminiV1BetaGetModel)
 		// Gin treats ":" as a param marker, but Gemini uses "{model}:{action}" in the same segment.
 		gemini.POST("/models/*modelAction", h.Gateway.GeminiV1BetaModels)
 	}
@@ -388,7 +390,7 @@ func RegisterGatewayRoutes(
 	antigravityV1Beta.Use(requireGroupGoogle)
 	{
 		antigravityV1Beta.GET("/models", h.Gateway.GeminiV1BetaListModels)
-		antigravityV1Beta.GET("/models/:model", h.Gateway.GeminiV1BetaGetModel)
+		antigravityV1Beta.GET("/models/*model", h.Gateway.GeminiV1BetaGetModel)
 		antigravityV1Beta.POST("/models/*modelAction", h.Gateway.GeminiV1BetaModels)
 	}
 

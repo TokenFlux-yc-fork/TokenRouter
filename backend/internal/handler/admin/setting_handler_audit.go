@@ -53,6 +53,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.PasswordResetEnabled != after.PasswordResetEnabled {
 		changed = append(changed, "password_reset_enabled")
 	}
+	if before.TeamEnabled != after.TeamEnabled {
+		changed = append(changed, "team_enabled")
+	}
+	if before.DataSharingEnabled != after.DataSharingEnabled {
+		changed = append(changed, "data_sharing_enabled")
+	}
 	if before.RiskControlEnabled != after.RiskControlEnabled {
 		changed = append(changed, "risk_control_enabled")
 	}

@@ -37,7 +37,6 @@ func TestExtractCCReasoningEffortFromBody(t *testing.T) {
 
 func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoning(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -78,7 +77,6 @@ func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoni
 // Anthropic 兼容上游可能返回冒号后无空格的紧凑 SSE，缓冲路径必须完整解析。
 func TestHandleCCBufferedFromAnthropic_CompactSSEFormat(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -111,7 +109,6 @@ func TestHandleCCBufferedFromAnthropic_CompactSSEFormat(t *testing.T) {
 
 func TestHandleCCStreamingFromAnthropic_CompactSSEFormat(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -147,7 +144,6 @@ func TestHandleCCStreamingFromAnthropic_CompactSSEFormat(t *testing.T) {
 
 func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReasoning(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -190,7 +186,6 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 
 func TestHandleCCBufferedFromAnthropic_ResponseBodyCapturesToolCall(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

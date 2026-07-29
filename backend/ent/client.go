@@ -20,6 +20,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/announcement"
 	"github.com/TokenFlux/TokenRouter/ent/announcementread"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/authidentity"
 	"github.com/TokenFlux/TokenRouter/ent/authidentitychannel"
 	"github.com/TokenFlux/TokenRouter/ent/batchimageevent"
@@ -68,6 +69,8 @@ type Client struct {
 	Schema *migrate.Schema
 	// APIKey is the client for interacting with the APIKey builders.
 	APIKey *APIKeyClient
+	// APIKeyCompositeGroup is the client for interacting with the APIKeyCompositeGroup builders.
+	APIKeyCompositeGroup *APIKeyCompositeGroupClient
 	// Account is the client for interacting with the Account builders.
 	Account *AccountClient
 	// AccountGroup is the client for interacting with the AccountGroup builders.
@@ -162,6 +165,7 @@ func NewClient(opts ...Option) *Client {
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.APIKey = NewAPIKeyClient(c.config)
+	c.APIKeyCompositeGroup = NewAPIKeyCompositeGroupClient(c.config)
 	c.Account = NewAccountClient(c.config)
 	c.AccountGroup = NewAccountGroupClient(c.config)
 	c.Announcement = NewAnnouncementClient(c.config)
@@ -296,6 +300,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ctx:                      ctx,
 		config:                   cfg,
 		APIKey:                   NewAPIKeyClient(cfg),
+		APIKeyCompositeGroup:     NewAPIKeyCompositeGroupClient(cfg),
 		Account:                  NewAccountClient(cfg),
 		AccountGroup:             NewAccountGroupClient(cfg),
 		Announcement:             NewAnnouncementClient(cfg),
@@ -357,6 +362,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ctx:                      ctx,
 		config:                   cfg,
 		APIKey:                   NewAPIKeyClient(cfg),
+		APIKeyCompositeGroup:     NewAPIKeyCompositeGroupClient(cfg),
 		Account:                  NewAccountClient(cfg),
 		AccountGroup:             NewAccountGroupClient(cfg),
 		Announcement:             NewAnnouncementClient(cfg),
@@ -427,10 +433,10 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.APIKey, c.Account, c.AccountGroup, c.Announcement, c.AnnouncementRead,
-		c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent, c.BatchImageItem,
-		c.BatchImageJob, c.DataShareSession, c.ErrorPassthroughRule, c.Group,
-		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
+		c.APIKey, c.APIKeyCompositeGroup, c.Account, c.AccountGroup, c.Announcement,
+		c.AnnouncementRead, c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent,
+		c.BatchImageItem, c.BatchImageJob, c.DataShareSession, c.ErrorPassthroughRule,
+		c.Group, c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
 		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
 		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.RedeemCodeUsage, c.SecuritySecret,
 		c.Setting, c.SubscriptionPlan, c.TLSFingerprintProfile, c.TLSFingerprintRouter,
@@ -447,10 +453,10 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.APIKey, c.Account, c.AccountGroup, c.Announcement, c.AnnouncementRead,
-		c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent, c.BatchImageItem,
-		c.BatchImageJob, c.DataShareSession, c.ErrorPassthroughRule, c.Group,
-		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
+		c.APIKey, c.APIKeyCompositeGroup, c.Account, c.AccountGroup, c.Announcement,
+		c.AnnouncementRead, c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent,
+		c.BatchImageItem, c.BatchImageJob, c.DataShareSession, c.ErrorPassthroughRule,
+		c.Group, c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
 		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
 		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.RedeemCodeUsage, c.SecuritySecret,
 		c.Setting, c.SubscriptionPlan, c.TLSFingerprintProfile, c.TLSFingerprintRouter,
@@ -468,6 +474,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
 	case *APIKeyMutation:
 		return c.APIKey.mutate(ctx, m)
+	case *APIKeyCompositeGroupMutation:
+		return c.APIKeyCompositeGroup.mutate(ctx, m)
 	case *AccountMutation:
 		return c.Account.mutate(ctx, m)
 	case *AccountGroupMutation:
@@ -711,6 +719,22 @@ func (c *APIKeyClient) QueryUsageLogs(_m *APIKey) *UsageLogQuery {
 	return query
 }
 
+// QueryCompositeGroups queries the composite_groups edge of a APIKey.
+func (c *APIKeyClient) QueryCompositeGroups(_m *APIKey) *APIKeyCompositeGroupQuery {
+	query := (&APIKeyCompositeGroupClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikey.Table, apikey.FieldID, id),
+			sqlgraph.To(apikeycompositegroup.Table, apikeycompositegroup.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, apikey.CompositeGroupsTable, apikey.CompositeGroupsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryTeam queries the team edge of a APIKey.
 func (c *APIKeyClient) QueryTeam(_m *APIKey) *TeamQuery {
 	query := (&TeamClient{config: c.config}).Query()
@@ -751,6 +775,171 @@ func (c *APIKeyClient) mutate(ctx context.Context, m *APIKeyMutation) (Value, er
 		return (&APIKeyDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown APIKey mutation op: %q", m.Op())
+	}
+}
+
+// APIKeyCompositeGroupClient is a client for the APIKeyCompositeGroup schema.
+type APIKeyCompositeGroupClient struct {
+	config
+}
+
+// NewAPIKeyCompositeGroupClient returns a client for the APIKeyCompositeGroup from the given config.
+func NewAPIKeyCompositeGroupClient(c config) *APIKeyCompositeGroupClient {
+	return &APIKeyCompositeGroupClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `apikeycompositegroup.Hooks(f(g(h())))`.
+func (c *APIKeyCompositeGroupClient) Use(hooks ...Hook) {
+	c.hooks.APIKeyCompositeGroup = append(c.hooks.APIKeyCompositeGroup, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `apikeycompositegroup.Intercept(f(g(h())))`.
+func (c *APIKeyCompositeGroupClient) Intercept(interceptors ...Interceptor) {
+	c.inters.APIKeyCompositeGroup = append(c.inters.APIKeyCompositeGroup, interceptors...)
+}
+
+// Create returns a builder for creating a APIKeyCompositeGroup entity.
+func (c *APIKeyCompositeGroupClient) Create() *APIKeyCompositeGroupCreate {
+	mutation := newAPIKeyCompositeGroupMutation(c.config, OpCreate)
+	return &APIKeyCompositeGroupCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of APIKeyCompositeGroup entities.
+func (c *APIKeyCompositeGroupClient) CreateBulk(builders ...*APIKeyCompositeGroupCreate) *APIKeyCompositeGroupCreateBulk {
+	return &APIKeyCompositeGroupCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *APIKeyCompositeGroupClient) MapCreateBulk(slice any, setFunc func(*APIKeyCompositeGroupCreate, int)) *APIKeyCompositeGroupCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &APIKeyCompositeGroupCreateBulk{err: fmt.Errorf("calling to APIKeyCompositeGroupClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*APIKeyCompositeGroupCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &APIKeyCompositeGroupCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for APIKeyCompositeGroup.
+func (c *APIKeyCompositeGroupClient) Update() *APIKeyCompositeGroupUpdate {
+	mutation := newAPIKeyCompositeGroupMutation(c.config, OpUpdate)
+	return &APIKeyCompositeGroupUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *APIKeyCompositeGroupClient) UpdateOne(_m *APIKeyCompositeGroup) *APIKeyCompositeGroupUpdateOne {
+	mutation := newAPIKeyCompositeGroupMutation(c.config, OpUpdateOne, withAPIKeyCompositeGroup(_m))
+	return &APIKeyCompositeGroupUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *APIKeyCompositeGroupClient) UpdateOneID(id int64) *APIKeyCompositeGroupUpdateOne {
+	mutation := newAPIKeyCompositeGroupMutation(c.config, OpUpdateOne, withAPIKeyCompositeGroupID(id))
+	return &APIKeyCompositeGroupUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for APIKeyCompositeGroup.
+func (c *APIKeyCompositeGroupClient) Delete() *APIKeyCompositeGroupDelete {
+	mutation := newAPIKeyCompositeGroupMutation(c.config, OpDelete)
+	return &APIKeyCompositeGroupDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *APIKeyCompositeGroupClient) DeleteOne(_m *APIKeyCompositeGroup) *APIKeyCompositeGroupDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *APIKeyCompositeGroupClient) DeleteOneID(id int64) *APIKeyCompositeGroupDeleteOne {
+	builder := c.Delete().Where(apikeycompositegroup.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &APIKeyCompositeGroupDeleteOne{builder}
+}
+
+// Query returns a query builder for APIKeyCompositeGroup.
+func (c *APIKeyCompositeGroupClient) Query() *APIKeyCompositeGroupQuery {
+	return &APIKeyCompositeGroupQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeAPIKeyCompositeGroup},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a APIKeyCompositeGroup entity by its id.
+func (c *APIKeyCompositeGroupClient) Get(ctx context.Context, id int64) (*APIKeyCompositeGroup, error) {
+	return c.Query().Where(apikeycompositegroup.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *APIKeyCompositeGroupClient) GetX(ctx context.Context, id int64) *APIKeyCompositeGroup {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryAPIKey queries the api_key edge of a APIKeyCompositeGroup.
+func (c *APIKeyCompositeGroupClient) QueryAPIKey(_m *APIKeyCompositeGroup) *APIKeyQuery {
+	query := (&APIKeyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikeycompositegroup.Table, apikeycompositegroup.FieldID, id),
+			sqlgraph.To(apikey.Table, apikey.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, apikeycompositegroup.APIKeyTable, apikeycompositegroup.APIKeyColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryGroup queries the group edge of a APIKeyCompositeGroup.
+func (c *APIKeyCompositeGroupClient) QueryGroup(_m *APIKeyCompositeGroup) *GroupQuery {
+	query := (&GroupClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikeycompositegroup.Table, apikeycompositegroup.FieldID, id),
+			sqlgraph.To(group.Table, group.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, apikeycompositegroup.GroupTable, apikeycompositegroup.GroupColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *APIKeyCompositeGroupClient) Hooks() []Hook {
+	return c.hooks.APIKeyCompositeGroup
+}
+
+// Interceptors returns the client interceptors.
+func (c *APIKeyCompositeGroupClient) Interceptors() []Interceptor {
+	return c.inters.APIKeyCompositeGroup
+}
+
+func (c *APIKeyCompositeGroupClient) mutate(ctx context.Context, m *APIKeyCompositeGroupMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&APIKeyCompositeGroupCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&APIKeyCompositeGroupUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&APIKeyCompositeGroupUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&APIKeyCompositeGroupDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown APIKeyCompositeGroup mutation op: %q", m.Op())
 	}
 }
 
@@ -2527,6 +2716,22 @@ func (c *GroupClient) QueryAPIKeys(_m *Group) *APIKeyQuery {
 			sqlgraph.From(group.Table, group.FieldID, id),
 			sqlgraph.To(apikey.Table, apikey.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, group.APIKeysTable, group.APIKeysColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryAPIKeyCompositeGroups queries the api_key_composite_groups edge of a Group.
+func (c *GroupClient) QueryAPIKeyCompositeGroups(_m *Group) *APIKeyCompositeGroupQuery {
+	query := (&APIKeyCompositeGroupClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(group.Table, group.FieldID, id),
+			sqlgraph.To(apikeycompositegroup.Table, apikeycompositegroup.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, group.APIKeyCompositeGroupsTable, group.APIKeyCompositeGroupsColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -7439,10 +7644,10 @@ func (c *UserSubscriptionClient) mutate(ctx context.Context, m *UserSubscription
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
-		AuthIdentityChannel, BatchImageEvent, BatchImageItem, BatchImageJob,
-		DataShareSession, ErrorPassthroughRule, Group, IdempotencyRecord,
-		IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
+		APIKey, APIKeyCompositeGroup, Account, AccountGroup, Announcement,
+		AnnouncementRead, AuthIdentity, AuthIdentityChannel, BatchImageEvent,
+		BatchImageItem, BatchImageJob, DataShareSession, ErrorPassthroughRule, Group,
+		IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
 		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
 		RedeemCode, RedeemCodeUsage, SecuritySecret, Setting, SubscriptionPlan,
 		TLSFingerprintProfile, TLSFingerprintRouter, Team, TeamInvitation,
@@ -7451,10 +7656,10 @@ type (
 		UserDisabledPublicGroup, UserPlatformQuota, UserSubscription []ent.Hook
 	}
 	inters struct {
-		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
-		AuthIdentityChannel, BatchImageEvent, BatchImageItem, BatchImageJob,
-		DataShareSession, ErrorPassthroughRule, Group, IdempotencyRecord,
-		IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
+		APIKey, APIKeyCompositeGroup, Account, AccountGroup, Announcement,
+		AnnouncementRead, AuthIdentity, AuthIdentityChannel, BatchImageEvent,
+		BatchImageItem, BatchImageJob, DataShareSession, ErrorPassthroughRule, Group,
+		IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog, PaymentOrder,
 		PaymentProviderInstance, PendingAuthSession, PromoCode, PromoCodeUsage, Proxy,
 		RedeemCode, RedeemCodeUsage, SecuritySecret, Setting, SubscriptionPlan,
 		TLSFingerprintProfile, TLSFingerprintRouter, Team, TeamInvitation,

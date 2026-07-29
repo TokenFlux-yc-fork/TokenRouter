@@ -207,8 +207,9 @@ type contentModerationTestHashCache struct {
 }
 
 type contentModerationTestUserRepo struct {
-	user    *User
-	updated []User
+	user         *User
+	updated      []User
+	requestedIDs []int64
 }
 
 func (r *contentModerationTestUserRepo) Create(ctx context.Context, user *User) error {
@@ -220,6 +221,7 @@ func (r *contentModerationTestUserRepo) CreateWithNormalizedEmailGuard(ctx conte
 }
 
 func (r *contentModerationTestUserRepo) GetByID(ctx context.Context, id int64) (*User, error) {
+	r.requestedIDs = append(r.requestedIDs, id)
 	if r.user == nil {
 		return nil, ErrUserNotFound
 	}
@@ -1623,6 +1625,36 @@ func TestContentModerationAutoBanDisablesRegularUserAtThreshold(t *testing.T) {
 	require.Equal(t, []int64{userID}, invalidator.userIDs)
 }
 
+func TestContentModerationTeamAttributionAutoBanDisablesActorOnly(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.BanThreshold = 1
+	cfg.ViolationWindowHours = 24
+
+	ownerID := int64(1001)
+	memberID := int64(2002)
+	teamID := int64(3003)
+	repo := &contentModerationTestRepo{}
+	userRepo := &contentModerationTestUserRepo{user: &User{ID: memberID, Role: RoleUser, Status: StatusActive}}
+	invalidator := &contentModerationTestAuthCacheInvalidator{}
+	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, invalidator, nil)
+	log := newContentModerationFlaggedLog(memberID)
+	log.BillingUserID = &ownerID
+	log.TeamID = &teamID
+
+	svc.persistContentModerationLog(context.Background(), cfg, log, "", false, true)
+
+	logs := requireContentModerationLogCount(t, repo, 1)
+	require.Equal(t, memberID, *logs[0].UserID)
+	require.Equal(t, ownerID, *logs[0].BillingUserID)
+	require.Equal(t, teamID, *logs[0].TeamID)
+	require.Equal(t, []int64{memberID}, userRepo.requestedIDs)
+	require.Len(t, userRepo.updated, 1)
+	require.Equal(t, memberID, userRepo.updated[0].ID)
+	require.Equal(t, StatusDisabled, userRepo.updated[0].Status)
+	require.NotEqual(t, ownerID, userRepo.updated[0].ID)
+	require.Equal(t, []int64{memberID}, invalidator.userIDs)
+}
+
 func TestContentModerationAdminBelowBanThresholdRecordsViolationOnly(t *testing.T) {
 	cfg := defaultContentModerationConfig()
 	cfg.BanThreshold = 2
@@ -1941,6 +1973,68 @@ func TestContentModerationRecordCyberWarning_RecordsCyberPolicyCode(t *testing.T
 	require.NotNil(t, warning)
 	require.Len(t, repo.cyberWarnings, 1)
 	require.Equal(t, "Request blocked by upstream cyber policy", repo.cyberWarnings[0].WarningText)
+}
+
+func TestContentModerationCyberSessionBlockGroupInScope_RespectsRiskControlGroups(t *testing.T) {
+	selectedGroupID := int64(101)
+	otherGroupID := int64(202)
+	tests := []struct {
+		name               string
+		riskControlEnabled bool
+		allGroups          bool
+		groupIDs           []int64
+		groupID            *int64
+		want               bool
+	}{
+		{
+			name:               "已选分组启用会话屏蔽",
+			riskControlEnabled: true,
+			groupIDs:           []int64{selectedGroupID},
+			groupID:            &selectedGroupID,
+			want:               true,
+		},
+		{
+			name:               "未选分组跳过会话屏蔽",
+			riskControlEnabled: true,
+			groupIDs:           []int64{selectedGroupID},
+			groupID:            &otherGroupID,
+			want:               false,
+		},
+		{
+			name:               "全部分组启用会话屏蔽",
+			riskControlEnabled: true,
+			allGroups:          true,
+			groupID:            &otherGroupID,
+			want:               true,
+		},
+		{
+			name:               "风控中心关闭时跳过会话屏蔽",
+			riskControlEnabled: false,
+			allGroups:          true,
+			groupID:            &selectedGroupID,
+			want:               false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultContentModerationConfig()
+			cfg.AllGroups = tc.allGroups
+			cfg.GroupIDs = tc.groupIDs
+			rawCfg, err := json.Marshal(cfg)
+			require.NoError(t, err)
+			settingRepo := &contentModerationTestSettingRepo{values: map[string]string{
+				SettingKeyRiskControlEnabled:      fmt.Sprintf("%t", tc.riskControlEnabled),
+				SettingKeyContentModerationConfig: string(rawCfg),
+			}}
+			svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil)
+
+			inScope, err := svc.CyberSessionBlockGroupInScope(context.Background(), tc.groupID)
+
+			require.NoError(t, err)
+			require.Equal(t, tc.want, inScope)
+		})
+	}
 }
 
 func TestContentModerationRecordCyberWarning_SkipsGroupOutOfScope(t *testing.T) {

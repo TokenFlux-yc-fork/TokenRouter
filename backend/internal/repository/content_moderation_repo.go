@@ -50,6 +50,14 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	if log.UserID != nil {
 		userID = *log.UserID
 	}
+	var billingUserID any
+	if log.BillingUserID != nil {
+		billingUserID = *log.BillingUserID
+	}
+	var teamID any
+	if log.TeamID != nil {
+		teamID = *log.TeamID
+	}
 	var apiKeyID any
 	if log.APIKeyID != nil {
 		apiKeyID = *log.APIKeyID
@@ -69,21 +77,21 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	defer func() { _ = tx.Rollback() }()
 	err = tx.QueryRowContext(ctx, `
 INSERT INTO content_moderation_logs (
-    request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
+    request_id, user_id, user_email, billing_user_id, team_id, api_key_id, api_key_name, group_id, group_name,
     endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
 	    category_scores, threshold_snapshot, input_excerpt, upstream_latency_ms, error,
 	    violation_count, auto_banned, email_sent, queue_delay_ms, matched_keyword,
 	    source, input_items, content_complete, audit_complete, text_unit_count, image_unit_count,
 	    failed_unit_count, failed_units
 	) VALUES (
-    $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10, $11, $12, $13, $14, $15,
-    $16::jsonb, $17::jsonb, $18, $19, $20,
-	    $21, $22, $23, $24, $25,
-	    $26, $27::jsonb, $28, $29, $30, $31,
-	    $32, $33::jsonb
+    $1, $2, $3, $4, $5, $6, $7, $8, $9,
+    $10, $11, $12, $13, $14, $15, $16, $17,
+    $18::jsonb, $19::jsonb, $20, $21, $22,
+	    $23, $24, $25, $26, $27,
+	    $28, $29::jsonb, $30, $31, $32, $33,
+	    $34, $35::jsonb
 	) RETURNING id, created_at`,
-		log.RequestID, userID, log.UserEmail, apiKeyID, log.APIKeyName, groupID, log.GroupName,
+		log.RequestID, userID, log.UserEmail, billingUserID, teamID, apiKeyID, log.APIKeyName, groupID, log.GroupName,
 		log.Endpoint, log.Provider, log.Model, log.Mode, log.Action, log.Flagged, log.HighestCategory, log.HighestScore,
 		string(categoryScores), string(thresholdSnapshot), log.InputExcerpt, latency, log.Error,
 		log.ViolationCount, log.AutoBanned, log.EmailSent, nullableIntPtr(log.QueueDelayMS), log.MatchedKeyword,
@@ -128,7 +136,8 @@ func (r *contentModerationRepository) ListLogs(ctx context.Context, filter servi
 	queryArgs = append(queryArgs, params.Limit(), params.Offset())
 	rows, err := r.db.QueryContext(ctx, `
 SELECT
-    l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
+    l.id, l.request_id, l.user_id, l.user_email, l.billing_user_id, l.team_id,
+    l.api_key_id, l.api_key_name, l.group_id, l.group_name,
     l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
     l.category_scores, l.threshold_snapshot, l.input_excerpt, l.upstream_latency_ms, l.error,
 	    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.matched_keyword,
@@ -148,13 +157,15 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 	items := make([]service.ContentModerationLog, 0)
 	for rows.Next() {
 		var item service.ContentModerationLog
-		var userID, apiKeyID, groupID, latency, queueDelay sql.NullInt64
+		var userID, billingUserID, teamID, apiKeyID, groupID, latency, queueDelay sql.NullInt64
 		var scoresRaw, thresholdsRaw []byte
 		if err := rows.Scan(
 			&item.ID,
 			&item.RequestID,
 			&userID,
 			&item.UserEmail,
+			&billingUserID,
+			&teamID,
 			&apiKeyID,
 			&item.APIKeyName,
 			&groupID,
@@ -192,6 +203,14 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			v := userID.Int64
 			item.UserID = &v
 		}
+		if billingUserID.Valid {
+			v := billingUserID.Int64
+			item.BillingUserID = &v
+		}
+		if teamID.Valid {
+			v := teamID.Int64
+			item.TeamID = &v
+		}
 		if apiKeyID.Valid {
 			v := apiKeyID.Int64
 			item.APIKeyID = &v
@@ -223,11 +242,12 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 // GetLog 只在管理员详情接口读取完整正文和失败单元，列表查询不携带这些大字段。
 func (r *contentModerationRepository) GetLog(ctx context.Context, id int64) (*service.ContentModerationLog, error) {
 	var item service.ContentModerationLog
-	var userID, apiKeyID, groupID, latency, queueDelay sql.NullInt64
+	var userID, billingUserID, teamID, apiKeyID, groupID, latency, queueDelay sql.NullInt64
 	var scoresRaw, thresholdsRaw, inputItemsRaw, failedUnitsRaw []byte
 	err := r.db.QueryRowContext(ctx, `
 SELECT
-    l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
+    l.id, l.request_id, l.user_id, l.user_email, l.billing_user_id, l.team_id,
+    l.api_key_id, l.api_key_name, l.group_id, l.group_name,
     l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
     l.category_scores, l.threshold_snapshot, l.input_excerpt, l.upstream_latency_ms, l.error,
     l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.matched_keyword,
@@ -237,7 +257,8 @@ FROM content_moderation_logs l
 LEFT JOIN users u ON u.id = l.user_id
 WHERE l.id = $1
 `, id).Scan(
-		&item.ID, &item.RequestID, &userID, &item.UserEmail, &apiKeyID, &item.APIKeyName, &groupID, &item.GroupName,
+		&item.ID, &item.RequestID, &userID, &item.UserEmail, &billingUserID, &teamID,
+		&apiKeyID, &item.APIKeyName, &groupID, &item.GroupName,
 		&item.Endpoint, &item.Provider, &item.Model, &item.Mode, &item.Action, &item.Flagged, &item.HighestCategory, &item.HighestScore,
 		&scoresRaw, &thresholdsRaw, &item.InputExcerpt, &latency, &item.Error,
 		&item.ViolationCount, &item.AutoBanned, &item.EmailSent, &item.UserStatus, &queueDelay, &item.MatchedKeyword,
@@ -247,7 +268,7 @@ WHERE l.id = $1
 	if err != nil {
 		return nil, fmt.Errorf("get content moderation log: %w", err)
 	}
-	assignContentModerationNullableIDs(&item, userID, apiKeyID, groupID, latency, queueDelay)
+	assignContentModerationNullableIDs(&item, userID, billingUserID, teamID, apiKeyID, groupID, latency, queueDelay)
 	item.CategoryScores = map[string]float64{}
 	item.ThresholdSnapshot = map[string]float64{}
 	_ = json.Unmarshal(scoresRaw, &item.CategoryScores)
@@ -261,10 +282,18 @@ WHERE l.id = $1
 	return &item, nil
 }
 
-func assignContentModerationNullableIDs(item *service.ContentModerationLog, userID sql.NullInt64, apiKeyID sql.NullInt64, groupID sql.NullInt64, latency sql.NullInt64, queueDelay sql.NullInt64) {
+func assignContentModerationNullableIDs(item *service.ContentModerationLog, userID sql.NullInt64, billingUserID sql.NullInt64, teamID sql.NullInt64, apiKeyID sql.NullInt64, groupID sql.NullInt64, latency sql.NullInt64, queueDelay sql.NullInt64) {
 	if userID.Valid {
 		value := userID.Int64
 		item.UserID = &value
+	}
+	if billingUserID.Valid {
+		value := billingUserID.Int64
+		item.BillingUserID = &value
+	}
+	if teamID.Valid {
+		value := teamID.Int64
+		item.TeamID = &value
 	}
 	if apiKeyID.Valid {
 		value := apiKeyID.Int64
@@ -363,6 +392,14 @@ func insertContentModerationCyberWarning(ctx context.Context, q sqlQueryRower, w
 	if warning.UserID != nil {
 		userID = *warning.UserID
 	}
+	var billingUserID any
+	if warning.BillingUserID != nil {
+		billingUserID = *warning.BillingUserID
+	}
+	var teamID any
+	if warning.TeamID != nil {
+		teamID = *warning.TeamID
+	}
 	var apiKeyID any
 	if warning.APIKeyID != nil {
 		apiKeyID = *warning.APIKeyID
@@ -377,19 +414,19 @@ func insertContentModerationCyberWarning(ctx context.Context, q sqlQueryRower, w
 	}
 	err = q.QueryRowContext(ctx, `
 INSERT INTO content_moderation_cyber_warnings (
-    request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
+    request_id, user_id, user_email, billing_user_id, team_id, api_key_id, api_key_name, group_id, group_name,
     account_id, account_name, endpoint, model, upstream_status, warning_text, prompt_excerpt,
 	    violation_count, auto_banned, email_sent,
 	    source, input_items, content_complete, audit_complete, text_unit_count, image_unit_count,
 	    failed_unit_count, failed_units
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10, $11, $12, $13, $14,
-	    $15, $16, $17,
-	    $18, $19::jsonb, $20, $21, $22, $23,
-	    $24, $25::jsonb
+    $1, $2, $3, $4, $5, $6, $7, $8, $9,
+    $10, $11, $12, $13, $14, $15, $16,
+	    $17, $18, $19,
+	    $20, $21::jsonb, $22, $23, $24, $25,
+	    $26, $27::jsonb
 ) RETURNING id, created_at`,
-		warning.RequestID, userID, warning.UserEmail, apiKeyID, warning.APIKeyName, groupID, warning.GroupName,
+		warning.RequestID, userID, warning.UserEmail, billingUserID, teamID, apiKeyID, warning.APIKeyName, groupID, warning.GroupName,
 		accountID, warning.AccountName, warning.Endpoint, warning.Model, warning.UpstreamStatus, warning.WarningText, warning.PromptExcerpt,
 		warning.ViolationCount, warning.AutoBanned, warning.EmailSent,
 		warning.Source, string(inputItems), warning.ContentComplete, warning.AuditComplete, warning.TextUnitCount, warning.ImageUnitCount,
@@ -501,7 +538,8 @@ func (r *contentModerationRepository) ListCyberWarnings(ctx context.Context, fil
 	queryArgs = append(queryArgs, params.Limit(), params.Offset())
 	rows, err := r.db.QueryContext(ctx, `
 SELECT
-    w.id, w.request_id, w.user_id, w.user_email, w.api_key_id, w.api_key_name, w.group_id, w.group_name,
+    w.id, w.request_id, w.user_id, w.user_email, w.billing_user_id, w.team_id,
+    w.api_key_id, w.api_key_name, w.group_id, w.group_name,
     w.account_id, w.account_name, w.endpoint, w.model, w.upstream_status, w.warning_text, w.prompt_excerpt,
 	    w.violation_count, w.auto_banned, w.email_sent, COALESCE(u.status, ''),
 	    w.source, w.content_complete, w.audit_complete, w.text_unit_count, w.image_unit_count, w.failed_unit_count,
@@ -520,12 +558,14 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 	items := make([]service.ContentModerationCyberWarning, 0)
 	for rows.Next() {
 		var item service.ContentModerationCyberWarning
-		var userID, apiKeyID, groupID, accountID sql.NullInt64
+		var userID, billingUserID, teamID, apiKeyID, groupID, accountID sql.NullInt64
 		if err := rows.Scan(
 			&item.ID,
 			&item.RequestID,
 			&userID,
 			&item.UserEmail,
+			&billingUserID,
+			&teamID,
 			&apiKeyID,
 			&item.APIKeyName,
 			&groupID,
@@ -555,6 +595,14 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			v := userID.Int64
 			item.UserID = &v
 		}
+		if billingUserID.Valid {
+			v := billingUserID.Int64
+			item.BillingUserID = &v
+		}
+		if teamID.Valid {
+			v := teamID.Int64
+			item.TeamID = &v
+		}
 		if apiKeyID.Valid {
 			v := apiKeyID.Int64
 			item.APIKeyID = &v
@@ -578,11 +626,12 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 // GetCyberWarning 返回 Cyber 命中时保存的完整当前轮快照和媒体元数据。
 func (r *contentModerationRepository) GetCyberWarning(ctx context.Context, id int64) (*service.ContentModerationCyberWarning, error) {
 	var item service.ContentModerationCyberWarning
-	var userID, apiKeyID, groupID, accountID sql.NullInt64
+	var userID, billingUserID, teamID, apiKeyID, groupID, accountID sql.NullInt64
 	var inputItemsRaw, failedUnitsRaw []byte
 	err := r.db.QueryRowContext(ctx, `
 SELECT
-    w.id, w.request_id, w.user_id, w.user_email, w.api_key_id, w.api_key_name, w.group_id, w.group_name,
+    w.id, w.request_id, w.user_id, w.user_email, w.billing_user_id, w.team_id,
+    w.api_key_id, w.api_key_name, w.group_id, w.group_name,
     w.account_id, w.account_name, w.endpoint, w.model, w.upstream_status, w.warning_text, w.prompt_excerpt,
     w.violation_count, w.auto_banned, w.email_sent, COALESCE(u.status, ''),
     w.source, w.input_items, w.content_complete, w.audit_complete, w.text_unit_count, w.image_unit_count,
@@ -591,7 +640,8 @@ FROM content_moderation_cyber_warnings w
 LEFT JOIN users u ON u.id = w.user_id
 WHERE w.id = $1
 `, id).Scan(
-		&item.ID, &item.RequestID, &userID, &item.UserEmail, &apiKeyID, &item.APIKeyName, &groupID, &item.GroupName,
+		&item.ID, &item.RequestID, &userID, &item.UserEmail, &billingUserID, &teamID,
+		&apiKeyID, &item.APIKeyName, &groupID, &item.GroupName,
 		&accountID, &item.AccountName, &item.Endpoint, &item.Model, &item.UpstreamStatus, &item.WarningText, &item.PromptExcerpt,
 		&item.ViolationCount, &item.AutoBanned, &item.EmailSent, &item.UserStatus,
 		&item.Source, &inputItemsRaw, &item.ContentComplete, &item.AuditComplete, &item.TextUnitCount, &item.ImageUnitCount,
@@ -603,6 +653,14 @@ WHERE w.id = $1
 	if userID.Valid {
 		value := userID.Int64
 		item.UserID = &value
+	}
+	if billingUserID.Valid {
+		value := billingUserID.Int64
+		item.BillingUserID = &value
+	}
+	if teamID.Valid {
+		value := teamID.Int64
+		item.TeamID = &value
 	}
 	if apiKeyID.Valid {
 		value := apiKeyID.Int64

@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { DOMWrapper, VueWrapper } from '@vue/test-utils'
 
 import RiskControlView from '../RiskControlView.vue'
-import type { ContentModerationConfig, ContentModerationLog, UpdateContentModerationConfig } from '@/api/admin/riskControl'
+import type { ContentModerationConfig, ContentModerationCyberWarning, ContentModerationLog, UpdateContentModerationConfig } from '@/api/admin/riskControl'
 
 const {
   getConfig,
@@ -76,6 +76,9 @@ vi.mock('vue-i18n', async () => {
       t: (key: string, params?: Record<string, string | number>) => {
         if (key === 'admin.riskControl.preBlockAPIKeyLoadSummary') {
           return `同步并发 ${params?.active} / 可用 Key ${params?.available}，累计 ${params?.total} 次，worker：${params?.workerActive} / ${params?.workerTotal}`
+        }
+        if (key === 'admin.riskControl.teamAttribution') {
+          return `团队 ${params?.teamId} · 付款 UID ${params?.billingUserId}`
         }
         return key.replace(/\{(\w+)\}/g, (_, token) => String(params?.[token] ?? `{${token}}`))
       },
@@ -285,12 +288,14 @@ describe('admin RiskControlView', () => {
     expect(listLogs).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'hash_block' }))
   })
 
-  it('renders matched keyword for keyword-block audit logs', async () => {
+  it('renders matched keyword and team attribution for keyword-block audit logs', async () => {
     const log: ContentModerationLog = {
       id: 1,
       request_id: 'req-keyword',
       user_id: 1001,
       user_email: 'user@example.com',
+      billing_user_id: 9001,
+      team_id: 8001,
       api_key_id: 2001,
       api_key_name: 'default-key',
       group_id: 3001,
@@ -335,6 +340,70 @@ describe('admin RiskControlView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('admin.riskControl.matchedKeyword: secret-token')
+    expect(wrapper.get('[data-test="moderation-team-attribution"]').text()).toBe('团队 8001 · 付款 UID 9001')
+  })
+
+  it('renders cyber team attribution in the list and detail dialog', async () => {
+    const warning: ContentModerationCyberWarning = {
+      id: 11,
+      request_id: 'req-cyber-team',
+      user_id: 1101,
+      user_email: 'member@example.com',
+      billing_user_id: 9101,
+      team_id: 8101,
+      api_key_id: 2101,
+      api_key_name: 'team-key',
+      group_id: 3101,
+      group_name: 'openai',
+      account_id: 4101,
+      account_name: 'upstream-account',
+      endpoint: '/v1/responses',
+      model: 'gpt-5',
+      upstream_status: 400,
+      warning_text: 'cyber_policy',
+      prompt_excerpt: 'blocked prompt',
+      violation_count: 1,
+      auto_banned: false,
+      email_sent: true,
+      user_status: 'active',
+      created_at: '2026-01-02T03:04:05Z',
+    }
+    listCyberWarnings.mockResolvedValue({ items: [warning], total: 1, page: 1, page_size: 20, pages: 1 })
+    getCyberWarning.mockResolvedValue({
+      ...warning,
+      billing_user_id: 9202,
+      team_id: 8202,
+      content_complete: true,
+      audit_complete: true,
+      input_items: [],
+      media: [],
+    })
+
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+        },
+      },
+    })
+
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.recordTabs.cyber').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="cyber-team-attribution"]').text()).toBe('团队 8101 · 付款 UID 9101')
+
+    await wrapper.get('[data-test="cyber-detail-button"]').trigger('click')
+    await flushPromises()
+
+    expect(getCyberWarning).toHaveBeenCalledWith(11)
+    expect(wrapper.get('[data-test="cyber-detail-team-attribution"]').text()).toBe('团队 8202 · 付款 UID 9202')
   })
 
   it('renders hash blocks with a red blocked badge instead of a hit badge', async () => {
@@ -400,6 +469,8 @@ describe('admin RiskControlView', () => {
       request_id: 'req-review',
       user_id: 1001,
       user_email: 'user@example.com',
+      billing_user_id: 9001,
+      team_id: 8001,
       api_key_id: 2001,
       api_key_name: 'default-key',
       group_id: 3001,
@@ -471,6 +542,7 @@ describe('admin RiskControlView', () => {
     expect(getLog).toHaveBeenCalledWith(9)
     expect(getMediaContent).toHaveBeenCalledWith(77)
     expect(wrapper.text()).toContain('complete tool output with secret')
+    expect(wrapper.get('[data-test="moderation-detail-team-attribution"]').text()).toBe('团队 8001 · 付款 UID 9001')
     expect(wrapper.get('img').attributes('src')).toBe('blob:review-image')
 
     await findButtonByText(wrapper, 'common.close').trigger('click')

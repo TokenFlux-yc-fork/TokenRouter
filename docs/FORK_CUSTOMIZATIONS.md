@@ -85,6 +85,34 @@ upstream merge.
   service race test still reports concurrent Gin `SetMode` calls; the same
   four-test reproducer fails on the canonical upstream target.
 
+## Upstream Review: v0.1.241
+
+- Upstream target: `23ca2fff357e35b9fe2e10b129160f92a0030e1c` (the
+  post-tag `VERSION=0.1.241` sync commit for `v0.1.241`).
+- Reviewed range: `003dd01a24c41ace1c36eb399c692a0401ae9c7d..23ca2fff357e35b9fe2e10b129160f92a0030e1c`.
+- No active customization is fully upstreamed in this range; all rows remain
+  `local`.
+- Upstream composite API-key routing is combined with the fork's group health,
+  backup-pool, OpenAI capacity/failover, and Team online-migration behavior.
+  Batch-image reads keep the fork's legacy billing-user fallback while adding
+  the upstream composite group and requested-model fields.
+- Upstream group-creation sort locking is combined with the fork's persisted
+  health defaults. The five textual conflicts were resolved by retaining both
+  behaviors and both sets of regression tests rather than selecting either
+  side wholesale.
+- Upstream content-moderation Team attribution migration `225` and composite
+  API-key migration `226` are locally hardened to preserve the fork's online
+  rollout rules: bounded lock waits, nullable historical attribution, no
+  startup-time large-table backfill, `NOT VALID` historical constraints, and
+  retry-safe concurrent indexes in `225a`/`226a`. Migration-only execution
+  remains required before application startup.
+- Upstream Codex WebSocket configuration and risk-control Team scoping do not
+  replace the fork's OpenAI native compact, Responses validation, pre-output
+  failover, scheduled-runner isolation, or build-identity deltas.
+- Focused repository, migration, service, and API-contract tests pass on the
+  combined tree; the complete baseline gates below remain required before the
+  merge is finalized.
+
 ## Active Customizations
 
 | ID | Behavior | Source commits | Main paths | Status | Verification |

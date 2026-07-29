@@ -73,6 +73,39 @@ func TestGoogleAPIKeyAuthMarksLookupBulkheadRejection(t *testing.T) {
 	require.Equal(t, IngressRejectAPIKeyAuthOverloaded, reason)
 }
 
+func TestGoogleAPIKeyAuthCompositeModelListStillChecksQuota(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := &service.User{ID: 7, Status: service.StatusActive, Balance: 10}
+	group := &service.Group{ID: 9, Platform: service.PlatformGemini, Status: service.StatusActive, Hydrated: true}
+	apiKey := &service.APIKey{
+		ID: 10, UserID: user.ID, Key: "google-composite-exhausted", Status: service.StatusAPIKeyQuotaExhausted,
+		User: user, IsComposite: true, Quota: 1, QuotaUsed: 1,
+		CompositeGroups: []service.APIKeyCompositeGroup{{GroupID: group.ID, Prefix: "Gemini", NormalizedPrefix: "gemini", Group: group}},
+	}
+	repo := fakeAPIKeyRepo{getByKey: func(_ context.Context, key string) (*service.APIKey, error) {
+		if key != apiKey.Key {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		clone := *apiKey
+		return &clone, nil
+	}}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
+	router := gin.New()
+	router.Use(APIKeyAuthWithSubscriptionGoogle(svc, nil, cfg))
+	router.GET("/v1beta/models", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
+	req.Header.Set("x-goog-api-key", apiKey.Key)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusTooManyRequests, w.Code)
+	var response googleErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Equal(t, "API key 额度已用完", response.Error.Message)
+}
+
 type fakeAPIKeyRepo struct {
 	getByKey       func(ctx context.Context, key string) (*service.APIKey, error)
 	updateLastUsed func(ctx context.Context, id int64, usedAt time.Time) error

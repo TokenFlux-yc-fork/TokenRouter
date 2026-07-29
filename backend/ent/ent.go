@@ -17,6 +17,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/announcement"
 	"github.com/TokenFlux/TokenRouter/ent/announcementread"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/authidentity"
 	"github.com/TokenFlux/TokenRouter/ent/authidentitychannel"
 	"github.com/TokenFlux/TokenRouter/ent/batchimageevent"
@@ -115,6 +116,7 @@ func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			apikey.Table:                   apikey.ValidColumn,
+			apikeycompositegroup.Table:     apikeycompositegroup.ValidColumn,
 			account.Table:                  account.ValidColumn,
 			accountgroup.Table:             accountgroup.ValidColumn,
 			announcement.Table:             announcement.ValidColumn,

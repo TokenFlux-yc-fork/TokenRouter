@@ -100,6 +100,11 @@ func GroupID(v int64) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldGroupID, v))
 }
 
+// IsComposite applies equality check predicate on the "is_composite" field. It's identical to IsCompositeEQ.
+func IsComposite(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldIsComposite, v))
+}
+
 // Status applies equality check predicate on the "status" field. It's identical to StatusEQ.
 func Status(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldStatus, v))
@@ -543,6 +548,16 @@ func GroupIDIsNil() predicate.APIKey {
 // GroupIDNotNil applies the NotNil predicate on the "group_id" field.
 func GroupIDNotNil() predicate.APIKey {
 	return predicate.APIKey(sql.FieldNotNull(FieldGroupID))
+}
+
+// IsCompositeEQ applies the EQ predicate on the "is_composite" field.
+func IsCompositeEQ(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldIsComposite, v))
+}
+
+// IsCompositeNEQ applies the NEQ predicate on the "is_composite" field.
+func IsCompositeNEQ(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldIsComposite, v))
 }
 
 // StatusEQ applies the EQ predicate on the "status" field.
@@ -1476,6 +1491,29 @@ func HasUsageLogs() predicate.APIKey {
 func HasUsageLogsWith(preds ...predicate.UsageLog) predicate.APIKey {
 	return predicate.APIKey(func(s *sql.Selector) {
 		step := newUsageLogsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasCompositeGroups applies the HasEdge predicate on the "composite_groups" edge.
+func HasCompositeGroups() predicate.APIKey {
+	return predicate.APIKey(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, CompositeGroupsTable, CompositeGroupsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasCompositeGroupsWith applies the HasEdge predicate on the "composite_groups" edge with a given conditions (other predicates).
+func HasCompositeGroupsWith(preds ...predicate.APIKeyCompositeGroup) predicate.APIKey {
+	return predicate.APIKey(func(s *sql.Selector) {
+		step := newCompositeGroupsStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

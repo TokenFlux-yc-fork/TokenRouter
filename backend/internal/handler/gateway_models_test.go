@@ -133,6 +133,95 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
 }
 
+func TestGatewayModelsCompositeKeyAggregatesMappingsInOrder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	openAIGroupID := int64(50)
+	anthropicGroupID := int64(51)
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{
+		openAIGroupID: {
+			{ID: 1, Platform: service.PlatformOpenAI, Credentials: map[string]any{
+				"model_mapping": map[string]any{"gpt-5": "gpt-5"},
+			}},
+		},
+		anthropicGroupID: {
+			{ID: 2, Platform: service.PlatformAnthropic, Credentials: map[string]any{
+				"model_mapping": map[string]any{"claude-sonnet-4-6": "claude-sonnet-4-6"},
+			}},
+		},
+	}})
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	context.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		IsComposite: true,
+		User:        &service.User{Status: service.StatusActive, AllowedGroups: []int64{anthropicGroupID}},
+		CompositeGroups: []service.APIKeyCompositeGroup{
+			{GroupID: openAIGroupID, Prefix: "GPT", SortOrder: 0, Group: &service.Group{ID: openAIGroupID, Platform: service.PlatformOpenAI, Status: service.StatusActive}},
+			{GroupID: anthropicGroupID, Prefix: "Claude", SortOrder: 1, Group: &service.Group{ID: anthropicGroupID, Platform: service.PlatformAnthropic, Status: service.StatusActive}},
+		},
+	})
+
+	h.Models(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &got))
+	ids := modelIDsForTest(got.Data)
+	require.NotEmpty(t, ids)
+	firstClaude := -1
+	for index, id := range ids {
+		if len(id) >= len("Claude/") && id[:len("Claude/")] == "Claude/" {
+			firstClaude = index
+			break
+		}
+		require.Contains(t, id, "GPT/")
+	}
+	require.Greater(t, firstClaude, 0)
+	for _, id := range ids[firstClaude:] {
+		require.Contains(t, id, "Claude/")
+	}
+	require.Contains(t, ids, "GPT/gpt-5")
+	require.Contains(t, ids, "Claude/claude-sonnet-4-6")
+}
+
+func TestGatewayModelsCompositeKeyFiltersRevokedMappings(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	publicGroupID := int64(60)
+	exclusiveGroupID := int64(61)
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{
+		publicGroupID: {{ID: 1, Platform: service.PlatformOpenAI, Credentials: map[string]any{
+			"model_mapping": map[string]any{"public-model": "public-model"},
+		}}},
+		exclusiveGroupID: {{ID: 2, Platform: service.PlatformAnthropic, Credentials: map[string]any{
+			"model_mapping": map[string]any{"exclusive-model": "exclusive-model"},
+		}}},
+	}})
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	context.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		IsComposite: true,
+		User: &service.User{
+			Status:               service.StatusActive,
+			DisabledPublicGroups: []int64{publicGroupID},
+			AllowedGroups:        nil,
+		},
+		CompositeGroups: []service.APIKeyCompositeGroup{
+			{GroupID: publicGroupID, Prefix: "Public", Group: &service.Group{ID: publicGroupID, Platform: service.PlatformOpenAI, Status: service.StatusActive}},
+			{GroupID: exclusiveGroupID, Prefix: "Private", Group: &service.Group{ID: exclusiveGroupID, Platform: service.PlatformAnthropic, Status: service.StatusActive, IsExclusive: true}},
+		},
+	})
+
+	h.Models(context)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &got))
+	require.Empty(t, got.Data)
+}
+
 // TestGatewayModels_AntigravityGroupKeepsDefaultModelMetadata 验证默认候选仍使用 Antigravity 的展示元数据。
 func TestGatewayModels_AntigravityGroupKeepsDefaultModelMetadata(t *testing.T) {
 	gin.SetMode(gin.TestMode)

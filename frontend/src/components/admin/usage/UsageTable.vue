@@ -27,9 +27,10 @@
         @sort="(key, order) => $emit('sort', key, order)"
       >
         <template #cell-user="{ row }">
+          <!-- 移动卡片按其他字段靠右对齐，桌面表格仍使用固定宽度方便纵向扫视。 -->
           <div
             class="flex items-center text-sm"
-            :class="compactUserColumn ? 'w-32 min-w-0 gap-1' : ''"
+            :class="compactUserColumn ? 'min-w-0 justify-end gap-1 md:w-32 md:justify-start' : ''"
             data-test="usage-user-cell"
           >
             <button

@@ -1031,6 +1031,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 // 仅未绑定分组的兼容调用会在没有显式结果时回退平台默认模型。
 func (h *GatewayHandler) Models(c *gin.Context) {
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
+	if apiKey != nil && apiKey.IsComposite {
+		writeCompositeModelsList(c, h.compositeRequestableModels(c.Request.Context(), apiKey, ""))
+		return
+	}
 
 	var groupID *int64
 	var platform string
@@ -1105,6 +1109,56 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		"object": "list",
 		"data":   claude.DefaultModels,
 	})
+}
+
+// compositeRequestableModels 按映射顺序聚合可请求模型，并在模型 ID 前添加展示前缀。
+func (h *GatewayHandler) compositeRequestableModels(ctx context.Context, apiKey *service.APIKey, requiredPlatform string) []string {
+	if h == nil || h.gatewayService == nil || apiKey == nil {
+		return nil
+	}
+	models := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, binding := range apiKey.CompositeGroups {
+		group := binding.Group
+		if !compositeGroupAvailableToUser(apiKey, group) || (requiredPlatform != "" && group.Platform != requiredPlatform) {
+			continue
+		}
+		groupID := group.ID
+		resolution := h.gatewayService.ResolveRequestableModels(ctx, &groupID, group.Platform)
+		available := service.RequestableModelIDs(resolution.Models)
+		if group.CustomModelsListEnabled() {
+			available = filterModelsByCustomList(available, nil, group.ModelsListConfig.Models)
+		}
+		for _, model := range available {
+			prefixed := binding.Prefix + "/" + model
+			if _, exists := seen[prefixed]; exists {
+				continue
+			}
+			seen[prefixed] = struct{}{}
+			models = append(models, prefixed)
+		}
+	}
+	return models
+}
+
+// compositeGroupAvailableToUser 使用认证快照过滤已停用或已撤销授权的复合映射。
+func compositeGroupAvailableToUser(apiKey *service.APIKey, group *service.Group) bool {
+	if apiKey == nil || apiKey.User == nil || group == nil || !group.IsActive() {
+		return false
+	}
+	return apiKey.User.CanBindGroup(group.ID, group.IsExclusive)
+}
+
+// writeCompositeModelsList 返回同时兼容 OpenAI 与 Anthropic 常用字段的模型列表。
+func writeCompositeModelsList(c *gin.Context, modelIDs []string) {
+	models := make([]gin.H, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		models = append(models, gin.H{
+			"id": modelID, "object": "model", "type": "model", "created": 1704067200,
+			"created_at": "2024-01-01T00:00:00Z", "owned_by": "token-router", "display_name": modelID,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"object": "list", "data": models})
 }
 
 func writeModelsList(c *gin.Context, modelIDs []string) {
@@ -1406,6 +1460,10 @@ func mergeModelIDs(primary, secondary []string) []string {
 // AntigravityModels 返回 Antigravity 支持的全部模型
 // GET /antigravity/models
 func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
+	if apiKey, ok := middleware2.GetAPIKeyFromContext(c); ok && apiKey.IsComposite {
+		writeCompositeModelsList(c, h.compositeRequestableModels(c.Request.Context(), apiKey, service.PlatformAntigravity))
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
 		"data":   antigravity.DefaultModels(),

@@ -59,6 +59,8 @@ func TestContentModerationRepositoryCreateLog_PersistsMatchedKeyword(t *testing.
 	db, mock := newSQLMock(t)
 	repo := NewContentModerationRepository(db)
 	userID := int64(1001)
+	billingUserID := int64(1000)
+	teamID := int64(4001)
 	apiKeyID := int64(2001)
 	groupID := int64(3001)
 	latencyMS := 42
@@ -68,6 +70,8 @@ func TestContentModerationRepositoryCreateLog_PersistsMatchedKeyword(t *testing.
 		RequestID:         "req-keyword",
 		UserID:            &userID,
 		UserEmail:         "user@example.com",
+		BillingUserID:     &billingUserID,
+		TeamID:            &teamID,
 		APIKeyID:          &apiKeyID,
 		APIKeyName:        "default-key",
 		GroupID:           &groupID,
@@ -96,6 +100,8 @@ func TestContentModerationRepositoryCreateLog_PersistsMatchedKeyword(t *testing.
 			log.RequestID,
 			userID,
 			log.UserEmail,
+			billingUserID,
+			teamID,
 			apiKeyID,
 			log.APIKeyName,
 			groupID,
@@ -186,6 +192,38 @@ func TestContentModerationRepositoryCreateLogRollsBackWhenMediaInsertFails(t *te
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestContentModerationRepositoryListLogsReturnsTeamAttribution(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &contentModerationRepository{db: db}
+	createdAt := time.Now()
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM content_moderation_logs").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("FROM content_moderation_logs l").WithArgs(20, 0).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"id", "request_id", "user_id", "user_email", "billing_user_id", "team_id", "api_key_id", "api_key_name", "group_id", "group_name",
+			"endpoint", "provider", "model", "mode", "action", "flagged", "highest_category", "highest_score",
+			"category_scores", "threshold_snapshot", "input_excerpt", "upstream_latency_ms", "error",
+			"violation_count", "auto_banned", "email_sent", "user_status", "queue_delay_ms", "matched_keyword",
+			"source", "content_complete", "audit_complete", "text_unit_count", "image_unit_count", "failed_unit_count", "created_at",
+		}).AddRow(
+			int64(9), "req", int64(2002), "member@example.com", int64(1001), int64(3003), int64(4004), "team-key", nil, "",
+			"/v1/responses", "openai", "gpt-5", "pre_block", "block", true, "violence", 0.9,
+			`{"violence":0.9}`, `{"violence":0.8}`, "excerpt", 12, "",
+			1, true, false, "disabled", 3, "", "user", true, true, 1, 0, 0, createdAt,
+		),
+	)
+
+	items, page, err := repo.ListLogs(context.Background(), service.ContentModerationLogFilter{})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(2002), *items[0].UserID)
+	require.Equal(t, int64(1001), *items[0].BillingUserID)
+	require.Equal(t, int64(3003), *items[0].TeamID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestContentModerationRepositoryGetLogReturnsFullReviewPayload(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &contentModerationRepository{db: db}
@@ -196,14 +234,14 @@ func TestContentModerationRepositoryGetLogReturnsFullReviewPayload(t *testing.T)
 	failedUnits := `[{"type":"image","index":1,"source_index":2,"error":"timeout"}]`
 	mock.ExpectQuery("FROM content_moderation_logs l").WithArgs(int64(9)).WillReturnRows(
 		sqlmock.NewRows([]string{
-			"id", "request_id", "user_id", "user_email", "api_key_id", "api_key_name", "group_id", "group_name",
+			"id", "request_id", "user_id", "user_email", "billing_user_id", "team_id", "api_key_id", "api_key_name", "group_id", "group_name",
 			"endpoint", "provider", "model", "mode", "action", "flagged", "highest_category", "highest_score",
 			"category_scores", "threshold_snapshot", "input_excerpt", "upstream_latency_ms", "error",
 			"violation_count", "auto_banned", "email_sent", "user_status", "queue_delay_ms", "matched_keyword",
 			"source", "input_items", "content_complete", "audit_complete", "text_unit_count", "image_unit_count",
 			"failed_unit_count", "failed_units", "created_at",
 		}).AddRow(
-			int64(9), "req", nil, "user@example.com", nil, "", nil, "", "/v1/responses", "openai", "gpt-5", "pre_block", "allow", false, "sexual", 0.1,
+			int64(9), "req", int64(1001), "user@example.com", int64(1000), int64(3001), nil, "", nil, "", "/v1/responses", "openai", "gpt-5", "pre_block", "allow", false, "sexual", 0.1,
 			`{"sexual":0.1}`, `{"sexual":0.65}`, "excerpt", 12, "timeout", 0, false, false, "active", 3, "",
 			"tool", inputItems, true, false, 1, 1, 1, failedUnits, createdAt,
 		),
@@ -216,12 +254,74 @@ func TestContentModerationRepositoryGetLogReturnsFullReviewPayload(t *testing.T)
 	item, err := repo.GetLog(context.Background(), 9)
 
 	require.NoError(t, err)
+	require.Equal(t, int64(1001), *item.UserID)
+	require.Equal(t, int64(1000), *item.BillingUserID)
+	require.Equal(t, int64(3001), *item.TeamID)
 	require.True(t, item.ContentComplete)
 	require.False(t, item.AuditComplete)
 	require.Equal(t, "complete output", item.InputItems[0].Text)
 	require.Equal(t, "timeout", item.FailedUnits[0].Error)
 	require.Len(t, item.Media, 1)
 	require.Empty(t, item.Media[0].Content)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContentModerationRepositoryListCyberWarningsReturnsTeamAttribution(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &contentModerationRepository{db: db}
+	createdAt := time.Now()
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM content_moderation_cyber_warnings").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("FROM content_moderation_cyber_warnings w").WithArgs(20, 0).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"id", "request_id", "user_id", "user_email", "billing_user_id", "team_id", "api_key_id", "api_key_name", "group_id", "group_name",
+			"account_id", "account_name", "endpoint", "model", "upstream_status", "warning_text", "prompt_excerpt",
+			"violation_count", "auto_banned", "email_sent", "user_status", "source", "content_complete", "audit_complete",
+			"text_unit_count", "image_unit_count", "failed_unit_count", "created_at",
+		}).AddRow(
+			int64(19), "req", int64(2002), "member@example.com", int64(1001), int64(3003), int64(4004), "team-key", nil, "",
+			int64(5005), "openai-1", "/v1/responses", "gpt-5", 400, "cyber_policy", "prompt",
+			1, true, false, "disabled", "user", true, true, 1, 0, 0, createdAt,
+		),
+	)
+
+	items, page, err := repo.ListCyberWarnings(context.Background(), service.ContentModerationCyberWarningFilter{})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(2002), *items[0].UserID)
+	require.Equal(t, int64(1001), *items[0].BillingUserID)
+	require.Equal(t, int64(3003), *items[0].TeamID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContentModerationRepositoryGetCyberWarningReturnsTeamAttribution(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &contentModerationRepository{db: db}
+	createdAt := time.Now()
+	mock.ExpectQuery("FROM content_moderation_cyber_warnings w").WithArgs(int64(19)).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"id", "request_id", "user_id", "user_email", "billing_user_id", "team_id", "api_key_id", "api_key_name", "group_id", "group_name",
+			"account_id", "account_name", "endpoint", "model", "upstream_status", "warning_text", "prompt_excerpt",
+			"violation_count", "auto_banned", "email_sent", "user_status", "source", "input_items", "content_complete", "audit_complete",
+			"text_unit_count", "image_unit_count", "failed_unit_count", "failed_units", "created_at",
+		}).AddRow(
+			int64(19), "req", int64(2002), "member@example.com", int64(1001), int64(3003), int64(4004), "team-key", nil, "",
+			int64(5005), "openai-1", "/v1/responses", "gpt-5", 400, "cyber_policy", "prompt",
+			1, true, false, "disabled", "user", `[]`, true, true, 1, 0, 0, `[]`, createdAt,
+		),
+	)
+	mock.ExpectQuery("FROM content_moderation_media").WithArgs(int64(19)).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "source_index", "source", "mime_type", "sha256", "byte_size", "original_ref", "snapshot_status", "snapshot_error", "created_at"}),
+	)
+
+	item, err := repo.GetCyberWarning(context.Background(), 19)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2002), *item.UserID)
+	require.Equal(t, int64(1001), *item.BillingUserID)
+	require.Equal(t, int64(3003), *item.TeamID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -260,12 +360,16 @@ func TestContentModerationRepositoryCreateCyberWarningAndApplyUserBan_DisablesUs
 	db, mock := newSQLMock(t)
 	repo := &contentModerationRepository{db: db}
 	userID := int64(1001)
+	billingUserID := int64(1000)
+	teamID := int64(3001)
 	accountID := int64(2001)
 	createdAt := time.Now()
 	warning := &service.ContentModerationCyberWarning{
 		RequestID:      "req_1",
 		UserID:         &userID,
 		UserEmail:      "user@example.com",
+		BillingUserID:  &billingUserID,
+		TeamID:         &teamID,
 		AccountID:      &accountID,
 		AccountName:    "openai-1",
 		Endpoint:       "/v1/responses",
@@ -284,6 +388,8 @@ func TestContentModerationRepositoryCreateCyberWarningAndApplyUserBan_DisablesUs
 			warning.RequestID,
 			userID,
 			warning.UserEmail,
+			billingUserID,
+			teamID,
 			nil,
 			warning.APIKeyName,
 			nil,
@@ -354,6 +460,8 @@ func TestContentModerationRepositoryCreateCyberWarningAndApplyUserBan_KeepsBelow
 			warning.RequestID,
 			userID,
 			warning.UserEmail,
+			nil,
+			nil,
 			nil,
 			warning.APIKeyName,
 			nil,

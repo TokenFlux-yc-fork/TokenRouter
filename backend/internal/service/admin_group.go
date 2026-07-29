@@ -20,6 +20,8 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 )
 
+const groupSortOrderStep = 10
+
 // Group management implementations
 func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
@@ -280,12 +282,16 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		return nil, err
 	}
 
+	sortOrder := 0
+	if input.SortOrder != nil {
+		sortOrder = *input.SortOrder
+	}
 	group := &Group{
 		Name:                            input.Name,
 		Description:                     input.Description,
 		Platform:                        platform,
 		DisplayBrand:                    strings.TrimSpace(input.DisplayBrand),
-		SortOrder:                       input.SortOrder,
+		SortOrder:                       sortOrder,
 		RateMultiplier:                  input.RateMultiplier,
 		IsExclusive:                     input.IsExclusive,
 		IsDefault:                       input.IsDefault,
@@ -367,6 +373,13 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	if err := s.runGroupMutationTx(ctx, func(opCtx context.Context) error {
+		if input.SortOrder == nil {
+			resolvedSortOrder, err := s.nextGroupSortOrder(opCtx)
+			if err != nil {
+				return err
+			}
+			group.SortOrder = resolvedSortOrder
+		}
 		if err := s.clearOtherPlatformDefaultGroups(opCtx, group.Platform, 0, group.IsDefault); err != nil {
 			return err
 		}
@@ -389,6 +402,41 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	return group, nil
+}
+
+// nextGroupSortOrder 在创建事务内分配末尾排序值，避免并发新建产生重复位置。
+func (s *adminServiceImpl) nextGroupSortOrder(ctx context.Context) (int, error) {
+	if s.groupSortOrderRepo != nil {
+		if err := s.groupSortOrderRepo.LockGroupSortOrder(ctx); err != nil {
+			return 0, fmt.Errorf("lock group sort order: %w", err)
+		}
+	}
+
+	groups, _, err := s.groupRepo.ListWithFilters(
+		ctx,
+		pagination.PaginationParams{
+			Page:      1,
+			PageSize:  1,
+			SortBy:    "sort_order",
+			SortOrder: "desc",
+		},
+		"",
+		"",
+		"",
+		nil,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("load last group sort order: %w", err)
+	}
+	if len(groups) == 0 {
+		return 0, nil
+	}
+
+	next := groups[0].SortOrder + groupSortOrderStep
+	if next < groups[0].SortOrder {
+		return 0, errors.New("group sort order overflow")
+	}
+	return next, nil
 }
 
 // normalizePrice 将负数转换为 nil（表示使用默认价格），0 保留（表示免费）
@@ -1081,6 +1129,9 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, keyID)
 	if err != nil {
 		return nil, err
+	}
+	if apiKey.IsComposite {
+		return nil, ErrCompositeKeyGroupConflict
 	}
 
 	if groupID == nil {

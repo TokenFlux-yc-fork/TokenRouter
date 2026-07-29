@@ -85,6 +85,31 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "batch_image_jobs", "subscription_rate_multiplier", "numeric", 0, false)
 	requireColumn(t, tx, "batch_image_jobs", "balance_rate_multiplier", "numeric", 0, false)
 	requireColumn(t, tx, "batch_image_jobs", "plan_group_rate_multiplier_enabled", "boolean", 0, false)
+	// migration 226：历史任务归属与请求模型允许未知，索引由事务外迁移构建。
+	requireColumn(t, tx, "batch_image_jobs", "group_id", "bigint", 0, true)
+	requireColumn(t, tx, "batch_image_jobs", "requested_model", "character varying", 512, true)
+	requireColumnDefaultContains(t, tx, "batch_image_jobs", "requested_model", "''")
+	requireForeignKeyOnDelete(t, tx, "batch_image_jobs", "group_id", "groups", "SET NULL")
+	requireIndex(t, tx, "batch_image_jobs", "idx_batch_image_jobs_group_id")
+
+	// migration 225：内容风控历史归属保持可空，四个索引由事务外迁移构建。
+	for _, table := range []string{"content_moderation_logs", "content_moderation_cyber_warnings"} {
+		requireColumn(t, tx, table, "billing_user_id", "bigint", 0, true)
+		requireColumn(t, tx, table, "team_id", "bigint", 0, true)
+		requireForeignKeyOnDelete(t, tx, table, "billing_user_id", "users", "SET NULL")
+		requireForeignKeyOnDelete(t, tx, table, "team_id", "teams", "SET NULL")
+	}
+	requireIndex(t, tx, "content_moderation_logs", "idx_content_moderation_logs_billing_user_created_at")
+	requireIndex(t, tx, "content_moderation_logs", "idx_content_moderation_logs_team_created_at")
+	requireIndex(t, tx, "content_moderation_cyber_warnings", "idx_content_moderation_cyber_warnings_billing_user_created_at")
+	requireIndex(t, tx, "content_moderation_cyber_warnings", "idx_content_moderation_cyber_warnings_team_created_at")
+
+	// 复合 API Key 映射表及唯一性索引必须完整存在。
+	var compositeGroupRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.api_key_composite_groups')").Scan(&compositeGroupRegclass))
+	require.True(t, compositeGroupRegclass.Valid, "expected api_key_composite_groups table to exist")
+	requireIndex(t, tx, "api_key_composite_groups", "idx_api_key_composite_groups_key_group")
+	requireIndex(t, tx, "api_key_composite_groups", "idx_api_key_composite_groups_key_prefix")
 
 	// payment_orders: subscription order snapshot fields
 	requireColumn(t, tx, "payment_orders", "plan_id", "bigint", 0, true)

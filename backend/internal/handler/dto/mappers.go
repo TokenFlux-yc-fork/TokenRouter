@@ -90,6 +90,7 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		Key:                                   k.Key,
 		Name:                                  k.Name,
 		GroupID:                               k.GroupID,
+		IsComposite:                           k.IsComposite,
 		Status:                                k.Status,
 		FastModePolicy:                        k.FastModePolicy,
 		IPWhitelist:                           k.IPWhitelist,
@@ -116,6 +117,14 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		FallbackToDefaultGroupWhenUnavailable: k.FallbackToDefaultGroupWhenUnavailable,
 		CurrentConcurrency:                    k.CurrentConcurrency,
 		Group:                                 GroupFromServiceShallow(k.Group),
+	}
+	out.CompositeGroups = make([]APIKeyCompositeGroup, 0, len(k.CompositeGroups))
+	for _, binding := range k.CompositeGroups {
+		out.CompositeGroups = append(out.CompositeGroups, APIKeyCompositeGroup{
+			GroupID: binding.GroupID,
+			Prefix:  binding.Prefix,
+			Group:   GroupFromServiceShallow(binding.Group),
+		})
 	}
 	if k.TeamID != nil {
 		out.Scope = "team"

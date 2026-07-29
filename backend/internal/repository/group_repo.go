@@ -75,6 +75,23 @@ func normalizedGroupHealthPersistenceFields(groupIn *service.Group) (intervalSec
 	return
 }
 
+// LockGroupSortOrder 在当前事务内串行化末尾排序值的读取和分组创建。
+func (r *groupRepository) LockGroupSortOrder(ctx context.Context) error {
+	if dbent.TxFromContext(ctx) == nil {
+		return errors.New("group sort order lock requires transaction")
+	}
+	sqlq := r.sqlExecutorFromContext(ctx)
+	if sqlq == nil {
+		return errors.New("sql executor is not configured")
+	}
+	_, err := sqlq.ExecContext(
+		ctx,
+		"SELECT pg_advisory_xact_lock(hashtext($1))",
+		"tokenrouter_group_sort_order",
+	)
+	return err
+}
+
 func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) error {
 	client := clientFromContext(ctx, r.client)
 	sqlq := r.sqlExecutorFromContext(ctx)

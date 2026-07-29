@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 25 // v25：认证快照包含 Owner 锁定和 Key 创建时间
+const apiKeyAuthSnapshotVersion = 26 // v26：认证快照包含复合 Key 的有序分组映射
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -390,6 +390,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		TeamOwnerDisabled:                     apiKey.TeamOwnerDisabled,
 		CreatedAt:                             apiKey.CreatedAt,
 		GroupID:                               apiKey.GroupID,
+		IsComposite:                           apiKey.IsComposite,
 		Name:                                  apiKey.Name,
 		Status:                                apiKey.Status,
 		FastModePolicy:                        apiKey.FastModePolicy,
@@ -481,6 +482,28 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			PeakRateMultiplier:              apiKey.Group.PeakRateMultiplier,
 		}
 	}
+	if apiKey.IsComposite {
+		snapshot.CompositeGroups = make([]APIKeyAuthCompositeGroupSnapshot, 0, len(apiKey.CompositeGroups))
+		for _, binding := range apiKey.CompositeGroups {
+			bindingSnapshot := APIKeyAuthCompositeGroupSnapshot{
+				ID:                       binding.ID,
+				GroupID:                  binding.GroupID,
+				Prefix:                   binding.Prefix,
+				NormalizedPrefix:         binding.NormalizedPrefix,
+				SortOrder:                binding.SortOrder,
+				DataSharingNoticeVersion: binding.DataSharingNoticeVersion,
+				DataSharingConfirmedAt:   binding.DataSharingConfirmedAt,
+				Group:                    authGroupSnapshotFromGroup(binding.Group),
+			}
+			if binding.Group != nil && binding.Group.IsActive() && s.userGroupRateRepo != nil {
+				override, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, apiKey.User.ID, binding.GroupID)
+				if err == nil {
+					bindingSnapshot.UserGroupRPMOverride = override
+				}
+			}
+			snapshot.CompositeGroups = append(snapshot.CompositeGroups, bindingSnapshot)
+		}
+	}
 	return snapshot
 }
 
@@ -495,6 +518,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		TeamOwnerDisabled:                     snapshot.TeamOwnerDisabled,
 		CreatedAt:                             snapshot.CreatedAt,
 		GroupID:                               snapshot.GroupID,
+		IsComposite:                           snapshot.IsComposite,
 		Key:                                   key,
 		Name:                                  snapshot.Name,
 		Status:                                snapshot.Status,
@@ -583,6 +607,78 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			PeakRateMultiplier:              snapshot.Group.PeakRateMultiplier,
 		}
 	}
+	if snapshot.IsComposite {
+		apiKey.CompositeGroups = make([]APIKeyCompositeGroup, 0, len(snapshot.CompositeGroups))
+		for _, binding := range snapshot.CompositeGroups {
+			apiKey.CompositeGroups = append(apiKey.CompositeGroups, APIKeyCompositeGroup{
+				ID:                       binding.ID,
+				APIKeyID:                 snapshot.APIKeyID,
+				GroupID:                  binding.GroupID,
+				Prefix:                   binding.Prefix,
+				NormalizedPrefix:         binding.NormalizedPrefix,
+				SortOrder:                binding.SortOrder,
+				DataSharingNoticeVersion: binding.DataSharingNoticeVersion,
+				DataSharingConfirmedAt:   binding.DataSharingConfirmedAt,
+				UserGroupRPMOverride:     binding.UserGroupRPMOverride,
+				Group:                    groupFromAuthSnapshot(binding.Group),
+			})
+		}
+	}
 	s.compileAPIKeyIPRules(apiKey)
 	return apiKey
+}
+
+// authGroupSnapshotFromGroup 将分组复制到认证缓存，避免复合映射共享可变对象。
+func authGroupSnapshotFromGroup(group *Group) *APIKeyAuthGroupSnapshot {
+	if group == nil {
+		return nil
+	}
+	return &APIKeyAuthGroupSnapshot{
+		ID: group.ID, Name: group.Name, Platform: group.Platform, IsExclusive: group.IsExclusive,
+		Status: group.Status, RateMultiplier: group.RateMultiplier, DataSharingEnabled: group.DataSharingEnabled,
+		SessionIsolationEnabled: group.SessionIsolationEnabled, AllowImageGeneration: group.AllowImageGeneration,
+		AllowBatchImageGeneration: group.AllowBatchImageGeneration, ImageRateIndependent: group.ImageRateIndependent,
+		ImageRateMultiplier: group.ImageRateMultiplier, ImagePrice1K: group.ImagePrice1K, ImagePrice2K: group.ImagePrice2K,
+		ImagePrice4K: group.ImagePrice4K, VideoRateIndependent: group.VideoRateIndependent,
+		VideoRateMultiplier: group.VideoRateMultiplier, VideoPrice480P: group.VideoPrice480P,
+		VideoPrice720P: group.VideoPrice720P, VideoPrice1080P: group.VideoPrice1080P,
+		WebSearchPricePerCall: group.WebSearchPricePerCall, ClaudeCodeOnly: group.ClaudeCodeOnly,
+		FallbackGroupID: group.FallbackGroupID, FallbackGroupIDOnInvalidRequest: group.FallbackGroupIDOnInvalidRequest,
+		UnavailableFallbackGroupID: group.UnavailableFallbackGroupID, ModelRouting: group.ModelRouting,
+		ModelRoutingEnabled: group.ModelRoutingEnabled, MCPXMLInject: group.MCPXMLInject,
+		SupportedModelScopes: group.SupportedModelScopes, AllowMessagesDispatch: group.AllowMessagesDispatch,
+		AllowLive: group.AllowLive, DefaultMappedModel: group.DefaultMappedModel,
+		MessagesDispatchModelConfig: group.MessagesDispatchModelConfig, ModelsListConfig: group.ModelsListConfig,
+		RPMLimit: group.RPMLimit, MaxReasoningEffort: group.MaxReasoningEffort,
+		ReasoningEffortMappings: group.ReasoningEffortMappings, PeakRateEnabled: group.PeakRateEnabled,
+		PeakStart: group.PeakStart, PeakEnd: group.PeakEnd, PeakRateMultiplier: group.PeakRateMultiplier,
+	}
+}
+
+// groupFromAuthSnapshot 为单次请求还原独立分组对象。
+func groupFromAuthSnapshot(snapshot *APIKeyAuthGroupSnapshot) *Group {
+	if snapshot == nil {
+		return nil
+	}
+	return &Group{
+		ID: snapshot.ID, Name: snapshot.Name, Platform: snapshot.Platform, IsExclusive: snapshot.IsExclusive,
+		Status: snapshot.Status, Hydrated: true, RateMultiplier: snapshot.RateMultiplier,
+		DataSharingEnabled: snapshot.DataSharingEnabled, SessionIsolationEnabled: snapshot.SessionIsolationEnabled,
+		AllowImageGeneration: snapshot.AllowImageGeneration, AllowBatchImageGeneration: snapshot.AllowBatchImageGeneration,
+		ImageRateIndependent: snapshot.ImageRateIndependent, ImageRateMultiplier: snapshot.ImageRateMultiplier,
+		ImagePrice1K: snapshot.ImagePrice1K, ImagePrice2K: snapshot.ImagePrice2K, ImagePrice4K: snapshot.ImagePrice4K,
+		VideoRateIndependent: snapshot.VideoRateIndependent, VideoRateMultiplier: snapshot.VideoRateMultiplier,
+		VideoPrice480P: snapshot.VideoPrice480P, VideoPrice720P: snapshot.VideoPrice720P,
+		VideoPrice1080P: snapshot.VideoPrice1080P, WebSearchPricePerCall: snapshot.WebSearchPricePerCall,
+		ClaudeCodeOnly: snapshot.ClaudeCodeOnly, FallbackGroupID: snapshot.FallbackGroupID,
+		FallbackGroupIDOnInvalidRequest: snapshot.FallbackGroupIDOnInvalidRequest,
+		UnavailableFallbackGroupID:      snapshot.UnavailableFallbackGroupID, ModelRouting: snapshot.ModelRouting,
+		ModelRoutingEnabled: snapshot.ModelRoutingEnabled, MCPXMLInject: snapshot.MCPXMLInject,
+		SupportedModelScopes: snapshot.SupportedModelScopes, AllowMessagesDispatch: snapshot.AllowMessagesDispatch,
+		AllowLive: snapshot.AllowLive, DefaultMappedModel: snapshot.DefaultMappedModel,
+		MessagesDispatchModelConfig: snapshot.MessagesDispatchModelConfig, ModelsListConfig: snapshot.ModelsListConfig,
+		RPMLimit: snapshot.RPMLimit, MaxReasoningEffort: snapshot.MaxReasoningEffort,
+		ReasoningEffortMappings: snapshot.ReasoningEffortMappings, PeakRateEnabled: snapshot.PeakRateEnabled,
+		PeakStart: snapshot.PeakStart, PeakEnd: snapshot.PeakEnd, PeakRateMultiplier: snapshot.PeakRateMultiplier,
+	}
 }

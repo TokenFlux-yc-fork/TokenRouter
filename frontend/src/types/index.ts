@@ -234,6 +234,8 @@ export interface PublicSettings {
   payment_enabled: boolean
   team_enabled?: boolean
   team_self_service_enabled?: boolean
+  // 旧版公开设置可能缺少该字段，调用方应仅在明确为 false 时关闭入口。
+  data_sharing_enabled?: boolean
   table_default_page_size: number
   table_page_size_options: number[]
   usage_ranking_limit: number
@@ -745,6 +747,13 @@ export interface ModelsListConfig {
 // 单个 API Key 的 Fast 模式策略，系统级策略拥有更高优先级。
 export type ApiKeyFastModePolicy = 'follow_request' | 'force_on' | 'force_off'
 
+// ApiKeyCompositeGroup 表示一个复合 Key 的分组前缀映射。
+export interface ApiKeyCompositeGroup {
+  group_id: number
+  prefix: string
+  group?: Group
+}
+
 export interface ApiKey {
   id: number
   user_id: number
@@ -754,6 +763,8 @@ export interface ApiKey {
   key: string
   name: string
   group_id: number | null
+  is_composite?: boolean
+  composite_groups?: ApiKeyCompositeGroup[]
   status: 'active' | 'inactive' | 'disabled' | 'quota_exhausted' | 'expired'
   fast_mode_policy: ApiKeyFastModePolicy
   ip_whitelist: string[]
@@ -789,6 +800,8 @@ export interface CreateApiKeyRequest {
   name: string
   scope?: 'personal' | 'team'
   group_id?: number | null
+  is_composite?: boolean
+  composite_groups?: Array<{ group_id: number; prefix: string }>
   fast_mode_policy?: ApiKeyFastModePolicy
   custom_key?: string // Optional custom API Key
   ip_whitelist?: string[]
@@ -806,6 +819,8 @@ export interface CreateApiKeyRequest {
 export interface UpdateApiKeyRequest {
   name?: string
   group_id?: number | null
+  is_composite?: boolean
+  composite_groups?: Array<{ group_id: number; prefix: string }>
   status?: 'active' | 'inactive'
   fast_mode_policy?: ApiKeyFastModePolicy
   ip_whitelist?: string[]

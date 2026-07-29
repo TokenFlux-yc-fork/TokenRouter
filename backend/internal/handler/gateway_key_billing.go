@@ -30,6 +30,18 @@ type keyBillingInfoResponse struct {
 	ObservedAt              time.Time `json:"observed_at"`
 }
 
+type compositeKeyBillingInfoResponse struct {
+	Object        string                         `json:"object"`
+	SchemaVersion int                            `json:"schema_version"`
+	Mappings      []compositeKeyBillingInfoEntry `json:"mappings"`
+}
+
+type compositeKeyBillingInfoEntry struct {
+	Prefix  string                 `json:"prefix"`
+	GroupID int64                  `json:"group_id"`
+	Billing keyBillingInfoResponse `json:"billing"`
+}
+
 // KeyBillingInfo 返回已认证 API Key 当前使用的 token 计费倍率。
 // 接口路径为 GET /v1/sub2api/billing。
 func (h *GatewayHandler) KeyBillingInfo(c *gin.Context) {
@@ -40,6 +52,10 @@ func (h *GatewayHandler) KeyBillingInfo(c *gin.Context) {
 	}
 	if h.cfg != nil && h.cfg.RunMode == config.RunModeSimple {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Billing information is not supported in simple mode")
+		return
+	}
+	if apiKey.IsComposite {
+		h.writeCompositeKeyBillingInfo(c, apiKey)
 		return
 	}
 	if apiKey.GroupID == nil {
@@ -59,6 +75,35 @@ func (h *GatewayHandler) KeyBillingInfo(c *gin.Context) {
 
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, buildKeyBillingInfo(apiKey, resolvedRate, timezone.Now()))
+}
+
+// writeCompositeKeyBillingInfo 分映射返回倍率，不为无模型请求选择任意默认分组。
+func (h *GatewayHandler) writeCompositeKeyBillingInfo(c *gin.Context, apiKey *service.APIKey) {
+	response := compositeKeyBillingInfoResponse{
+		Object:        "sub2api.composite_key_billing",
+		SchemaVersion: keyBillingInfoSchemaVersion,
+		Mappings:      make([]compositeKeyBillingInfoEntry, 0, len(apiKey.CompositeGroups)),
+	}
+	now := timezone.Now()
+	for _, binding := range apiKey.CompositeGroups {
+		if binding.Group == nil || !binding.Group.IsActive() {
+			continue
+		}
+		selected := *apiKey
+		groupID := binding.GroupID
+		selected.GroupID = &groupID
+		selected.Group = binding.Group
+		resolvedRate, ok := h.resolveKeyBillingRate(c, &selected)
+		if !ok {
+			h.errorResponse(c, http.StatusInternalServerError, "api_error", "Billing information is unavailable")
+			return
+		}
+		response.Mappings = append(response.Mappings, compositeKeyBillingInfoEntry{
+			Prefix: binding.Prefix, GroupID: binding.GroupID, Billing: buildKeyBillingInfo(&selected, resolvedRate, now),
+		})
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *GatewayHandler) resolveKeyBillingRate(c *gin.Context, apiKey *service.APIKey) (float64, bool) {

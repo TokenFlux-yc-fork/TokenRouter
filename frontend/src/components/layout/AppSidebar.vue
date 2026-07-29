@@ -653,6 +653,7 @@ const ChevronDownIcon = {
 // 批量图片入口还需要用户 API Key 和分组权限同时满足。
 const flagBatchImageAccess = () => canUseBatchImage.value
 const flagTeamAccess = () => appStore.cachedPublicSettings?.team_enabled !== false
+const flagDataSharingAccess = () => appStore.cachedPublicSettings?.data_sharing_enabled !== false
 
 // 普通用户导航项。
 const userNavItems = computed((): NavItem[] => {
@@ -664,7 +665,7 @@ const userNavItems = computed((): NavItem[] => {
     { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
-    { path: '/data-sharing', label: t('nav.dataSharing'), icon: DatabaseIcon, hideInSimpleMode: true },
+    { path: '/data-sharing', label: t('nav.dataSharing'), icon: DatabaseIcon, hideInSimpleMode: true, featureFlag: flagDataSharingAccess },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     ...(appStore.cachedPublicSettings?.payment_enabled
       ? [
@@ -719,7 +720,7 @@ const personalNavItems = computed((): NavItem[] => {
     { path: '/team', label: t('nav.team'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
-    { path: '/data-sharing', label: t('nav.dataSharing'), icon: DatabaseIcon, hideInSimpleMode: true },
+    { path: '/data-sharing', label: t('nav.dataSharing'), icon: DatabaseIcon, hideInSimpleMode: true, featureFlag: flagDataSharingAccess },
     { path: '/subscriptions', label: t('nav.mySubscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     ...(appStore.cachedPublicSettings?.payment_enabled
       ? [
@@ -786,7 +787,7 @@ const adminNavItems = computed((): NavItem[] => {
       ? [{ path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon }]
       : []),
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
-    { path: '/admin/teams', label: t('nav.teams'), icon: UsersIcon, hideInSimpleMode: true },
+    { path: '/admin/teams', label: t('nav.teams'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagTeamAccess },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
     { path: '/admin/channels', label: t('nav.channels', '渠道管理'), icon: ChannelIcon, hideInSimpleMode: true },
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
@@ -834,7 +835,7 @@ const adminNavItems = computed((): NavItem[] => {
         ]
       : []),
     { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon },
-    { path: '/admin/data-sharing', label: t('nav.dataSharing'), icon: DatabaseIcon, hideInSimpleMode: true },
+    { path: '/admin/data-sharing', label: t('nav.dataSharing'), icon: DatabaseIcon, hideInSimpleMode: true, featureFlag: flagDataSharingAccess },
     { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ShieldIcon, hideInSimpleMode: true }
   ]
 

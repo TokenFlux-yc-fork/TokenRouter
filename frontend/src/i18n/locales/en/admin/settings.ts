@@ -48,6 +48,18 @@ dataSharing: {
           'If the window and bucket size would produce more than 720 bars, the backend widens the bucket size automatically.'
       },
       features: {
+        team: {
+          title: 'Team Features',
+          description: 'Control whether team pages are available to users and administrators.',
+          enabled: 'Enable Team Features',
+          enabledHint: 'When off, related page entries are hidden and direct URL access is blocked.'
+        },
+        dataSharing: {
+          title: 'Data Sharing',
+          description: 'Control whether data sharing pages are available to users and administrators.',
+          enabled: 'Enable Data Sharing',
+          enabledHint: 'When off, related page entries are hidden and direct URL access is blocked.'
+        },
         riskControl: {
           title: 'Risk Control',
           description: 'Enable the content moderation menu and gateway audit entry point. Disabled by default.',
@@ -55,7 +67,7 @@ dataSharing: {
           enabled: 'Enable Risk Control',
           enabledHint: 'When off, the admin sidebar entry is hidden and gateway moderation is skipped.',
           cyberSessionBlockEnabled: 'Cyber Session Block',
-          cyberSessionBlockEnabledHint: 'After upstream returns cyber_policy, temporarily reject later requests in the same explicit session_id / conversation_id / prompt_cache_key.',
+          cyberSessionBlockEnabledHint: 'Applies only to groups included in the risk control scope. After upstream returns cyber_policy, temporarily reject later requests in the same explicit session_id / conversation_id / prompt_cache_key.',
           cyberSessionBlockTTLSeconds: 'Block Duration (seconds)',
           cyberSessionBlockTTLSecondsHint: 'Default is 3600 seconds. When disabled, only audit and usage records are written.',
         },

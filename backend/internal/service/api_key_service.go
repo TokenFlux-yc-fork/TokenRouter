@@ -36,6 +36,16 @@ var (
 	ErrInvalidIPPattern            = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
 	ErrInvalidAPIKeyFastModePolicy = infraerrors.BadRequest("INVALID_API_KEY_FAST_MODE_POLICY", "invalid API key fast mode policy")
 	ErrDataSharingConsentRequired  = infraerrors.Forbidden("DATA_SHARING_CONSENT_REQUIRED", "switching to a data sharing group requires confirmation")
+	ErrCompositeKeyGroupsRequired  = infraerrors.BadRequest("COMPOSITE_KEY_GROUPS_REQUIRED", "composite api key requires at least one group")
+	ErrCompositeKeyTooManyGroups   = infraerrors.BadRequest("COMPOSITE_KEY_TOO_MANY_GROUPS", "composite api key supports at most 20 groups")
+	ErrCompositeKeyPrefixInvalid   = infraerrors.BadRequest("COMPOSITE_KEY_PREFIX_INVALID", "composite api key prefix is invalid")
+	ErrCompositeKeyPrefixDuplicate = infraerrors.BadRequest("COMPOSITE_KEY_PREFIX_DUPLICATE", "composite api key prefixes must be unique")
+	ErrCompositeKeyGroupDuplicate  = infraerrors.BadRequest("COMPOSITE_KEY_GROUP_DUPLICATE", "composite api key groups must be unique")
+	ErrCompositeKeyGroupConflict   = infraerrors.BadRequest("COMPOSITE_KEY_GROUP_CONFLICT", "composite api key cannot use group_id")
+	ErrCompositeKeyTargetRequired  = infraerrors.BadRequest("COMPOSITE_KEY_TARGET_GROUP_REQUIRED", "converting a composite api key requires a target group")
+	ErrCompositeKeyPrefixRequired  = infraerrors.BadRequest("COMPOSITE_KEY_MODEL_PREFIX_REQUIRED", "composite api key model must use prefix/model_id")
+	ErrCompositeKeyPrefixNotFound  = infraerrors.BadRequest("COMPOSITE_KEY_PREFIX_NOT_FOUND", "composite api key model prefix was not found")
+	ErrCompositeKeyUnsupported     = infraerrors.BadRequest("COMPOSITE_KEY_ENDPOINT_UNSUPPORTED", "composite api key is not supported for this endpoint")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -192,12 +202,15 @@ type APIKeyAuthCacheInvalidator interface {
 
 // CreateAPIKeyRequest 创建API Key请求
 type CreateAPIKeyRequest struct {
-	Name        string   `json:"name"`
-	Scope       string   `json:"scope"`
-	GroupID     *int64   `json:"group_id"`
-	CustomKey   *string  `json:"custom_key"`   // 可选的自定义key
-	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
-	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单
+	Name        string `json:"name"`
+	Scope       string `json:"scope"`
+	GroupID     *int64 `json:"group_id"`
+	IsComposite bool   `json:"is_composite"`
+	// CompositeGroups 是复合 Key 的完整分组映射列表。
+	CompositeGroups []APIKeyCompositeGroupInput `json:"composite_groups"`
+	CustomKey       *string                     `json:"custom_key"`   // 可选的自定义key
+	IPWhitelist     []string                    `json:"ip_whitelist"` // IP 白名单
+	IPBlacklist     []string                    `json:"ip_blacklist"` // IP 黑名单
 	// FastModePolicy 为空时默认跟随下游请求。
 	FastModePolicy string `json:"fast_mode_policy"`
 
@@ -220,11 +233,14 @@ type CreateAPIKeyRequest struct {
 
 // UpdateAPIKeyRequest 更新API Key请求
 type UpdateAPIKeyRequest struct {
-	Name        *string   `json:"name"`
-	GroupID     *int64    `json:"group_id"`
-	Status      *string   `json:"status"`
-	IPWhitelist *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
-	IPBlacklist *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
+	Name        *string `json:"name"`
+	GroupID     *int64  `json:"group_id"`
+	IsComposite *bool   `json:"is_composite"`
+	// CompositeGroups 非 nil 时完整替换当前复合映射。
+	CompositeGroups *[]APIKeyCompositeGroupInput `json:"composite_groups"`
+	Status          *string                      `json:"status"`
+	IPWhitelist     *[]string                    `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
+	IPBlacklist     *[]string                    `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
 	// FastModePolicy 为 nil 时保持原值。
 	FastModePolicy *string `json:"fast_mode_policy"`
 
@@ -519,11 +535,28 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		}
 	}
 
-	// 验证分组权限（如果指定了分组）
+	// 验证普通分组或复合分组权限。
 	var dataSharingNoticeVersion int
 	var dataSharingConfirmedGroupID *int64
 	var dataSharingConfirmedAt *time.Time
-	if req.GroupID != nil {
+	var compositeGroups []APIKeyCompositeGroup
+	if req.IsComposite {
+		if req.GroupID != nil {
+			return nil, ErrCompositeKeyGroupConflict
+		}
+		compositeGroups, err = s.prepareCompositeGroups(
+			ctx,
+			user,
+			req.CompositeGroups,
+			nil,
+			req.DataSharingConfirmed,
+			req.DataSharingNoticeVersion,
+		)
+		if err != nil {
+			return nil, err
+		}
+		dataSharingNoticeVersion, dataSharingConfirmedGroupID, dataSharingConfirmedAt = compositeConsentSnapshot(compositeGroups)
+	} else if req.GroupID != nil {
 		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
 		if err != nil {
 			return nil, fmt.Errorf("get group: %w", err)
@@ -592,6 +625,8 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		Key:                                   key,
 		Name:                                  html.EscapeString(req.Name),
 		GroupID:                               req.GroupID,
+		IsComposite:                           req.IsComposite,
+		CompositeGroups:                       compositeGroups,
 		Status:                                StatusActive,
 		FastModePolicy:                        fastModePolicy,
 		IPWhitelist:                           req.IPWhitelist,
@@ -775,9 +810,11 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
-			apiKey = s.applyDefaultGroupFallback(ctx, apiKey)
-			if !s.canUserUseBoundGroup(ctx, apiKey) {
-				return nil, fmt.Errorf("get api key: %w", ErrGroupDisabledForUser)
+			if !apiKey.IsComposite {
+				apiKey = s.applyDefaultGroupFallback(ctx, apiKey)
+				if !s.canUserUseBoundGroup(ctx, apiKey) {
+					return nil, fmt.Errorf("get api key: %w", ErrGroupDisabledForUser)
+				}
 			}
 			s.compileAPIKeyIPRules(apiKey)
 			return apiKey, nil
@@ -796,9 +833,11 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
-			apiKey = s.applyDefaultGroupFallback(ctx, apiKey)
-			if !s.canUserUseBoundGroup(ctx, apiKey) {
-				return nil, fmt.Errorf("get api key: %w", ErrGroupDisabledForUser)
+			if !apiKey.IsComposite {
+				apiKey = s.applyDefaultGroupFallback(ctx, apiKey)
+				if !s.canUserUseBoundGroup(ctx, apiKey) {
+					return nil, fmt.Errorf("get api key: %w", ErrGroupDisabledForUser)
+				}
 			}
 			s.compileAPIKeyIPRules(apiKey)
 			return apiKey, nil
@@ -812,9 +851,11 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
 			}
-			apiKey = s.applyDefaultGroupFallback(ctx, apiKey)
-			if !s.canUserUseBoundGroup(ctx, apiKey) {
-				return nil, fmt.Errorf("get api key: %w", ErrGroupDisabledForUser)
+			if !apiKey.IsComposite {
+				apiKey = s.applyDefaultGroupFallback(ctx, apiKey)
+				if !s.canUserUseBoundGroup(ctx, apiKey) {
+					return nil, fmt.Errorf("get api key: %w", ErrGroupDisabledForUser)
+				}
 			}
 			s.compileAPIKeyIPRules(apiKey)
 			return apiKey, nil
@@ -826,12 +867,36 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
 	apiKey.Key = key
-	apiKey = s.applyDefaultGroupFallback(ctx, apiKey)
-	if !s.canUserUseBoundGroup(ctx, apiKey) {
-		return nil, fmt.Errorf("get api key: %w", ErrGroupDisabledForUser)
+	if !apiKey.IsComposite {
+		apiKey = s.applyDefaultGroupFallback(ctx, apiKey)
+		if !s.canUserUseBoundGroup(ctx, apiKey) {
+			return nil, fmt.Errorf("get api key: %w", ErrGroupDisabledForUser)
+		}
 	}
 	s.compileAPIKeyIPRules(apiKey)
 	return apiKey, nil
+}
+
+// SelectCompositeGroupForRequest 为复合 Key 创建请求级分组视图，缓存对象不会被修改。
+func (s *APIKeyService) SelectCompositeGroupForRequest(ctx context.Context, apiKey *APIKey, binding *APIKeyCompositeGroup) (*APIKey, error) {
+	if apiKey == nil || !apiKey.IsComposite || binding == nil || binding.Group == nil {
+		return nil, ErrCompositeKeyPrefixNotFound
+	}
+	selected := *apiKey
+	selected.CompositeGroups = cloneCompositeBindings(apiKey.CompositeGroups)
+	groupID := binding.GroupID
+	selected.GroupID = &groupID
+	selected.Group = binding.Group
+	if apiKey.User != nil {
+		userCopy := *apiKey.User
+		userCopy.UserGroupRPMOverride = binding.UserGroupRPMOverride
+		selected.User = &userCopy
+	}
+	prepared := s.applyDefaultGroupFallback(ctx, &selected)
+	if !s.canUserUseBoundGroup(ctx, prepared) {
+		return nil, ErrGroupDisabledForUser
+	}
+	return prepared, nil
 }
 
 // applyDefaultGroupFallback 为未绑定有效分组或绑定停用分组的 API Key 计算请求级默认分组。
@@ -1019,7 +1084,62 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.FastModePolicy = fastModePolicy
 	}
 
-	if req.GroupID != nil {
+	targetComposite := apiKey.IsComposite
+	if req.IsComposite != nil {
+		targetComposite = *req.IsComposite
+	}
+
+	// 类型切换和复合映射更新必须在写库前一次性完成校验。
+	if targetComposite {
+		if req.GroupID != nil {
+			return nil, ErrCompositeKeyGroupConflict
+		}
+		if !apiKey.IsComposite && req.CompositeGroups == nil {
+			return nil, ErrCompositeKeyGroupsRequired
+		}
+		if req.CompositeGroups != nil {
+			billingUserID := userID
+			if apiKey.TeamID != nil {
+				if s.teamRepo == nil {
+					return nil, ErrTeamFeatureDisabled
+				}
+				teamCtx, teamErr := s.teamRepo.GetContextByUserID(ctx, userID)
+				if teamErr != nil || teamCtx.Team.ID != *apiKey.TeamID {
+					return nil, ErrTeamMembershipRequired
+				}
+				billingUserID = teamCtx.Owner.UserID
+			}
+			user, err := s.userRepo.GetByID(ctx, billingUserID)
+			if err != nil {
+				return nil, fmt.Errorf("get user: %w", err)
+			}
+			bindings, err := s.prepareCompositeGroups(
+				ctx,
+				user,
+				*req.CompositeGroups,
+				apiKey.CompositeGroups,
+				req.DataSharingConfirmed,
+				req.DataSharingNoticeVersion,
+			)
+			if err != nil {
+				return nil, err
+			}
+			apiKey.CompositeGroups = bindings
+			apiKey.User = user
+			apiKey.DataSharingNoticeVersion, apiKey.DataSharingConfirmedGroupID, apiKey.DataSharingConfirmedAt = compositeConsentSnapshot(bindings)
+		}
+		apiKey.IsComposite = true
+		apiKey.GroupID = nil
+		apiKey.Group = nil
+	} else if apiKey.IsComposite {
+		if req.GroupID == nil || *req.GroupID <= 0 {
+			return nil, ErrCompositeKeyTargetRequired
+		}
+		apiKey.IsComposite = false
+		apiKey.CompositeGroups = nil
+	}
+
+	if !targetComposite && req.GroupID != nil {
 		// 验证分组权限
 		billingUserID := userID
 		if apiKey.TeamID != nil {
@@ -1054,7 +1174,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.Group = group
 		apiKey.User = user
 	}
-	if !s.canUserUseBoundGroup(ctx, apiKey) {
+	if !apiKey.IsComposite && !s.canUserUseBoundGroup(ctx, apiKey) {
 		return nil, ErrGroupDisabledForUser
 	}
 

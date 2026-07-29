@@ -6356,6 +6356,54 @@
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.features.team.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.features.team.description") }}
+              </p>
+            </div>
+            <div class="p-6">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.features.team.enabled") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.team.enabledHint") }}
+                  </p>
+                </div>
+                <Toggle v-model="form.team_enabled" />
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.features.dataSharing.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.features.dataSharing.description") }}
+              </p>
+            </div>
+            <div class="p-6">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    {{ t("admin.settings.features.dataSharing.enabled") }}
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.features.dataSharing.enabledHint") }}
+                  </p>
+                </div>
+                <Toggle v-model="form.data_sharing_enabled" />
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
                 {{ t("admin.settings.features.affiliate.title") }}
               </h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -8434,6 +8482,9 @@ const form = reactive<SettingsForm>({
   enable_anthropic_cache_ttl_1h_injection: false,
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
+  // 页面功能开关默认开启，兼容升级前行为。
+  team_enabled: true,
+  data_sharing_enabled: true,
   risk_control_enabled: false,
   cyber_session_block_enabled: false,
   cyber_session_block_ttl_seconds: 3600,
@@ -10118,6 +10169,9 @@ async function saveSettings() {
         normalizeUserPromptReplacementConfigForSave(),
       // Payment configuration
       payment_enabled: form.payment_enabled,
+      // 页面功能开关
+      team_enabled: form.team_enabled,
+      data_sharing_enabled: form.data_sharing_enabled,
       risk_control_enabled: form.risk_control_enabled,
       cyber_session_block_enabled: form.cyber_session_block_enabled,
       cyber_session_block_ttl_seconds: Math.max(

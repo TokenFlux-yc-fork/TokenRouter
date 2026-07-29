@@ -91,6 +91,29 @@ func (h *BatchImageHandler) Models(c *gin.Context) {
 		batchImageError(c, infraerrors.New(http.StatusUnauthorized, "API_KEY_REQUIRED", "API key is required"))
 		return
 	}
+	apiKey, _ := middleware.GetAPIKeyFromContext(c)
+	if apiKey != nil && apiKey.IsComposite {
+		out := &service.BatchImagePublicModelsResponse{Object: "list", Data: make([]service.BatchImagePublicModel, 0)}
+		for _, binding := range apiKey.CompositeGroups {
+			if !compositeGroupAvailableToUser(apiKey, binding.Group) || !binding.Group.AllowBatchImageGeneration {
+				continue
+			}
+			groupOwner := owner
+			groupID := binding.GroupID
+			groupOwner.GroupID = &groupID
+			models, err := h.service.ListModels(c.Request.Context(), groupOwner)
+			if err != nil {
+				batchImageError(c, err)
+				return
+			}
+			for _, model := range models.Data {
+				model.ID = binding.Prefix + "/" + model.ID
+				out.Data = append(out.Data, model)
+			}
+		}
+		c.JSON(http.StatusOK, out)
+		return
+	}
 	got, err := h.service.ListModels(c.Request.Context(), owner)
 	if err != nil {
 		batchImageError(c, err)

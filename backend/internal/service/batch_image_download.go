@@ -241,7 +241,7 @@ func (s *BatchImageDownloadService) StreamZip(ctx context.Context, owner BatchIm
 	zipErrors = append(zipErrors, batchImageZipErrorsFromItems(failedItems)...)
 	if err := writeBatchImageZipJSON(zipWriter, "manifest.json", batchImageZipManifest{
 		BatchID:      job.BatchID,
-		Model:        job.Model,
+		Model:        batchImageRequestedModel(job),
 		ItemCount:    job.ItemCount,
 		SuccessCount: job.SuccessCount,
 		FailCount:    job.FailCount,

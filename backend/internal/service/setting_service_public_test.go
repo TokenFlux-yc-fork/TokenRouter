@@ -106,6 +106,22 @@ func TestSettingService_GetPublicSettings_ExposesAffiliateEnabled(t *testing.T) 
 	require.True(t, settings.AffiliateEnabled)
 }
 
+// 页面开关必须在公开设置中明确返回，供侧边栏和路由守卫共用。
+func TestSettingService_GetPublicSettings_ExposesPageFeatureFlags(t *testing.T) {
+	repo := &settingPublicRepoStub{
+		values: map[string]string{
+			SettingKeyTeamEnabled:        "false",
+			SettingKeyDataSharingEnabled: "false",
+		},
+	}
+	svc := NewSettingService(repo, &config.Config{Team: config.TeamConfig{Enabled: true}})
+
+	settings, err := svc.GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.False(t, settings.TeamEnabled)
+	require.False(t, settings.DataSharingEnabled)
+}
+
 func TestSettingService_GetPublicSettings_ExposesAllowUserViewErrorRequests(t *testing.T) {
 	repo := &settingPublicRepoStub{
 		values: map[string]string{
@@ -126,9 +142,11 @@ func TestSettingService_GetPublicSettingsForInjection_ExposesPublicFeatureFlags(
 			SettingKeyAffiliateEnabled:             "true",
 			SettingKeyForceEmailOnThirdPartySignup: "true",
 			SettingKeyAllowUserViewErrorRequests:   "true",
+			SettingKeyTeamEnabled:                  "true",
+			SettingKeyDataSharingEnabled:           "false",
 		},
 	}
-	svc := NewSettingService(repo, &config.Config{})
+	svc := NewSettingService(repo, &config.Config{Team: config.TeamConfig{Enabled: true}})
 
 	payload, err := svc.GetPublicSettingsForInjection(context.Background())
 	require.NoError(t, err)
@@ -140,11 +158,15 @@ func TestSettingService_GetPublicSettingsForInjection_ExposesPublicFeatureFlags(
 		AffiliateEnabled             bool `json:"affiliate_enabled"`
 		ForceEmailOnThirdPartySignup bool `json:"force_email_on_third_party_signup"`
 		AllowUserViewErrorRequests   bool `json:"allow_user_view_error_requests"`
+		TeamEnabled                  bool `json:"team_enabled"`
+		DataSharingEnabled           bool `json:"data_sharing_enabled"`
 	}
 	require.NoError(t, json.Unmarshal(encoded, &settings))
 	require.True(t, settings.AffiliateEnabled)
 	require.True(t, settings.ForceEmailOnThirdPartySignup)
 	require.True(t, settings.AllowUserViewErrorRequests)
+	require.True(t, settings.TeamEnabled)
+	require.False(t, settings.DataSharingEnabled)
 }
 
 func TestSettingService_GetPublicSettingsForInjection_ExposesBuildIdentitySeparately(t *testing.T) {

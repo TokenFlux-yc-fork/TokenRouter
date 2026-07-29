@@ -12,6 +12,7 @@ import (
 	"time"
 
 	dbent "github.com/TokenFlux/TokenRouter/ent"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/ctxkey"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
@@ -154,6 +155,7 @@ func (r *usageLogRepository) Create(ctx context.Context, log *service.UsageLog) 
 	if log == nil {
 		return false, nil
 	}
+	applyCompositeClientModel(ctx, log)
 
 	if tx := dbent.TxFromContext(ctx); tx != nil {
 		return r.createSingle(ctx, tx.Client(), log)
@@ -170,6 +172,7 @@ func (r *usageLogRepository) CreateBestEffort(ctx context.Context, log *service.
 	if log == nil {
 		return nil
 	}
+	applyCompositeClientModel(ctx, log)
 
 	if tx := dbent.TxFromContext(ctx); tx != nil {
 		_, err := r.createSingle(ctx, tx.Client(), log)
@@ -211,6 +214,16 @@ func (r *usageLogRepository) CreateBestEffort(ctx context.Context, log *service.
 		return err
 	case <-ctx.Done():
 		return service.MarkUsageLogCreateDropped(ctx.Err())
+	}
+}
+
+// applyCompositeClientModel 仅覆盖展示用请求模型，不改变实际模型与计费模型。
+func applyCompositeClientModel(ctx context.Context, log *service.UsageLog) {
+	if ctx == nil || log == nil {
+		return
+	}
+	if clientModel, ok := ctx.Value(ctxkey.ClientModel).(string); ok && strings.TrimSpace(clientModel) != "" {
+		log.RequestedModel = strings.TrimSpace(clientModel)
 	}
 }
 

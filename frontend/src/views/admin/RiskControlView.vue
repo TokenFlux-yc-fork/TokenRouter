@@ -338,6 +338,9 @@
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <div>{{ row.user_email || '-' }}</div>
                       <div v-if="row.user_id" class="text-xs text-gray-400">UID {{ row.user_id }}</div>
+                      <div v-if="row.team_id" class="text-xs text-gray-400" data-test="moderation-team-attribution">
+                        {{ t('admin.riskControl.teamAttribution', { teamId: row.team_id, billingUserId: row.billing_user_id ?? '-' }) }}
+                      </div>
                     </td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">{{ row.api_key_name || '-' }}</td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
@@ -424,6 +427,9 @@
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <div>{{ row.user_email || '-' }}</div>
                       <div v-if="row.user_id" class="text-xs text-gray-400">UID {{ row.user_id }}</div>
+                      <div v-if="row.team_id" class="text-xs text-gray-400" data-test="cyber-team-attribution">
+                        {{ t('admin.riskControl.teamAttribution', { teamId: row.team_id, billingUserId: row.billing_user_id ?? '-' }) }}
+                      </div>
                     </td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">{{ row.api_key_name || '-' }}</td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
@@ -455,6 +461,7 @@
                     <td class="w-[360px] max-w-sm px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
                       <button
                         type="button"
+                        data-test="cyber-detail-button"
                         class="group flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-gray-100 dark:hover:bg-dark-700"
                         :title="cyberSummaryText(row)"
                         @click="openCyberDetail(row)"
@@ -1253,6 +1260,9 @@
             <div class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/70">
               <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.user') }}</p>
               <p class="mt-1 truncate text-sm font-semibold text-gray-900 dark:text-white">{{ inputDetailRow.user_email || '-' }}</p>
+              <p v-if="inputDetailRow.team_id" class="mt-1 text-xs text-gray-500 dark:text-gray-400" data-test="moderation-detail-team-attribution">
+                {{ t('admin.riskControl.teamAttribution', { teamId: inputDetailRow.team_id, billingUserId: inputDetailRow.billing_user_id ?? '-' }) }}
+              </p>
             </div>
             <div class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/70">
               <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.result') }}</p>
@@ -1351,6 +1361,9 @@
             <div class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/70">
               <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.table.user') }}</p>
               <p class="mt-1 truncate text-sm font-semibold text-gray-900 dark:text-white">{{ cyberDetailRow.user_email || '-' }}</p>
+              <p v-if="cyberDetailRow.team_id" class="mt-1 text-xs text-gray-500 dark:text-gray-400" data-test="cyber-detail-team-attribution">
+                {{ t('admin.riskControl.teamAttribution', { teamId: cyberDetailRow.team_id, billingUserId: cyberDetailRow.billing_user_id ?? '-' }) }}
+              </p>
             </div>
             <div class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/70">
               <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.cyberAccount') }}</p>

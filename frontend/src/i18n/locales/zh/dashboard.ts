@@ -102,6 +102,22 @@ export default {
     namePlaceholder: '我的 API 密钥',
     groupLabel: '分组',
     selectGroup: '选择分组',
+    composite: {
+      label: '复合 Key',
+      hint: '通过“前缀/模型 ID”选择不同分组。',
+      addMapping: '添加分组映射',
+      editMappings: '编辑复合 Key 映射',
+      prefixPlaceholder: '例如 GPT',
+      groupRequired: '请选择分组',
+      prefixRequired: '请输入前缀',
+      prefixInvalid: '前缀仅允许 1 至 32 位字母、数字、下划线或连字符',
+      prefixDuplicate: '前缀不能重复（不区分大小写）',
+      groupDuplicate: '同一分组只能添加一次',
+      mappingRequired: '复合 Key 至少需要一个分组映射',
+      tooManyMappings: '复合 Key 最多支持 20 个分组映射',
+      moveUp: '上移',
+      moveDown: '下移'
+    },
     fastModePolicyLabel: 'Fast 模式策略',
     fastModePolicy: {
       followRequest: '跟随请求',
@@ -139,6 +155,7 @@ export default {
     useKey: '使用密钥',
     useKeyModal: {
       title: '使用 API 密钥',
+      compositeDescription: '调用模型时，请在模型 ID 前添加对应分组前缀。',
       description: '将以下环境变量添加到您的终端配置文件或直接在终端中运行。',
       copy: '复制',
       copied: '已复制',
@@ -150,10 +167,14 @@ export default {
       openai: {
         description: '将以下配置文件添加到 Codex CLI 配置目录中。',
         authModeTitle: 'Codex 认证模式',
-        authModeDescription: '兼容模式保留旧版 Codex 配置；API Key Mode 用于授权客户端图片执行器。',
+        authModeDescription: '日常使用请选择兼容模式；仅当 Codex Desktop 需要调用本地图片工具时，才选择 API Key Mode。',
         authModeLegacy: '兼容模式',
         authModeApiKey: 'API Key Mode',
         authModeApiKeyRestartNotice: '保存此配置后，必须完全退出并重启 Codex Desktop 或 CLI，然后新建 task，让客户端重新构建工具注册表。',
+        websocketTitle: 'WebSocket 连接',
+        websocketDescription: '默认使用普通 HTTP 请求。仅当当前 Codex 客户端和服务端都支持 WebSocket v2 时开启；复合 Key 不支持 WebSocket。',
+        websocketDisabled: '关闭',
+        websocketEnabled: '开启',
         configTomlHint: '请确保以下内容位于 config.toml 文件的开头部分',
         note: '请确保配置目录存在。macOS/Linux 用户可运行 mkdir -p ~/.codex 创建目录。',
         noteWindows:
@@ -163,7 +184,6 @@ export default {
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         codexCli: 'Codex CLI',
-        codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
         opencode: 'OpenCode'
       },

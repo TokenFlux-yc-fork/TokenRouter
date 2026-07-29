@@ -15,7 +15,7 @@ RUN go mod download
 COPY . .
 
 # 构建应用
-ARG FORK_ID=
+ARG FORK_ID=yc-fork
 RUN VERSION_VALUE="$(./scripts/resolve-version.sh)" && \
     go build -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.ForkID=${FORK_ID}" -o main ./cmd/server/
 

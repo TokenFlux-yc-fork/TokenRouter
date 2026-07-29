@@ -140,6 +140,12 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			abortWithGoogleError(c, 401, "User account is not active")
 			return
 		}
+		apiKey, err = resolveCompositeAPIKeyRequest(c, apiKeyService, apiKey)
+		if err != nil {
+			abortCompositeKeyGoogleError(c, err)
+			return
+		}
+		SetOpsFallbackAPIKey(c, apiKey)
 		if code, message, ok := validateAPIKeyGroupAvailable(apiKey); !ok {
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonAPIKeyGroupUnavailable)
 			if code == "GROUP_DELETED" {
@@ -167,6 +173,19 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			})
 			c.Set(string(ContextKeyUserRole), apiKey.User.Role)
 			setGroupContext(c, apiKey.Group)
+			_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
+			c.Next()
+			return
+		}
+		// 仅已有任务和用量入口按身份跳过计费；模型列表仍校验 Key 额度、订阅和余额。
+		if apiKey.IsComposite && isCompositeKeyBillingBypassEndpoint(c.Request.Method, c.Request.URL.Path) {
+			c.Set(string(ContextKeyAPIKey), apiKey)
+			c.Set(string(ContextKeyUser), AuthSubject{
+				UserID:      apiKey.User.ID,
+				Concurrency: apiKey.User.Concurrency,
+			})
+			c.Set(string(ContextKeyUserRole), apiKey.User.Role)
+			setGroupContext(c, nil)
 			_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
 			c.Next()
 			return

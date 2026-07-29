@@ -1769,7 +1769,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		openAIWSIngressFallbackSessionSeed(subject.UserID, apiKey.ID, apiKey.GroupID),
 	)
 	cyberBlockKeyWS := service.CyberSessionBlockKey(apiKey.ID, c, firstMessage)
-	if cyberBlockKeyWS != "" && h.gatewayService.IsCyberSessionBlocked(ctx, cyberBlockKeyWS) {
+	if cyberBlockKeyWS != "" && h.cyberSessionBlockAppliesToGroup(c, apiKey) && h.gatewayService.IsCyberSessionBlocked(ctx, cyberBlockKeyWS) {
 		writeCyberSessionBlockedWSError(ctx, wsConn)
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, cyberSessionBlockedClientMsg)
 		h.enqueueCyberSessionBlockedOpsEntry(c, apiKey, reqModel, cyberBlockKeyWS)
@@ -2868,6 +2868,19 @@ const (
 	cyberBlockFormatAnthropic
 )
 
+// cyberSessionBlockAppliesToGroup 只对已纳入风控范围的分组启用会话屏蔽，范围读取失败时放行请求。
+func (h *OpenAIGatewayHandler) cyberSessionBlockAppliesToGroup(c *gin.Context, apiKey *service.APIKey) bool {
+	if h == nil || h.contentModerationService == nil || c == nil || c.Request == nil || apiKey == nil {
+		return false
+	}
+	inScope, err := h.contentModerationService.CyberSessionBlockGroupInScope(c.Request.Context(), apiKey.GroupID)
+	if err != nil {
+		requestLogger(c, "handler.openai_gateway.cyber_session_block").Warn("content_moderation.cyber_session_block_scope_check_failed", zap.Error(err))
+		return false
+	}
+	return inScope
+}
+
 func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlocked(c *gin.Context, apiKey *service.APIKey, body []byte, model string, format cyberSessionBlockFormat) bool {
 	if h == nil || h.gatewayService == nil || apiKey == nil || c == nil {
 		return false
@@ -2876,7 +2889,7 @@ func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlocked(c *gin.Context, apiKe
 		return false
 	}
 	key := service.CyberSessionBlockKey(apiKey.ID, c, body)
-	if key == "" || !h.gatewayService.IsCyberSessionBlocked(c.Request.Context(), key) {
+	if key == "" || !h.cyberSessionBlockAppliesToGroup(c, apiKey) || !h.gatewayService.IsCyberSessionBlocked(c.Request.Context(), key) {
 		return false
 	}
 	// body-signal compact 心跳可能已把响应头提交为 200（cyber 检查在用户槽位

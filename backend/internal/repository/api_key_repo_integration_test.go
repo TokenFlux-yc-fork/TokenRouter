@@ -54,6 +54,96 @@ func (s *APIKeyRepoSuite) TestCreate() {
 	s.Require().Equal("sk-create-test", got.Key)
 }
 
+func (s *APIKeyRepoSuite) TestCompositeKeyCRUDAndGroupQueries() {
+	user := s.mustCreateUser("composite-key@test.com")
+	openAIGroup := s.mustCreateGroup("g-composite-openai")
+	claudeGroup := s.mustCreateGroup("g-composite-claude")
+	key := &service.APIKey{
+		UserID: user.ID, Key: "sk-composite-integration", Name: "Composite Key",
+		Status: service.StatusActive, IsComposite: true,
+		CompositeGroups: []service.APIKeyCompositeGroup{
+			{GroupID: openAIGroup.ID, Prefix: "GPT", NormalizedPrefix: "gpt", SortOrder: 0},
+			{GroupID: claudeGroup.ID, Prefix: "Claude", NormalizedPrefix: "claude", SortOrder: 1},
+		},
+	}
+
+	// 主记录与两条映射必须在同一事务内创建，并按用户顺序完整加载。
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+	got, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().True(got.IsComposite)
+	s.Require().Nil(got.GroupID)
+	s.Require().Len(got.CompositeGroups, 2)
+	s.Require().Equal("GPT", got.CompositeGroups[0].Prefix)
+	s.Require().Equal("Claude", got.CompositeGroups[1].Prefix)
+	s.Require().NotNil(got.CompositeGroups[0].Group)
+
+	count, err := s.repo.CountByGroupID(s.ctx, claudeGroup.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), count)
+	listed, page, err := s.repo.ListByGroupID(s.ctx, claudeGroup.ID, pagination.PaginationParams{Page: 1, PageSize: 10})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(listed, 1)
+	s.Require().Equal(key.ID, listed[0].ID)
+
+	// 更新使用完整替换语义，删除旧映射后只保留请求中的新列表。
+	got.CompositeGroups = []service.APIKeyCompositeGroup{
+		{GroupID: claudeGroup.ID, Prefix: "Anthropic", NormalizedPrefix: "anthropic", SortOrder: 0},
+	}
+	s.Require().NoError(s.repo.Update(s.ctx, got))
+	updated, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().Len(updated.CompositeGroups, 1)
+	s.Require().Equal("Anthropic", updated.CompositeGroups[0].Prefix)
+
+	affected, err := s.repo.ClearGroupIDByGroupID(s.ctx, claudeGroup.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(1), affected)
+	cleared, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().Empty(cleared.CompositeGroups)
+
+	// 唯一约束测试放在末尾，PostgreSQL 事务进入失败状态后无需再执行其他断言。
+	_, err = s.client.APIKeyCompositeGroup.Create().
+		SetAPIKeyID(key.ID).
+		SetGroupID(openAIGroup.ID).
+		SetPrefix("GPT").
+		SetNormalizedPrefix("gpt").
+		Save(s.ctx)
+	s.Require().NoError(err)
+	_, err = s.client.APIKeyCompositeGroup.Create().
+		SetAPIKeyID(key.ID).
+		SetGroupID(openAIGroup.ID).
+		SetPrefix("Other").
+		SetNormalizedPrefix("other").
+		Save(s.ctx)
+	s.Require().Error(err)
+}
+
+func (s *APIKeyRepoSuite) TestCompositeKeyNormalizedPrefixUniqueConstraint() {
+	user := s.mustCreateUser("composite-prefix-unique@test.com")
+	firstGroup := s.mustCreateGroup("g-composite-prefix-first")
+	secondGroup := s.mustCreateGroup("g-composite-prefix-second")
+	key := &service.APIKey{
+		UserID: user.ID, Key: "sk-composite-prefix-unique", Name: "Composite Prefix Unique",
+		Status: service.StatusActive, IsComposite: true,
+		CompositeGroups: []service.APIKeyCompositeGroup{
+			{GroupID: firstGroup.ID, Prefix: "GPT", NormalizedPrefix: "gpt", SortOrder: 0},
+		},
+	}
+
+	// 不同分组仍不能复用同一规范化前缀，数据库约束负责兜底并发写入。
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+	_, err := s.client.APIKeyCompositeGroup.Create().
+		SetAPIKeyID(key.ID).
+		SetGroupID(secondGroup.ID).
+		SetPrefix("gpt").
+		SetNormalizedPrefix("gpt").
+		Save(s.ctx)
+	s.Require().Error(err)
+}
+
 func (s *APIKeyRepoSuite) TestGetByID_NotFound() {
 	_, err := s.repo.GetByID(s.ctx, 999999)
 	s.Require().Error(err, "expected error for non-existent ID")

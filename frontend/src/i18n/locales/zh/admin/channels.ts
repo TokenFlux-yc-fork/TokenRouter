@@ -293,6 +293,7 @@ riskControl: {
         allGroups: '全部分组',
         allEndpoints: '全部端点',
       },
+      teamAttribution: '团队 {teamId} · 付款 UID {billingUserId}',
       table: {
         time: '时间',
         group: '分组',

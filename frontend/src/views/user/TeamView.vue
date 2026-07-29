@@ -376,11 +376,14 @@ const closeInvitationDialog = async () => {
   invitationPreviewError.value = ''
 }
 
-// 团队导览由 AppLayout 中的全局控制器启动，跨页面时仍能保持同一流程。
-const startTeamGuide = () => onboardingStore.startTeamGuide({
-  isOwner: isOwner.value,
-  hasTeam: Boolean(teamContext.value)
-})
+// 团队导览的首批锚点位于概览页，先恢复页签再交给全局控制器等待 DOM 更新。
+const startTeamGuide = () => {
+  if (teamContext.value) activeTab.value = 'overview'
+  onboardingStore.startTeamGuide({
+    isOwner: isOwner.value,
+    hasTeam: Boolean(teamContext.value)
+  })
+}
 
 const visibleTabs = computed(() => {
   const tabs: Array<{ value: TeamTab; label: string }> = [{ value: 'overview', label: t('team.overview') }]
