@@ -234,6 +234,566 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	require.Equal(t, []string{"1:client-turn-1", "2:client-turn-2"}, routingCalls)
 }
 
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CtxPoolNativeCompactionPersistsAttempt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+	upstreamConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.output_item.done","response_id":"resp_ctx_native","item":{"id":"cmp_ctx_native","type":"compaction","status":"completed","encrypted_content":"fixture-state"}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_ctx_native","model":"gpt-5","status":"completed","usage":{"input_tokens":4,"output_tokens":1,"total_tokens":5}}}`),
+	}}
+	dialer := &openAIWSCaptureDialer{conn: upstreamConn}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(dialer)
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+	svc := &OpenAIGatewayService{
+		cfg:                            cfg,
+		httpUpstream:                   &httpUpstreamRecorder{},
+		cache:                          &stubGatewayCache{},
+		openaiWSResolver:               NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:                  NewCodexToolCorrector(),
+		openaiWSPool:                   pool,
+		upstreamAttemptAttributionRepo: attemptRepo,
+	}
+	account := &Account{
+		ID:          453,
+		Name:        "openai-ingress-ctx-native",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-fixture",
+			"base_url": "https://api.openai.com/v1",
+		},
+		Extra: map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	serverErrCh := make(chan error, 1)
+	resultCh := make(chan *OpenAIForwardResult, 1)
+	hooks := &OpenAIWSIngressHooks{AfterTurn: func(capture OpenAIWSTurnCapture) {
+		if capture.Err == nil && capture.Result != nil {
+			resultCh <- capture.Result
+		}
+	}}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		req := r.Clone(r.Context())
+		req.Header = req.Header.Clone()
+		req.Header.Set("User-Agent", "unit-test-agent/1.0")
+		req.Header.Set("x-codex-beta-features", "responses_websockets_v2,remote_compaction_v2")
+		ginCtx.Request = req
+
+		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
+		msgType, firstMessage, readErr := conn.Read(readCtx)
+		cancelRead()
+		if readErr != nil {
+			serverErrCh <- readErr
+			return
+		}
+		if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+			serverErrCh <- errors.New("unsupported websocket client message type")
+			return
+		}
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-fixture", firstMessage, hooks)
+	}))
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5","stream":true,"input":[{"type":"compaction_trigger"}]}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	readEvent := func() []byte {
+		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancelRead()
+		msgType, message, readErr := clientConn.Read(readCtx)
+		require.NoError(t, readErr)
+		require.Equal(t, coderws.MessageText, msgType)
+		return message
+	}
+	require.Equal(t, "response.output_item.done", gjson.GetBytes(readEvent(), "type").String())
+	require.Equal(t, "response.completed", gjson.GetBytes(readEvent(), "type").String())
+
+	select {
+	case result := <-resultCh:
+		require.Equal(t, "resp_ctx_native", result.ResponseID)
+		require.True(t, result.NativeRemoteCompactionV2)
+		require.Equal(t, OpenAINativeCompactionValid, result.SemanticOutcome)
+		require.Equal(t, UpstreamAttemptTransportWebSocket, result.Transport)
+		require.NotEmpty(t, result.AttemptID)
+		require.NotEmpty(t, result.WSConnectionID)
+		require.NotEmpty(t, result.WSTurnID)
+		require.True(t, result.DeliveryCommitted)
+		require.True(t, result.AttributionPersisted)
+		require.True(t, result.UpstreamUsageObserved)
+		require.True(t, result.CustomerSettlementAllowed())
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for native ctx_pool result")
+	}
+
+	require.NoError(t, clientConn.Close(coderws.StatusNormalClosure, "done"))
+	select {
+	case serverErr := <-serverErrCh:
+		require.NoError(t, serverErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for native ctx_pool session to close")
+	}
+
+	var terminal *UpstreamAttemptAttribution
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			rowCopy := row
+			terminal = &rowCopy
+		}
+	}
+	require.NotNil(t, terminal)
+	require.Equal(t, UpstreamAttemptTransportWebSocket, terminal.Transport)
+	require.NotEmpty(t, terminal.WSConnectionID)
+	require.NotEmpty(t, terminal.WSTurnID)
+	require.Equal(t, string(OpenAINativeCompactionValid), terminal.Semantic.Outcome)
+	require.Equal(t, int64(1), terminal.Semantic.CompactionItemCount)
+	require.True(t, terminal.DeliveryCommitted)
+	require.True(t, terminal.Usage.Observed)
+	require.Equal(t, 1, dialer.DialCount())
+	require.Len(t, upstreamConn.writes, 1)
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CtxPoolNativeCompactionSemanticFailureDiscardsAllMessages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+	cfg.Gateway.OpenAINativeCompaction.SemanticQuarantineSeconds = 60
+
+	upstreamConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.output_item.done","response_id":"resp_ctx_invalid","item":{"id":"msg_ctx_invalid","type":"message","status":"completed","content":[{"type":"output_text","text":"must not leak"}]}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_ctx_invalid","model":"gpt-5","status":"completed","usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}`),
+	}}
+	dialer := &openAIWSCaptureDialer{conn: upstreamConn}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(dialer)
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+	quarantineRepo := &semanticQuarantineRepo{}
+	processBudget := NewOpenAIStageBudget(1 << 20)
+	svc := &OpenAIGatewayService{
+		cfg:                                  cfg,
+		httpUpstream:                         &httpUpstreamRecorder{},
+		cache:                                &stubGatewayCache{},
+		openaiWSResolver:                     NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:                        NewCodexToolCorrector(),
+		openaiWSPool:                         pool,
+		openAINativeCompactionStageBudget:    processBudget,
+		openAINativeCompactionCapabilityRepo: quarantineRepo,
+		upstreamAttemptAttributionRepo:       attemptRepo,
+	}
+	account := &Account{
+		ID:          455,
+		Name:        "openai-ingress-ctx-native-invalid",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-fixture", "base_url": "https://api.openai.com/v1"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	serverErrCh := make(chan error, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+
+		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
+		msgType, firstMessage, readErr := conn.Read(readCtx)
+		cancelRead()
+		if readErr != nil {
+			serverErrCh <- readErr
+			return
+		}
+		if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+			serverErrCh <- errors.New("unsupported websocket client message type")
+			return
+		}
+
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		serviceCtx := WithOpenAINativeRemoteCompactionV2(r.Context(), true)
+		req := r.Clone(serviceCtx)
+		req.Header = req.Header.Clone()
+		req.Header.Set("x-codex-beta-features", "responses_websockets_v2,remote_compaction_v2")
+		ginCtx.Request = req
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(serviceCtx, ginCtx, conn, account, "sk-fixture", firstMessage, nil)
+	}))
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5","stream":true,"input":[{"type":"compaction_trigger"}]}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	select {
+	case serverErr := <-serverErrCh:
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, serverErr, &failoverErr)
+		require.True(t, failoverErr.SafeToFailoverAfterWrite)
+	case <-time.After(3 * time.Second):
+		t.Fatal("native ctx_pool semantic failure did not finish")
+	}
+	readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
+	_, payload, readErr := clientConn.Read(readCtx)
+	cancelRead()
+	require.Error(t, readErr)
+	require.Empty(t, payload, "invalid semantic frames must not reach the client")
+
+	var terminal *UpstreamAttemptAttribution
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			rowCopy := row
+			terminal = &rowCopy
+		}
+	}
+	require.NotNil(t, terminal)
+	require.Equal(t, string(OpenAINativeCompactionZeroCompaction), terminal.Semantic.Outcome)
+	require.False(t, terminal.DeliveryCommitted)
+	require.True(t, terminal.SafeToFailover)
+	require.True(t, terminal.Usage.Observed)
+	require.Len(t, quarantineRepo.calls, 1)
+	require.Equal(t, string(OpenAINativeCompactionZeroCompaction), quarantineRepo.calls[0].outcome)
+	require.Zero(t, processBudget.Reserved())
+}
+
+type openAIWSBlockingCaptureConn struct {
+	*openAIWSCaptureConn
+	readStarted  chan struct{}
+	readCanceled chan struct{}
+	startedOnce  sync.Once
+	canceledOnce sync.Once
+}
+
+type openAIWSBlockingCaptureDialer struct {
+	conn *openAIWSBlockingCaptureConn
+}
+
+func (d *openAIWSBlockingCaptureDialer) Dial(
+	context.Context,
+	string,
+	http.Header,
+	string,
+	*tlsfingerprint.Profile,
+) (openAIWSClientConn, int, http.Header, error) {
+	return d.conn, 0, nil, nil
+}
+
+func (c *openAIWSBlockingCaptureConn) ReadMessage(ctx context.Context) ([]byte, error) {
+	c.startedOnce.Do(func() { close(c.readStarted) })
+	<-ctx.Done()
+	c.canceledOnce.Do(func() { close(c.readCanceled) })
+	return nil, ctx.Err()
+}
+
+func (c *openAIWSBlockingCaptureConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
+	payload, err := c.ReadMessage(ctx)
+	return coderws.MessageText, payload, err
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CtxPoolNativeCompactionClientDisconnectCancelsUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 30
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+	upstreamConn := &openAIWSBlockingCaptureConn{
+		openAIWSCaptureConn: &openAIWSCaptureConn{},
+		readStarted:         make(chan struct{}),
+		readCanceled:        make(chan struct{}),
+	}
+	dialer := &openAIWSBlockingCaptureDialer{conn: upstreamConn}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(dialer)
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+	quarantineRepo := &semanticQuarantineRepo{}
+	processBudget := NewOpenAIStageBudget(1 << 20)
+	svc := &OpenAIGatewayService{
+		cfg:                                  cfg,
+		httpUpstream:                         &httpUpstreamRecorder{},
+		cache:                                &stubGatewayCache{},
+		openaiWSResolver:                     NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:                        NewCodexToolCorrector(),
+		openaiWSPool:                         pool,
+		openAINativeCompactionStageBudget:    processBudget,
+		openAINativeCompactionCapabilityRepo: quarantineRepo,
+		upstreamAttemptAttributionRepo:       attemptRepo,
+	}
+	account := &Account{
+		ID:          454,
+		Name:        "openai-ingress-ctx-native-disconnect",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-fixture", "base_url": "https://api.openai.com/v1"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	serverErrCh := make(chan error, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+
+		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
+		msgType, firstMessage, readErr := conn.Read(readCtx)
+		cancelRead()
+		if readErr != nil {
+			serverErrCh <- readErr
+			return
+		}
+		if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+			serverErrCh <- errors.New("unsupported websocket client message type")
+			return
+		}
+
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		req := r.Clone(r.Context())
+		req.Header = req.Header.Clone()
+		req.Header.Set("x-codex-beta-features", "responses_websockets_v2,remote_compaction_v2")
+		pumpCtx, stopPump := WithOpenAIWSClientReadPump(r.Context(), conn)
+		defer stopPump()
+		req = req.WithContext(pumpCtx)
+		ginCtx.Request = req
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(pumpCtx, ginCtx, conn, account, "sk-fixture", firstMessage, nil)
+	}))
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5","stream":true,"input":[{"type":"compaction_trigger"}]}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	select {
+	case <-upstreamConn.readStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native ctx_pool upstream read did not start")
+	}
+	disconnectAt := time.Now()
+	require.NoError(t, clientConn.CloseNow())
+
+	select {
+	case <-upstreamConn.readCanceled:
+		require.Less(t, time.Since(disconnectAt), time.Second)
+	case <-time.After(time.Second):
+		t.Fatal("client disconnect did not cancel native ctx_pool upstream read")
+	}
+	select {
+	case serverErr := <-serverErrCh:
+		var closeErr *OpenAIWSClientCloseError
+		require.ErrorAs(t, serverErr, &closeErr)
+		require.Equal(t, coderws.StatusNormalClosure, closeErr.StatusCode())
+	case <-time.After(3 * time.Second):
+		t.Fatal("native ctx_pool session did not finish after client disconnect")
+	}
+
+	var terminal *UpstreamAttemptAttribution
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			rowCopy := row
+			terminal = &rowCopy
+		}
+	}
+	require.NotNil(t, terminal)
+	require.Equal(t, string(OpenAINativeCompactionIncompleteStream), terminal.Semantic.Outcome)
+	require.False(t, terminal.DeliveryCommitted)
+	require.False(t, terminal.SafeToFailover)
+	require.False(t, terminal.Usage.Observed)
+	require.Empty(t, quarantineRepo.calls)
+	require.Zero(t, processBudget.Reserved())
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughNativeCompactionClientDisconnectCancelsUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+	cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModeCtxPool
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 30
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+	upstreamConn := &openAIWSBlockingCaptureConn{
+		openAIWSCaptureConn: &openAIWSCaptureConn{},
+		readStarted:         make(chan struct{}),
+		readCanceled:        make(chan struct{}),
+	}
+	dialer := &openAIWSBlockingCaptureDialer{conn: upstreamConn}
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+	processBudget := NewOpenAIStageBudget(1 << 20)
+	svc := &OpenAIGatewayService{
+		cfg:                               cfg,
+		httpUpstream:                      &httpUpstreamRecorder{},
+		cache:                             &stubGatewayCache{},
+		openaiWSResolver:                  NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:                     NewCodexToolCorrector(),
+		openaiWSPassthroughDialer:         dialer,
+		openAINativeCompactionStageBudget: processBudget,
+		upstreamAttemptAttributionRepo:    attemptRepo,
+	}
+	account := &Account{
+		ID:          456,
+		Name:        "openai-ingress-passthrough-native-disconnect",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-fixture", "base_url": "https://api.openai.com/v1"},
+		Extra:       map[string]any{"openai_apikey_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough},
+	}
+
+	serverErrCh := make(chan error, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
+		msgType, firstMessage, readErr := conn.Read(readCtx)
+		cancelRead()
+		if readErr != nil {
+			serverErrCh <- readErr
+			return
+		}
+		if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+			serverErrCh <- errors.New("unsupported websocket client message type")
+			return
+		}
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		req := r.Clone(r.Context())
+		req.Header = req.Header.Clone()
+		req.Header.Set("x-codex-beta-features", "responses_websockets_v2,remote_compaction_v2")
+		ginCtx.Request = req
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-fixture", firstMessage, nil)
+	}))
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5","stream":true,"input":[{"type":"compaction_trigger"}]}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	select {
+	case <-upstreamConn.readStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native passthrough upstream read did not start")
+	}
+	disconnectAt := time.Now()
+	require.NoError(t, clientConn.CloseNow())
+	select {
+	case <-upstreamConn.readCanceled:
+		require.Less(t, time.Since(disconnectAt), time.Second)
+	case <-time.After(time.Second):
+		t.Fatal("client disconnect did not cancel native passthrough upstream read")
+	}
+	select {
+	case serverErr := <-serverErrCh:
+		require.NoError(t, serverErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("native passthrough session did not finish after client disconnect")
+	}
+
+	var terminal *UpstreamAttemptAttribution
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			rowCopy := row
+			terminal = &rowCopy
+		}
+	}
+	require.NotNil(t, terminal)
+	require.Equal(t, string(OpenAINativeCompactionIncompleteStream), terminal.Semantic.Outcome)
+	require.False(t, terminal.DeliveryCommitted)
+	require.False(t, terminal.SafeToFailover)
+	require.False(t, terminal.Usage.Observed)
+	require.Zero(t, processBudget.Reserved())
+}
+
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_IdleTimeoutReleasesStoreDisabledSession(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -977,21 +1537,26 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 
 	upstreamConn := &openAIWSCaptureConn{
 		// 首轮先返回 created，让客户端能在终态前发送 session.update；后续终态等待对应请求到达。
-		readDelays: []time.Duration{0, 200 * time.Millisecond, 200 * time.Millisecond},
+		readDelays: []time.Duration{0, 100 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond},
 		events: [][]byte{
 			[]byte(`{"type":"response.created","response":{"id":"resp_passthrough_turn_1","model":"upstream-turn-1"}}`),
-			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_turn_1","model":"upstream-turn-1","output":[{"id":"ig_passthrough_1","type":"image_generation_call","status":"generating","result":"final-image"}],"usage":{"input_tokens":2,"output_tokens":3}}}`),
+			[]byte(`{"type":"response.output_item.done","response_id":"resp_passthrough_turn_1","item":{"id":"cmp_passthrough_1","type":"compaction","encrypted_content":"ciphertext-1"}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_turn_1","model":"upstream-turn-1","output":[{"id":"ig_passthrough_1","type":"image_generation_call","status":"generating","result":"final-image"}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}`),
 			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_turn_2","model":"upstream-turn-2","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.output_item.done","response_id":"resp_passthrough_turn_3","item":{"id":"cmp_passthrough_3","type":"compaction","encrypted_content":"ciphertext-3"}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_turn_3","model":"upstream-turn-2","usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: upstreamConn}
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
 	svc := &OpenAIGatewayService{
-		cfg:                       cfg,
-		httpUpstream:              &httpUpstreamRecorder{},
-		cache:                     &stubGatewayCache{},
-		openaiWSResolver:          NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:             NewCodexToolCorrector(),
-		openaiWSPassthroughDialer: captureDialer,
+		cfg:                            cfg,
+		httpUpstream:                   &httpUpstreamRecorder{},
+		cache:                          &stubGatewayCache{},
+		openaiWSResolver:               NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:                  NewCodexToolCorrector(),
+		openaiWSPassthroughDialer:      captureDialer,
+		upstreamAttemptAttributionRepo: attemptRepo,
 	}
 
 	account := &Account{
@@ -1015,9 +1580,9 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	}
 
 	serverErrCh := make(chan error, 1)
-	resultCh := make(chan *OpenAIForwardResult, 2)
-	routingCalls := make(chan string, 3)
-	beforeTurnCalls := make(chan int, 1)
+	resultCh := make(chan *OpenAIForwardResult, 3)
+	routingCalls := make(chan string, 4)
+	beforeTurnCalls := make(chan int, 2)
 	hooks := &OpenAIWSIngressHooks{
 		ResolveRoutingModel: func(turn int, requestedModel string, _ []byte) (string, error) {
 			routingCalls <- fmt.Sprintf("%d:%s", turn, requestedModel)
@@ -1060,6 +1625,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		req := r.Clone(r.Context())
 		req.Header = req.Header.Clone()
 		req.Header.Set("User-Agent", "unit-test-agent/1.0")
+		req.Header.Set("x-codex-beta-features", "responses_websockets_v2,remote_compaction_v2")
 		ginCtx.Request = req
 
 		readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -1087,7 +1653,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	}()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"client-turn-1","stream":false,"service_tier":"fast","reasoning":{"effort":"HIGH"}}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"client-turn-1","stream":false,"service_tier":"fast","reasoning":{"effort":"HIGH"},"input":[{"type":"compaction_trigger"}]}`))
 	cancelWrite()
 	require.NoError(t, err)
 
@@ -1104,6 +1670,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	err = clientConn.Write(sessionWriteCtx, coderws.MessageText, []byte(`{"type":"session.update","session":{"model":"client-turn-2"}}`))
 	cancelSessionWrite()
 	require.NoError(t, err)
+	firstDoneReadCtx, cancelFirstDoneRead := context.WithTimeout(context.Background(), 3*time.Second)
+	_, firstDone, firstDoneErr := clientConn.Read(firstDoneReadCtx)
+	cancelFirstDoneRead()
+	require.NoError(t, firstDoneErr)
+	require.Equal(t, "response.output_item.done", gjson.GetBytes(firstDone, "type").String())
+	require.Equal(t, "ciphertext-1", gjson.GetBytes(firstDone, "item.encrypted_content").String())
 	firstTerminalReadCtx, cancelFirstTerminalRead := context.WithTimeout(context.Background(), 3*time.Second)
 	_, firstTerminal, firstTerminalErr := clientConn.Read(firstTerminalReadCtx)
 	cancelFirstTerminalRead()
@@ -1124,6 +1696,22 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	require.Equal(t, "response.completed", gjson.GetBytes(event2, "type").String())
 	require.Equal(t, "resp_passthrough_turn_2", gjson.GetBytes(event2, "response.id").String())
 	require.Equal(t, "client-turn-2", gjson.GetBytes(event2, "response.model").String())
+
+	writeCtx3, cancelWrite3 := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx3, coderws.MessageText, []byte(`{"type":"response.create","model":"client-turn-2","stream":false,"previous_response_id":"resp_passthrough_turn_2","input":[{"type":"compaction_trigger"}]}`))
+	cancelWrite3()
+	require.NoError(t, err)
+	readCtx3, cancelRead3 := context.WithTimeout(context.Background(), 3*time.Second)
+	_, thirdDone, readErr3 := clientConn.Read(readCtx3)
+	cancelRead3()
+	require.NoError(t, readErr3)
+	require.Equal(t, "response.output_item.done", gjson.GetBytes(thirdDone, "type").String())
+	require.Equal(t, "ciphertext-3", gjson.GetBytes(thirdDone, "item.encrypted_content").String())
+	readCtx3, cancelRead3 = context.WithTimeout(context.Background(), 3*time.Second)
+	_, event3, readErr3 := clientConn.Read(readCtx3)
+	cancelRead3()
+	require.NoError(t, readErr3)
+	require.Equal(t, "resp_passthrough_turn_3", gjson.GetBytes(event3, "response.id").String())
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
 	select {
@@ -1145,13 +1733,18 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		require.Equal(t, "upstream-turn-1", result.UpstreamModel)
 		require.True(t, result.OpenAIWSMode)
 		// 内部 turn 快照保留上游原文；客户端出站帧已在上方断言归一为 completed。
-		require.JSONEq(t, `{"id":"resp_passthrough_turn_1","model":"upstream-turn-1","output":[{"id":"ig_passthrough_1","type":"image_generation_call","status":"generating","result":"final-image"}],"usage":{"input_tokens":2,"output_tokens":3}}`, string(result.ResponseBody))
+		require.JSONEq(t, `{"id":"resp_passthrough_turn_1","model":"upstream-turn-1","output":[{"id":"ig_passthrough_1","type":"image_generation_call","status":"generating","result":"final-image"}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`, string(result.ResponseBody))
 		require.Equal(t, 2, result.Usage.InputTokens)
 		require.Equal(t, 3, result.Usage.OutputTokens)
 		require.NotNil(t, result.ServiceTier)
 		require.Equal(t, "priority", *result.ServiceTier)
 		require.NotNil(t, result.ReasoningEffort)
 		require.Equal(t, "high", *result.ReasoningEffort)
+		require.True(t, result.NativeRemoteCompactionV2)
+		require.Equal(t, OpenAINativeCompactionValid, result.SemanticOutcome)
+		require.True(t, result.DeliveryCommitted)
+		require.True(t, result.AttributionPersisted)
+		require.True(t, result.CustomerSettlementAllowed())
 	case <-time.After(2 * time.Second):
 		t.Fatal("未收到 passthrough turn 结果回调")
 	}
@@ -1160,22 +1753,49 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		require.Equal(t, "resp_passthrough_turn_2", result.RequestID)
 		require.Equal(t, "client-turn-2", result.Model)
 		require.Equal(t, "upstream-turn-2", result.UpstreamModel)
+		require.False(t, result.NativeRemoteCompactionV2, "ordinary turn after compaction must bypass exactly-one validation")
 	case <-time.After(2 * time.Second):
 		t.Fatal("未收到 passthrough 第二轮 turn 结果回调")
 	}
+	select {
+	case result := <-resultCh:
+		require.Equal(t, "resp_passthrough_turn_3", result.RequestID)
+		require.True(t, result.NativeRemoteCompactionV2, "later compaction turn must re-enable validation")
+		require.Equal(t, OpenAINativeCompactionValid, result.SemanticOutcome)
+	case <-time.After(2 * time.Second):
+		t.Fatal("未收到 passthrough 第三轮 turn 结果回调")
+	}
 
 	require.Equal(t, 1, captureDialer.DialCount(), "passthrough 模式应直接建立上游 websocket")
-	require.Len(t, upstreamConn.writes, 3, "passthrough 模式应转发两轮 response.create 和一次 session.update")
+	require.Len(t, upstreamConn.writes, 4, "passthrough 模式应转发三轮 response.create 和一次 session.update")
 	require.Equal(t, "upstream-turn-1", fmt.Sprint(upstreamConn.writes[0]["model"]))
 	// session.update 必须保留对象结构，并把第二轮请求模型替换为上游模型。
 	secondTurnSession, ok := upstreamConn.writes[1]["session"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "upstream-turn-2", fmt.Sprint(secondTurnSession["model"]))
 	require.Equal(t, "upstream-turn-2", fmt.Sprint(upstreamConn.writes[2]["model"]))
+	require.Equal(t, "upstream-turn-2", fmt.Sprint(upstreamConn.writes[3]["model"]))
 	require.Equal(t, "1:client-turn-1", <-routingCalls)
 	require.Equal(t, "2:client-turn-2", <-routingCalls)
 	require.Equal(t, "2:client-turn-2", <-routingCalls)
+	require.Equal(t, "3:client-turn-2", <-routingCalls)
 	require.Equal(t, 2, <-beforeTurnCalls)
+	require.Equal(t, 3, <-beforeTurnCalls)
+	terminalAttempts := make([]UpstreamAttemptAttribution, 0, 2)
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			terminalAttempts = append(terminalAttempts, row)
+		}
+	}
+	require.Len(t, terminalAttempts, 2)
+	require.NotEmpty(t, terminalAttempts[0].WSConnectionID)
+	require.Equal(t, terminalAttempts[0].WSConnectionID, terminalAttempts[1].WSConnectionID)
+	require.NotEqual(t, terminalAttempts[0].WSTurnID, terminalAttempts[1].WSTurnID)
+	for _, attempt := range terminalAttempts {
+		require.Equal(t, UpstreamAttemptTransportWebSocket, attempt.Transport)
+		require.Equal(t, string(OpenAINativeCompactionValid), attempt.Semantic.Outcome)
+		require.True(t, attempt.DeliveryCommitted)
+	}
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRelaysHTTPStream(t *testing.T) {

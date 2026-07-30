@@ -467,6 +467,42 @@ func TestRelay_ClientDisconnect_DrainCapturesLateUsage(t *testing.T) {
 	require.Equal(t, int64(1), result.DroppedDownstreamFrames)
 }
 
+func TestRelay_ClientDisconnect_CancelsStagedUpstreamWithoutDrain(t *testing.T) {
+	t.Parallel()
+
+	clientConn := newPassthroughTestFrameConn(nil, true)
+	upstreamConn := &delayedReadFrameConn{
+		base:       newPassthroughTestFrameConn(nil, false),
+		firstDelay: time.Second,
+	}
+	var cancelDecisionCalls atomic.Int32
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	startedAt := time.Now()
+
+	result, relayExit := Relay(
+		ctx,
+		clientConn,
+		upstreamConn,
+		[]byte(`{"type":"response.create","model":"gpt-5","input":[{"type":"compaction_trigger"}]}`),
+		RelayOptions{
+			UpstreamDrainTimeout: time.Second,
+			CancelUpstreamOnClientDisconnect: func() bool {
+				cancelDecisionCalls.Add(1)
+				return true
+			},
+		},
+	)
+
+	require.NotNil(t, relayExit)
+	require.Equal(t, "client_disconnected", relayExit.Stage)
+	require.Less(t, time.Since(startedAt), 500*time.Millisecond, "staged relay must not wait for the ordinary usage-drain window")
+	require.Equal(t, int32(1), cancelDecisionCalls.Load())
+	require.Empty(t, result.RequestID)
+	require.Zero(t, result.Usage.InputTokens)
+	require.Zero(t, result.UpstreamToClientFrames)
+}
+
 func TestRelay_IdleTimeout(t *testing.T) {
 	t.Parallel()
 

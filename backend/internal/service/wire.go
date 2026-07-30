@@ -802,6 +802,87 @@ func defaultDataShareExportDataDir() string {
 	return "."
 }
 
+// ProvideOpenAIGatewayService 构造 OpenAI 网关并注入仅供运营探测使用的原始 provider 定价和费用账本。
+func ProvideOpenAIGatewayService(
+	accountRepo AccountRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	httpUpstream HTTPUpstream,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	deferredService *DeferredService,
+	openAITokenProvider *OpenAITokenProvider,
+	grokTokenProvider *GrokTokenProvider,
+	resolver *ModelPricingResolver,
+	channelService *ChannelService,
+	balanceNotifyService *BalanceNotifyService,
+	settingService *SettingService,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	dataSharingService *DataSharingService,
+	pricingService *PricingService,
+	probeBudgetRepo OpenAINativeCompactionProbeBudgetRepository,
+	capabilityRepo OpenAINativeCompactionCapabilityRepository,
+	attemptAttributionRepo UpstreamAttemptAttributionRepository,
+	tlsFPRouterServices ...*TLSFingerprintRouterService,
+) *OpenAIGatewayService {
+	svc := NewOpenAIGatewayService(
+		accountRepo,
+		usageLogRepo,
+		usageBillingRepo,
+		userRepo,
+		userSubRepo,
+		userGroupRateRepo,
+		cache,
+		cfg,
+		schedulerSnapshot,
+		concurrencyService,
+		billingService,
+		rateLimitService,
+		billingCacheService,
+		httpUpstream,
+		tlsFPProfileService,
+		deferredService,
+		openAITokenProvider,
+		grokTokenProvider,
+		resolver,
+		channelService,
+		balanceNotifyService,
+		settingService,
+		userPlatformQuotaRepo,
+		dataSharingService,
+		tlsFPRouterServices...,
+	)
+	svc.openAIProbePriceLookup = pricingService
+	svc.openAIProbeBudgetRepo = probeBudgetRepo
+	svc.openAINativeCompactionCapabilityRepo = capabilityRepo
+	svc.upstreamAttemptAttributionRepo = attemptAttributionRepo
+	return svc
+}
+
+// ProvideOpenAINativeCompactionProbeRunnerService 构造并启动隔离的 native-v2 能力探测 runner。
+func ProvideOpenAINativeCompactionProbeRunnerService(
+	accountRepo AccountRepository,
+	apiKeyRepo APIKeyRepository,
+	userRepo UserRepository,
+	groupRepo GroupRepository,
+	capabilityRepo OpenAINativeCompactionCapabilityRepository,
+	gateway *OpenAIGatewayService,
+	cfg *config.Config,
+) *OpenAINativeCompactionProbeRunnerService {
+	svc := NewOpenAINativeCompactionProbeRunnerService(accountRepo, apiKeyRepo, userRepo, groupRepo, capabilityRepo, gateway, cfg)
+	svc.Start()
+	return svc
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
@@ -830,7 +911,8 @@ var ProviderSet = wire.NewSet(
 	NewQoderTokenProvider,
 	NewQoderGatewayService,
 	ProvideOpenAIGatewayTLSFingerprintRouterServices,
-	NewOpenAIGatewayService,
+	ProvideOpenAIGatewayService,
+	ProvideOpenAINativeCompactionProbeRunnerService,
 	NewCodexInviteResetService,
 	ProvideOpenAIQuotaService,
 	ProvideImageStorageSettingService,

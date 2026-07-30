@@ -1072,6 +1072,94 @@ func TestOpenAIGatewayServiceRecordUsage_WSModePrefersUpstreamRequestIDOverClien
 	require.Equal(t, "resp_openai_ws_turn_456", usageRepo.lastLog.RequestID)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_NativeWSUsesDistinctTurnBillingIdentity(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkey.ClientRequestID, "openai-ws-connection-123")
+	for _, turnID := range []WSTurnID{"wsturn_native_1", "wsturn_native_2"} {
+		usageRepo := &openAIRecordUsageLogRepoStub{}
+		billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+		svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+
+		err := svc.RecordUsage(ctx, &OpenAIRecordUsageInput{
+			Result: &OpenAIForwardResult{
+				RequestID:                "resp_native_ws_shared_response_prefix",
+				ResponseID:               "resp_native_ws_shared_response_prefix",
+				WSTurnID:                 turnID,
+				OpenAIWSMode:             true,
+				NativeRemoteCompactionV2: true,
+				SemanticOutcome:          OpenAINativeCompactionValid,
+				DeliveryCommitted:        true,
+				AttributionPersisted:     true,
+				Usage:                    OpenAIUsage{InputTokens: 8, OutputTokens: 4},
+				Model:                    "gpt-5.1",
+				Duration:                 time.Second,
+			},
+			APIKey:  &APIKey{ID: 10060},
+			User:    &User{ID: 20060},
+			Account: &Account{ID: 30060},
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, billingRepo.lastCmd)
+		require.Equal(t, "ws-turn:"+string(turnID), billingRepo.lastCmd.RequestID)
+		require.NotNil(t, usageRepo.lastLog)
+		require.Equal(t, "ws-turn:"+string(turnID), usageRepo.lastLog.RequestID)
+		require.NotEqual(t, "resp_native_ws_shared_response_prefix", billingRepo.lastCmd.RequestID)
+	}
+}
+
+func TestOpenAIGatewayServiceRecordUsage_NativeFailureDoesNotSettleObservedUsage(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:                "upstream-request-not-billing-key",
+			ResponseID:               "response-must-not-be-billing-key",
+			NativeRemoteCompactionV2: true,
+			SemanticOutcome:          OpenAINativeCompactionZeroCompaction,
+			UpstreamUsageObserved:    true,
+			Usage:                    OpenAIUsage{InputTokens: 99, OutputTokens: 7},
+			Model:                    "gpt-5.1",
+			Duration:                 time.Second,
+		},
+		APIKey:  &APIKey{ID: 10051},
+		User:    &User{ID: 20051},
+		Account: &Account{ID: 30051},
+	})
+
+	require.NoError(t, err)
+	require.Nil(t, billingRepo.lastCmd)
+	require.Nil(t, usageRepo.lastLog)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_ResponseIDNeverBecomesBillingKey(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+
+	ctx := context.WithValue(context.Background(), ctxkey.RequestID, "gateway-request-stable")
+	err := svc.RecordUsage(ctx, &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			ResponseID:               "response-id-for-telemetry-only",
+			NativeRemoteCompactionV2: true,
+			SemanticOutcome:          OpenAINativeCompactionValid,
+			DeliveryCommitted:        true,
+			AttributionPersisted:     true,
+			Model:                    "gpt-5.1",
+			Duration:                 time.Second,
+		},
+		APIKey:  &APIKey{ID: 10052},
+		User:    &User{ID: 20052},
+		Account: &Account{ID: 30052},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, billingRepo.lastCmd)
+	require.Equal(t, "local:gateway-request-stable", billingRepo.lastCmd.RequestID)
+	require.NotEqual(t, "response-id-for-telemetry-only", billingRepo.lastCmd.RequestID)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_GeneratesRequestIDWhenAllSourcesMissing(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}

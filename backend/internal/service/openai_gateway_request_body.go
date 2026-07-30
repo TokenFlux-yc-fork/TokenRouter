@@ -720,6 +720,10 @@ func extractOpenAIServiceTierFromBody(body []byte) *string {
 	return normalizeOpenAIServiceTier(gjson.GetBytes(body, "service_tier").String())
 }
 
+func openAIServiceTierIsPriority(serviceTier *string) bool {
+	return serviceTier != nil && *serviceTier == "priority"
+}
+
 func normalizeOpenAIServiceTier(raw string) *string {
 	value := strings.ToLower(strings.TrimSpace(raw))
 	if value == "" {

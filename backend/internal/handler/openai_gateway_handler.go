@@ -49,6 +49,38 @@ type grokMediaEligibilityProber interface {
 
 const maxOpenAIFirstOutputTimeoutSwitches = 1
 
+const openAINativeCompactionLogStateKey = "openai_native_compaction_log_state"
+
+type openAINativeCompactionLogState struct {
+	Attempted         bool
+	SettlementAllowed bool
+	Telemetry         service.OpenAIOpsTelemetry
+}
+
+func markOpenAINativeCompactionAttemptForLog(c *gin.Context, result *service.OpenAIForwardResult) {
+	if c == nil {
+		return
+	}
+	state := openAINativeCompactionLogState{Attempted: true}
+	if result != nil {
+		state.SettlementAllowed = result.CustomerSettlementAllowed()
+		state.Telemetry = result.OpsTelemetry()
+	}
+	c.Set(openAINativeCompactionLogStateKey, state)
+}
+
+func getOpenAINativeCompactionLogState(c *gin.Context) (openAINativeCompactionLogState, bool) {
+	if c == nil {
+		return openAINativeCompactionLogState{}, false
+	}
+	value, ok := c.Get(openAINativeCompactionLogStateKey)
+	if !ok {
+		return openAINativeCompactionLogState{}, false
+	}
+	state, ok := value.(openAINativeCompactionLogState)
+	return state, ok && state.Attempted
+}
+
 // openAIForwardSucceededForScheduling 会排除以失败事件结束的 WebSocket 转发结果。
 func openAIForwardSucceededForScheduling(result *service.OpenAIForwardResult) bool {
 	return result.SucceededForScheduling()
@@ -351,11 +383,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a response.id (resp_*), not a message id")
 			return
 		}
-		reqLog.Warn("openai.request_validation_failed",
-			zap.String("reason", "previous_response_id_requires_wsv2"),
-		)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is only supported on Responses WebSocket v2")
-		return
+		if !service.IsOpenAINativeRemoteCompactionV2(c) {
+			reqLog.Warn("openai.request_validation_failed",
+				zap.String("reason", "previous_response_id_requires_wsv2"),
+			)
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is only supported on Responses WebSocket v2")
+			return
+		}
 	}
 
 	setOpsRequestContext(c, reqModel, reqStream)
@@ -451,11 +485,31 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	requireCompact := isOpenAIRemoteCompactPath(c)
 	nativeRemoteCompactionV2 := service.IsOpenAINativeRemoteCompactionV2(c)
+	var compatibilityAttempt *service.OpenAICompatibilityDomainAttempt
+	if nativeRemoteCompactionV2 {
+		requestStageBudget := service.NewOpenAIStageBudget(h.cfg.Gateway.OpenAINativeCompaction.MaxRequestCumulativeBytes)
+		defer requestStageBudget.Close()
+		selectionCtx = service.WithOpenAINativeCompactionRequestStageBudget(selectionCtx, requestStageBudget)
+		c.Request = c.Request.WithContext(selectionCtx)
+
+		compatibilityAttempt, err = h.gatewayService.NewOpenAINativeCompatibilityDomainAttempt(
+			selectionCtx,
+			apiKey.GroupID,
+			previousResponseID,
+			sessionHash,
+		)
+		if err != nil {
+			reqLog.Warn("openai.compatibility_domain_continuation_rejected", zap.Error(err))
+			h.handleStreamingAwareError(c, http.StatusConflict, "compatibility_domain_error", "Native compaction continuation compatibility is unknown or mismatched", streamStarted)
+			return
+		}
+	}
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	firstOutputTimeoutSwitchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	compatibilityCandidateRejected := false
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
@@ -515,7 +569,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 				return
 			}
-			if lastFailoverErr != nil {
+			if lastFailoverErr == nil && compatibilityCandidateRejected {
+				h.handleStreamingAwareError(c, http.StatusConflict, "compatibility_domain_error", "No native compaction account matches the required compatibility domain", streamStarted)
+			} else if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
 			} else {
 				h.handleFailoverExhaustedSimple(c, 502, streamStarted)
@@ -523,11 +579,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		if selection == nil || selection.Account == nil {
-			cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel)
-			if !cls.ModelNotFound {
-				markOpsRoutingCapacityLimited(c)
+			if compatibilityCandidateRejected {
+				h.handleStreamingAwareError(c, http.StatusConflict, "compatibility_domain_error", "No native compaction account matches the required compatibility domain", streamStarted)
+			} else {
+				cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel)
+				if !cls.ModelNotFound {
+					markOpsRoutingCapacityLimited(c)
+				}
+				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			}
-			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
 		if previousResponseID != "" && selection != nil && selection.Account != nil {
@@ -543,11 +603,29 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.Float64("load_skew", scheduleDecision.LoadSkew),
 		)
 		account := selection.Account
+		if compatibilityAttempt != nil {
+			if _, domainErr := compatibilityAttempt.CheckCandidate(selectionCtx, account, routingModel); domainErr != nil {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				reqLog.Warn("openai.compatibility_domain_candidate_rejected",
+					zap.Int64("account_id", account.ID),
+					zap.Error(domainErr),
+				)
+				compatibilityCandidateRejected = true
+				failedAccountIDs[account.ID] = struct{}{}
+				continue
+			}
+		}
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountSlotSessionHash := sessionHash
+		if compatibilityAttempt != nil {
+			accountSlotSessionHash = ""
+		}
+		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, accountSlotSessionHash, selection, reqStream, &streamStarted, reqLog)
 		if !acquired {
 			return
 		}
@@ -566,6 +644,29 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			}()
 			return h.gatewayService.Forward(c.Request.Context(), c, account, forwardBody)
 		}()
+		if compatibilityAttempt != nil {
+			deliveryCommitted := err == nil && result != nil && !result.ClientDisconnect && service.IsResponseCommitted(c)
+			responseID := ""
+			if result != nil {
+				responseID = result.ResponseID
+			}
+			if commitErr := compatibilityAttempt.CommitDelivery(c.Request.Context(), account.ID, responseID, deliveryCommitted); commitErr != nil {
+				reqLog.Warn("openai.compatibility_domain_commit_failed",
+					zap.Int64("account_id", account.ID),
+					zap.Bool("delivery_committed", deliveryCommitted),
+					zap.Error(commitErr),
+				)
+				if deliveryCommitted {
+					return
+				}
+			}
+		}
+		if result != nil {
+			result.FailoverCount = switchCount
+		}
+		if service.IsOpenAINativeRemoteCompactionV2(c) {
+			markOpenAINativeCompactionAttemptForLog(c, result)
+		}
 		cyberBlockKeyHTTP := ""
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockKeyHTTP = service.CyberSessionBlockKey(apiKey.ID, c, sessionHashBody)
@@ -770,13 +871,8 @@ func isBareOpenAIResponsesPath(c *gin.Context) bool {
 	return strings.HasSuffix(normalizedPath, "/responses")
 }
 
-// isOpenAIRemoteCompactionV2Request 判断请求是否明确使用原生 remote compaction v2 流式协议。
-func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte) bool {
-	stream, valid := parseOpenAICompatibleStream(body)
-	if !valid || !stream || c == nil || c.Request == nil {
-		return false
-	}
-	for _, header := range c.Request.Header.Values("x-codex-beta-features") {
+func hasOpenAIRemoteCompactionV2Feature(betaFeatureHeaders []string) bool {
+	for _, header := range betaFeatureHeaders {
 		for _, feature := range strings.Split(header, ",") {
 			if strings.TrimSpace(feature) == "remote_compaction_v2" {
 				return true
@@ -791,10 +887,19 @@ func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte) bool {
 // 返回归一化后的 body；ok=false 表示错误响应已写出，调用方应直接 return。
 func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Context, reqLog *zap.Logger, body []byte) ([]byte, bool) {
 	isCompactRequest := service.IsOpenAIResponsesCompactPathForTest(c)
-	if !isCompactRequest && isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
-		if isOpenAIRemoteCompactionV2Request(c, body) {
+	if !isCompactRequest && isBareOpenAIResponsesPath(c) {
+		betaHeaders := c.Request.Header.Values("x-codex-beta-features")
+		if hasOpenAIRemoteCompactionV2Feature(betaHeaders) && service.HasCompactionTriggerInInput(body) {
+			if !service.IsOpenAINativeRemoteCompactionV2Request(body, betaHeaders) {
+				h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Native remote compaction v2 requires stream=true and a final compaction_trigger input item")
+				return nil, false
+			}
 			service.MarkOpenAINativeRemoteCompactionV2(c)
+			markOpenAINativeCompactionAttemptForLog(c, nil)
 			reqLog.Info("codex.remote_compact.detected_native_v2")
+			return body, true
+		}
+		if !service.HasCompactionTriggerInInput(body) {
 			return body, true
 		}
 		c.Request.URL.Path = strings.TrimRight(c.Request.URL.Path, "/") + "/compact"
@@ -824,7 +929,8 @@ func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Con
 
 func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, startedAt time.Time) {
 	nativeV2 := service.IsOpenAINativeRemoteCompactionV2(c)
-	if !isOpenAIRemoteCompactPath(c) && !nativeV2 {
+	nativeState, nativeAttempted := getOpenAINativeCompactionLogState(c)
+	if !isOpenAIRemoteCompactPath(c) && (!nativeV2 || !nativeAttempted) {
 		return
 	}
 
@@ -846,7 +952,11 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 	}
 
 	outcome := "failed"
-	if status >= 200 && status < 300 {
+	if nativeV2 && nativeAttempted {
+		if nativeState.SettlementAllowed {
+			outcome = "succeeded"
+		}
+	} else if status >= 200 && status < 300 {
 		outcome = "succeeded"
 	}
 	// compact 心跳提交后失败的 wire 状态码固化为 200，真实结局以流内错误
@@ -870,6 +980,30 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 		zap.Int64("latency_ms", latencyMs),
 		zap.String("path", path),
 		zap.Bool("force_codex_cli", h != nil && h.cfg != nil && h.cfg.Gateway.ForceCodexCLI),
+	}
+	if nativeV2 && nativeAttempted {
+		telemetry := nativeState.Telemetry
+		fields = append(fields,
+			zap.String("transport", string(telemetry.Transport)),
+			zap.String("account_type", telemetry.AccountType),
+			zap.String("final_account_type", telemetry.FinalAccountType),
+			zap.String("upstream_fingerprint", string(telemetry.UpstreamFingerprint)),
+			zap.String("requested_model", telemetry.RequestedModel),
+			zap.String("mapped_model", telemetry.MappedModel),
+			zap.String("capability_source", telemetry.CapabilitySource),
+			zap.Int("output_item_count", telemetry.OutputItemDoneCount),
+			zap.Int("compaction_item_count", telemetry.CompactionItemCount),
+			zap.Int("malformed_item_count", telemetry.MalformedItemCount),
+			zap.String("terminal_type", telemetry.TerminalEvent),
+			zap.String("semantic_outcome", string(telemetry.Outcome)),
+			zap.Bool("semantic_output_committed", telemetry.SemanticOutputCommitted),
+			zap.Bool("attribution_persisted", telemetry.AttributionPersisted),
+			zap.Bool("safe_to_failover", telemetry.SafeToFailover),
+			zap.Int("failover_count", telemetry.FailoverCount),
+			zap.String("attempt_id", string(telemetry.AttemptID)),
+			zap.String("ws_connection_id", string(telemetry.WSConnectionID)),
+			zap.String("ws_turn_id", string(telemetry.WSTurnID)),
+		)
 	}
 
 	if c != nil {
@@ -1629,6 +1763,29 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
 	}
+	betaFeatureHeaders := c.Request.Header.Values("x-codex-beta-features")
+	nativeRemoteCompactionV2 := hasOpenAIRemoteCompactionV2Feature(betaFeatureHeaders)
+	firstTurnNativeRemoteCompactionV2 := service.IsOpenAINativeRemoteCompactionV2Turn(
+		firstMessage,
+		betaFeatureHeaders,
+	)
+	if nativeRemoteCompactionV2 && service.HasCompactionTriggerInInput(firstMessage) && !firstTurnNativeRemoteCompactionV2 {
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "native remote compaction v2 requires a final compaction_trigger input item")
+		return
+	}
+	if nativeRemoteCompactionV2 {
+		service.MarkOpenAINativeRemoteCompactionV2(c)
+		ctx = c.Request.Context()
+	}
+	if firstTurnNativeRemoteCompactionV2 {
+		markOpenAINativeCompactionAttemptForLog(c, nil)
+	}
+	// The first frame has already been consumed. Keep one session-scoped reader
+	// across safe account failover attempts so native compaction can cancel an
+	// in-flight upstream attempt as soon as the client peer closes.
+	ctx, stopClientReadPump := service.WithOpenAIWSClientReadPump(ctx, wsConn)
+	defer stopClientReadPump()
+	c.Request = c.Request.WithContext(ctx)
 	// 用户提示词替换必须在首帧模型解析、内容审计和会话 hash 前执行，保证 WS 首轮请求与 HTTP 入口一致。
 	firstMessage = h.gatewayService.ApplyUserPromptReplacement(ctx, firstMessage, "openai_responses")
 
@@ -1768,6 +1925,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		firstMessage,
 		openAIWSIngressFallbackSessionSeed(subject.UserID, apiKey.ID, apiKey.GroupID),
 	)
+	var compatibilityAttempt *service.OpenAICompatibilityDomainAttempt
+	if nativeRemoteCompactionV2 {
+		requestStageBudget := service.NewOpenAIStageBudget(h.cfg.Gateway.OpenAINativeCompaction.MaxRequestCumulativeBytes)
+		defer requestStageBudget.Close()
+		ctx = service.WithOpenAINativeCompactionRequestStageBudget(ctx, requestStageBudget)
+		c.Request = c.Request.WithContext(ctx)
+		compatibilityAttempt, err = h.gatewayService.NewOpenAINativeCompatibilityDomainAttempt(ctx, apiKey.GroupID, previousResponseID, sessionHash)
+		if err != nil {
+			reqLog.Warn("openai.websocket_compatibility_domain_continuation_rejected", zap.Error(err))
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "native compaction continuation compatibility is unknown or mismatched")
+			return
+		}
+	}
 	cyberBlockKeyWS := service.CyberSessionBlockKey(apiKey.ID, c, firstMessage)
 	if cyberBlockKeyWS != "" && h.cyberSessionBlockAppliesToGroup(c, apiKey) && h.gatewayService.IsCyberSessionBlocked(ctx, cyberBlockKeyWS) {
 		writeCyberSessionBlockedWSError(ctx, wsConn)
@@ -1795,6 +1965,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
+	compatibilityCandidateRejected := false
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	handleWSFailover := func(account *service.Account, failoverErr *service.UpstreamFailoverError) bool {
@@ -1839,11 +2010,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return ensureUserSlotHeld()
 	}
 
-	// 与 HTTP Responses 路径保持一致：生图意图请求要求账号支持 Responses API（#4417）。
-	// WSv2 传输本身已隐含 Responses 支持，此处为防御性对齐。
-	// 首轮显式意图已按渠道模型 C 判断，被动 namespace 不会误过滤账号（#4476）。
+	// OpenAI Responses WS ingress 始终要求 Responses API；Grok 的兼容入口
+	// 继续走 WS→HTTP bridge，因此保留其 Chat Completions capability 语义。
 	requiredCapability := service.OpenAIEndpointCapabilityChatCompletions
-	if imageIntent && requestPlatform == service.PlatformOpenAI {
+	if requestPlatform == service.PlatformOpenAI {
 		requiredCapability = service.OpenAIEndpointCapabilityResponses
 	}
 
@@ -1871,7 +2041,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
-			if lastFailoverErr != nil {
+			if lastFailoverErr == nil && compatibilityCandidateRejected {
+				closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "no native compaction account matches the required compatibility domain")
+			} else if lastFailoverErr != nil {
 				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr)
 			} else {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
@@ -1879,7 +2051,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return
 		}
 		if selection == nil || selection.Account == nil {
-			if lastFailoverErr != nil {
+			if lastFailoverErr == nil && compatibilityCandidateRejected {
+				closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "no native compaction account matches the required compatibility domain")
+			} else if lastFailoverErr != nil {
 				closeOpenAIWSFailoverExhausted(wsConn, lastFailoverErr)
 			} else {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
@@ -1888,6 +2062,17 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		account := selection.Account
+		if compatibilityAttempt != nil {
+			if _, domainErr := compatibilityAttempt.CheckCandidate(ctx, account, routingModelWS); domainErr != nil {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				reqLog.Warn("openai.websocket_compatibility_domain_candidate_rejected", zap.Int64("account_id", account.ID), zap.Error(domainErr))
+				compatibilityCandidateRejected = true
+				failedAccountIDs[account.ID] = struct{}{}
+				continue
+			}
+		}
 		accountMaxConcurrency := account.Concurrency
 		if selection.WaitPlan != nil && selection.WaitPlan.MaxConcurrency > 0 {
 			accountMaxConcurrency = selection.WaitPlan.MaxConcurrency
@@ -1915,8 +2100,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			accountReleaseFunc = fastReleaseFunc
 		}
 		currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
-		if err := h.gatewayService.BindStickySession(ctx, apiKey.GroupID, sessionHash, account.ID); err != nil {
-			reqLog.Warn("openai.websocket_bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		if compatibilityAttempt == nil {
+			if err := h.gatewayService.BindStickySession(ctx, apiKey.GroupID, sessionHash, account.ID); err != nil {
+				reqLog.Warn("openai.websocket_bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			}
 		}
 
 		token, _, err := h.gatewayService.GetRequestCredential(ctx, c, account)
@@ -2004,7 +2191,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnCtx = service.WithOpenAIImageGenerationIntent(turnCtx)
 				}
 				turnCapability := service.OpenAIEndpointCapabilityChatCompletions
-				if turnImageIntent && requestPlatform == service.PlatformOpenAI {
+				if requestPlatform == service.PlatformOpenAI {
 					turnCapability = service.OpenAIEndpointCapabilityResponses
 				}
 				routingModel, resolveErr := h.gatewayService.ResolveOpenAIWSRoutingModelForAccount(
@@ -2018,14 +2205,25 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					reason := fmt.Sprintf("model %s is not available for this websocket channel or account", requestedModel)
 					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, reason, resolveErr)
 				}
+				if compatibilityAttempt != nil {
+					if _, domainErr := compatibilityAttempt.CheckCandidate(turnCtx, account, routingModel); domainErr != nil {
+						return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "native compaction candidate compatibility is unknown or mismatched", domainErr)
+					}
+				}
 				return routingModel, nil
 			},
 			BeforeRequest: func(turn int, payload []byte, originalModel, _ string) ([]byte, error) {
+				if service.IsOpenAINativeRemoteCompactionV2Turn(payload, betaFeatureHeaders) {
+					markOpenAINativeCompactionAttemptForLog(c, nil)
+				}
 				if turn == 1 {
 					return payload, nil
 				}
 				if !gjson.ValidBytes(payload) {
 					return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
+				}
+				if nativeRemoteCompactionV2 && service.HasCompactionTriggerInInput(payload) && !service.IsOpenAINativeRemoteCompactionV2Turn(payload, betaFeatureHeaders) {
+					return payload, service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "native remote compaction v2 requires a final compaction_trigger input item", nil)
 				}
 				payloadPreviousResponseID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
 				model := strings.TrimSpace(originalModel)
@@ -2101,6 +2299,16 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				turn := capture.Turn
 				result := capture.Result
 				turnErr := capture.Err
+				turnRequestBodyForNative := capture.RequestBody
+				if len(turnRequestBodyForNative) == 0 {
+					turnRequestBodyForNative = wsFirstMessageForUsageFallback
+				}
+				if service.IsOpenAINativeRemoteCompactionV2Turn(turnRequestBodyForNative, betaFeatureHeaders) {
+					if result != nil {
+						result.FailoverCount = switchCount
+					}
+					markOpenAINativeCompactionAttemptForLog(c, result)
+				}
 				turnModel := strings.TrimSpace(capture.OriginalModel)
 				if turnModel == "" {
 					turnModel = reqModel
@@ -2128,6 +2336,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				defer clearCyberPromptExcerpt(turn)
 				if turnErr != nil {
+					if compatibilityAttempt != nil {
+						responseID := ""
+						if result != nil {
+							responseID = result.ResponseID
+						}
+						if commitErr := compatibilityAttempt.CommitDelivery(ctx, account.ID, responseID, false); commitErr != nil {
+							reqLog.Warn("openai.websocket_compatibility_domain_failed_turn_cleanup", zap.Int64("account_id", account.ID), zap.Int("turn", turn), zap.Error(commitErr))
+						}
+					}
 					if result == nil || result.ImageCount <= 0 {
 						return
 					}
@@ -2142,6 +2359,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				if result == nil {
 					return
+				}
+				if compatibilityAttempt != nil {
+					deliveryCommitted := turnErr == nil && !result.ClientDisconnect && strings.TrimSpace(result.UpstreamTerminalEvent) != ""
+					if commitErr := compatibilityAttempt.CommitDelivery(ctx, account.ID, result.ResponseID, deliveryCommitted); commitErr != nil {
+						reqLog.Warn("openai.websocket_compatibility_domain_commit_failed", zap.Int64("account_id", account.ID), zap.Int("turn", turn), zap.Bool("delivery_committed", deliveryCommitted), zap.Error(commitErr))
+						if deliveryCommitted {
+							return
+						}
+					}
 				}
 				// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
 				if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
@@ -2199,7 +2425,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// 切组/会话失配防护：previous_response_id 未在当前分组命中粘连账号时，
 		// 说明该会话链不属于本次调度到的账号；原样转发会触发上游会话链鉴权失败。
 		// 因此只在上下文可迁移时剥离首包 previous_response_id，后续 turn 仍由 WS 转发层处理。
-		if previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
+		if !nativeRemoteCompactionV2 && previousResponseID != "" && !scheduleDecision.StickyPreviousHit && previousResponseCanMove {
 			wsFirstMessage = service.RemovePreviousResponseIDFromBody(wsFirstMessage)
 			reqLog.Debug("openai.websocket_previous_response_id_stripped_cross_group",
 				zap.Int64("account_id", account.ID),
@@ -2385,6 +2611,9 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(c *gin.Context, task servic
 }
 
 func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(c *gin.Context, result *service.OpenAIForwardResult, task service.UsageRecordTask) {
+	if result != nil && !result.CustomerSettlementAllowed() {
+		return
+	}
 	if result != nil && result.ImageCount > 0 {
 		h.submitMandatoryUsageRecordTask(c, task)
 		return
@@ -2637,6 +2866,14 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 			flusher.Flush()
 		}
 		return
+	}
+	if service.IsOpenAINativeRemoteCompactionV2(c) && !c.Writer.Written() {
+		// Native whole-attempt staging installs provisional SSE headers before a
+		// keepalive or semantic commit. If every attempt fails before either write,
+		// restore the normal non-2xx JSON response contract.
+		for _, header := range []string{"Content-Type", "Cache-Control", "Connection", "X-Accel-Buffering"} {
+			c.Writer.Header().Del(header)
+		}
 	}
 
 	// Normal case: return JSON response with proper status code

@@ -39,6 +39,11 @@ type openAIWSSessionConnBinding struct {
 	expiresAt time.Time
 }
 
+type openAICompatibilityDomainBinding struct {
+	domain    OpenAICompatibilityDomain
+	expiresAt time.Time
+}
+
 // OpenAIWSStateStore 管理 WSv2 的粘连状态。
 // - response_id -> account_id 用于续链路由
 // - response_id -> conn_id 用于连接内上下文复用
@@ -61,6 +66,14 @@ type OpenAIWSStateStore interface {
 	BindSessionConn(groupID int64, sessionHash, connID string, ttl time.Duration)
 	GetSessionConn(groupID int64, sessionHash string) (string, bool)
 	DeleteSessionConn(groupID int64, sessionHash string)
+
+	BindResponseDomain(ctx context.Context, groupID int64, responseID string, domain OpenAICompatibilityDomain, ttl time.Duration) bool
+	GetResponseDomain(ctx context.Context, groupID int64, responseID string) (OpenAICompatibilityDomain, bool)
+	DeleteResponseDomain(ctx context.Context, groupID int64, responseID string) error
+
+	BindSessionDomain(ctx context.Context, groupID int64, sessionHash string, domain OpenAICompatibilityDomain, ttl time.Duration) bool
+	GetSessionDomain(ctx context.Context, groupID int64, sessionHash string) (OpenAICompatibilityDomain, bool)
+	DeleteSessionDomain(ctx context.Context, groupID int64, sessionHash string) error
 }
 
 type defaultOpenAIWSStateStore struct {
@@ -74,6 +87,10 @@ type defaultOpenAIWSStateStore struct {
 	sessionToTurnState   map[string]openAIWSTurnStateBinding
 	sessionToConnMu      sync.RWMutex
 	sessionToConn        map[string]openAIWSSessionConnBinding
+	responseToDomainMu   sync.RWMutex
+	responseToDomain     map[string]openAICompatibilityDomainBinding
+	sessionToDomainMu    sync.RWMutex
+	sessionToDomain      map[string]openAICompatibilityDomainBinding
 
 	lastCleanupUnixNano atomic.Int64
 }
@@ -86,6 +103,8 @@ func NewOpenAIWSStateStore(cache GatewayCache) OpenAIWSStateStore {
 		responseToConn:     make(map[string]openAIWSConnBinding, 256),
 		sessionToTurnState: make(map[string]openAIWSTurnStateBinding, 256),
 		sessionToConn:      make(map[string]openAIWSSessionConnBinding, 256),
+		responseToDomain:   make(map[string]openAICompatibilityDomainBinding, 256),
+		sessionToDomain:    make(map[string]openAICompatibilityDomainBinding, 256),
 	}
 	store.lastCleanupUnixNano.Store(time.Now().UnixNano())
 	return store
@@ -301,6 +320,142 @@ func (s *defaultOpenAIWSStateStore) DeleteSessionConn(groupID int64, sessionHash
 	s.sessionToConnMu.Unlock()
 }
 
+func (s *defaultOpenAIWSStateStore) BindResponseDomain(ctx context.Context, groupID int64, responseID string, domain OpenAICompatibilityDomain, ttl time.Duration) bool {
+	id := normalizeOpenAIWSResponseID(responseID)
+	key := openAIWSResponseAccountMapKey(groupID, id)
+	if id == "" || !domain.Valid() {
+		return false
+	}
+	ttl = normalizeOpenAIWSTTL(ttl)
+	if cache, ok := s.cache.(OpenAICompatibilityDomainCache); ok {
+		cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+		err := cache.SetOpenAICompatibilityDomain(cacheCtx, groupID, openAIWSResponseDomainBindingKey(id), domain, ttl)
+		cancel()
+		if err != nil {
+			return false
+		}
+	}
+	s.maybeCleanup()
+
+	s.responseToDomainMu.Lock()
+	defer s.responseToDomainMu.Unlock()
+	ensureBindingCapacity(s.responseToDomain, key, openAIWSStateStoreMaxEntriesPerMap)
+	s.responseToDomain[key] = openAICompatibilityDomainBinding{domain: domain, expiresAt: time.Now().Add(ttl)}
+	return true
+}
+
+func (s *defaultOpenAIWSStateStore) GetResponseDomain(ctx context.Context, groupID int64, responseID string) (OpenAICompatibilityDomain, bool) {
+	id := normalizeOpenAIWSResponseID(responseID)
+	if id == "" {
+		return OpenAICompatibilityDomain{}, false
+	}
+	s.maybeCleanup()
+
+	key := openAIWSResponseAccountMapKey(groupID, id)
+	s.responseToDomainMu.RLock()
+	binding, ok := s.responseToDomain[key]
+	s.responseToDomainMu.RUnlock()
+	if ok && time.Now().Before(binding.expiresAt) && binding.domain.Valid() {
+		return binding.domain, true
+	}
+	if cache, cacheOK := s.cache.(OpenAICompatibilityDomainCache); cacheOK {
+		cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+		domain, err := cache.GetOpenAICompatibilityDomain(cacheCtx, groupID, openAIWSResponseDomainBindingKey(id))
+		cancel()
+		if err == nil && domain.Valid() {
+			return domain, true
+		}
+	}
+	return OpenAICompatibilityDomain{}, false
+}
+
+func (s *defaultOpenAIWSStateStore) DeleteResponseDomain(ctx context.Context, groupID int64, responseID string) error {
+	id := normalizeOpenAIWSResponseID(responseID)
+	if id == "" {
+		return nil
+	}
+	s.responseToDomainMu.Lock()
+	delete(s.responseToDomain, openAIWSResponseAccountMapKey(groupID, id))
+	s.responseToDomainMu.Unlock()
+	if cache, ok := s.cache.(OpenAICompatibilityDomainCache); ok {
+		cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+		defer cancel()
+		return cache.DeleteOpenAICompatibilityDomain(cacheCtx, groupID, openAIWSResponseDomainBindingKey(id))
+	}
+	return nil
+}
+
+func (s *defaultOpenAIWSStateStore) BindSessionDomain(ctx context.Context, groupID int64, sessionHash string, domain OpenAICompatibilityDomain, ttl time.Duration) bool {
+	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	if key == "" || !domain.Valid() {
+		return false
+	}
+	ttl = normalizeOpenAIWSTTL(ttl)
+	if cache, ok := s.cache.(OpenAICompatibilityDomainCache); ok {
+		cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+		err := cache.SetOpenAICompatibilityDomain(cacheCtx, groupID, openAIWSSessionDomainBindingKey(sessionHash), domain, ttl)
+		cancel()
+		if err != nil {
+			return false
+		}
+	}
+	s.maybeCleanup()
+
+	s.sessionToDomainMu.Lock()
+	defer s.sessionToDomainMu.Unlock()
+	ensureBindingCapacity(s.sessionToDomain, key, openAIWSStateStoreMaxEntriesPerMap)
+	s.sessionToDomain[key] = openAICompatibilityDomainBinding{domain: domain, expiresAt: time.Now().Add(ttl)}
+	return true
+}
+
+func (s *defaultOpenAIWSStateStore) GetSessionDomain(ctx context.Context, groupID int64, sessionHash string) (OpenAICompatibilityDomain, bool) {
+	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	if key == "" {
+		return OpenAICompatibilityDomain{}, false
+	}
+	s.maybeCleanup()
+
+	s.sessionToDomainMu.RLock()
+	binding, ok := s.sessionToDomain[key]
+	s.sessionToDomainMu.RUnlock()
+	if ok && time.Now().Before(binding.expiresAt) && binding.domain.Valid() {
+		return binding.domain, true
+	}
+	if cache, cacheOK := s.cache.(OpenAICompatibilityDomainCache); cacheOK {
+		cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+		domain, err := cache.GetOpenAICompatibilityDomain(cacheCtx, groupID, openAIWSSessionDomainBindingKey(sessionHash))
+		cancel()
+		if err == nil && domain.Valid() {
+			return domain, true
+		}
+	}
+	return OpenAICompatibilityDomain{}, false
+}
+
+func (s *defaultOpenAIWSStateStore) DeleteSessionDomain(ctx context.Context, groupID int64, sessionHash string) error {
+	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	if key == "" {
+		return nil
+	}
+	s.sessionToDomainMu.Lock()
+	delete(s.sessionToDomain, key)
+	s.sessionToDomainMu.Unlock()
+	if cache, ok := s.cache.(OpenAICompatibilityDomainCache); ok {
+		cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+		defer cancel()
+		return cache.DeleteOpenAICompatibilityDomain(cacheCtx, groupID, openAIWSSessionDomainBindingKey(sessionHash))
+	}
+	return nil
+}
+
+func openAIWSResponseDomainBindingKey(responseID string) string {
+	return "response\x00" + normalizeOpenAIWSResponseID(responseID)
+}
+
+func openAIWSSessionDomainBindingKey(sessionHash string) string {
+	return "session\x00" + strings.TrimSpace(sessionHash)
+}
+
 func (s *defaultOpenAIWSStateStore) maybeCleanup() {
 	if s == nil {
 		return
@@ -330,6 +485,14 @@ func (s *defaultOpenAIWSStateStore) maybeCleanup() {
 	s.sessionToConnMu.Lock()
 	cleanupExpiredSessionConnBindings(s.sessionToConn, now, openAIWSStateStoreCleanupMaxPerMap)
 	s.sessionToConnMu.Unlock()
+
+	s.responseToDomainMu.Lock()
+	cleanupExpiredCompatibilityDomainBindings(s.responseToDomain, now, openAIWSStateStoreCleanupMaxPerMap)
+	s.responseToDomainMu.Unlock()
+
+	s.sessionToDomainMu.Lock()
+	cleanupExpiredCompatibilityDomainBindings(s.sessionToDomain, now, openAIWSStateStoreCleanupMaxPerMap)
+	s.sessionToDomainMu.Unlock()
 }
 
 func cleanupExpiredAccountBindings(bindings map[string]openAIWSAccountBinding, now time.Time, maxScan int) {
@@ -387,6 +550,22 @@ func cleanupExpiredSessionConnBindings(bindings map[string]openAIWSSessionConnBi
 	scanned := 0
 	for key, binding := range bindings {
 		if now.After(binding.expiresAt) {
+			delete(bindings, key)
+		}
+		scanned++
+		if scanned >= maxScan {
+			break
+		}
+	}
+}
+
+func cleanupExpiredCompatibilityDomainBindings(bindings map[string]openAICompatibilityDomainBinding, now time.Time, maxScan int) {
+	if len(bindings) == 0 || maxScan <= 0 {
+		return
+	}
+	scanned := 0
+	for key, binding := range bindings {
+		if !now.Before(binding.expiresAt) || !binding.domain.Valid() {
 			delete(bindings, key)
 		}
 		scanned++

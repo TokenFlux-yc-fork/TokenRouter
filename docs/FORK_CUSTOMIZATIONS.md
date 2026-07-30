@@ -134,7 +134,147 @@ upstream merge.
 | `responses-lite-validation` | Reject residual unsupported Responses Lite fields and preserve event/tool validation semantics. | `6a73e12df` | OpenAI gateway handler/forwarder, Responses Lite tools | `local` | Responses Lite unit tests and production protocol probes. |
 | `grok-inference-error-classification` | Persist Grok inference scheduling state only for 429; other inference errors fail over for the current request only. | `6f31ce627` | `openai_gateway_grok*` | `local` | Grok gateway tests, refresh race tests and account-state production probe. |
 | `grok-responses-transient-404` | Retry the exact xAI Responses `bad_response_status_code` 404 once on the same account, then fail over without entering another same-account pool retry; unrelated 404 responses keep their existing behavior. | `5f7439b85` | `grok_upstream_errors*`, `openai_gateway_grok*` | `local` | Exact classifier, API-key same-account recovery, retry exhaustion/failover and non-overmatch Grok tests. |
+| `openai-remote-compaction-v2-contract` | Require native Remote Compaction v2 to use an exact, current capability domain and to validate and stage the complete upstream attempt before committing exactly one valid result to the customer; final candidate qualification remains release-gated. | task `#102` (pending commit) | OpenAI HTTP/SSE/WebSocket gateway, capability/probe/attribution repositories, migrations `227`-`231` | `local` | Strict classifier and validator fixtures; bounded staging, disconnect and failover tests; capability, probe-fencing, migration, attribution, settlement and HTTP/WebSocket parity gates below. |
 | `frontend-build-heap` | Give the containerized frontend build enough heap for the fork UI. | `fe599ead3` | `deploy/Dockerfile` | `local` | Container image build. |
+
+## Remote Compaction v2 Contract
+
+The `openai-remote-compaction-v2-contract` customization is fail-closed and
+preserves these boundaries:
+
+- **Strict request classifier.** On a bare Responses route, a request is native
+  Remote Compaction v2 only when `stream` is the JSON boolean `true`, an
+  `x-codex-beta-features` comma-delimited token is exactly and case-sensitively
+  `remote_compaction_v2`, `input` is a non-empty array, and its final element is
+  an object whose string `type` is exactly `compaction_trigger`. A trigger only
+  earlier in the input, a substring or case-folded feature match, a non-boolean
+  stream value, a Responses subresource, or the legacy compact route must not
+  enter this contract. The classifier requires a final trigger; it does not
+  claim that the request contains only one trigger.
+- **Transport-independent exactly-one validation.** HTTP SSE and WebSocket feed
+  the same Responses event validator. Success requires exactly one well-formed
+  compaction item from `response.output_item.done`, exactly one successful
+  terminal event, and no invalid, duplicate-terminal, or post-terminal frame.
+  The accepted item types are exactly `compaction` and `compaction_summary`,
+  with a non-empty bounded string content field. Zero, multiple, malformed,
+  failed-terminal, incomplete, or resource-limited attempts fail closed;
+  terminal framing alone is not a successful Responses terminal. Legacy
+  reconstruction from item-added events or a terminal response body is not
+  evidence for this contract.
+- **Bounded whole-attempt staging.** Every candidate attempt is retained until
+  semantic validation succeeds, under per-attempt byte/event/duration limits,
+  a request-cumulative byte limit, and a process-wide staged-byte budget; large
+  stages may spill to a private temporary file. Before commit, any transport,
+  semantic, or staging failure discards the entire attempt and may fail over.
+  Commit is one-way: after bytes or WebSocket frames begin reaching the client,
+  the attempt is not safe to fail over, and a commit/write failure must not
+  replay another account into the same customer response. Native HTTP requests
+  remain linked to client cancellation. Responses WebSocket ingress uses one
+  session-scoped client reader across account failover; a peer close cancels an
+  active native `ctx_pool`, `passthrough`, or `http_bridge` upstream attempt and
+  releases staging without changing the ordinary-stream usage-drain policy.
+- **Compatibility and capability domain.** Reusable state is scoped by provider,
+  opaque canonical-upstream fingerprint, effective mapped model, and contract
+  version `remote_compaction_v2`; transport is deliberately excluded so HTTP
+  and WebSocket share evidence. Successful response/session bindings persist
+  this payload-free tuple in Redis as well as the local hot cache, so a
+  continuation remains verifiable across instances and blue-green handoff;
+  a missing, expired, malformed, or mismatched distributed binding fails
+  closed. The exact persisted capability key is
+  `(account_id, upstream_fingerprint, effective_model, contract_version)` and
+  cannot be inferred from generic Responses or legacy compact support. A
+  `trusted_official` admission additionally requires an OpenAI OAuth account,
+  the canonical official Responses identity, its matching fingerprint, and
+  Responses endpoint capability. Probe evidence expires with its freshness
+  window; `force_on`/`force_off` overrides require explicit manual-override
+  metadata, cease to apply when revoked or expired, and never bypass semantic
+  validation. An active exact-key semantic quarantine denies admission,
+  including trusted-official and force-on candidates.
+- **Schema ownership.** Migration `227` adds exact-key capability, override,
+  quarantine, probe-lease, and payload-free probe-result state. Migration `228`
+  adds a content-free, per-real-upstream-attempt attribution ledger that is
+  telemetry rather than customer billing. Migration `229` adds the independent
+  UTC daily operator-cost reservation/commit ledger for probes. Migration `230`
+  hardens dispatch with reservation expiry and irreversible authorization-
+  sentinel identity fields plus an expired-reservation recovery index. Migration
+  `231` requires finite, nonblank manual-override metadata and adds immutable
+  exact-key set/revoke audit rows while the canonical row returns to `auto` on
+  revoke. These migrations are additive, retry-safe, and must pass isolated
+  PostgreSQL rehearsal before rollout.
+- **Probe isolation and recovery.** Autonomous probing is disabled by default.
+  When explicitly enabled, it requires an isolated active group, a dedicated
+  non-composite API-key authorization sentinel, an active sentinel owner, an
+  allowlisted model, positive output/cost bounds, and database-leased claims.
+  Explicitly grouped API-key/custom HTTPS Responses endpoints are eligible and
+  remain subject to the global upstream URL policy; they are not restricted to
+  the public OpenAI hostname.
+  The sentinel is a kill switch, never the candidate's upstream credential.
+  Dispatch revalidates identity and uses claim/account-revision fencing; stale
+  workers or changed identities may record only an inconclusive, payload-free
+  result. Cost is reserved before dispatch, dispatched work is committed, and
+  work known not to have been sent is released. The probe runner invokes the
+  budget repository's conservative expired-reservation reaper before claiming
+  new work; definitely dispatched reservations remain charged and are never
+  reclaimed from elapsed time alone.
+- **Attribution, settlement, and telemetry gates.** The required design gives
+  each actual HTTP, WebSocket, or probe attempt independent
+  request/connection/turn and exact-domain attribution. Unknown usage remains
+  unknown rather than observed zero. Native customer settlement and scheduler
+  success require a validator outcome of `valid`, successful delivery commit,
+  and no client disconnect; failed, discarded, uncommitted, or merely observed
+  upstream attempts must not charge the customer. Operations telemetry and the
+  attribution ledger are bounded metadata only and must not contain
+  request/response bodies, secrets, sensitive upstream addresses, or compaction
+  content. Production HTTP and WebSocket paths populate the durable attempt
+  coordinator, project its terminal state into the forward result, gate customer
+  settlement on valid committed delivery plus persisted attribution, and feed
+  the bounded attempt projection into the existing compact outcome logger.
+
+### Remote Compaction v2 Release Gates
+
+The customer path remains guarded by exact capability admission. Autonomous
+probing remains off unless operators deliberately configure and enable it. The
+HTTP and WebSocket implementations are required to have parity for classifier,
+validator, whole-attempt staging, commit/failover, attribution, settlement, and
+redaction semantics; implementation presence alone is not release evidence.
+
+Before enabling this customization in a release, all of the following must be
+recorded as passing on the final combined tree:
+
+1. Strict positive/negative classifier fixtures and transport-independent
+   exactly-one validator fixtures, including malformed, duplicate-terminal,
+   post-terminal, incomplete-stream, and stage-limit cases.
+2. HTTP/SSE end-to-end tests for pre-commit failover, successful atomic commit,
+   post-commit no-retry, client cancellation, usage settlement, attribution,
+   semantic quarantine, and bounded memory/disk cleanup.
+3. Equivalent native WebSocket tests over `ctx_pool`, `passthrough`, and
+   `http_bridge`, including text/binary frame preservation, disconnects,
+   reconnect/turn identity, pre-commit failover, and post-commit no-retry.
+4. Capability and scheduler tests for exact-key mismatch, mapped models,
+   trusted-official identity, stale probe evidence, override expiry/revocation,
+   quarantine, and HTTP/WebSocket reuse of the same compatibility domain.
+5. Probe tests for sentinel revocation, claim and account-revision fencing,
+   concurrent workers, reservation exhaustion, dispatch settlement, stale
+   results, crash recovery, and payload-free/redacted persistence.
+6. Isolated PostgreSQL apply/reapply and repository integration tests for
+   migrations `227`-`231`, including constraints, leases, stale writes,
+   reservation recovery, immutable override audits, and attribution state
+   transitions.
+7. Customer-settlement and operations-telemetry hard-gate tests proving that
+   every real upstream attempt is attributed while only a valid committed
+   customer delivery can settle usage, and that unknown usage is not zero.
+8. The complete baseline gates below, race tests for the affected handler and
+   service packages, Compose validation, and controlled non-production HTTP and
+   WebSocket protocol probes.
+
+At task `#102` implementation time, production classifier, exact capability,
+probe and reaper, shared validator/staging, semantic quarantine, attempt
+attribution, settlement, bounded telemetry, and all enabled HTTP/WebSocket mode
+wiring are present with focused regression coverage. Controlled protocol probes,
+isolated migration rehearsals, and the complete final candidate baseline remain
+release evidence rather than implementation claims. Remote Compaction v2
+therefore remains release-gated; autonomous probing remains disabled unless its
+explicit isolation and budget configuration is supplied.
 
 ## Qualification-Only Commits
 

@@ -955,6 +955,43 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_NoAvailableErrorPreserv
 	require.Equal(t, "model_not_supported", reason)
 }
 
+func TestDefaultOpenAIAccountSchedulerRejectsNativeCompactionWithoutExactCapability(t *testing.T) {
+	now := time.Now()
+	ctx := WithOpenAINativeRemoteCompactionV2(context.Background(), true)
+	account := &Account{
+		ID:          38112,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "fixture"},
+		Extra:       map[string]any{"openai_responses_supported": true},
+	}
+	req := OpenAIAccountScheduleRequest{
+		RequestedModel:     "gpt-native-v2",
+		RequiredCapability: OpenAIEndpointCapabilityResponses,
+	}
+	scheduler := &defaultOpenAIAccountScheduler{service: &OpenAIGatewayService{}}
+
+	compatible, reason := scheduler.isAccountRequestCompatibleReason(ctx, account, req)
+	require.False(t, compatible)
+	require.Equal(t, "native_compaction_capability_mismatch", reason)
+
+	key, err := ResolveOpenAINativeCompactionCapabilityKey(account, req.RequestedModel)
+	require.NoError(t, err)
+	account.OpenAINativeCompactionCapabilities = []OpenAINativeCompactionCapability{{
+		Key:       key,
+		Supported: true,
+		Mode:      OpenAINativeCompactionCapabilityModeAuto,
+		Source:    OpenAINativeCompactionCapabilitySourceProbe,
+		CheckedAt: &now,
+	}}
+	compatible, reason = scheduler.isAccountRequestCompatibleReason(ctx, account, req)
+	require.True(t, compatible)
+	require.Empty(t, reason)
+}
+
 func TestOpenAIGatewayService_SelectAccountWithScheduler_NoAvailableErrorAggregatesReasonsDeterministically(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 

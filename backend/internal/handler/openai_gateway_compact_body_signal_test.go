@@ -15,12 +15,18 @@ import (
 
 func newCompactBodySignalTestContext(t *testing.T, path string, body []byte) *gin.Context {
 	t.Helper()
+	c, _ := newCompactBodySignalTestContextWithRecorder(t, path, body)
+	return c
+}
+
+func newCompactBodySignalTestContextWithRecorder(t *testing.T, path string, body []byte) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
-	return c
+	return c, rec
 }
 
 func TestNormalizeOpenAIResponsesCompactRequest_RemoteV2StaysOnResponses(t *testing.T) {
@@ -122,16 +128,6 @@ func TestNormalizeOpenAIResponsesCompactRequest_NonRemoteV2BodySignalPromoted(t 
 			betaHeader: "REMOTE_COMPACTION_V2",
 			wantMarked: true,
 		},
-		{
-			name:       "stream_false",
-			body:       []byte(`{"model":"gpt-5.5","stream":false,"input":[{"type":"compaction_trigger"}]}`),
-			betaHeader: "remote_compaction_v2",
-		},
-		{
-			name:       "stream_absent",
-			body:       []byte(`{"model":"gpt-5.5","input":[{"type":"compaction_trigger"}]}`),
-			betaHeader: "remote_compaction_v2",
-		},
 	}
 
 	for _, tt := range tests {
@@ -152,6 +148,74 @@ func TestNormalizeOpenAIResponsesCompactRequest_NonRemoteV2BodySignalPromoted(t 
 				require.Equal(t, true, marked)
 			}
 		})
+	}
+}
+
+func TestNormalizeOpenAIResponsesCompactRequest_RemoteV2RejectsInvalidContract(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "last_item_not_trigger",
+			body: []byte(`{
+				"model":"gpt-5.6-sol",
+				"stream":true,
+				"input":[
+					{"type":"compaction_trigger"},
+					{"type":"message","role":"user","content":"after trigger"}
+				]
+			}`),
+		},
+		{
+			name: "stream_missing",
+			body: []byte(`{"model":"gpt-5.5","input":[{"type":"compaction_trigger"}]}`),
+		},
+		{
+			name: "stream_string_false",
+			body: []byte(`{"model":"gpt-5.5","stream":"false","input":[{"type":"compaction_trigger"}]}`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, rec := newCompactBodySignalTestContextWithRecorder(t, "/v1/responses", tt.body)
+			c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+
+			normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), tt.body)
+			require.False(t, ok)
+			require.Nil(t, normalized)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			require.JSONEq(t, `{
+				"error": {
+					"type": "invalid_request_error",
+					"message": "Native remote compaction v2 requires stream=true and a final compaction_trigger input item"
+				}
+			}`, rec.Body.String())
+			require.False(t, service.IsOpenAINativeRemoteCompactionV2(c))
+			require.Equal(t, "/v1/responses", c.Request.URL.Path)
+		})
+	}
+}
+
+func TestNormalizeOpenAIResponsesCompactRequest_RemoteV2FeatureWithoutTriggerIsOrdinaryResponse(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	for _, body := range [][]byte{
+		[]byte(`{"model":"gpt-5.5","stream":true}`),
+		[]byte(`{"model":"gpt-5.5","stream":true,"input":[]}`),
+		[]byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"message","role":"user","content":"hello"}]}`),
+		[]byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"message"},"compaction_trigger"]}`),
+	} {
+		c, rec := newCompactBodySignalTestContextWithRecorder(t, "/v1/responses", body)
+		c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+
+		normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+		require.True(t, ok)
+		require.Equal(t, body, normalized)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, "/v1/responses", c.Request.URL.Path)
+		require.False(t, service.IsOpenAINativeRemoteCompactionV2(c))
 	}
 }
 

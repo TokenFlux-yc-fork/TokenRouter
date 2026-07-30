@@ -992,6 +992,37 @@ func TestOpenAISelectAccountForModelWithExclusions_SetsStickyBinding(t *testing.
 	}
 }
 
+func TestOpenAISelectAccountForModelWithExclusions_NativeDefersStickyBinding(t *testing.T) {
+	sessionHash := "native-bind-after-commit"
+	account := Account{
+		ID:          1,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    1,
+	}
+	key, err := ResolveOpenAINativeCompactionCapabilityKey(&account, "gpt-4")
+	require.NoError(t, err)
+	account.OpenAINativeCompactionCapabilities = []OpenAINativeCompactionCapability{{
+		Key:       key,
+		Supported: true,
+		Mode:      OpenAINativeCompactionCapabilityModeAuto,
+		Source:    OpenAINativeCompactionCapabilitySourceTrustedOfficial,
+	}}
+	repo := stubOpenAIAccountRepo{accounts: []Account{account}}
+	cache := &stubGatewayCache{}
+	svc := &OpenAIGatewayService{accountRepo: repo, cache: cache}
+	ctx := WithOpenAINativeRemoteCompactionV2(context.Background(), true)
+
+	selected, err := svc.SelectAccountForModelWithExclusions(ctx, nil, sessionHash, "gpt-4", nil)
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	require.Equal(t, int64(1), selected.ID)
+	require.NotContains(t, cache.sessionBindings, "openai:"+sessionHash)
+}
+
 func TestOpenAISelectAccountWithLoadAwareness_StickyWaitPlan(t *testing.T) {
 	sessionHash := "sticky-wait"
 	groupID := int64(1)

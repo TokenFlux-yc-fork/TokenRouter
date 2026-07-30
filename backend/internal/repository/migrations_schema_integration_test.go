@@ -182,6 +182,41 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "scheduler_outbox", "dedup_key", "text", 0, true)
 	requireIndex(t, tx, "scheduler_outbox", "idx_scheduler_outbox_pending_dedup_key")
 
+	// migration 227：native remote compaction v2 能力与 probe audit 必须独立持久化。
+	var nativeCapabilityRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.openai_native_compaction_capabilities')").Scan(&nativeCapabilityRegclass))
+	require.True(t, nativeCapabilityRegclass.Valid, "expected openai_native_compaction_capabilities table to exist")
+	requireColumn(t, tx, "openai_native_compaction_capabilities", "upstream_fingerprint", "character varying", 128, false)
+	requireColumn(t, tx, "openai_native_compaction_capabilities", "effective_model", "character varying", 512, false)
+	requireColumn(t, tx, "openai_native_compaction_capabilities", "contract_version", "character varying", 64, false)
+	requireIndex(t, tx, "openai_native_compaction_capabilities", "idx_openai_native_compaction_capabilities_probe_due")
+
+	var nativeProbeAuditRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.openai_native_compaction_probe_results')").Scan(&nativeProbeAuditRegclass))
+	require.True(t, nativeProbeAuditRegclass.Valid, "expected openai_native_compaction_probe_results table to exist")
+	requireColumn(t, tx, "openai_native_compaction_probe_results", "stale_identity", "boolean", 0, false)
+	requireIndex(t, tx, "openai_native_compaction_probe_results", "idx_openai_native_compaction_probe_results_account_checked")
+	requireColumn(t, tx, "openai_native_compaction_probe_budgets", "reserved_micro_usd", "bigint", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budgets", "committed_micro_usd", "bigint", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budget_reservations", "reservation_id", "uuid", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budget_reservations", "amount_micro_usd", "bigint", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budget_reservations", "expires_at", "timestamp with time zone", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budget_reservations", "authorization_principal_sha256", "character varying", 64, true)
+	requireColumn(t, tx, "openai_native_compaction_probe_results", "authorization_principal_sha256", "character varying", 64, true)
+	requireForeignKeyOnDelete(t, tx, "openai_native_compaction_probe_budget_reservations", "budget_day", "openai_native_compaction_probe_budgets", "RESTRICT")
+	requireIndex(t, tx, "openai_native_compaction_probe_budget_reservations", "idx_openai_native_compaction_probe_budget_reservations_day")
+	requireIndex(t, tx, "openai_native_compaction_probe_budget_reservations", "idx_openai_native_compaction_probe_reservations_expired")
+
+	// migration 228：每次真实 upstream attempt 独立、payload-free、unknown-safe 持久化。
+	requireColumn(t, tx, "upstream_attempt_attributions", "attempt_id", "character varying", 128, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "gateway_request_id", "character varying", 128, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "upstream_fingerprint", "character varying", 128, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "state_version", "bigint", 0, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "usage_observed", "boolean", 0, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "cost_usd", "numeric", 0, true)
+	requireIndex(t, tx, "upstream_attempt_attributions", "idx_upstream_attempt_attributions_gateway_request")
+	requireIndex(t, tx, "upstream_attempt_attributions", "idx_upstream_attempt_attributions_account_started")
+
 	// usage_billing_dedup: billing idempotency narrow table
 	var usageBillingDedupRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.usage_billing_dedup')").Scan(&usageBillingDedupRegclass))

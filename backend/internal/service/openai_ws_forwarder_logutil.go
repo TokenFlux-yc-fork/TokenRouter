@@ -510,6 +510,16 @@ func applyOpenAIWSRetryPayloadStrategy(payload map[string]any, attempt int) (str
 	return "trim_optional_fields", removed
 }
 
+func applyOpenAIWSRetryPayloadStrategyForRequest(payload map[string]any, attempt int, nativeCompaction bool) (strategy string, removedKeys []string) {
+	if !nativeCompaction {
+		return applyOpenAIWSRetryPayloadStrategy(payload, attempt)
+	}
+	if len(payload) == 0 {
+		return "empty", nil
+	}
+	return "full", nil
+}
+
 func logOpenAIWSModeInfo(format string, args ...any) {
 	logger.LegacyPrintf("service.openai_gateway", "[OpenAI WS Mode][openai_ws_mode=true] "+format, args...)
 }

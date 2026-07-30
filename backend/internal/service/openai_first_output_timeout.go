@@ -2,14 +2,12 @@ package service
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,28 +31,20 @@ var (
 )
 
 type openAIFirstOutputStage struct {
-	limit      int64
-	size       int64
-	memory     bytes.Buffer
-	tempFile   *os.File
-	tempPath   string
-	createTemp func() (*os.File, error)
-	removeFile func(string) error
-	memoryOnly bool
-	cleanupErr error
-	closed     bool
+	*openAIStagedBuffer
 }
 
 func newOpenAIFirstOutputStage(limit int64) *openAIFirstOutputStage {
-	if limit < 1 {
-		limit = 1
-	}
-	return &openAIFirstOutputStage{
-		limit:      limit,
-		createTemp: func() (*os.File, error) { return os.CreateTemp("", "tokenrouter-openai-first-output-*") },
-		removeFile: os.Remove,
-		memoryOnly: runtime.GOOS == "windows",
-	}
+	stage := newOpenAIStagedBuffer(
+		limit,
+		openAIFirstOutputStageMemoryLimit,
+		"tokenrouter-openai-first-output-*",
+	)
+	// Preserve the legacy first-output fallback: it may stay in memory up to its
+	// byte limit when unlink is unavailable. Native compaction staging uses the
+	// shared primitive directly and fails closed above its memory threshold.
+	stage.fallbackMemoryLimit = stage.limit
+	return &openAIFirstOutputStage{openAIStagedBuffer: stage}
 }
 
 func newDefaultOpenAIFirstOutputStage() *openAIFirstOutputStage {
@@ -90,143 +80,38 @@ func openAIFirstOutputDynamicScanLines(guardActive *atomic.Bool) bufio.SplitFunc
 	}
 }
 
-func (s *openAIFirstOutputStage) Buffered() int64 {
-	if s == nil {
-		return 0
+func (s *openAIFirstOutputStage) prepareWrite(incoming int) error {
+	if s == nil || s.openAIStagedBuffer == nil {
+		return os.ErrClosed
 	}
-	return s.size
+	if int64(incoming) > s.limit-s.size {
+		return fmt.Errorf("%w: buffered=%d incoming=%d limit=%d", errOpenAIFirstOutputStageLimit, s.size, incoming, s.limit)
+	}
+	return s.openAIStagedBuffer.prepareWrite(incoming)
 }
 
 func (s *openAIFirstOutputStage) WriteString(value string) (int, error) {
 	if err := s.prepareWrite(len(value)); err != nil {
 		return 0, err
 	}
-	var n int
-	var err error
-	if s.tempFile == nil {
-		n, err = s.memory.WriteString(value)
-	} else {
-		n, err = io.WriteString(s.tempFile, value)
-	}
-	s.size += int64(n)
-	if err != nil {
-		return n, fmt.Errorf("write first-output stage: %w", err)
-	}
-	return n, nil
+	return s.openAIStagedBuffer.WriteString(value)
 }
 
 func (s *openAIFirstOutputStage) Write(p []byte) (int, error) {
 	if err := s.prepareWrite(len(p)); err != nil {
 		return 0, err
 	}
-	var n int
-	var err error
-	if s.tempFile == nil {
-		n, err = s.memory.Write(p)
-	} else {
-		n, err = s.tempFile.Write(p)
-	}
-	s.size += int64(n)
-	if err != nil {
-		return n, fmt.Errorf("write first-output stage: %w", err)
-	}
-	return n, nil
-}
-
-func (s *openAIFirstOutputStage) prepareWrite(incoming int) error {
-	if s == nil || s.closed {
-		return os.ErrClosed
-	}
-	if int64(incoming) > s.limit-s.size {
-		return fmt.Errorf("%w: buffered=%d incoming=%d limit=%d", errOpenAIFirstOutputStageLimit, s.size, incoming, s.limit)
-	}
-	if s.tempFile != nil || s.memoryOnly || s.size+int64(incoming) <= openAIFirstOutputStageMemoryLimit {
-		return nil
-	}
-	file, err := s.createTemp()
-	if err != nil {
-		return fmt.Errorf("create first-output spool: %w", err)
-	}
-	path := file.Name()
-	// 写入任何请求数据前先 unlink。Unix 仍可通过文件描述符读取，进程崩溃或 SIGKILL
-	// 也不会留下带名称的明文暂存文件。
-	if unlinkErr := s.removeFile(path); unlinkErr != nil {
-		closeErr := file.Close()
-		removeErr := s.removeFile(path)
-		if errors.Is(removeErr, os.ErrNotExist) {
-			removeErr = nil
-		}
-		s.memoryOnly = true
-		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			s.tempPath = path
-		}
-		s.cleanupErr = errors.Join(
-			s.cleanupErr,
-			fmt.Errorf("unlink first-output spool before use: %w", unlinkErr),
-			closeErr,
-			removeErr,
-		)
-		return nil
-	}
-	if _, err := file.Write(s.memory.Bytes()); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("initialize first-output spool: %w", err)
-	}
-	s.tempFile = file
-	s.tempPath = path
-	s.memory.Reset()
-	return nil
+	return s.openAIStagedBuffer.Write(p)
 }
 
 func (s *openAIFirstOutputStage) CommitTo(dst io.Writer) error {
-	if s == nil || s.closed {
+	if s == nil || s.openAIStagedBuffer == nil {
 		return os.ErrClosed
 	}
-	if s.tempFile == nil {
-		if _, err := io.Copy(dst, bytes.NewReader(s.memory.Bytes())); err != nil {
-			return err
-		}
-	} else {
-		if _, err := s.tempFile.Seek(0, io.SeekStart); err != nil {
-			return fmt.Errorf("seek first-output spool: %w", err)
-		}
-		if _, err := io.CopyN(dst, s.tempFile, s.size); err != nil {
-			return err
-		}
-	}
-	if err := s.Close(); err != nil {
-		// 数据已成功交付；保留清理错误供 handler 的延迟清理/日志阶段处理，
-		// 不把已经提交的字节转换成流错误。
-		s.cleanupErr = errors.Join(s.cleanupErr, err)
+	if err := s.openAIStagedBuffer.CommitTo(dst); err != nil {
+		return err
 	}
 	return nil
-}
-
-func (s *openAIFirstOutputStage) Close() error {
-	if s == nil {
-		return nil
-	}
-	if s.closed && s.tempFile == nil && s.tempPath == "" && s.cleanupErr == nil {
-		return nil
-	}
-	s.closed = true
-	s.size = 0
-	s.memory.Reset()
-	closeErr := s.cleanupErr
-	s.cleanupErr = nil
-	if s.tempFile != nil {
-		closeErr = errors.Join(closeErr, s.tempFile.Close())
-		s.tempFile = nil
-	}
-	if s.tempPath != "" {
-		removeErr := s.removeFile(s.tempPath)
-		if removeErr == nil || errors.Is(removeErr, os.ErrNotExist) {
-			s.tempPath = ""
-		} else {
-			closeErr = errors.Join(closeErr, removeErr)
-		}
-	}
-	return closeErr
 }
 
 func (s *OpenAIGatewayService) openAIFirstOutputTimeout(reasoningEffort string) time.Duration {

@@ -161,8 +161,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	grokOAuthClient := repository.NewGrokOAuthClient()
 	grokOAuthService := service.NewGrokOAuthService(proxyRepository, grokOAuthClient)
 	grokTokenProvider := service.ProvideGrokTokenProvider(accountRepository, geminiTokenCache, grokOAuthService, oAuthRefreshAPI, tempUnschedCache)
+	openAINativeCompactionProbeBudgetRepository := repository.NewOpenAINativeCompactionProbeBudgetRepository(db)
+	openAINativeCompactionCapabilityRepository := repository.NewOpenAINativeCompactionCapabilityRepository(db)
+	upstreamAttemptAttributionRepository := repository.NewUpstreamAttemptAttributionRepository(db)
 	v := service.ProvideOpenAIGatewayTLSFingerprintRouterServices(tlsFingerprintRouterService)
-	openAIGatewayService := service.NewOpenAIGatewayService(accountRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, httpUpstream, tlsFingerprintProfileService, deferredService, openAITokenProvider, grokTokenProvider, modelPricingResolver, channelService, balanceNotifyService, settingService, serviceUserPlatformQuotaRepository, dataSharingService, v...)
+	openAIGatewayService := service.ProvideOpenAIGatewayService(accountRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, httpUpstream, tlsFingerprintProfileService, deferredService, openAITokenProvider, grokTokenProvider, modelPricingResolver, channelService, balanceNotifyService, settingService, serviceUserPlatformQuotaRepository, dataSharingService, pricingService, openAINativeCompactionProbeBudgetRepository, openAINativeCompactionCapabilityRepository, upstreamAttemptAttributionRepository, v...)
 	geminiOAuthClient := repository.NewGeminiOAuthClient(configConfig)
 	geminiCliCodeAssistClient := repository.NewGeminiCliCodeAssistClient()
 	driveClient := repository.NewGeminiDriveClient()
@@ -326,7 +329,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	groupBackupPoolRefillService := service.ProvideGroupBackupPoolRefillService(accountRepository, groupRepository, settingService)
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v2 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, dataSharingService, dataSharingCaptureWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, groupBackupPoolRefillService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService)
+	openAINativeCompactionProbeRunnerService := service.ProvideOpenAINativeCompactionProbeRunnerService(accountRepository, apiKeyRepository, userRepository, groupRepository, openAINativeCompactionCapabilityRepository, openAIGatewayService, configConfig)
+	v2 := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, dataSharingService, dataSharingCaptureWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, qoderOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, groupAvailabilityProbeRunnerService, groupBackupPoolRefillService, backupService, paymentOrderExpiryService, userPlatformQuotaUsageFlusher, tlsFingerprintCollectorService, upstreamBillingProbeService, openAINativeCompactionProbeRunnerService, ollamaCloudUsageService, auditLogService)
 	application := &Application{
 		Server:  httpServer,
 		Cleanup: v2,
@@ -397,6 +401,7 @@ func provideCleanup(
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	tlsFingerprintCollector *service.TLSFingerprintCollectorService,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	nativeCompactionProbeRunner *service.OpenAINativeCompactionProbeRunnerService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 ) func() {
@@ -632,6 +637,12 @@ func provideCleanup(
 			{"UpstreamBillingProbeService", func() error {
 				if upstreamBillingProbe != nil {
 					upstreamBillingProbe.Stop()
+				}
+				return nil
+			}},
+			{"OpenAINativeCompactionProbeRunnerService", func() error {
+				if nativeCompactionProbeRunner != nil {
+					nativeCompactionProbeRunner.Stop()
 				}
 				return nil
 			}},

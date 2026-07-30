@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/tlsfingerprint"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -47,8 +49,46 @@ func (r *openAIWSHTTPBridgeErrTailReader) Read(p []byte) (int, error) {
 
 func (r *openAIWSHTTPBridgeErrTailReader) Close() error { return nil }
 
+type openAIWSHTTPBridgeBlockingBody struct {
+	ctx          context.Context
+	readStarted  chan struct{}
+	readCanceled chan struct{}
+	startedOnce  sync.Once
+	canceledOnce sync.Once
+}
+
+func (b *openAIWSHTTPBridgeBlockingBody) Read([]byte) (int, error) {
+	b.startedOnce.Do(func() { close(b.readStarted) })
+	<-b.ctx.Done()
+	b.canceledOnce.Do(func() { close(b.readCanceled) })
+	return 0, b.ctx.Err()
+}
+
+func (b *openAIWSHTTPBridgeBlockingBody) Close() error { return nil }
+
+type openAIWSHTTPBridgeBlockingUpstream struct {
+	readStarted  chan struct{}
+	readCanceled chan struct{}
+}
+
+func (u *openAIWSHTTPBridgeBlockingUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: &openAIWSHTTPBridgeBlockingBody{
+			ctx:          req.Context(),
+			readStarted:  u.readStarted,
+			readCanceled: u.readCanceled,
+		},
+	}, nil
+}
+
+func (u *openAIWSHTTPBridgeBlockingUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
+}
+
 func TestPrepareOpenAIWSHTTPBridgeBodyStripsWSFields(t *testing.T) {
-	body, err := prepareOpenAIWSHTTPBridgeBody([]byte(`{"type":"response.create","generate":true,"model":"gpt-5","stream":false,"previous_response_id":"resp_prev","input":"hi"}`))
+	body, err := prepareOpenAIWSHTTPBridgeBody([]byte(`{"type":"response.create","generate":true,"model":"gpt-5","stream":false,"previous_response_id":"resp_prev","input":"hi"}`), false)
 	require.NoError(t, err)
 	require.False(t, gjson.GetBytes(body, "type").Exists())
 	require.False(t, gjson.GetBytes(body, "generate").Exists())
@@ -429,6 +469,354 @@ func TestOpenAIWSHTTPBridgeRelaysSSEFramesAsWebSocketMessages(t *testing.T) {
 	require.False(t, gjson.GetBytes(upstream.lastBody, "type").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "generate").Exists())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+}
+
+func TestOpenAIWSHTTPBridgeNativeCompactionPersistsLogicalWSAttempt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	sseBody := strings.Join([]string{
+		`data: {"type":"response.output_item.done","response_id":"resp_bridge_native","item":{"id":"cmp_bridge_native","type":"compaction","status":"completed","encrypted_content":"fixture-state"}}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_bridge_native","status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`,
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			"X-Request-Id": []string{"rid_bridge_native"},
+		},
+		Body: io.NopCloser(strings.NewReader(sseBody)),
+	}}
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+	svc := &OpenAIGatewayService{
+		cfg:                            &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:                   upstream,
+		toolCorrector:                  NewCodexToolCorrector(),
+		upstreamAttemptAttributionRepo: attemptRepo,
+	}
+	account := &Account{
+		ID:          73,
+		Name:        "api-key-native",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Status:      StatusActive,
+		Credentials: map[string]any{
+			"api_key":  "sk-fixture",
+			"base_url": "https://api.openai.com/v1",
+		},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+	payload := []byte(`{"type":"response.create","model":"gpt-5","stream":true,"previous_response_id":"resp_bridge_previous","include":["reasoning.encrypted_content"],"input":[{"type":"reasoning","encrypted_content":"fixture-previous-state"},{"type":"compaction_trigger"}]}`)
+	var writes [][]byte
+	ctx := withOpenAIWSAttemptIdentity(
+		context.Background(),
+		WSConnectionID("wsconn_fixture"),
+		WSTurnID("wsturn_fixture"),
+	)
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		ctx, c, account, "sk-fixture", payload, len(payload),
+		"gpt-5", "gpt-5", "", "", "", "", 1,
+		func(message []byte) error {
+			writes = append(writes, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, writes, 2)
+	require.Equal(t, "response.output_item.done", gjson.GetBytes(writes[0], "type").String())
+	require.Equal(t, "response.completed", gjson.GetBytes(writes[1], "type").String())
+	require.Equal(t, "resp_bridge_native", result.ResponseID)
+	require.True(t, result.NativeRemoteCompactionV2)
+	require.Equal(t, OpenAINativeCompactionValid, result.SemanticOutcome)
+	require.Equal(t, UpstreamAttemptTransportHTTP, result.Transport)
+	require.Equal(t, WSConnectionID("wsconn_fixture"), result.WSConnectionID)
+	require.Equal(t, WSTurnID("wsturn_fixture"), result.WSTurnID)
+	require.NotEmpty(t, result.AttemptID)
+	require.Equal(t, UpstreamRequestID("rid_bridge_native"), result.UpstreamRequestID)
+	require.True(t, result.DeliveryCommitted)
+	require.True(t, result.AttributionPersisted)
+	require.True(t, result.UpstreamUsageObserved)
+	require.True(t, result.CustomerSettlementAllowed())
+
+	var terminal *UpstreamAttemptAttribution
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			rowCopy := row
+			terminal = &rowCopy
+		}
+	}
+	require.NotNil(t, terminal)
+	require.Equal(t, UpstreamAttemptTransportHTTP, terminal.Transport)
+	require.Equal(t, WSConnectionID("wsconn_fixture"), terminal.WSConnectionID)
+	require.Equal(t, WSTurnID("wsturn_fixture"), terminal.WSTurnID)
+	require.True(t, terminal.HTTPObserved)
+	require.NotNil(t, terminal.HTTPStatus)
+	require.Equal(t, http.StatusOK, *terminal.HTTPStatus)
+	require.Equal(t, string(OpenAINativeCompactionValid), terminal.Semantic.Outcome)
+	require.Equal(t, int64(1), terminal.Semantic.CompactionItemCount)
+	require.True(t, terminal.DeliveryCommitted)
+	require.True(t, terminal.Usage.Observed)
+	require.Equal(t, "resp_bridge_previous", gjson.GetBytes(upstream.lastBody, "previous_response_id").String())
+	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(upstream.lastBody, "include.0").String())
+	require.Equal(t, "fixture-previous-state", gjson.GetBytes(upstream.lastBody, "input.0.encrypted_content").String())
+	require.Equal(t, "compaction_trigger", gjson.GetBytes(upstream.lastBody, "input.1.type").String())
+}
+
+func TestOpenAIWSHTTPBridgeNativeCompactionSemanticFailureDiscardsAllMessages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	sseBody := strings.Join([]string{
+		`data: {"type":"response.output_item.done","response_id":"resp_bridge_invalid","item":{"id":"msg_bridge_invalid","type":"message","status":"completed","content":[{"type":"output_text","text":"must not leak"}]}}`,
+		"",
+		`data: {"type":"response.completed","response":{"id":"resp_bridge_invalid","status":"completed","usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}`,
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"rid_bridge_invalid"}},
+		Body:       io.NopCloser(strings.NewReader(sseBody)),
+	}}
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+	processBudget := NewOpenAIStageBudget(1 << 20)
+	svc := &OpenAIGatewayService{
+		cfg:                               &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:                      upstream,
+		toolCorrector:                     NewCodexToolCorrector(),
+		openAINativeCompactionStageBudget: processBudget,
+		upstreamAttemptAttributionRepo:    attemptRepo,
+	}
+	account := &Account{
+		ID:          74,
+		Name:        "api-key-native-invalid",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Status:      StatusActive,
+		Credentials: map[string]any{"api_key": "sk-fixture", "base_url": "https://api.openai.com/v1"},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+	payload := []byte(`{"type":"response.create","model":"gpt-5","stream":true,"input":[{"type":"compaction_trigger"}]}`)
+	var writes [][]byte
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		withOpenAIWSAttemptIdentity(context.Background(), WSConnectionID("wsconn_invalid"), WSTurnID("wsturn_invalid")),
+		c, account, "sk-fixture", payload, len(payload), "gpt-5", "gpt-5", "", "", "", "", 1,
+		func(message []byte) error {
+			writes = append(writes, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.True(t, openAINativeCompactionFailureSafeToReplay(err))
+	require.Empty(t, writes, "invalid account-specific semantic frames must remain uncommitted")
+	require.Zero(t, processBudget.Reserved())
+
+	var terminal *UpstreamAttemptAttribution
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			rowCopy := row
+			terminal = &rowCopy
+		}
+	}
+	require.NotNil(t, terminal)
+	require.Equal(t, string(OpenAINativeCompactionZeroCompaction), terminal.Semantic.Outcome)
+	require.Equal(t, int64(1), terminal.Semantic.OutputItemDoneCount)
+	require.Zero(t, terminal.Semantic.CompactionItemCount)
+	require.False(t, terminal.DeliveryCommitted)
+	require.True(t, terminal.SafeToFailover)
+	require.True(t, terminal.Usage.Observed, "failed upstream attempt usage remains attributable without customer settlement")
+}
+
+func TestOpenAIWSHTTPBridgeNativeCompactionRejectsMultipleDocumentsInOneSSEEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	sseBody := strings.Join([]string{
+		`data: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"fixture-state"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_bridge_joined","status":"completed"}}`,
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(sseBody)),
+	}}
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+	processBudget := NewOpenAIStageBudget(1 << 20)
+	svc := &OpenAIGatewayService{
+		cfg:                               &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:                      upstream,
+		toolCorrector:                     NewCodexToolCorrector(),
+		openAINativeCompactionStageBudget: processBudget,
+		upstreamAttemptAttributionRepo:    attemptRepo,
+	}
+	account := &Account{
+		ID:          76,
+		Name:        "api-key-native-joined-event",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Status:      StatusActive,
+		Credentials: map[string]any{"api_key": "sk-fixture", "base_url": "https://api.openai.com/v1"},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+	payload := []byte(`{"type":"response.create","model":"gpt-5","stream":true,"input":[{"type":"compaction_trigger"}]}`)
+	var writes [][]byte
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		withOpenAIWSAttemptIdentity(context.Background(), WSConnectionID("wsconn_joined"), WSTurnID("wsturn_joined")),
+		c, account, "sk-fixture", payload, len(payload), "gpt-5", "gpt-5", "", "", "", "", 1,
+		func(message []byte) error {
+			writes = append(writes, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.True(t, openAINativeCompactionFailureSafeToReplay(err))
+	require.Empty(t, writes)
+	require.Zero(t, processBudget.Reserved())
+
+	var terminal *UpstreamAttemptAttribution
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			rowCopy := row
+			terminal = &rowCopy
+		}
+	}
+	require.NotNil(t, terminal)
+	require.Equal(t, string(OpenAINativeCompactionInvalidEvent), terminal.Semantic.Outcome)
+	require.False(t, terminal.DeliveryCommitted)
+}
+
+func TestOpenAIWSHTTPBridgeNativeCompactionClientDisconnectCancelsUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := &openAIWSHTTPBridgeBlockingUpstream{
+		readStarted:  make(chan struct{}),
+		readCanceled: make(chan struct{}),
+	}
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+	processBudget := NewOpenAIStageBudget(1 << 20)
+	svc := &OpenAIGatewayService{
+		cfg:                               &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream:                      upstream,
+		openAINativeCompactionStageBudget: processBudget,
+		upstreamAttemptAttributionRepo:    attemptRepo,
+	}
+	account := &Account{
+		ID:          75,
+		Name:        "api-key-native-disconnect",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Status:      StatusActive,
+		Credentials: map[string]any{"api_key": "sk-fixture", "base_url": "https://api.openai.com/v1"},
+	}
+	serverErrCh := make(chan error, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+
+		readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
+		msgType, firstMessage, readErr := conn.Read(readCtx)
+		cancelRead()
+		if readErr != nil {
+			serverErrCh <- readErr
+			return
+		}
+		if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+			serverErrCh <- errors.New("unsupported websocket client message type")
+			return
+		}
+
+		pumpCtx, stopPump := WithOpenAIWSClientReadPump(r.Context(), conn)
+		defer stopPump()
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		request := r.Clone(pumpCtx)
+		request.Header = request.Header.Clone()
+		request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+		c.Request = request
+		_, bridgeErr := svc.proxyOpenAIWSHTTPBridgeTurn(
+			withOpenAIWSAttemptIdentity(pumpCtx, WSConnectionID("wsconn_disconnect"), WSTurnID("wsturn_disconnect")),
+			c, account, "sk-fixture", firstMessage, len(firstMessage), "gpt-5", "gpt-5", "", "", "", "", 1,
+			func(message []byte) error {
+				writeCtx, cancelWrite := context.WithTimeout(pumpCtx, time.Second)
+				defer cancelWrite()
+				return conn.Write(writeCtx, coderws.MessageText, message)
+			},
+		)
+		serverErrCh <- bridgeErr
+	}))
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5","stream":true,"input":[{"type":"compaction_trigger"}]}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	select {
+	case <-upstream.readStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native HTTP bridge upstream read did not start")
+	}
+	disconnectAt := time.Now()
+	require.NoError(t, clientConn.CloseNow())
+	select {
+	case <-upstream.readCanceled:
+		require.Less(t, time.Since(disconnectAt), time.Second)
+	case <-time.After(time.Second):
+		t.Fatal("client disconnect did not cancel native HTTP bridge upstream read")
+	}
+	select {
+	case serverErr := <-serverErrCh:
+		var closeErr *OpenAIWSClientCloseError
+		require.ErrorAs(t, serverErr, &closeErr)
+		require.Equal(t, coderws.StatusNormalClosure, closeErr.StatusCode())
+	case <-time.After(3 * time.Second):
+		t.Fatal("native HTTP bridge did not finish after client disconnect")
+	}
+
+	var terminal *UpstreamAttemptAttribution
+	for _, row := range attemptRepo.snapshot() {
+		if row.State == UpstreamAttemptStateTerminal {
+			rowCopy := row
+			terminal = &rowCopy
+		}
+	}
+	require.NotNil(t, terminal)
+	require.Equal(t, string(OpenAINativeCompactionIncompleteStream), terminal.Semantic.Outcome)
+	require.False(t, terminal.DeliveryCommitted)
+	require.False(t, terminal.SafeToFailover)
+	require.False(t, terminal.Usage.Observed)
+	require.Zero(t, processBudget.Reserved())
 }
 
 func TestProxyOpenAIWSHTTPBridgeTurnForGrokDefaultsEmptyModelTo45(t *testing.T) {

@@ -220,10 +220,18 @@ type OpenAIUsage struct {
 
 // OpenAIForwardResult represents the result of forwarding
 type OpenAIForwardResult struct {
-	RequestID  string
-	ResponseID string
-	Usage      OpenAIUsage
-	Model      string // 原始模型（用于响应和日志显示）
+	// RequestID is retained for compatibility while callers migrate to the
+	// explicit request, attempt, upstream, response, and WebSocket identities.
+	RequestID         string
+	ClientRequestID   ClientRequestID
+	GatewayRequestID  GatewayRequestID
+	AttemptID         AttemptID
+	UpstreamRequestID UpstreamRequestID
+	ResponseID        string
+	WSConnectionID    WSConnectionID
+	WSTurnID          WSTurnID
+	Usage             OpenAIUsage
+	Model             string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
@@ -246,6 +254,29 @@ type OpenAIForwardResult struct {
 	// UpstreamTerminalEvent 记录 Responses WebSocket 请求观测到的规范化终止事件；
 	// 空值保持旧调用方和非 WebSocket 请求的成功语义。
 	UpstreamTerminalEvent string
+	// NativeRemoteCompactionV2 opts this result into the fail-closed semantic
+	// delivery contract. Legacy and non-native results retain their prior behavior.
+	NativeRemoteCompactionV2 bool
+	SemanticOutcome          OpenAINativeCompactionOutcome
+	SemanticSource           string
+	OutputItemDoneCount      int
+	CompactionItemCount      int
+	MalformedItemCount       int
+	TerminalEventCount       int
+	SafeToFailover           bool
+	FailoverCount            int
+	DeliveryCommitted        bool
+	// AttributionPersisted confirms that the terminal per-attempt ledger row is
+	// durable. Native-v2 customer settlement fails closed without it.
+	AttributionPersisted bool
+	// UpstreamUsageObserved distinguishes unknown usage from an observed zero.
+	// Failed-attempt usage is operational attribution only and is never a customer
+	// settlement signal by itself.
+	UpstreamUsageObserved bool
+	Transport             UpstreamAttemptTransport
+	AccountType           string
+	CapabilitySource      string
+	UpstreamFingerprint   OpenAIUpstreamFingerprint
 	ResponseHeaders       http.Header
 	ResponseBody          []byte // 成功响应体，用于数据共享提取 assistant 输出。
 	DataShareSessionID    string // 数据共享聚合使用的稳定会话标识。
@@ -273,10 +304,30 @@ type OpenAIForwardResult struct {
 	wsReplayInputExists bool
 }
 
+// CustomerSettlementAllowed is the customer billing gate. Native remote
+// compaction v2 settles only after both semantic validation and downstream
+// delivery commit. Unknown/failed-attempt usage remains telemetry only.
+func (r *OpenAIForwardResult) CustomerSettlementAllowed() bool {
+	if r == nil {
+		return false
+	}
+	if !r.NativeRemoteCompactionV2 {
+		return true
+	}
+	return r.SemanticOutcome == OpenAINativeCompactionValid && r.DeliveryCommitted && r.AttributionPersisted && !r.ClientDisconnect
+}
+
 // SucceededForScheduling 判断转发结果能否作为上游调度成功，并清除模型级短暂状态。
-// 零值继续保持现有非 WebSocket 调用方的成功语义。
+// 零值继续保持现有非 WebSocket 调用方的成功语义；native-v2 与客户结算
+// 共用 fail-closed semantic delivery gate，避免 HTTP 200 被误报为成功。
 func (r *OpenAIForwardResult) SucceededForScheduling() bool {
-	if r == nil || !r.OpenAIWSMode || r.UpstreamTerminalEvent == "" {
+	if r == nil {
+		return true
+	}
+	if r.NativeRemoteCompactionV2 {
+		return r.CustomerSettlementAllowed()
+	}
+	if !r.OpenAIWSMode || r.UpstreamTerminalEvent == "" {
 		return true
 	}
 	switch r.UpstreamTerminalEvent {
@@ -386,36 +437,41 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
-	accountRepo           AccountRepository
-	usageLogRepo          UsageLogRepository
-	usageBillingRepo      UsageBillingRepository
-	userRepo              UserRepository
-	userSubRepo           UserSubscriptionRepository
-	cache                 GatewayCache
-	cfg                   *config.Config
-	codexDetector         CodexClientRestrictionDetector
-	schedulerSnapshot     *SchedulerSnapshotService
-	concurrencyService    *ConcurrencyService
-	billingService        *BillingService
-	rateLimitService      *RateLimitService
-	billingCacheService   *BillingCacheService
-	userGroupRateResolver *userGroupRateResolver
-	httpUpstream          HTTPUpstream
-	tlsFPProfileService   *TLSFingerprintProfileService
-	tlsFPRouterService    *TLSFingerprintRouterService
-	deferredService       *DeferredService
-	openAITokenProvider   *OpenAITokenProvider
-	grokTokenProvider     *GrokTokenProvider
-	toolCorrector         *CodexToolCorrector
-	openaiWSResolver      OpenAIWSProtocolResolver
-	resolver              *ModelPricingResolver
-	channelService        *ChannelService
-	balanceNotifyService  *BalanceNotifyService
-	settingService        *SettingService
-	userPlatformQuotaRepo UserPlatformQuotaRepository
-	dataSharingService    *DataSharingService
-	liveAttestation       liveattestation.Provider
-	liveAttestationCipher SecretEncryptor
+	accountRepo                          AccountRepository
+	usageLogRepo                         UsageLogRepository
+	usageBillingRepo                     UsageBillingRepository
+	userRepo                             UserRepository
+	userSubRepo                          UserSubscriptionRepository
+	cache                                GatewayCache
+	cfg                                  *config.Config
+	codexDetector                        CodexClientRestrictionDetector
+	schedulerSnapshot                    *SchedulerSnapshotService
+	concurrencyService                   *ConcurrencyService
+	billingService                       *BillingService
+	rateLimitService                     *RateLimitService
+	billingCacheService                  *BillingCacheService
+	userGroupRateResolver                *userGroupRateResolver
+	httpUpstream                         HTTPUpstream
+	tlsFPProfileService                  *TLSFingerprintProfileService
+	tlsFPRouterService                   *TLSFingerprintRouterService
+	deferredService                      *DeferredService
+	openAITokenProvider                  *OpenAITokenProvider
+	grokTokenProvider                    *GrokTokenProvider
+	toolCorrector                        *CodexToolCorrector
+	openaiWSResolver                     OpenAIWSProtocolResolver
+	resolver                             *ModelPricingResolver
+	channelService                       *ChannelService
+	balanceNotifyService                 *BalanceNotifyService
+	settingService                       *SettingService
+	userPlatformQuotaRepo                UserPlatformQuotaRepository
+	dataSharingService                   *DataSharingService
+	openAIProbePriceLookup               OpenAIProviderPriceLookup
+	openAIProbeBudgetRepo                OpenAINativeCompactionProbeBudgetRepository
+	openAINativeCompactionCapabilityRepo OpenAINativeCompactionCapabilityRepository
+	upstreamAttemptAttributionRepo       UpstreamAttemptAttributionRepository
+	openAINativeCompactionStageBudget    *OpenAIStageBudget
+	liveAttestation                      liveattestation.Provider
+	liveAttestationCipher                SecretEncryptor
 
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
@@ -534,6 +590,11 @@ func NewOpenAIGatewayService(
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
 	}
+	stageBudgetLimit := int64(1)
+	if cfg != nil && cfg.Gateway.OpenAINativeCompaction.MaxProcessStagedBytes > 0 {
+		stageBudgetLimit = cfg.Gateway.OpenAINativeCompaction.MaxProcessStagedBytes
+	}
+	svc.openAINativeCompactionStageBudget = NewOpenAIStageBudget(stageBudgetLimit)
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
 	}
