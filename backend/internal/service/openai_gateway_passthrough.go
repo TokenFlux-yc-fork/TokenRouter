@@ -180,11 +180,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		c.Set("openai_passthrough", true)
 	}
 
+	nativeRemoteCompactionV2 := IsOpenAINativeRemoteCompactionV2(c)
 	agentTaskRecoveryTried := false
+	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	var resp *http.Response
 	var attempt *openAIUpstreamAttemptCoordinator
 	for {
-		upstreamCtx, releaseUpstreamCtx := openAIUpstreamContextForCompactionAttempt(ctx, IsOpenAINativeRemoteCompactionV2(c))
+		upstreamCtx, releaseUpstreamCtx := openAIUpstreamContextForCompactionAttempt(ctx, nativeRemoteCompactionV2)
 		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token, tlsRouterMatch...)
 		releaseUpstreamCtx()
 		if buildErr != nil {
@@ -218,10 +220,21 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			}
 			continue
 		}
+		if !nativeRemoteCompactionV2 {
+			retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody)
+			if retryErr != nil {
+				return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
+			}
+			if changed && rejectedFieldRetryState.Allow(retryBody) {
+				body = retryBody
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Retrying request after %s (account: %s)", reason, account.Name)
+				continue
+			}
+		}
 
 		// 透传模式默认保持原样代理；容量错误以及 API-key 上游的瞬时
 		// 5xx 应先触发多账号 failover；probeBody 已在 task 探测时读取，不再重复消费响应体。
-		if continuationCode := openAINativeCompactionContinuationErrorCode(extractUpstreamErrorCode(probeBody)); IsOpenAINativeRemoteCompactionV2(c) && continuationCode != "" {
+		if continuationCode := openAINativeCompactionContinuationErrorCode(extractUpstreamErrorCode(probeBody)); nativeRemoteCompactionV2 && continuationCode != "" {
 			return nil, newOpenAINativeCompactionHTTPContinuationFailoverError(resp.StatusCode, resp.Header, continuationCode, false)
 		}
 		if shouldFailoverOpenAIPassthroughResponse(account, resp.StatusCode, probeBody) {
