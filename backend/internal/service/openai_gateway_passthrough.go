@@ -227,7 +227,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			}
 			if changed && rejectedFieldRetryState.Allow(retryBody) {
 				body = retryBody
-				logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Retrying request after %s (account: %s)", reason, account.Name)
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI 透传] 上游拒绝字段后降级重试: account=%d reason=%s", account.ID, reason)
 				continue
 			}
 		}

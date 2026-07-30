@@ -1127,6 +1127,18 @@ func (_u *GroupUpdate) AppendReasoningEffortMappings(v []domain.ReasoningEffortM
 	return _u
 }
 
+// SetOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field.
+func (_u *GroupUpdate) SetOpenaiPassthroughStripFields(v []string) *GroupUpdate {
+	_u.mutation.SetOpenaiPassthroughStripFields(v)
+	return _u
+}
+
+// AppendOpenaiPassthroughStripFields appends value to the "openai_passthrough_strip_fields" field.
+func (_u *GroupUpdate) AppendOpenaiPassthroughStripFields(v []string) *GroupUpdate {
+	_u.mutation.AppendOpenaiPassthroughStripFields(v)
+	return _u
+}
+
 // SetDataSharingEnabled sets the "data_sharing_enabled" field.
 func (_u *GroupUpdate) SetDataSharingEnabled(v bool) *GroupUpdate {
 	_u.mutation.SetDataSharingEnabled(v)
@@ -1794,6 +1806,14 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AppendedReasoningEffortMappings(); ok {
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, group.FieldReasoningEffortMappings, value)
+		})
+	}
+	if value, ok := _u.mutation.OpenaiPassthroughStripFields(); ok {
+		_spec.SetField(group.FieldOpenaiPassthroughStripFields, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedOpenaiPassthroughStripFields(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, group.FieldOpenaiPassthroughStripFields, value)
 		})
 	}
 	if value, ok := _u.mutation.DataSharingEnabled(); ok {
@@ -3220,6 +3240,18 @@ func (_u *GroupUpdateOne) AppendReasoningEffortMappings(v []domain.ReasoningEffo
 	return _u
 }
 
+// SetOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field.
+func (_u *GroupUpdateOne) SetOpenaiPassthroughStripFields(v []string) *GroupUpdateOne {
+	_u.mutation.SetOpenaiPassthroughStripFields(v)
+	return _u
+}
+
+// AppendOpenaiPassthroughStripFields appends value to the "openai_passthrough_strip_fields" field.
+func (_u *GroupUpdateOne) AppendOpenaiPassthroughStripFields(v []string) *GroupUpdateOne {
+	_u.mutation.AppendOpenaiPassthroughStripFields(v)
+	return _u
+}
+
 // SetDataSharingEnabled sets the "data_sharing_enabled" field.
 func (_u *GroupUpdateOne) SetDataSharingEnabled(v bool) *GroupUpdateOne {
 	_u.mutation.SetDataSharingEnabled(v)
@@ -3917,6 +3949,14 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if value, ok := _u.mutation.AppendedReasoningEffortMappings(); ok {
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, group.FieldReasoningEffortMappings, value)
+		})
+	}
+	if value, ok := _u.mutation.OpenaiPassthroughStripFields(); ok {
+		_spec.SetField(group.FieldOpenaiPassthroughStripFields, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedOpenaiPassthroughStripFields(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, group.FieldOpenaiPassthroughStripFields, value)
 		})
 	}
 	if value, ok := _u.mutation.DataSharingEnabled(); ok {

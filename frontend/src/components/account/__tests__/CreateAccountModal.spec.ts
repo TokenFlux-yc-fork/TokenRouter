@@ -167,6 +167,14 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(false)
   })
 
+  it('inherits the group API key passthrough field policy by default', async () => {
+    const wrapper = await submitApiKeyAccount('openai')
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_passthrough_strip_fields).toBeUndefined()
+    expect(wrapper.find('#create-account-openai-passthrough-strip-inherit').exists()).toBe(true)
+  })
+
   it('enables upstream billing probes by default for new OpenAI API key accounts', async () => {
     await submitApiKeyAccount('openai')
 

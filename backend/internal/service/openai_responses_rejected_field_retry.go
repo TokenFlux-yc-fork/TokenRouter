@@ -18,7 +18,7 @@ const maxOpenAIResponsesRejectedFieldRetries = 6
 var (
 	openAIResponsesRejectedNamespaceParamPattern = regexp.MustCompile(`(?i)^input\[(\d+)\]\.namespace$`)
 	openAIResponsesRejectedStatusParamPattern    = regexp.MustCompile(`(?i)^input\[(\d+)\]\.status$`)
-	openAIResponsesRejectedMessageParamPattern   = regexp.MustCompile(`(?i)(?:unknown|unsupported)[ _-]+parameter\s*(?::|=|is)?\s*["']?(max_output_tokens|input\[\d+\]\.namespace|input\[\d+\]\.status)(?:["']|\b)`)
+	openAIResponsesRejectedMessageParamPattern   = regexp.MustCompile(`(?i)(?:unknown|unsupported)[ _-]+parameter\s*(?::|=|is)?\s*["']?([a-z_][a-z0-9_-]*(?:\[(?:\d+)\])?(?:\.[a-z_][a-z0-9_-]*(?:\[(?:\d+)\])?)*)(?:["']|\b)`)
 )
 
 type openAIResponsesRejectedFieldRetryState struct {
@@ -73,6 +73,9 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 	param := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.param").String()))
 	if param == "" {
 		param = openAIResponsesRejectedParamFromMessage(message)
+		if param == "" && isOpenAIResponsesReasoningModeModelRejection(message) {
+			param = "reasoning.mode"
+		}
 	}
 	if index, ok := openAIResponsesRejectedNamespaceIndex(param); ok {
 		return removeOpenAIResponsesRejectedNamespaceAtIndex(body, index)
@@ -87,6 +90,22 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 		}
 		return retryBody, "max_output_tokens parameter rejection", true, nil
 	}
+	if param == "reasoning.mode" && gjson.GetBytes(body, "reasoning.mode").Exists() {
+		retryBody, err := sjson.DeleteBytes(body, "reasoning.mode")
+		if err != nil {
+			return nil, "", false, fmt.Errorf("delete rejected reasoning.mode: %w", err)
+		}
+		return retryBody, "reasoning.mode parameter rejection", true, nil
+	}
+	if isSafeOpenAIResponsesUnknownLeaf(param) {
+		retryBody, changed, err := stripOpenAIPassthroughRequestFields(body, []string{param})
+		if err != nil {
+			return nil, "", false, fmt.Errorf("delete rejected parameter %s: %w", param, err)
+		}
+		if changed {
+			return retryBody, "explicit unknown leaf parameter rejection", true, nil
+		}
+	}
 	return nil, "", false, nil
 }
 
@@ -96,7 +115,14 @@ func isExplicitOpenAIResponsesFieldRejection(code, message string) bool {
 		return true
 	}
 	return strings.Contains(message, "unknown parameter") ||
-		strings.Contains(message, "unsupported parameter")
+		strings.Contains(message, "unsupported parameter") ||
+		isOpenAIResponsesReasoningModeModelRejection(message)
+}
+
+func isOpenAIResponsesReasoningModeModelRejection(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(message, "reasoning.mode") &&
+		strings.Contains(message, "is not supported with this model")
 }
 
 func openAIResponsesRejectedParamFromMessage(message string) string {
@@ -129,6 +155,41 @@ func openAIResponsesRejectedStatusIndex(param string) (int, bool) {
 		return index, true
 	}
 	return 0, false
+}
+
+func isSafeOpenAIResponsesUnknownLeaf(param string) bool {
+	param = strings.TrimSpace(param)
+	if param == "" {
+		return false
+	}
+	segments, err := parseOpenAIPassthroughStripPath(param)
+	if err != nil || len(segments) == 0 || segments[len(segments)-1].arraySelected {
+		return false
+	}
+	root := segments[0].name
+	if len(segments) == 1 {
+		switch root {
+		case "model", "input", "stream", "instructions", "tools", "tool_choice", "reasoning":
+			return false
+		}
+	}
+	leaf := segments[len(segments)-1].name
+	// Known compatibility fields are accepted only in their exact supported shape.
+	switch leaf {
+	case "max_output_tokens", "max_tokens", "namespace", "status":
+		return false
+	}
+	if root == "reasoning" && leaf == "effort" {
+		return false
+	}
+	if root == "input" {
+		switch leaf {
+		case "type", "role", "content", "name", "arguments", "call_id", "output", "id":
+			return false
+		}
+	}
+	_, err = normalizeOpenAIPassthroughStripFields([]string{param})
+	return err == nil
 }
 
 func removeOpenAIResponsesRejectedNamespaceAtIndex(body []byte, index int) ([]byte, string, bool, error) {

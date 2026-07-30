@@ -123,6 +123,7 @@ upstream merge.
 | `openai-oauth-schedulability` | Keep externally managed OpenAI OAuth accounts schedulable without allowing runtime failures to corrupt their ownership state. | `055ec2369`, `55015979b` | account scheduler, token refresh, runtime block and rate-limit services | `local` | Scheduler, token refresh, runtime block and rate-limit tests. |
 | `scheduled-test-circuit-breaker` | Apply passive account circuit breaking only after bounded retries and keep request-level OpenAI blocked responses out of account health state. | `ef26ee67e`, `d30849206` | scheduled-test handler/repository/service, OpenAI upstream error classification, gateway failover | `local` | Scheduled-test, request-blocked classification, passive-breaker and failover tests. |
 | `scheduled-test-runner-isolation` | Keep the scheduled-test runner enabled by default, allow temporary blue-green instances to disable it without mutating shared schedules, and require enabled instances to hold a renewable fail-closed Redis lease with a handoff fencing token. | `d01eb92f4`, task `scheduled-runner-fenced-lease` | config loading, scheduled-test runner, leader-lease cache and startup wiring | `local` | Config switch tests; lease acquire/renew/expiry/release, stale-token, Redis-failure and two-instance handoff tests; blue-green release rehearsal. |
+| `parallel-startup-concurrency-safety` | Preserve live account/user concurrency slots and wait counters across parallel blue-green startup; reclaim them only through Redis TTL and active-index expiry rather than process-prefix mismatch or a startup-wide wait-key sweep. | task `parallel-startup-concurrency-safety` | concurrency cache, active indexes and startup wiring | `local` | Repository integration tests for two live prefixes, indexed TTL expiry and unindexed wait-counter preservation; rolling-deployment rehearsal. |
 | `openai-capacity-failure-semantics` | Keep capacity, retry and terminal stream failures inside the gateway until failover is exhausted. | `93980cc41`, `863a94711`, `317678716` | OpenAI gateway HTTP/SSE/WebSocket paths | `local` | Gateway failure, SSE, WebSocket, retry and terminal-status tests. |
 | `openai-http2-body-fallback` | Retry eligible HTTP/2 internal stream/body failures through the bounded upstream fallback path. | `87a2387ec` | `backend/internal/repository/http_upstream*` | `local` | HTTP upstream repository tests. |
 | `openai-native-compact-liveness` | Preserve native compact stream liveness, writer state and completion semantics, and keep native v2 on Responses-capable accounts. | `ac83503f1`, `a41329a2a` | compact bridge, native compact liveness, SSE writer, account capability routing | `local` | Native compact, Responses capability/fallback, scheduler, stream bridge, SSE writer and ops logger tests. |
@@ -147,6 +148,15 @@ release compare both the process owner ID and fencing token. Lease acquisition,
 renewal, or a pre-side-effect fence check failing cancels in-flight work and
 prevents result, circuit-breaker, and schedule updates. A missing lease backend
 keeps the runner stopped rather than reverting to multi-instance execution.
+
+## Parallel Startup Concurrency State
+
+The historical startup cleanup entry point now reconciles only expired active
+index candidates. A request ID prefix identifies a process but does not prove
+that another prefix is stale while blue and green instances overlap. Startup
+therefore never removes another prefix's live account/user slots and never
+scans or bulk-deletes wait counters. Slot scores, key TTLs, wait-counter TTLs,
+and the existing active-index reconciliation worker remain the expiry authority.
 
 ## Remote Compaction v2 Contract
 

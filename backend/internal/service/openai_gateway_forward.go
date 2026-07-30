@@ -13,6 +13,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai_compat"
+	"github.com/TokenFlux/TokenRouter/internal/util/httputil"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -26,6 +27,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	startTime := time.Now()
 	// 固定渠道映射后的请求级 canonical body；账号 normalize/strip 不得改写跨 failover hint。
 	canonicalImageIntentBody := body
+	var apiKeyStripFields []string
+	if account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey {
+		apiKeyStripFields = resolveOpenAIPassthroughStripFields(account, apiKeyGroup(getAPIKeyFromContext(c)))
+		strippedBody, changed, stripErr := stripOpenAIPassthroughRequestFields(body, apiKeyStripFields)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip OpenAI API-key request fields: %w", stripErr)
+		}
+		if changed {
+			body = strippedBody
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI API-key] 首包剥离兼容字段: account=%d fields=%s", account.ID, strings.Join(apiKeyStripFields, ","))
+		}
+	}
 
 	tlsRouterMatch := s.matchTLSFingerprintRouter(c, account)
 	restrictionResult := s.detectCodexClientRestriction(c, account, tlsRouterMatch)
@@ -520,6 +533,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			requestView = newOpenAIRequestView(body)
 		}
 	}
+	if len(apiKeyStripFields) > 0 {
+		strippedBody, changed, stripErr := stripOpenAIPassthroughRequestFields(body, apiKeyStripFields)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip normalized OpenAI API-key request fields: %w", stripErr)
+		}
+		if changed {
+			body = strippedBody
+			requestView = newOpenAIRequestView(body)
+			reqBody = nil
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI API-key] 归一化后剥离兼容字段: account=%d fields=%s", account.ID, strings.Join(apiKeyStripFields, ","))
+		}
+	}
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""
@@ -815,6 +840,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	httpInvalidEncryptedContentRetryTried := false
 	agentTaskRecoveryTried := false
+	const maxNeutralEdgeBlockRetries = 2
+	neutralEdgeBlockRetries := 0
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	for {
 
@@ -878,6 +905,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			attempt.finishHTTPError(resp, string(OpenAINativeCompactionHTTPFailure), true)
+			if isOpenAINeutralEdgeBlockResponse(resp.StatusCode, resp.Header, respBody) && neutralEdgeBlockRetries < maxNeutralEdgeBlockRetries {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				neutralEdgeBlockRetries++
+				continue
+			}
 
 			if !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 				agentTaskRecoveryTried = true
@@ -1031,6 +1065,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		finalizeOpenAINativeHTTPForwardResult(c, forwardResult, account, attempt)
 		return forwardResult, nil
 	}
+}
+
+func isOpenAINeutralEdgeBlockResponse(statusCode int, headers http.Header, body []byte) bool {
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	return isOpenAIRequestBlockedError(statusCode, extractUpstreamErrorMessage(body), body) ||
+		httputil.IsCloudflareChallengeResponse(statusCode, headers, body)
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool, routerMatch ...TLSFingerprintRouterMatchResult) (*http.Request, error) {

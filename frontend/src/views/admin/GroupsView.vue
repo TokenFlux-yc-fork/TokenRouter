@@ -541,6 +541,11 @@
           v-model:max-effort="createForm.max_reasoning_effort"
           v-model:mappings="createForm.reasoning_effort_mappings"
         />
+        <OpenAIPassthroughStripFieldsEditor
+          v-if="createForm.platform === 'openai'"
+          id-prefix="create-group-openai-passthrough-strip"
+          v-model="createForm.openai_passthrough_strip_fields"
+        />
         <div data-tour="group-form-exclusive">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -2315,6 +2320,11 @@
           :platform="editForm.platform"
           v-model:max-effort="editForm.max_reasoning_effort"
           v-model:mappings="editForm.reasoning_effort_mappings"
+        />
+        <OpenAIPassthroughStripFieldsEditor
+          v-if="editForm.platform === 'openai'"
+          id-prefix="edit-group-openai-passthrough-strip"
+          v-model="editForm.openai_passthrough_strip_fields"
         />
         <div>
           <div class="mb-1.5 flex items-center gap-1">
@@ -4143,6 +4153,7 @@ import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipl
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
+import OpenAIPassthroughStripFieldsEditor from "@/components/admin/OpenAIPassthroughStripFieldsEditor.vue";
 import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
 import {
@@ -4792,6 +4803,7 @@ const createForm = reactive({
   rpm_limit: 0 as number,
   max_reasoning_effort: "",
   reasoning_effort_mappings: [] as ReasoningEffortMappingRow[],
+  openai_passthrough_strip_fields: ["max_output_tokens"] as string[],
   // 分组主动可用性探测配置
   availability_probe_enabled: false,
   availability_probe_model_id: "",
@@ -5234,6 +5246,7 @@ const editForm = reactive({
   rpm_limit: 0 as number,
   max_reasoning_effort: "",
   reasoning_effort_mappings: [] as ReasoningEffortMappingRow[],
+  openai_passthrough_strip_fields: ["max_output_tokens"] as string[],
   // 分组主动可用性探测配置
   availability_probe_enabled: false,
   availability_probe_model_id: "",
@@ -5676,6 +5689,7 @@ const closeCreateModal = () => {
   createForm.rpm_limit = 0;
   createForm.max_reasoning_effort = "";
   createForm.reasoning_effort_mappings = [];
+  createForm.openai_passthrough_strip_fields = ["max_output_tokens"];
   createReasoningEffortPolicyRef.value?.resetValidation();
   resetAvailabilityProbeFormState(createForm);
   resetHealthCheckFormState(createForm);
@@ -5934,6 +5948,9 @@ const handleEdit = async (group: AdminGroup) => {
     group.reasoning_effort_mappings,
     group.platform,
   );
+  editForm.openai_passthrough_strip_fields = [
+    ...(group.openai_passthrough_strip_fields ?? ["max_output_tokens"]),
+  ];
   resetAvailabilityProbeFormState(editForm, group.availability_probe_config);
   resetHealthCheckFormState(editForm, group);
   resetModelsListState(editModelsListState, group.models_list_config);
@@ -5954,6 +5971,7 @@ const closeEditModal = () => {
   editingGroup.value = null;
   editForm.max_reasoning_effort = "";
   editForm.reasoning_effort_mappings = [];
+  editForm.openai_passthrough_strip_fields = ["max_output_tokens"];
   editReasoningEffortPolicyRef.value?.resetValidation();
   editModelRoutingRules.value = [];
   editForm.is_default = false;

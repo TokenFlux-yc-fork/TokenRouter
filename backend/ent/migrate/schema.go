@@ -926,6 +926,7 @@ var (
 		{Name: "rpm_limit", Type: field.TypeInt, Default: 0},
 		{Name: "max_reasoning_effort", Type: field.TypeString, Size: 20, Default: ""},
 		{Name: "reasoning_effort_mappings", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "openai_passthrough_strip_fields", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
 		{Name: "data_sharing_enabled", Type: field.TypeBool, Default: false},
 		{Name: "session_isolation_enabled", Type: field.TypeBool, Default: false},
 	}
@@ -968,12 +969,12 @@ var (
 			{
 				Name:    "group_data_sharing_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[63]},
+				Columns: []*schema.Column{GroupsColumns[64]},
 			},
 			{
 				Name:    "group_session_isolation_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{GroupsColumns[64]},
+				Columns: []*schema.Column{GroupsColumns[65]},
 			},
 			{
 				Name:    "group_health_check_enabled",

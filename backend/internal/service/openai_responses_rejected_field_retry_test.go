@@ -56,16 +56,6 @@ func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRejectsAmbiguousErrors(t 
 			body:         []byte(`{"max_output_tokens":4096,"input":[{"type":"message","content":{"max_output_tokens":"keep"}}]}`),
 			responseBody: []byte(`{"error":{"code":"unknown_parameter","message":"Unknown parameter: input[0].content.max_output_tokens","param":"input[0].content.max_output_tokens"}}`),
 		},
-		{
-			name:         "status value validation is not a field rejection",
-			body:         []byte(`{"input":[{"type":"custom_tool_call","status":"keep","input":"{}"}]}`),
-			responseBody: []byte(`{"error":{"code":"invalid_request_error","message":"input[0].status must be completed","param":"input[0].status"}}`),
-		},
-		{
-			name:         "structured param overrides status mention",
-			body:         []byte(`{"input":[{"type":"custom_tool_call","status":"keep","input":"{}"}]}`),
-			responseBody: []byte(`{"error":{"code":"unknown_parameter","message":"Unknown parameter: input[0].status","param":"tools"}}`),
-		},
 	}
 
 	for _, tt := range tests {
@@ -124,40 +114,9 @@ func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyBindsMaxOutputTokensToRej
 	require.False(t, gjson.GetBytes(retryBody, "max_output_tokens").Exists())
 }
 
-func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyStripsSameTypeStatusesInOneRetry(t *testing.T) {
-	body := []byte(`{
-		"input":[
-			{"type":"custom_tool_call","status":"completed","name":"one","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"two","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"three","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"four","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"five","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"six","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"seven","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"eight","input":"{}"},
-			{"type":"function_call","status":"completed","name":"preserve-function","arguments":"{}"},
-			{"type":"local_shell_call","status":"completed","action":{}},
-			{"type":"message","status":"completed","content":{"status":"nested-keep"}}
-		]
-	}`)
-	responseBody := []byte(`{"error":{"code":"unknown_parameter","message":"Unknown parameter: 'input[7].status'.","param":"input[7].status","type":"invalid_request_error"}}`)
-
-	retryBody, _, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, responseBody)
-
-	require.NoError(t, err)
-	require.True(t, changed)
-	for index := 0; index < 8; index++ {
-		require.False(t, gjson.GetBytes(retryBody, fmt.Sprintf("input.%d.status", index)).Exists())
-	}
-	require.Equal(t, "completed", gjson.GetBytes(retryBody, "input.8.status").String())
-	require.Equal(t, "completed", gjson.GetBytes(retryBody, "input.9.status").String())
-	require.Equal(t, "completed", gjson.GetBytes(retryBody, "input.10.status").String())
-	require.Equal(t, "nested-keep", gjson.GetBytes(retryBody, "input.10.content.status").String())
-}
-
-func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyWithoutItemTypeStripsExactStatusOnly(t *testing.T) {
-	body := []byte(`{"input":[{"status":"keep","content":"first"},{"status":"remove","content":"second"}]}`)
-	responseBody := []byte(`{"error":{"code":"unknown_parameter","message":"Unknown parameter: input[1].status"}}`)
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRemovesIndexedStatusOnly(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","status":"keep"},{"type":"function_call","status":"remove","arguments":"{}","content":{"status":"nested-keep"}}]}`)
+	responseBody := []byte(`{"error":{"code":"unknown_parameter","message":"Unknown parameter: 'input[1].status'.","param":"input[1].status"}}`)
 
 	retryBody, _, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, responseBody)
 
@@ -165,25 +124,159 @@ func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyWithoutItemTypeStripsExac
 	require.True(t, changed)
 	require.Equal(t, "keep", gjson.GetBytes(retryBody, "input.0.status").String())
 	require.False(t, gjson.GetBytes(retryBody, "input.1.status").Exists())
+	require.Equal(t, "nested-keep", gjson.GetBytes(retryBody, "input.1.content.status").String())
 }
 
-func TestNormalizeOpenAIResponsesRejectedFieldRetryBodySeparatesMessageRoles(t *testing.T) {
-	body := []byte(`{
-		"input":[
-			{"type":"message","role":"user","status":"completed","content":"first"},
-			{"type":"message","role":"assistant","status":"completed","content":"preserve"},
-			{"type":"message","role":"user","status":"completed","content":"second"}
-		]
-	}`)
-	responseBody := []byte(`{"error":{"code":"unknown_parameter","message":"Unknown parameter: input[2].status","param":"input[2].status"}}`)
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRemovesObservedReasoningModeRejection(t *testing.T) {
+	body := []byte(`{"reasoning":{"mode":"remove","effort":"high"},"metadata":{"mode":"keep"}}`)
+	responseBody := []byte("{\"detail\":\"`reasoning.mode` is not supported with this model.\"}")
 
 	retryBody, _, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, responseBody)
 
 	require.NoError(t, err)
 	require.True(t, changed)
-	require.False(t, gjson.GetBytes(retryBody, "input.0.status").Exists())
-	require.Equal(t, "completed", gjson.GetBytes(retryBody, "input.1.status").String())
-	require.False(t, gjson.GetBytes(retryBody, "input.2.status").Exists())
+	require.False(t, gjson.GetBytes(retryBody, "reasoning.mode").Exists())
+	require.Equal(t, "high", gjson.GetBytes(retryBody, "reasoning.effort").String())
+	require.Equal(t, "keep", gjson.GetBytes(retryBody, "metadata.mode").String())
+}
+
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRemovesExplicitUnknownLeaf(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","client_trace":{"detail":"remove","id":"keep"}}`)
+	responseBody := []byte(`{"error":{"code":"unknown_parameter","message":"Unknown parameter: client_trace.detail.","param":"client_trace.detail"}}`)
+
+	retryBody, _, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, responseBody)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(retryBody, "client_trace.detail").Exists())
+	require.Equal(t, "keep", gjson.GetBytes(retryBody, "client_trace.id").String())
+}
+
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyRemovesObservedNestedFileField(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","content":[{"type":"input_text","text":"keep"},{"type":"input_file","file":"remove","filename":"keep.txt"}]}]}`)
+	responseBody := []byte(`{"detail":"Unknown parameter: 'input[0].content[1].file'."}`)
+
+	retryBody, _, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, responseBody)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(retryBody, "input.0.content.1.file").Exists())
+	require.Equal(t, "keep.txt", gjson.GetBytes(retryBody, "input.0.content.1.filename").String())
+}
+
+func TestNormalizeOpenAIPassthroughStripFields(t *testing.T) {
+	fields, err := normalizeOpenAIPassthroughStripFields([]string{
+		" max_output_tokens ",
+		"input[].status",
+		"reasoning.mode",
+		"input[].status",
+		"client_trace.detail",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"max_output_tokens",
+		"input[].status",
+		"reasoning.mode",
+		"client_trace.detail",
+	}, fields)
+}
+
+func TestNormalizeOpenAIPassthroughStripFieldsRejectsCoreOrInvalidPaths(t *testing.T) {
+	for _, fields := range [][]string{
+		{"model"},
+		{"input"},
+		{"stream"},
+		{"input[]"},
+		{"input[*].status"},
+		{"input[].content[]"},
+	} {
+		_, err := normalizeOpenAIPassthroughStripFields(fields)
+		require.Error(t, err, fields)
+	}
+}
+
+func TestNormalizeOpenAIPassthroughStripFieldsExtra(t *testing.T) {
+	t.Run("JSON array is normalized", func(t *testing.T) {
+		extra, err := normalizeOpenAIPassthroughStripFieldsExtra(PlatformOpenAI, map[string]any{
+			openAIPassthroughStripFieldsExtraKey: []any{" max_output_tokens ", "input[].status", "input[].status"},
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, []string{"max_output_tokens", "input[].status"}, extra[openAIPassthroughStripFieldsExtraKey])
+	})
+
+	t.Run("missing key keeps group inheritance", func(t *testing.T) {
+		extra := map[string]any{"openai_passthrough": true}
+		normalized, err := normalizeOpenAIPassthroughStripFieldsExtra(PlatformOpenAI, extra)
+
+		require.NoError(t, err)
+		_, provided := normalized[openAIPassthroughStripFieldsExtraKey]
+		require.False(t, provided)
+	})
+
+	t.Run("explicit empty array is retained", func(t *testing.T) {
+		extra, err := normalizeOpenAIPassthroughStripFieldsExtra(PlatformOpenAI, map[string]any{
+			openAIPassthroughStripFieldsExtraKey: []any{},
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, []string{}, extra[openAIPassthroughStripFieldsExtraKey])
+	})
+
+	t.Run("malformed value is rejected", func(t *testing.T) {
+		_, err := normalizeOpenAIPassthroughStripFieldsExtra(PlatformOpenAI, map[string]any{
+			openAIPassthroughStripFieldsExtraKey: "max_output_tokens",
+		})
+
+		require.Error(t, err)
+	})
+}
+
+func TestResolveOpenAIPassthroughStripFieldsAccountOverridesGroup(t *testing.T) {
+	group := &Group{OpenAIPassthroughStripFields: []string{"max_output_tokens", "input[].status"}}
+
+	require.Empty(t,
+		resolveOpenAIPassthroughStripFields(&Account{}, nil),
+		"a missing request group must not invent a stripping policy",
+	)
+	require.Equal(t,
+		[]string{"max_output_tokens"},
+		resolveOpenAIPassthroughStripFields(&Account{}, &Group{}),
+		"a missing legacy group value must use the default rather than disable stripping",
+	)
+	require.Equal(t,
+		[]string{"max_output_tokens", "input[].status"},
+		resolveOpenAIPassthroughStripFields(&Account{}, group),
+	)
+	require.Equal(t,
+		[]string{"reasoning.mode"},
+		resolveOpenAIPassthroughStripFields(&Account{Extra: map[string]any{
+			openAIPassthroughStripFieldsExtraKey: []any{"reasoning.mode"},
+		}}, group),
+	)
+	require.Empty(t, resolveOpenAIPassthroughStripFields(&Account{Extra: map[string]any{
+		openAIPassthroughStripFieldsExtraKey: []any{},
+	}}, group))
+}
+
+func TestStripOpenAIPassthroughRequestFieldsRemovesWildcardLeaves(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","max_output_tokens":4096,"reasoning":{"mode":"legacy","effort":"high"},"input":[{"type":"message","status":"remove","content":[{"type":"input_text","text":"hello","status":"nested-keep"}]},{"type":"function_call","status":"remove","arguments":"{}"}]}`)
+
+	strippedBody, changed, err := stripOpenAIPassthroughRequestFields(body, []string{
+		"max_output_tokens",
+		"reasoning.mode",
+		"input[].status",
+	})
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(strippedBody, "max_output_tokens").Exists())
+	require.False(t, gjson.GetBytes(strippedBody, "reasoning.mode").Exists())
+	require.Equal(t, "high", gjson.GetBytes(strippedBody, "reasoning.effort").String())
+	require.False(t, gjson.GetBytes(strippedBody, "input.0.status").Exists())
+	require.False(t, gjson.GetBytes(strippedBody, "input.1.status").Exists())
+	require.Equal(t, "nested-keep", gjson.GetBytes(strippedBody, "input.0.content.0.status").String())
 }
 
 func TestOpenAIGatewayService_APIKeyStripsAllIndexedNamespacesBeforeFirstForward(t *testing.T) {
@@ -248,10 +341,12 @@ func TestOpenAIGatewayService_RetriesExplicitMaxOutputTokensRejection(t *testing
 		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
 	}}
 
+	account := newOpenAIRejectedFieldTestAccount()
+	account.Extra[openAIPassthroughStripFieldsExtraKey] = []any{}
 	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
 		context.Background(),
 		newOpenAIRejectedFieldTestContext(body),
-		newOpenAIRejectedFieldTestAccount(),
+		account,
 		body,
 	)
 
@@ -263,19 +358,60 @@ func TestOpenAIGatewayService_RetriesExplicitMaxOutputTokensRejection(t *testing
 	require.Equal(t, "keep", gjson.GetBytes(upstream.bodies[1], "input.0.content.max_output_tokens").String())
 }
 
-func TestOpenAIGatewayService_NormalForwardRetriesRejectedStatuses(t *testing.T) {
-	body := []byte(`{
-		"model":"gpt-5.5",
-		"stream":false,
-		"input":[
-			{"type":"custom_tool_call","status":"completed","name":"first","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"second","input":"{}"},
-			{"type":"local_shell_call","status":"completed","action":{}}
-		]
-	}`)
+func TestOpenAIGatewayService_APIKeyDefaultStripsMaxOutputTokensBeforeNormalForward(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"max_output_tokens":4096,"input":[{"type":"message","role":"user","content":"hello"}]}`)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
-		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unknown_parameter","message":"Unknown parameter: 'input[1].status'.","param":"input[1].status","type":"invalid_request_error"}}`),
-		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"id":"resp_status_ok","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+	}}
+	c := newOpenAIRejectedFieldTestContext(body)
+	c.Set("api_key", &APIKey{Group: &Group{
+		OpenAIPassthroughStripFields: []string{"max_output_tokens"},
+	}})
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+		context.Background(),
+		c,
+		newOpenAIRejectedFieldTestAccount(),
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1)
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "max_output_tokens").Exists())
+}
+
+func TestOpenAIGatewayService_APIKeyDefaultStripsNormalizedMaxTokensBeforeNormalForward(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"max_tokens":4096,"input":[{"type":"message","role":"user","content":"hello"}]}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+	}}
+	c := newOpenAIRejectedFieldTestContext(body)
+	c.Set("api_key", &APIKey{Group: &Group{
+		OpenAIPassthroughStripFields: []string{"max_output_tokens"},
+	}})
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+		context.Background(),
+		c,
+		newOpenAIRejectedFieldTestAccount(),
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1)
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "max_tokens").Exists())
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "max_output_tokens").Exists())
+}
+
+func TestOpenAIGatewayService_ResponsesRetriesObservedRejectedFieldsSequentially(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"reasoning":{"mode":"legacy","effort":"high"},"input":[{"type":"message","role":"user","status":"remove","content":[{"type":"input_file","file":"remove","filename":"keep.txt"}]}]}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unknown_parameter","message":"Unknown parameter: 'input[0].status'.","param":"input[0].status"}}`),
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, "{\"detail\":\"`reasoning.mode` is not supported with this model.\"}"),
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"detail":"Unknown parameter: 'input[0].content[0].file'."}`),
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
 	}}
 
 	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
@@ -287,12 +423,14 @@ func TestOpenAIGatewayService_NormalForwardRetriesRejectedStatuses(t *testing.T)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, upstream.bodies, 2)
-	require.Equal(t, "completed", gjson.GetBytes(upstream.bodies[0], "input.0.status").String())
-	require.Equal(t, "completed", gjson.GetBytes(upstream.bodies[0], "input.1.status").String())
+	require.Len(t, upstream.bodies, 4)
+	require.Equal(t, "remove", gjson.GetBytes(upstream.bodies[0], "input.0.status").String())
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.0.status").Exists())
-	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.1.status").Exists())
-	require.Equal(t, "completed", gjson.GetBytes(upstream.bodies[1], "input.2.status").String())
+	require.Equal(t, "legacy", gjson.GetBytes(upstream.bodies[1], "reasoning.mode").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[2], "reasoning.mode").Exists())
+	require.Equal(t, "remove", gjson.GetBytes(upstream.bodies[2], "input.0.content.0.file").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[3], "input.0.content.0.file").Exists())
+	require.Equal(t, "keep.txt", gjson.GetBytes(upstream.bodies[3], "input.0.content.0.filename").String())
 }
 
 func TestOpenAIGatewayService_ComposesProactiveNamespaceStripWithRejectedFieldRetry(t *testing.T) {
@@ -320,39 +458,18 @@ func TestOpenAIGatewayService_ComposesProactiveNamespaceStripWithRejectedFieldRe
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "max_output_tokens").Exists())
 }
 
-func TestOpenAIGatewayService_OAuthPassthroughRetriesRejectedStatusesBeforeStreaming(t *testing.T) {
-	body := []byte(`{
-		"model":"gpt-5.5",
-		"stream":true,
-		"store":false,
-		"instructions":"status retry regression",
-		"input":[
-			{"type":"custom_tool_call","status":"completed","name":"first","input":"{}"},
-			{"type":"custom_tool_call","status":"completed","name":"second","input":"{}"},
-			{"type":"function_call","status":"completed","name":"preserve","arguments":"{}"}
-		]
-	}`)
+func TestOpenAIGatewayService_APIKeyPassthroughUsesAccountStripOverrideBeforeFirstForward(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"max_output_tokens":2048,"reasoning":{"mode":"legacy","effort":"high"},"input":[{"type":"message","role":"user","status":"remove","content":"hello"}]}`)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
-		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unknown_parameter","message":"Unknown parameter: 'input[1].status'.","param":"input[1].status","type":"invalid_request_error"}}`),
-		{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Type": []string{"text/event-stream"},
-				"x-request-id": []string{"req_status_retry"},
-			},
-			Body: io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
-		},
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
 	}}
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Set("User-Agent", "codex-tui/0.121.0")
-	account := newOpenAIOAuthNamespaceTestAccount()
-	account.Extra = map[string]any{
-		"openai_passthrough":                        true,
-		"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff,
-	}
+	account := newOpenAIRejectedFieldTestAccount()
+	account.Extra["openai_passthrough"] = true
+	account.Extra[openAIPassthroughStripFieldsExtraKey] = []any{"max_output_tokens", "input[].status"}
+	c := newOpenAIRejectedFieldTestContext(body)
+	c.Set("api_key", &APIKey{Group: &Group{
+		OpenAIPassthroughStripFields: []string{"reasoning.mode"},
+	}})
 
 	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
 		context.Background(),
@@ -363,43 +480,23 @@ func TestOpenAIGatewayService_OAuthPassthroughRetriesRejectedStatusesBeforeStrea
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.True(t, result.Stream)
-	require.Len(t, upstream.bodies, 2)
-	require.Equal(t, "completed", gjson.GetBytes(upstream.bodies[0], "input.0.status").String())
-	require.Equal(t, "completed", gjson.GetBytes(upstream.bodies[0], "input.1.status").String())
-	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.0.status").Exists())
-	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.1.status").Exists())
-	require.Equal(t, "completed", gjson.GetBytes(upstream.bodies[1], "input.2.status").String())
-	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Contains(t, recorder.Body.String(), `"type":"response.completed"`)
-	require.NotContains(t, recorder.Body.String(), "Upstream request failed")
+	require.Len(t, upstream.bodies, 1)
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "max_output_tokens").Exists())
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "input.0.status").Exists())
+	require.Equal(t, "legacy", gjson.GetBytes(upstream.bodies[0], "reasoning.mode").String(), "account override must replace, not merge with, the group policy")
 }
 
-func TestOpenAIGatewayService_OAuthPassthroughDoesNotRetryRejectedStatusForNativeCompactionV2(t *testing.T) {
-	body := []byte(`{
-		"model":"gpt-5.5",
-		"stream":true,
-		"store":false,
-		"instructions":"native compaction status retry guard",
-		"input":[
-			{"type":"custom_tool_call","status":"completed","name":"preserve","input":"{}"},
-			{"type":"compaction_trigger"}
-		]
-	}`)
+func TestOpenAIGatewayService_APIKeyPassthroughUsesGroupStripFieldsBeforeFirstForward(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"max_output_tokens":2048,"reasoning":{"mode":"legacy","effort":"high"},"input":[{"type":"message","role":"user","status":"keep","content":"hello"}]}`)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
-		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unknown_parameter","message":"Unknown parameter: 'input[0].status'.","param":"input[0].status","type":"invalid_request_error"}}`),
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
 	}}
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Set("User-Agent", "codex-tui/0.121.0")
-	MarkOpenAINativeRemoteCompactionV2(c)
-	account := newOpenAIOAuthNamespaceTestAccount()
-	account.Extra = map[string]any{
-		"openai_passthrough":                        true,
-		"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff,
-	}
+	account := newOpenAIRejectedFieldTestAccount()
+	account.Extra["openai_passthrough"] = true
+	c := newOpenAIRejectedFieldTestContext(body)
+	c.Set("api_key", &APIKey{Group: &Group{
+		OpenAIPassthroughStripFields: []string{"max_output_tokens", "reasoning.mode"},
+	}})
 
 	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
 		context.Background(),
@@ -408,10 +505,69 @@ func TestOpenAIGatewayService_OAuthPassthroughDoesNotRetryRejectedStatusForNativ
 		body,
 	)
 
-	require.Error(t, err)
-	require.Nil(t, result)
+	require.NoError(t, err)
+	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 1)
-	require.Equal(t, "completed", gjson.GetBytes(upstream.bodies[0], "input.0.status").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "max_output_tokens").Exists())
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "reasoning.mode").Exists())
+	require.Equal(t, "high", gjson.GetBytes(upstream.bodies[0], "reasoning.effort").String())
+	require.Equal(t, "keep", gjson.GetBytes(upstream.bodies[0], "input.0.status").String())
+}
+
+func TestOpenAIGatewayService_APIKeyPassthroughRetriesRejectedFieldsSequentially(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"reasoning":{"mode":"legacy","effort":"high"},"input":[{"type":"message","role":"user","status":"remove","content":"hello"}]}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unknown_parameter","message":"Unknown parameter: input[0].status","param":"input[0].status"}}`),
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, "{\"detail\":\"`reasoning.mode` is not supported with this model.\"}"),
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+	}}
+	account := newOpenAIRejectedFieldTestAccount()
+	account.Extra["openai_passthrough"] = true
+	// 显式空数组关闭首包剥离，用于验证上游拒绝后的有界降级重试。
+	account.Extra[openAIPassthroughStripFieldsExtraKey] = []any{}
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+		context.Background(),
+		newOpenAIRejectedFieldTestContext(body),
+		account,
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 3)
+	require.Equal(t, "remove", gjson.GetBytes(upstream.bodies[0], "input.0.status").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.0.status").Exists())
+	require.Equal(t, "legacy", gjson.GetBytes(upstream.bodies[1], "reasoning.mode").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[2], "reasoning.mode").Exists())
+	require.Equal(t, "high", gjson.GetBytes(upstream.bodies[2], "reasoning.effort").String())
+}
+
+func TestOpenAIGatewayService_OAuthPassthroughRetriesExplicitRejectedField(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":false,"max_output_tokens":2048,"input":[{"type":"message","role":"user","content":"hello"}]}`)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: max_output_tokens","param":"max_output_tokens"}}`),
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITestCompletedSSE)),
+		},
+	}}
+	account := newOpenAIOAuthNamespaceTestAccount()
+	account.Extra = map[string]any{"openai_passthrough": true}
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+		context.Background(),
+		newOpenAIRejectedFieldTestContext(body),
+		account,
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 2)
+	require.Equal(t, int64(2048), gjson.GetBytes(upstream.bodies[0], "max_output_tokens").Int())
+	require.False(t, gjson.GetBytes(upstream.bodies[1], "max_output_tokens").Exists())
 }
 
 func newOpenAIRejectedFieldTestService(upstream *httpUpstreamRecorder) *OpenAIGatewayService {

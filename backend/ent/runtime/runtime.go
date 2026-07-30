@@ -1163,12 +1163,16 @@ func init() {
 	groupDescReasoningEffortMappings := groupFields[58].Descriptor()
 	// group.DefaultReasoningEffortMappings holds the default value on creation for the reasoning_effort_mappings field.
 	group.DefaultReasoningEffortMappings = groupDescReasoningEffortMappings.Default.([]domain.ReasoningEffortMapping)
+	// groupDescOpenaiPassthroughStripFields is the schema descriptor for openai_passthrough_strip_fields field.
+	groupDescOpenaiPassthroughStripFields := groupFields[59].Descriptor()
+	// group.DefaultOpenaiPassthroughStripFields holds the default value on creation for the openai_passthrough_strip_fields field.
+	group.DefaultOpenaiPassthroughStripFields = groupDescOpenaiPassthroughStripFields.Default.([]string)
 	// groupDescDataSharingEnabled is the schema descriptor for data_sharing_enabled field.
-	groupDescDataSharingEnabled := groupFields[59].Descriptor()
+	groupDescDataSharingEnabled := groupFields[60].Descriptor()
 	// group.DefaultDataSharingEnabled holds the default value on creation for the data_sharing_enabled field.
 	group.DefaultDataSharingEnabled = groupDescDataSharingEnabled.Default.(bool)
 	// groupDescSessionIsolationEnabled is the schema descriptor for session_isolation_enabled field.
-	groupDescSessionIsolationEnabled := groupFields[60].Descriptor()
+	groupDescSessionIsolationEnabled := groupFields[61].Descriptor()
 	// group.DefaultSessionIsolationEnabled holds the default value on creation for the session_isolation_enabled field.
 	group.DefaultSessionIsolationEnabled = groupDescSessionIsolationEnabled.Default.(bool)
 	idempotencyrecordMixin := schema.IdempotencyRecord{}.Mixin()

@@ -123,6 +123,8 @@ type Group struct {
 	MaxReasoningEffort string
 	// ReasoningEffortMappings 在应用上限前改写请求中显式指定的值。
 	ReasoningEffortMappings []ReasoningEffortMapping
+	// OpenAIPassthroughStripFields 在 API-key Responses 透传首包中删除指定可选字段。
+	OpenAIPassthroughStripFields []string
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

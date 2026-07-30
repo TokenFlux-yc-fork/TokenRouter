@@ -143,6 +143,8 @@ type Group struct {
 	MaxReasoningEffort string `json:"max_reasoning_effort,omitempty"`
 	// OpenAI reasoning effort 自定义精确映射；先映射再应用上限
 	ReasoningEffortMappings []domain.ReasoningEffortMapping `json:"reasoning_effort_mappings,omitempty"`
+	// OpenAI API-key Responses 透传首包中剥离的 JSON 字段路径
+	OpenaiPassthroughStripFields []string `json:"openai_passthrough_strip_fields,omitempty"`
 	// 是否为数据共享分组
 	DataSharingEnabled bool `json:"data_sharing_enabled,omitempty"`
 	// 是否开启会话隔离
@@ -264,7 +266,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig, group.FieldAvailabilityProbeConfig, group.FieldReasoningEffortMappings:
+		case group.FieldModelRouting, group.FieldSupportedModelScopes, group.FieldMessagesDispatchModelConfig, group.FieldModelsListConfig, group.FieldAvailabilityProbeConfig, group.FieldReasoningEffortMappings, group.FieldOpenaiPassthroughStripFields:
 			values[i] = new([]byte)
 		case group.FieldPeakRateEnabled, group.FieldIsExclusive, group.FieldIsDefault, group.FieldAllowImageGeneration, group.FieldAllowBatchImageGeneration, group.FieldImageRateIndependent, group.FieldVideoRateIndependent, group.FieldClaudeCodeOnly, group.FieldModelRoutingEnabled, group.FieldMcpXMLInject, group.FieldAllowMessagesDispatch, group.FieldAllowLive, group.FieldRequireOauthOnly, group.FieldRequirePrivacySet, group.FieldHealthCheckEnabled, group.FieldDataSharingEnabled, group.FieldSessionIsolationEnabled:
 			values[i] = new(sql.NullBool)
@@ -696,6 +698,14 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 					return fmt.Errorf("unmarshal field reasoning_effort_mappings: %w", err)
 				}
 			}
+		case group.FieldOpenaiPassthroughStripFields:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field openai_passthrough_strip_fields", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.OpenaiPassthroughStripFields); err != nil {
+					return fmt.Errorf("unmarshal field openai_passthrough_strip_fields: %w", err)
+				}
+			}
 		case group.FieldDataSharingEnabled:
 			if value, ok := values[i].(*sql.NullBool); !ok {
 				return fmt.Errorf("unexpected type %T for field data_sharing_enabled", values[i])
@@ -1004,6 +1014,9 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("reasoning_effort_mappings=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ReasoningEffortMappings))
+	builder.WriteString(", ")
+	builder.WriteString("openai_passthrough_strip_fields=")
+	builder.WriteString(fmt.Sprintf("%v", _m.OpenaiPassthroughStripFields))
 	builder.WriteString(", ")
 	builder.WriteString("data_sharing_enabled=")
 	builder.WriteString(fmt.Sprintf("%v", _m.DataSharingEnabled))

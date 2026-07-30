@@ -18,3 +18,12 @@ func TestGroupFromServiceAdmin_NormalizesNonFiniteBackupPoolThreshold(t *testing
 	_, err := json.Marshal(group)
 	require.NoError(t, err)
 }
+
+func TestGroupFromServiceAdmin_PreservesExplicitEmptyPassthroughStripFields(t *testing.T) {
+	group := GroupFromServiceAdmin(&service.Group{OpenAIPassthroughStripFields: []string{}})
+
+	require.NotNil(t, group.OpenAIPassthroughStripFields)
+	payload, err := json.Marshal(group)
+	require.NoError(t, err)
+	require.Contains(t, string(payload), `"openai_passthrough_strip_fields":[]`)
+}
