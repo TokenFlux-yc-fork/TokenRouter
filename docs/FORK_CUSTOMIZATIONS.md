@@ -135,7 +135,7 @@ upstream merge.
 | `responses-lite-validation` | Reject residual unsupported Responses Lite fields and preserve event/tool validation semantics. | `6a73e12df` | OpenAI gateway handler/forwarder, Responses Lite tools | `local` | Responses Lite unit tests and production protocol probes. |
 | `grok-inference-error-classification` | Persist Grok inference scheduling state only for 429; other inference errors fail over for the current request only. | `6f31ce627` | `openai_gateway_grok*` | `local` | Grok gateway tests, refresh race tests and account-state production probe. |
 | `grok-responses-transient-404` | Retry the exact xAI Responses `bad_response_status_code` 404 once on the same account, then fail over without entering another same-account pool retry; unrelated 404 responses keep their existing behavior. | `5f7439b85` | `grok_upstream_errors*`, `openai_gateway_grok*` | `local` | Exact classifier, API-key same-account recovery, retry exhaustion/failover and non-overmatch Grok tests. |
-| `openai-remote-compaction-v2-contract` | Require native Remote Compaction v2 to use an exact, current capability domain and to validate and stage the complete upstream attempt before committing exactly one valid result to the customer; final candidate qualification remains release-gated. | task `#102` (pending commit) | OpenAI HTTP/SSE/WebSocket gateway, capability/probe/attribution repositories, migrations `227`-`231` | `local` | Strict classifier and validator fixtures; bounded staging, disconnect and failover tests; capability, probe-fencing, migration, attribution, settlement and HTTP/WebSocket parity gates below. |
+| `openai-remote-compaction-v2-contract` | Require native Remote Compaction v2 to use an exact, current capability domain and to validate and stage the complete upstream attempt before committing exactly one valid result; before semantic commit, unavailable native capability or exhausted native attempts fall back to the legacy compact bridge; final candidate qualification remains release-gated. | task `#102` (pending commit) | OpenAI HTTP/SSE/WebSocket gateway, capability/probe/attribution repositories, migrations `227`-`231` | `local` | Strict classifier and validator fixtures; bounded staging, disconnect, native-to-legacy fallback and failover tests; capability, probe-fencing, migration, attribution, settlement and HTTP/WebSocket parity gates below. |
 | `frontend-build-heap` | Give the containerized frontend build enough heap for the fork UI. | `fe599ead3` | `deploy/Dockerfile` | `local` | Container image build. |
 
 ## Scheduled Test Runner Lease
@@ -194,6 +194,14 @@ preserves these boundaries:
   session-scoped client reader across account failover; a peer close cancels an
   active native `ctx_pool`, `passthrough`, or `http_bridge` upstream attempt and
   releases staging without changing the ordinary-stream usage-drain policy.
+- **Pre-commit availability fallback.** A missing compatibility-domain binding,
+  an empty exact native-capability pool, or exhaustion of staged native attempts
+  demotes the HTTP request once to the existing `/responses/compact` bridge only
+  while no semantic byte has been committed. The demotion removes only the
+  `remote_compaction_v2` feature token, normalizes the compact body, preserves
+  session/previous-response stickiness, resets request-local native exclusions,
+  and keeps SSE liveness active. It does not clear shared bindings, infer native
+  capability from legacy support, or replay after semantic delivery begins.
 - **Compatibility and capability domain.** Reusable state is scoped by provider,
   opaque canonical-upstream fingerprint, effective mapped model, and contract
   version `remote_compaction_v2`; transport is deliberately excluded so HTTP

@@ -203,8 +203,13 @@ func newNativeCompactionMixedFailoverHandler(
 	capabilityRepo service.OpenAINativeCompactionCapabilityRepository,
 	attemptRepo service.UpstreamAttemptAttributionRepository,
 	usageLogRepo service.UsageLogRepository,
+	gatewayCaches ...service.GatewayCache,
 ) *OpenAIGatewayHandler {
 	t.Helper()
+	var gatewayCache service.GatewayCache
+	if len(gatewayCaches) > 0 {
+		gatewayCache = gatewayCaches[0]
+	}
 	rateLimitService := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
 	billingCacheService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billingCacheService.Stop)
@@ -215,7 +220,7 @@ func newNativeCompactionMixedFailoverHandler(
 		nil,
 		nil,
 		nil,
-		nil,
+		gatewayCache,
 		cfg,
 		nil,
 		nil,
@@ -401,9 +406,10 @@ func TestOpenAIResponsesNativeCompactionMixedPoolSemanticFailover(t *testing.T) 
 	}
 }
 
-func TestOpenAIResponsesNativeCompactionAllSemanticFailuresEmitOneFailureAndSkipUnknown(t *testing.T) {
+func TestOpenAIResponsesNativeCompactionAllSemanticFailuresFallBackToLegacyCompact(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	first := nativeCompactionMixedAccount(t, 9960, service.AccountTypeAPIKey, 1)
+	first.Extra["openai_compact_supported"] = true
 	unknown := service.Account{
 		ID: 9961, Name: "responses-or-cc-only-unknown-native", Platform: service.PlatformOpenAI,
 		Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
@@ -412,11 +418,25 @@ func TestOpenAIResponsesNativeCompactionAllSemanticFailuresEmitOneFailureAndSkip
 		Extra:       map[string]any{"openai_responses_supported": true},
 	}
 	second := nativeCompactionMixedAccount(t, 9962, service.AccountTypeAPIKey, 3)
+	second.Extra["openai_compact_supported"] = true
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{first, unknown, second}}
 	capabilityRepo := &nativeCompactionCapabilityRepoStub{}
 	attemptRepo := newNativeCompactionAttemptRepoStub()
 	usageLogRepo := &nativeCompactionUsageLogRepoStub{}
-	upstream := &openAIHandlerHTTPUpstreamStub{do: func(_ *http.Request, accountID int64) (*http.Response, error) {
+	upstream := &openAIHandlerHTTPUpstreamStub{do: func(req *http.Request, accountID int64) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
+			requestBody, readErr := io.ReadAll(req.Body)
+			require.NoError(t, readErr)
+			require.False(t, gjson.GetBytes(requestBody, "stream").Exists())
+			require.NotContains(t, strings.ToLower(req.Header.Get("x-codex-beta-features")), "remote_compaction_v2")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"resp_legacy_fallback","output":[{"id":"cmp_legacy_fallback","type":"compaction","status":"completed","encrypted_content":"legacy-state"}],"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}}`,
+				)),
+			}, nil
+		}
 		body := strings.Join([]string{
 			`event: response.output_text.delta`,
 			`data: {"type":"response.output_text.delta","delta":"FAILED_ACCOUNT_MUST_NOT_LEAK"}`,
@@ -447,20 +467,16 @@ func TestOpenAIResponsesNativeCompactionAllSemanticFailuresEmitOneFailureAndSkip
 
 	h.Responses(c)
 
-	require.Equal(t, []int64{first.ID, second.ID}, upstream.AccountIDs(), "unknown native capability must be excluded before dispatch")
+	require.Equal(t, []int64{first.ID, second.ID, first.ID}, upstream.AccountIDs(), "unknown native capability must be excluded before dispatch and legacy selection must start clean")
 	wire := recorder.Body.String()
 	require.NotContains(t, wire, "FAILED_ACCOUNT_MUST_NOT_LEAK")
 	require.NotContains(t, wire, "resp_invalid_")
-	require.Equal(t, 1, strings.Count(wire, `"error":`))
-	if strings.Contains(recorder.Header().Get("Content-Type"), "text/event-stream") {
-		require.Equal(t, 1, strings.Count(wire, "event: response.failed"), wire)
-		require.Equal(t, 1, strings.Count(wire, `"type":"response.failed"`))
-	} else {
-		require.Equal(t, http.StatusBadGateway, recorder.Code)
-		require.Contains(t, recorder.Header().Get("Content-Type"), "application/json")
-		require.True(t, gjson.Valid(wire))
-		require.Equal(t, "upstream_error", gjson.Get(wire, "error.type").String())
-	}
+	require.Contains(t, recorder.Header().Get("Content-Type"), "text/event-stream")
+	require.Contains(t, wire, "resp_legacy_fallback")
+	require.Contains(t, wire, "cmp_legacy_fallback")
+	require.Equal(t, 1, strings.Count(wire, `"type":"response.output_item.done"`))
+	require.Equal(t, 1, strings.Count(wire, `"type":"response.completed"`))
+	require.NotContains(t, wire, `"type":"response.failed"`)
 	require.Len(t, capabilityRepo.snapshot(), 2)
 	require.Len(t, attemptRepo.terminalRows(), 2)
 	for _, row := range attemptRepo.terminalRows() {
@@ -468,7 +484,8 @@ func TestOpenAIResponsesNativeCompactionAllSemanticFailuresEmitOneFailureAndSkip
 		require.False(t, row.DeliveryCommitted)
 		require.True(t, row.SafeToFailover)
 	}
-	require.Empty(t, usageLogRepo.snapshot())
+	require.Eventually(t, func() bool { return len(usageLogRepo.snapshot()) == 1 }, time.Second, 10*time.Millisecond)
+	require.Equal(t, first.ID, usageLogRepo.snapshot()[0].AccountID)
 }
 
 func TestOpenAIResponsesWebSocketNativeCompactionSemanticFailoverSkipsIncompatibleCandidate(t *testing.T) {
