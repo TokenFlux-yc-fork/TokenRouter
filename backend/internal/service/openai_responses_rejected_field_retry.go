@@ -81,7 +81,7 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 		return removeOpenAIResponsesRejectedNamespaceAtIndex(body, index)
 	}
 	if index, ok := openAIResponsesRejectedStatusIndex(param); ok {
-		return removeOpenAIResponsesRejectedObjectFieldAtIndex(body, index, "status", "indexed status parameter rejection")
+		return removeOpenAIResponsesRejectedStatusesAtIndex(body, index)
 	}
 	if param == "max_output_tokens" && gjson.GetBytes(body, "max_output_tokens").Exists() {
 		retryBody, err := sjson.DeleteBytes(body, "max_output_tokens")
@@ -213,14 +213,51 @@ func removeOpenAIResponsesRejectedNamespaceAtIndex(body []byte, index int) ([]by
 	return retryBody, "indexed namespace parameter rejection", true, nil
 }
 
-func removeOpenAIResponsesRejectedObjectFieldAtIndex(body []byte, index int, field, reason string) ([]byte, string, bool, error) {
-	path := fmt.Sprintf("input.%d.%s", index, field)
-	if !gjson.GetBytes(body, path).Exists() {
+func removeOpenAIResponsesRejectedStatusesAtIndex(body []byte, index int) ([]byte, string, bool, error) {
+	statusPath := fmt.Sprintf("input.%d.status", index)
+	if !gjson.GetBytes(body, statusPath).Exists() {
 		return nil, "", false, nil
 	}
-	retryBody, err := sjson.DeleteBytes(body, path)
-	if err != nil {
-		return nil, "", false, fmt.Errorf("delete rejected %s at input[%d]: %w", field, index, err)
+
+	// 同一 type 的 input item 通常共享请求 schema；message 还需按 role 区分输入与
+	// assistant 输出形态。上游已通过精确 param 明确拒绝其中一个 status 后，一次
+	// 清理同形态 item，避免长历史逐项触发超过重试上限；其他形态保持原样。
+	rejectedType := strings.TrimSpace(gjson.GetBytes(body, fmt.Sprintf("input.%d.type", index)).String())
+	rejectedRole := ""
+	if rejectedType == "message" {
+		rejectedRole = strings.TrimSpace(gjson.GetBytes(body, fmt.Sprintf("input.%d.role", index)).String())
+		if rejectedRole == "" {
+			rejectedType = ""
+		}
+	}
+	retryBody := append([]byte(nil), body...)
+	removed := 0
+	if rejectedType != "" {
+		for itemIndex, item := range gjson.GetBytes(body, "input").Array() {
+			if strings.TrimSpace(item.Get("type").String()) != rejectedType || !item.Get("status").Exists() {
+				continue
+			}
+			if rejectedType == "message" && strings.TrimSpace(item.Get("role").String()) != rejectedRole {
+				continue
+			}
+			var err error
+			retryBody, err = sjson.DeleteBytes(retryBody, fmt.Sprintf("input.%d.status", itemIndex))
+			if err != nil {
+				return nil, "", false, fmt.Errorf("delete rejected status at input[%d]: %w", itemIndex, err)
+			}
+			removed++
+		}
+	}
+	if removed == 0 {
+		var err error
+		retryBody, err = sjson.DeleteBytes(retryBody, statusPath)
+		if err != nil {
+			return nil, "", false, fmt.Errorf("delete rejected status at input[%d]: %w", index, err)
+		}
+	}
+	reason := "indexed status parameter rejection"
+	if rejectedType != "" {
+		reason = fmt.Sprintf("indexed status parameter rejection for input type %s", rejectedType)
 	}
 	return retryBody, reason, true, nil
 }
