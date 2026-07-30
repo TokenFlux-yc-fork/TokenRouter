@@ -70,12 +70,18 @@ type RelayOptions struct {
 	OnUpstreamEvent   func(eventType string, payload []byte)
 	OnTurnComplete    func(turn RelayTurnResult)
 	BeforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
+	// WriteClient returns whether this call committed semantic downstream output.
+	// Staging implementations return false until the validated attempt is committed.
+	WriteClient       func(ctx context.Context, msgType coderws.MessageType, payload []byte) (bool, error)
 	BeforeClientWrite func(msgType coderws.MessageType, payload []byte)
 	AfterClientWrite  func(msgType coderws.MessageType, payload []byte, writeErr error)
 	BeforeRelayCancel func(exit RelayExit)
-	ReadClientFrame   func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
-	OnTrace           func(event RelayTraceEvent)
-	Now               func() time.Time
+	// CancelUpstreamOnClientDisconnect disables the ordinary short usage-drain
+	// window for an active staged transaction that must be discarded promptly.
+	CancelUpstreamOnClientDisconnect func() bool
+	ReadClientFrame                  func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
+	OnTrace                          func(event RelayTraceEvent)
+	Now                              func() time.Time
 }
 
 type RelayTraceEvent struct {
@@ -175,10 +181,21 @@ func Relay(
 		defer cancel()
 		return upstreamConn.WriteFrame(writeCtx, msgType, payload)
 	}
+	lastClientWriteCommitted := atomic.Bool{}
 	writeClient := func(msgType coderws.MessageType, payload []byte) error {
 		writeCtx, cancel := context.WithTimeout(relayCtx, writeTimeout)
 		defer cancel()
-		return clientConn.WriteFrame(writeCtx, msgType, payload)
+		lastClientWriteCommitted.Store(false)
+		if options.WriteClient != nil {
+			committed, err := options.WriteClient(writeCtx, msgType, payload)
+			lastClientWriteCommitted.Store(committed)
+			return err
+		}
+		if err := clientConn.WriteFrame(writeCtx, msgType, payload); err != nil {
+			return err
+		}
+		lastClientWriteCommitted.Store(true)
+		return nil
 	}
 
 	clientToUpstreamFrames := &atomic.Int64{}
@@ -231,10 +248,11 @@ func Relay(
 	if !options.StartClientAfterFirstDownstream {
 		startClientReader()
 	}
-	go runUpstreamToClient(
+	go runUpstreamToClientWithCommit(
 		relayCtx,
 		upstreamConn,
 		writeClient,
+		func() bool { return lastClientWriteCommitted.Load() },
 		startAt,
 		nowFn,
 		state,
@@ -283,8 +301,13 @@ func Relay(
 	secondExit := relayExitSignal{graceful: true}
 	hasSecondExit := false
 
-	// 客户端断开后尽力继续读取上游短窗口，捕获延迟 usage/terminal 事件用于计费。
-	if firstExit.stage == "read_client" && firstExit.graceful {
+	// 普通流在客户端断开后继续短窗口 drain usage；native compaction 的
+	// 未提交 staging 是事务边界，必须立即取消上游并释放资源。
+	cancelUpstreamOnClientDisconnect := firstExit.stage == "read_client" &&
+		firstExit.graceful &&
+		options.CancelUpstreamOnClientDisconnect != nil &&
+		options.CancelUpstreamOnClientDisconnect()
+	if firstExit.stage == "read_client" && firstExit.graceful && !cancelUpstreamOnClientDisconnect {
 		dropDownstreamWrites.Store(true)
 		secondExit, hasSecondExit = waitRelayExit(exitCh, drainTimeout)
 	} else {
@@ -464,6 +487,31 @@ func runUpstreamToClient(
 	onTrace func(event RelayTraceEvent),
 	exitCh chan<- relayExitSignal,
 ) {
+	runUpstreamToClientWithCommit(ctx, upstreamConn, writeClient, nil, startAt, nowFn, state, onUsageParseFailure, onUpstreamEvent, onTurnComplete, beforeWriteClient, beforeClientWrite, afterClientWrite, onClientReadReady, dropDownstreamWrites, forwardedFrames, droppedFrames, markActivity, onTrace, exitCh)
+}
+
+func runUpstreamToClientWithCommit(
+	ctx context.Context,
+	upstreamConn FrameConn,
+	writeClient func(msgType coderws.MessageType, payload []byte) error,
+	clientWriteCommitted func() bool,
+	startAt time.Time,
+	nowFn func() time.Time,
+	state *relayState,
+	onUsageParseFailure func(eventType string, usageRaw string),
+	onUpstreamEvent func(eventType string, payload []byte),
+	onTurnComplete func(turn RelayTurnResult),
+	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error,
+	beforeClientWrite func(msgType coderws.MessageType, payload []byte),
+	afterClientWrite func(msgType coderws.MessageType, payload []byte, writeErr error),
+	onClientReadReady func(msgType coderws.MessageType, payload []byte),
+	dropDownstreamWrites *atomic.Bool,
+	forwardedFrames *atomic.Int64,
+	droppedFrames *atomic.Int64,
+	markActivity func(),
+	onTrace func(event RelayTraceEvent),
+	exitCh chan<- relayExitSignal,
+) {
 	wroteDownstream := false
 	pendingPreamble := make([]bufferedRelayFrame, 0, 2)
 	pendingTerminalTail := make([]bufferedRelayFrame, 0, 4)
@@ -473,10 +521,12 @@ func runUpstreamToClient(
 			beforeClientWrite(msgType, payload)
 		}
 		writeErr := writeClient(msgType, payload)
+		committed := clientWriteCommitted == nil || clientWriteCommitted()
 		if afterClientWrite != nil {
 			afterClientWrite(msgType, payload, writeErr)
 		}
 		if writeErr != nil {
+			wroteDownstream = wroteDownstream || committed
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:           "write_client_failed",
 				Direction:       "upstream_to_client",
@@ -488,7 +538,7 @@ func runUpstreamToClient(
 			exitCh <- relayExitSignal{stage: "write_client", err: writeErr, wroteDownstream: wroteDownstream}
 			return false
 		}
-		wroteDownstream = true
+		wroteDownstream = wroteDownstream || committed
 		if onClientReadReady != nil {
 			onClientReadReady(msgType, payload)
 		}
@@ -541,9 +591,6 @@ func runUpstreamToClient(
 			observedEvent = observeUpstreamMessage(state, payload, startAt, nowFn, onUsageParseFailure, onUpstreamEvent)
 		case coderws.MessageBinary:
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
-		}
-		if !observedEvent.terminal || isSuccessfulTerminalEvent(payload, observedEvent.eventType) {
-			emitTurnComplete(onTurnComplete, state, observedEvent)
 		}
 		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
 			if droppedFrames != nil {
@@ -643,6 +690,9 @@ func runUpstreamToClient(
 		}
 		if !forwardClientFrame(msgType, payload) {
 			return
+		}
+		if !observedEvent.terminal || isSuccessfulTerminalEvent(payload, observedEvent.eventType) {
+			emitTurnComplete(onTurnComplete, state, observedEvent)
 		}
 		if observedEvent.eventType == "response.failed" {
 			failedMessage := strings.TrimSpace(gjson.GetBytes(payload, "response.error.message").String())

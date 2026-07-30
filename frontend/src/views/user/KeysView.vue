@@ -133,7 +133,24 @@
           </template>
 
           <template #cell-group="{ row }">
-            <div class="group/dropdown relative">
+            <button
+              v-if="row.is_composite"
+              type="button"
+              class="flex max-w-[28rem] flex-wrap items-center gap-1.5 rounded-md px-1 py-1 text-left hover:bg-gray-100 dark:hover:bg-dark-700"
+              :title="t('keys.composite.editMappings')"
+              @click="editKey(row)"
+            >
+              <span
+                v-for="binding in row.composite_groups"
+                :key="`${row.id}-${binding.group_id}`"
+                class="inline-flex min-w-0 items-center gap-1 rounded border border-gray-200 bg-gray-50 px-1.5 py-1 dark:border-dark-600 dark:bg-dark-800"
+              >
+                <span class="max-w-24 truncate font-mono text-xs font-semibold text-primary-700 dark:text-primary-300">{{ binding.prefix }}</span>
+                <span class="text-gray-300 dark:text-dark-500">/</span>
+                <span class="max-w-28 truncate text-xs text-gray-600 dark:text-dark-300">{{ binding.group?.name || `#${binding.group_id}` }}</span>
+              </span>
+            </button>
+            <div v-else class="group/dropdown relative">
               <button
                 :ref="(el) => setGroupButtonRef(row.id, el)"
                 @click="openGroupSelector(row)"
@@ -458,7 +475,21 @@
           />
         </div>
 
-        <div>
+        <!-- 复合模式使用项目 Toggle，切换后改为完整映射编辑。 -->
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('keys.composite.label') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ t('keys.composite.hint') }}</p>
+          </div>
+          <Toggle
+            :model-value="formData.is_composite"
+            size="sm"
+            data-test="composite-key-toggle"
+            @update:model-value="onCompositeModeChange"
+          />
+        </div>
+
+        <div v-if="!formData.is_composite">
           <label class="input-label">{{ t('keys.groupLabel') }}</label>
           <Select
             v-model="formData.group_id"
@@ -500,6 +531,55 @@
               />
             </template>
           </Select>
+        </div>
+
+        <div v-else class="space-y-3" data-test="composite-group-editor">
+          <div
+            v-for="(binding, index) in formData.composite_groups"
+            :key="binding.local_id"
+            class="grid min-w-0 grid-cols-1 items-start gap-2 rounded-md border border-gray-200 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(7rem,0.65fr)_auto] dark:border-dark-600"
+          >
+            <Select
+              v-model="binding.group_id"
+              :options="groupOptions"
+              :placeholder="t('keys.selectGroup')"
+              :searchable="true"
+              class="min-w-0"
+            />
+            <div class="min-w-0">
+              <input
+                v-model="binding.prefix"
+                type="text"
+                maxlength="32"
+                class="input min-w-0 font-mono"
+                :class="{ 'border-red-500 dark:border-red-500': compositeBindingError(index) }"
+                :placeholder="t('keys.composite.prefixPlaceholder')"
+              />
+              <p v-if="compositeBindingError(index)" class="mt-1 text-xs text-red-500">
+                {{ compositeBindingError(index) }}
+              </p>
+            </div>
+            <div class="flex items-center justify-end gap-1 sm:justify-start">
+              <button type="button" class="rounded p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-dark-700" :disabled="index === 0" :title="t('keys.composite.moveUp')" @click="moveCompositeBinding(index, -1)">
+                <Icon name="arrowUp" size="sm" />
+              </button>
+              <button type="button" class="rounded p-1.5 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-dark-700" :disabled="index === formData.composite_groups.length - 1" :title="t('keys.composite.moveDown')" @click="moveCompositeBinding(index, 1)">
+                <Icon name="arrowDown" size="sm" />
+              </button>
+              <button type="button" class="rounded p-1.5 text-red-500 hover:bg-red-50 disabled:opacity-30 dark:hover:bg-red-900/20" :disabled="formData.composite_groups.length <= 1" :title="t('common.delete')" @click="removeCompositeBinding(index)">
+                <Icon name="trash" size="sm" />
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="btn btn-secondary w-full"
+            :disabled="formData.composite_groups.length >= 20"
+            @click="addCompositeBinding"
+          >
+            <Icon name="plus" size="sm" class="mr-1.5" />
+            {{ t('keys.composite.addMapping') }}
+          </button>
         </div>
 
         <!-- 单 Key Fast 策略使用项目统一选择框，系统策略仍在服务端最终裁决。 -->
@@ -1018,6 +1098,7 @@
       :base-url="publicSettings?.api_base_url || ''"
       :platform="selectedKey?.group?.platform || null"
       :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch || false"
+      :composite-groups="selectedKey?.composite_groups || []"
       @close="closeUseKeyModal"
     />
 
@@ -1368,7 +1449,8 @@ const columns = computed<Column[]>(() =>
 
 const apiKeys = ref<ApiKey[]>([])
 const groups = ref<Group[]>([])
-const loading = ref(false)
+// 首次 Key 请求开始前也保持加载态，避免公共设置请求期间误显示空列表。
+const loading = ref(true)
 const submitting = ref(false)
 const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
@@ -1413,6 +1495,14 @@ const dropdownPosition = ref<{ top?: number; bottom?: number; left: number } | n
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
 let abortController: AbortController | null = null
 let dataSharingCountdownTimer: number | null = null
+let compositeBindingSequence = 0
+
+// 新建本地映射行时使用稳定 ID，排序不会导致输入框重建。
+const newCompositeBinding = (groupId: number | null = null, prefix = '') => ({
+  local_id: ++compositeBindingSequence,
+  group_id: groupId,
+  prefix
+})
 
 const dataSharingNoticeDialog = ref<{
   show: boolean
@@ -1449,6 +1539,8 @@ const setGroupButtonRef = (keyId: number, el: Element | ComponentPublicInstance 
 const formData = ref({
   name: '',
   group_id: null as number | null,
+  is_composite: false,
+  composite_groups: [] as Array<ReturnType<typeof newCompositeBinding>>,
   status: 'active' as 'active' | 'inactive',
   fast_mode_policy: 'follow_request' as ApiKeyFastModePolicy,
   use_custom_key: false,
@@ -1556,6 +1648,69 @@ const groupOptions = computed(() =>
     dataSharingEnabled: group.data_sharing_enabled
   }))
 )
+
+// 切换复合模式时保留普通 Key 的原分组，前缀仍要求用户明确填写。
+const onCompositeModeChange = (enabled: boolean) => {
+  if (enabled) {
+    if (formData.value.composite_groups.length === 0) {
+      formData.value.composite_groups = [newCompositeBinding(formData.value.group_id)]
+    }
+    formData.value.is_composite = true
+    return
+  }
+  formData.value.is_composite = false
+  if (selectedKey.value?.is_composite) {
+    formData.value.group_id = null
+  } else if (formData.value.group_id === null) {
+    formData.value.group_id = formData.value.composite_groups[0]?.group_id ?? null
+  }
+}
+
+const addCompositeBinding = () => {
+  if (formData.value.composite_groups.length >= 20) return
+  formData.value.composite_groups.push(newCompositeBinding())
+}
+
+const removeCompositeBinding = (index: number) => {
+  if (formData.value.composite_groups.length <= 1) return
+  formData.value.composite_groups.splice(index, 1)
+}
+
+const moveCompositeBinding = (index: number, offset: -1 | 1) => {
+  const target = index + offset
+  if (target < 0 || target >= formData.value.composite_groups.length) return
+  const [binding] = formData.value.composite_groups.splice(index, 1)
+  if (binding) formData.value.composite_groups.splice(target, 0, binding)
+}
+
+// compositeBindingError 即时检查前缀和分组的行内错误。
+const compositeBindingError = (index: number) => {
+  const binding = formData.value.composite_groups[index]
+  if (!binding?.group_id) return t('keys.composite.groupRequired')
+  const prefix = binding.prefix.trim()
+  if (!prefix) return t('keys.composite.prefixRequired')
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(prefix)) return t('keys.composite.prefixInvalid')
+  const duplicatePrefix = formData.value.composite_groups.some(
+    (item, itemIndex) => itemIndex !== index && item.prefix.trim().toLowerCase() === prefix.toLowerCase()
+  )
+  if (duplicatePrefix) return t('keys.composite.prefixDuplicate')
+  const duplicateGroup = formData.value.composite_groups.some(
+    (item, itemIndex) => itemIndex !== index && item.group_id === binding.group_id
+  )
+  if (duplicateGroup) return t('keys.composite.groupDuplicate')
+  return ''
+}
+
+const compositeFormError = computed(() => {
+  if (!formData.value.is_composite) return ''
+  if (formData.value.composite_groups.length === 0) return t('keys.composite.mappingRequired')
+  if (formData.value.composite_groups.length > 20) return t('keys.composite.tooManyMappings')
+  for (let index = 0; index < formData.value.composite_groups.length; index++) {
+    const error = compositeBindingError(index)
+    if (error) return error
+  }
+  return ''
+})
 
 // 分组下拉搜索。
 const groupSearchQuery = ref('')
@@ -1706,6 +1861,10 @@ const editKey = (key: ApiKey) => {
   formData.value = {
     name: key.name,
     group_id: key.group_id,
+    is_composite: key.is_composite ?? false,
+    composite_groups: (key.composite_groups || []).map((binding) =>
+      newCompositeBinding(binding.group_id, binding.prefix)
+    ),
     // 后端的终态统一映射为不可用，编辑表单只提交 active/inactive。
     status: key.status === 'active' ? 'active' : 'inactive',
     fast_mode_policy: key.fast_mode_policy ?? 'follow_request',
@@ -1771,6 +1930,10 @@ const closeKeyActionMenu = () => {
 }
 
 const openGroupSelector = (key: ApiKey) => {
+	if (key.is_composite) {
+		editKey(key)
+		return
+	}
   if (groupSelectorKeyId.value === key.id) {
     groupSelectorKeyId.value = null
     dropdownPosition.value = null
@@ -1988,7 +2151,14 @@ const submitKeyForm = async (
     if (showEditModal.value && selectedKey.value) {
       const updates: UpdateApiKeyRequest = {
         name: formData.value.name,
-        group_id: formData.value.group_id,
+        group_id: formData.value.is_composite ? undefined : formData.value.group_id,
+        is_composite: formData.value.is_composite,
+        composite_groups: formData.value.is_composite
+          ? formData.value.composite_groups.map((binding) => ({
+              group_id: binding.group_id!,
+              prefix: binding.prefix.trim()
+            }))
+          : undefined,
         fast_mode_policy: formData.value.fast_mode_policy,
         ip_whitelist: ipWhitelist,
         ip_blacklist: ipBlacklist,
@@ -2010,7 +2180,14 @@ const submitKeyForm = async (
       const payload = {
         name: formData.value.name,
         scope: scope.value,
-        group_id: formData.value.group_id,
+        group_id: formData.value.is_composite ? undefined : formData.value.group_id,
+        is_composite: formData.value.is_composite,
+        composite_groups: formData.value.is_composite
+          ? formData.value.composite_groups.map((binding) => ({
+              group_id: binding.group_id!,
+              prefix: binding.prefix.trim()
+            }))
+          : undefined,
         fast_mode_policy: formData.value.fast_mode_policy,
         custom_key: customKey,
         ip_whitelist: ipWhitelist,
@@ -2054,8 +2231,13 @@ const onScopeChange = () => {
 }
 
 const handleSubmit = async () => {
-  // 分组是必填项。
-  if (formData.value.group_id === null) {
+	if (formData.value.is_composite && compositeFormError.value) {
+		appStore.showError(compositeFormError.value)
+		return
+	}
+
+  // 普通模式必须显式选择单个分组，复合转普通时同样不沿用隐式值。
+  if (!formData.value.is_composite && formData.value.group_id === null) {
     appStore.showError(t('keys.groupRequired'))
     return
   }
@@ -2072,9 +2254,23 @@ const handleSubmit = async () => {
     }
   }
 
-  const changingGroup = !showEditModal.value || selectedKey.value?.group_id !== formData.value.group_id
-  if (changingGroup && groupRequiresDataSharingNotice(formData.value.group_id)) {
-    await openDataSharingNotice(formData.value.group_id!, 'form', selectedKey.value)
+	const existingCompositeGroups = new Set(
+		selectedKey.value?.is_composite
+			? (selectedKey.value.composite_groups || []).map((binding) => binding.group_id)
+			: []
+	)
+	const newDataSharingGroup = formData.value.is_composite
+		? formData.value.composite_groups.find(
+			(binding) => !existingCompositeGroups.has(binding.group_id!) && groupRequiresDataSharingNotice(binding.group_id)
+		)
+		: null
+	const changingGroup = !showEditModal.value || selectedKey.value?.group_id !== formData.value.group_id
+  if (newDataSharingGroup?.group_id) {
+		await openDataSharingNotice(newDataSharingGroup.group_id, 'form', selectedKey.value)
+		return
+	}
+	if (!formData.value.is_composite && changingGroup && groupRequiresDataSharingNotice(formData.value.group_id)) {
+		await openDataSharingNotice(formData.value.group_id!, 'form', selectedKey.value)
     return
   }
 
@@ -2108,6 +2304,8 @@ const closeModals = () => {
   formData.value = {
     name: '',
     group_id: null,
+    is_composite: false,
+    composite_groups: [],
     status: 'active',
     fast_mode_policy: 'follow_request',
     use_custom_key: false,

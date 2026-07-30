@@ -92,3 +92,39 @@ func TestBatchImageSubscriptionMigrationUsesBoundedLockWait(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, strings.ToLower(string(content)), "set local lock_timeout = '1s'")
 }
+
+func TestContentModerationTeamAttributionMigration(t *testing.T) {
+	content, err := FS.ReadFile("225_content_moderation_team_attribution.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(content))
+	normalized := strings.Join(strings.Fields(sql), " ")
+
+	// 两类风控记录都新增 nullable 归属字段，并用有界锁等待保护在线升级。
+	require.Contains(t, normalized, "set local lock_timeout = '1s'")
+	require.Equal(t, 2, strings.Count(sql, "add column if not exists billing_user_id bigint"))
+	require.Equal(t, 2, strings.Count(sql, "add column if not exists team_id bigint"))
+
+	// 历史归属未知时保持 NULL；迁移事务不能执行无界大表回填。
+	require.NotContains(t, normalized, "update content_moderation_logs")
+	require.NotContains(t, normalized, "update content_moderation_cyber_warnings")
+
+	// 删除关联对象后保留审计记录；历史验证推迟，避免首次 DDL 扫描整表。
+	require.Contains(t, sql, "content_moderation_logs_billing_user_id_fkey")
+	require.Contains(t, sql, "content_moderation_logs_team_id_fkey")
+	require.Contains(t, sql, "content_moderation_cyber_warnings_billing_user_id_fkey")
+	require.Contains(t, sql, "content_moderation_cyber_warnings_team_id_fkey")
+	require.Equal(t, 4, strings.Count(sql, "on delete set null"))
+	require.Equal(t, 4, strings.Count(sql, "not valid"))
+
+	// 既有表索引必须从事务迁移中拆出。
+	require.NotContains(t, normalized, "create index")
+
+	indexContent, err := FS.ReadFile("225a_content_moderation_team_attribution_indexes_notx.sql")
+	require.NoError(t, err)
+	indexSQL := strings.ToLower(string(indexContent))
+	require.Equal(t, 4, strings.Count(indexSQL, "create index concurrently if not exists"))
+	require.Contains(t, indexSQL, "idx_content_moderation_logs_billing_user_created_at")
+	require.Contains(t, indexSQL, "idx_content_moderation_logs_team_created_at")
+	require.Contains(t, indexSQL, "idx_content_moderation_cyber_warnings_billing_user_created_at")
+	require.Contains(t, indexSQL, "idx_content_moderation_cyber_warnings_team_created_at")
+}

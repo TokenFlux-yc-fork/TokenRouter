@@ -843,7 +843,6 @@ affiliates: {
       columns: {
         name: 'Name',
         id: 'ID',
-        sortOrder: 'Sort',
         platform: 'API Format',
         displayBrand: 'Brand Type',
         rateMultiplier: 'Rate Multiplier',
@@ -881,8 +880,6 @@ affiliates: {
         description: 'Description',
         platform: 'API Format',
         displayBrand: 'Brand Type',
-        sortOrder: 'Sort',
-        sortOrderHint: 'Lower numbers appear earlier in the model marketplace',
         rateMultiplier: 'Rate Multiplier',
         status: 'Status',
         exclusive: 'Exclusive Group',

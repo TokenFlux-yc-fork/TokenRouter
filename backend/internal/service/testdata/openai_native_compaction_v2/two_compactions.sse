@@ -1,0 +1,8 @@
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"cmp_first","type":"compaction","status":"completed","encrypted_content":"fixture-first"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"cmp_second","type":"compaction_summary","status":"completed","encrypted_content":"fixture-second"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_two","status":"completed","output":[]}}

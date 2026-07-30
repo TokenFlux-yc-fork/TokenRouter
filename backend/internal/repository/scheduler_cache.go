@@ -886,10 +886,14 @@ func buildSchedulerMetadataAccount(account service.Account) service.Account {
 		SessionWindowStatus:     account.SessionWindowStatus,
 		ParentAccountID:         account.ParentAccountID,
 		QuotaDimension:          account.QuotaDimension,
-		AccountGroups:           filterSchedulerAccountGroups(account.AccountGroups),
-		GroupIDs:                filterSchedulerGroupIDs(account.GroupIDs, account.AccountGroups),
-		Credentials:             filterSchedulerCredentials(account.Credentials),
-		Extra:                   filterSchedulerExtra(account.Extra),
+		OpenAINativeCompactionCapabilities: append(
+			[]service.OpenAINativeCompactionCapability(nil),
+			account.OpenAINativeCompactionCapabilities...,
+		),
+		AccountGroups: filterSchedulerAccountGroups(account.AccountGroups),
+		GroupIDs:      filterSchedulerGroupIDs(account.GroupIDs, account.AccountGroups),
+		Credentials:   filterSchedulerCredentials(account.Credentials),
+		Extra:         filterSchedulerExtra(account.Extra),
 	}
 }
 

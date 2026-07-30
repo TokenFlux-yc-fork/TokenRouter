@@ -11,6 +11,7 @@ import (
 
 	dbent "github.com/TokenFlux/TokenRouter/ent"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/group"
 	"github.com/TokenFlux/TokenRouter/ent/schema/mixins"
 	"github.com/TokenFlux/TokenRouter/ent/user"
@@ -139,6 +140,7 @@ func createAPIKeyRecord(ctx context.Context, client *dbent.Client, key *service.
 		SetKey(key.Key).
 		SetName(key.Name).
 		SetStatus(key.Status).
+		SetIsComposite(key.IsComposite).
 		SetFastModePolicy(apiKeyFastModePolicyForPersistence(key.FastModePolicy)).
 		SetNillableGroupID(key.GroupID).
 		SetNillableLastUsedAt(key.LastUsedAt).
@@ -160,11 +162,50 @@ func createAPIKeyRecord(ctx context.Context, client *dbent.Client, key *service.
 		builder.SetIPBlacklist(key.IPBlacklist)
 	}
 
-	return builder.Save(ctx)
+	created, err := builder.Save(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := replaceCompositeGroupRecords(ctx, client, created.ID, key.CompositeGroups); err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// replaceCompositeGroupRecords 在调用方事务内完整替换复合 Key 的分组映射。
+func replaceCompositeGroupRecords(ctx context.Context, client *dbent.Client, apiKeyID int64, bindings []service.APIKeyCompositeGroup) error {
+	if _, err := client.APIKeyCompositeGroup.Delete().
+		Where(apikeycompositegroup.APIKeyIDEQ(apiKeyID)).
+		Exec(ctx); err != nil {
+		return err
+	}
+	if len(bindings) == 0 {
+		return nil
+	}
+	builders := make([]*dbent.APIKeyCompositeGroupCreate, 0, len(bindings))
+	for _, binding := range bindings {
+		builders = append(builders, client.APIKeyCompositeGroup.Create().
+			SetAPIKeyID(apiKeyID).
+			SetGroupID(binding.GroupID).
+			SetPrefix(binding.Prefix).
+			SetNormalizedPrefix(binding.NormalizedPrefix).
+			SetSortOrder(binding.SortOrder).
+			SetDataSharingNoticeVersion(binding.DataSharingNoticeVersion).
+			SetNillableDataSharingConfirmedAt(binding.DataSharingConfirmedAt))
+	}
+	return client.APIKeyCompositeGroup.CreateBulk(builders...).Exec(ctx)
+}
+
+// withAPIKeyCompositeGroups 统一按用户配置顺序加载复合映射及分组。
+func withAPIKeyCompositeGroups(query *dbent.APIKeyQuery) *dbent.APIKeyQuery {
+	return query.WithCompositeGroups(func(q *dbent.APIKeyCompositeGroupQuery) {
+		q.Order(dbent.Asc(apikeycompositegroup.FieldSortOrder), dbent.Asc(apikeycompositegroup.FieldID)).
+			WithGroup()
+	})
 }
 
 func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
-	m, err := r.activeQuery().
+	m, err := withAPIKeyCompositeGroups(r.activeQuery()).
 		Where(apikey.IDEQ(id)).
 		WithUser().
 		WithGroup().
@@ -198,7 +239,7 @@ func (r *apiKeyRepository) GetKeyAndOwnerID(ctx context.Context, id int64) (stri
 }
 
 func (r *apiKeyRepository) GetByKey(ctx context.Context, key string) (*service.APIKey, error) {
-	m, err := r.activeQuery().
+	m, err := withAPIKeyCompositeGroups(r.activeQuery()).
 		Where(apikey.KeyEQ(key)).
 		WithUser(func(q *dbent.UserQuery) {
 			q.WithAllowedGroups(func(gq *dbent.GroupQuery) {
@@ -227,6 +268,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 			apikey.FieldTeamOwnerDisabled,
 			apikey.FieldCreatedAt,
 			apikey.FieldGroupID,
+			apikey.FieldIsComposite,
 			apikey.FieldName,
 			apikey.FieldStatus,
 			apikey.FieldFastModePolicy,
@@ -308,6 +350,10 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				group.FieldPeakRateMultiplier,
 			)
 		}).
+		WithCompositeGroups(func(q *dbent.APIKeyCompositeGroupQuery) {
+			q.Order(dbent.Asc(apikeycompositegroup.FieldSortOrder), dbent.Asc(apikeycompositegroup.FieldID)).
+				WithGroup()
+		}).
 		Only(ctx)
 	if err != nil {
 		if dbent.IsNotFound(err) {
@@ -319,6 +365,21 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 }
 
 func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) error {
+	// 复合映射与 API Key 主记录必须原子更新，避免认证读取到半套配置。
+	if dbent.TxFromContext(ctx) == nil {
+		tx, err := r.client.Tx(ctx)
+		if err == nil {
+			defer func() { _ = tx.Rollback() }()
+			opCtx := dbent.NewTxContext(ctx, tx)
+			if err := r.Update(opCtx, key); err != nil {
+				return err
+			}
+			return tx.Commit()
+		}
+		if !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+	}
 	// 使用原子操作：将软删除检查与更新合并到同一语句，避免竞态条件。
 	// 之前的实现先检查 Exist 再 UpdateOneID，若在两步之间发生软删除，
 	// 则会更新已删除的记录。
@@ -330,6 +391,7 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).
 		SetName(key.Name).
 		SetStatus(key.Status).
+		SetIsComposite(key.IsComposite).
 		SetFastModePolicy(apiKeyFastModePolicyForPersistence(key.FastModePolicy)).
 		SetQuota(key.Quota).
 		SetQuotaUsed(key.QuotaUsed).
@@ -403,6 +465,9 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 	if affected == 0 {
 		// 更新影响行数为 0，说明记录不存在或已被软删除。
 		return service.ErrAPIKeyNotFound
+	}
+	if err := replaceCompositeGroupRecords(ctx, client, key.ID, key.CompositeGroups); err != nil {
+		return err
 	}
 
 	// 使用同一时间戳回填，避免并发删除导致二次查询失败。
@@ -511,9 +576,12 @@ func (r *apiKeyRepository) apiKeyListByUserIDQuery(userID int64, filters service
 	}
 	if filters.GroupID != nil {
 		if *filters.GroupID == 0 {
-			q = q.Where(apikey.GroupIDIsNil())
+			q = q.Where(apikey.GroupIDIsNil(), apikey.IsCompositeEQ(false))
 		} else {
-			q = q.Where(apikey.GroupIDEQ(*filters.GroupID))
+			q = q.Where(apikey.Or(
+				apikey.GroupIDEQ(*filters.GroupID),
+				apikey.HasCompositeGroupsWith(apikeycompositegroup.GroupIDEQ(*filters.GroupID)),
+			))
 		}
 	}
 	// scope 只接受已定义的个人和团队范围，空值表示不限制。
@@ -539,8 +607,8 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 		return r.listByUserIDWithUsageSort(ctx, q, params, total)
 	}
 
-	keysQuery := q.
-		WithGroup().
+	keysQuery := withAPIKeyCompositeGroups(q.WithGroup())
+	keysQuery = keysQuery.
 		Offset(params.Offset()).
 		Limit(params.Limit())
 	for _, order := range apiKeyListOrder(params) {
@@ -565,8 +633,7 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 
 // ListAllByUserID 返回经过筛选的全部 API Key，供依赖运行时数据的排序逻辑使用。
 func (r *apiKeyRepository) ListAllByUserID(ctx context.Context, userID int64, filters service.APIKeyListFilters) ([]service.APIKey, error) {
-	keys, err := r.apiKeyListByUserIDQuery(userID, filters).
-		WithGroup().
+	keys, err := withAPIKeyCompositeGroups(r.apiKeyListByUserIDQuery(userID, filters).WithGroup()).
 		Order(dbent.Asc(apikey.FieldID)).
 		All(ctx)
 	if err != nil {
@@ -677,8 +744,7 @@ func latestUsageLogIPsQuery(apiKeyIDs []int64, dialectName string) (string, []an
 }
 
 func (r *apiKeyRepository) listByUserIDWithUsageSort(ctx context.Context, q *dbent.APIKeyQuery, params pagination.PaginationParams, total int) ([]service.APIKey, *pagination.PaginationResult, error) {
-	keys, err := q.
-		WithGroup().
+	keys, err := withAPIKeyCompositeGroups(q.WithGroup()).
 		Order(dbent.Desc(apikey.FieldID)).
 		All(ctx)
 	if err != nil {
@@ -787,15 +853,18 @@ func (r *apiKeyRepository) ExistsByKey(ctx context.Context, key string) (bool, e
 }
 
 func (r *apiKeyRepository) ListByGroupID(ctx context.Context, groupID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
-	q := r.activeQuery().Where(apikey.GroupIDEQ(groupID))
+	q := r.activeQuery().Where(apikey.Or(
+		apikey.GroupIDEQ(groupID),
+		apikey.HasCompositeGroupsWith(apikeycompositegroup.GroupIDEQ(groupID)),
+	))
 
 	total, err := q.Count(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	keysQuery := q.
-		WithUser().
+	keysQuery := withAPIKeyCompositeGroups(q.WithUser().WithGroup())
+	keysQuery = keysQuery.
 		Offset(params.Offset()).
 		Limit(params.Limit())
 	for _, order := range apiKeyListOrder(params) {
@@ -862,7 +931,10 @@ func (r *apiKeyRepository) SearchAPIKeys(ctx context.Context, userID int64, keyw
 		q = q.Where(apikey.NameContainsFold(keyword))
 	}
 
-	keys, err := q.Limit(limit).Order(dbent.Desc(apikey.FieldID)).All(ctx)
+	keys, err := withAPIKeyCompositeGroups(q.WithGroup()).
+		Limit(limit).
+		Order(dbent.Desc(apikey.FieldID)).
+		All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -876,11 +948,18 @@ func (r *apiKeyRepository) SearchAPIKeys(ctx context.Context, userID int64, keyw
 
 // ClearGroupIDByGroupID 将指定分组的所有 API Key 的 group_id 设为 nil
 func (r *apiKeyRepository) ClearGroupIDByGroupID(ctx context.Context, groupID int64) (int64, error) {
-	n, err := r.client.APIKey.Update().
+	client := clientFromContext(ctx, r.client)
+	n, err := client.APIKey.Update().
 		Where(apikey.GroupIDEQ(groupID), apikey.DeletedAtIsNil()).
 		ClearGroupID().
 		Save(ctx)
-	return int64(n), err
+	if err != nil {
+		return 0, err
+	}
+	deleted, err := client.APIKeyCompositeGroup.Delete().
+		Where(apikeycompositegroup.GroupIDEQ(groupID)).
+		Exec(ctx)
+	return int64(n + deleted), err
 }
 
 // UpdateGroupIDByUserAndGroup 将用户下绑定 oldGroupID 的所有 Key 迁移到 newGroupID
@@ -890,12 +969,42 @@ func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, user
 		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil()).
 		SetGroupID(newGroupID).
 		Save(ctx)
-	return int64(n), err
+	if err != nil {
+		return 0, err
+	}
+	// 目标分组已存在时保留其原前缀，并删除旧分组映射避免唯一约束冲突。
+	bindings, err := client.APIKeyCompositeGroup.Query().
+		Where(apikeycompositegroup.GroupIDEQ(oldGroupID), apikeycompositegroup.HasAPIKeyWith(apikey.UserIDEQ(userID), apikey.DeletedAtIsNil())).
+		All(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, binding := range bindings {
+		exists, err := client.APIKeyCompositeGroup.Query().
+			Where(apikeycompositegroup.APIKeyIDEQ(binding.APIKeyID), apikeycompositegroup.GroupIDEQ(newGroupID)).
+			Exist(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if exists {
+			if err := client.APIKeyCompositeGroup.DeleteOneID(binding.ID).Exec(ctx); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if _, err := client.APIKeyCompositeGroup.UpdateOneID(binding.ID).SetGroupID(newGroupID).Save(ctx); err != nil {
+			return 0, err
+		}
+	}
+	return int64(n + len(bindings)), nil
 }
 
 // CountByGroupID 获取分组的 API Key 数量
 func (r *apiKeyRepository) CountByGroupID(ctx context.Context, groupID int64) (int64, error) {
-	count, err := r.activeQuery().Where(apikey.GroupIDEQ(groupID)).Count(ctx)
+	count, err := r.activeQuery().Where(apikey.Or(
+		apikey.GroupIDEQ(groupID),
+		apikey.HasCompositeGroupsWith(apikeycompositegroup.GroupIDEQ(groupID)),
+	)).Count(ctx)
 	return int64(count), err
 }
 
@@ -912,7 +1021,10 @@ func (r *apiKeyRepository) ListKeysByUserID(ctx context.Context, userID int64) (
 
 func (r *apiKeyRepository) ListKeysByGroupID(ctx context.Context, groupID int64) ([]string, error) {
 	keys, err := r.activeQuery().
-		Where(apikey.GroupIDEQ(groupID)).
+		Where(apikey.Or(
+			apikey.GroupIDEQ(groupID),
+			apikey.HasCompositeGroupsWith(apikeycompositegroup.GroupIDEQ(groupID)),
+		)).
 		Select(apikey.FieldKey).
 		Strings(ctx)
 	if err != nil {
@@ -1054,6 +1166,7 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		CreatedAt:                             m.CreatedAt,
 		UpdatedAt:                             m.UpdatedAt,
 		GroupID:                               m.GroupID,
+		IsComposite:                           m.IsComposite,
 		Quota:                                 m.Quota,
 		QuotaUsed:                             m.QuotaUsed,
 		ExpiresAt:                             m.ExpiresAt,
@@ -1099,6 +1212,28 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 	}
 	if m.Edges.Group != nil {
 		out.Group = groupEntityToService(m.Edges.Group)
+	}
+	if rows, err := m.Edges.CompositeGroupsOrErr(); err == nil {
+		out.CompositeGroups = make([]service.APIKeyCompositeGroup, 0, len(rows))
+		for _, row := range rows {
+			if row == nil {
+				continue
+			}
+			binding := service.APIKeyCompositeGroup{
+				ID:                       row.ID,
+				APIKeyID:                 row.APIKeyID,
+				GroupID:                  row.GroupID,
+				Prefix:                   row.Prefix,
+				NormalizedPrefix:         row.NormalizedPrefix,
+				SortOrder:                row.SortOrder,
+				DataSharingNoticeVersion: row.DataSharingNoticeVersion,
+				DataSharingConfirmedAt:   row.DataSharingConfirmedAt,
+			}
+			if row.Edges.Group != nil {
+				binding.Group = groupEntityToService(row.Edges.Group)
+			}
+			out.CompositeGroups = append(out.CompositeGroups, binding)
+		}
 	}
 	return out
 }

@@ -633,6 +633,9 @@ export interface SystemSettings {
 
   // Payment configuration
   payment_enabled: boolean;
+  // 页面功能开关
+  team_enabled: boolean;
+  data_sharing_enabled: boolean;
   risk_control_enabled: boolean;
   cyber_session_block_enabled: boolean;
   cyber_session_block_ttl_seconds: number;
@@ -917,6 +920,9 @@ export interface UpdateSettingsRequest {
   user_prompt_replacement_config?: UserPromptReplacementConfig;
   // Payment configuration
   payment_enabled?: boolean;
+  // 页面功能开关
+  team_enabled?: boolean;
+  data_sharing_enabled?: boolean;
   risk_control_enabled?: boolean;
   cyber_session_block_enabled?: boolean;
   cyber_session_block_ttl_seconds?: number;

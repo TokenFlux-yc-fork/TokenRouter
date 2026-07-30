@@ -567,7 +567,7 @@ const DataTableStubWithUser = {
 }
 
 describe('admin UsageTable deleted-user badge', () => {
-  it('constrains long member emails in compact mode and keeps the full address in the title', () => {
+  it('right-aligns compact members on mobile and constrains long emails on desktop', () => {
     const email = 'member.with.a.very.long.address@sub2api.example.com'
     const wrapper = mount(UsageTable, {
       props: {
@@ -587,7 +587,12 @@ describe('admin UsageTable deleted-user badge', () => {
       },
     })
 
-    expect(wrapper.get('[data-test="usage-user-cell"]').classes()).toContain('w-32')
+    expect(wrapper.get('[data-test="usage-user-cell"]').classes()).toEqual(expect.arrayContaining([
+      'justify-end',
+      'md:w-32',
+      'md:justify-start',
+    ]))
+    expect(wrapper.get('[data-test="usage-user-cell"]').classes()).not.toContain('w-32')
     expect(wrapper.get('[data-test="usage-user-email"]').classes()).toContain('truncate')
     expect(wrapper.get('[data-test="usage-user-email"]').text()).toBe('m***s')
     expect(wrapper.get('[data-test="usage-user-email"]').attributes('title')).toBe(email)

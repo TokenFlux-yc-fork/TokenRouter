@@ -23,13 +23,16 @@ import (
 
 // openaiStreamingResult streaming response result
 type openaiStreamingResult struct {
-	usage            *OpenAIUsage
-	firstTokenMs     *int
-	responseID       string
-	clientDisconnect bool
-	imageCount       int
-	imageOutputSizes []string
-	responseBody     []byte
+	usage             *OpenAIUsage
+	usageObserved     bool
+	firstTokenMs      *int
+	responseID        string
+	clientDisconnect  bool
+	deliveryCommitted bool
+	nativeValidation  OpenAINativeCompactionValidationResult
+	imageCount        int
+	imageOutputSizes  []string
+	responseBody      []byte
 }
 
 type openaiNonStreamingResult struct {
@@ -47,6 +50,9 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (*openaiStreamingResult, error) {
+	if IsOpenAINativeRemoteCompactionV2(c) {
+		return s.handleOpenAINativeCompactionStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, false)
+	}
 	outputBaseline := captureOpenAIStreamOutputBaseline(c)
 	firstOutputTimeout := time.Duration(0)
 	if account != nil && account.Platform == PlatformOpenAI {
@@ -1256,6 +1262,11 @@ func extractOpenAIResponseIDFromJSONBytes(body []byte) string {
 }
 
 func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *gin.Context, account *Account, responseID string) {
+	// native-v2 continuation identity is published atomically by the handler's
+	// compatibility attempt only after downstream delivery commits.
+	if IsOpenAINativeRemoteCompactionV2(c) {
+		return
+	}
 	if s == nil || account == nil || account.ID <= 0 {
 		return
 	}

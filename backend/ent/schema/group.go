@@ -283,6 +283,8 @@ func (Group) Fields() []ent.Field {
 func (Group) Edges() []ent.Edge {
 	return []ent.Edge{
 		edge.To("api_keys", APIKey.Type),
+		edge.To("api_key_composite_groups", APIKeyCompositeGroup.Type).
+			Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("usage_logs", UsageLog.Type),
 		edge.From("accounts", Account.Type).
 			Ref("groups").

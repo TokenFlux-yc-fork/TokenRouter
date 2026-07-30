@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/group"
 	"github.com/TokenFlux/TokenRouter/ent/team"
 	"github.com/TokenFlux/TokenRouter/ent/usagelog"
@@ -124,6 +125,20 @@ func (_c *APIKeyCreate) SetGroupID(v int64) *APIKeyCreate {
 func (_c *APIKeyCreate) SetNillableGroupID(v *int64) *APIKeyCreate {
 	if v != nil {
 		_c.SetGroupID(*v)
+	}
+	return _c
+}
+
+// SetIsComposite sets the "is_composite" field.
+func (_c *APIKeyCreate) SetIsComposite(v bool) *APIKeyCreate {
+	_c.mutation.SetIsComposite(v)
+	return _c
+}
+
+// SetNillableIsComposite sets the "is_composite" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableIsComposite(v *bool) *APIKeyCreate {
+	if v != nil {
+		_c.SetIsComposite(*v)
 	}
 	return _c
 }
@@ -431,6 +446,21 @@ func (_c *APIKeyCreate) AddUsageLogs(v ...*UsageLog) *APIKeyCreate {
 	return _c.AddUsageLogIDs(ids...)
 }
 
+// AddCompositeGroupIDs adds the "composite_groups" edge to the APIKeyCompositeGroup entity by IDs.
+func (_c *APIKeyCreate) AddCompositeGroupIDs(ids ...int64) *APIKeyCreate {
+	_c.mutation.AddCompositeGroupIDs(ids...)
+	return _c
+}
+
+// AddCompositeGroups adds the "composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_c *APIKeyCreate) AddCompositeGroups(v ...*APIKeyCompositeGroup) *APIKeyCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddCompositeGroupIDs(ids...)
+}
+
 // SetTeam sets the "team" edge to the Team entity.
 func (_c *APIKeyCreate) SetTeam(v *Team) *APIKeyCreate {
 	return _c.SetTeamID(v.ID)
@@ -490,6 +520,10 @@ func (_c *APIKeyCreate) defaults() error {
 	if _, ok := _c.mutation.TeamOwnerDisabled(); !ok {
 		v := apikey.DefaultTeamOwnerDisabled
 		_c.mutation.SetTeamOwnerDisabled(v)
+	}
+	if _, ok := _c.mutation.IsComposite(); !ok {
+		v := apikey.DefaultIsComposite
+		_c.mutation.SetIsComposite(v)
 	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := apikey.DefaultStatus
@@ -571,6 +605,9 @@ func (_c *APIKeyCreate) check() error {
 		if err := apikey.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "APIKey.name": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.IsComposite(); !ok {
+		return &ValidationError{Name: "is_composite", err: errors.New(`ent: missing required field "APIKey.is_composite"`)}
 	}
 	if _, ok := _c.mutation.Status(); !ok {
 		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "APIKey.status"`)}
@@ -671,6 +708,10 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
 		_node.Name = value
+	}
+	if value, ok := _c.mutation.IsComposite(); ok {
+		_spec.SetField(apikey.FieldIsComposite, field.TypeBool, value)
+		_node.IsComposite = value
 	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -799,6 +840,22 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.CompositeGroupsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.CompositeGroupsTable,
+			Columns: []string{apikey.CompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -986,6 +1043,18 @@ func (u *APIKeyUpsert) UpdateGroupID() *APIKeyUpsert {
 // ClearGroupID clears the value of the "group_id" field.
 func (u *APIKeyUpsert) ClearGroupID() *APIKeyUpsert {
 	u.SetNull(apikey.FieldGroupID)
+	return u
+}
+
+// SetIsComposite sets the "is_composite" field.
+func (u *APIKeyUpsert) SetIsComposite(v bool) *APIKeyUpsert {
+	u.Set(apikey.FieldIsComposite, v)
+	return u
+}
+
+// UpdateIsComposite sets the "is_composite" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateIsComposite() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldIsComposite)
 	return u
 }
 
@@ -1530,6 +1599,20 @@ func (u *APIKeyUpsertOne) UpdateGroupID() *APIKeyUpsertOne {
 func (u *APIKeyUpsertOne) ClearGroupID() *APIKeyUpsertOne {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearGroupID()
+	})
+}
+
+// SetIsComposite sets the "is_composite" field.
+func (u *APIKeyUpsertOne) SetIsComposite(v bool) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetIsComposite(v)
+	})
+}
+
+// UpdateIsComposite sets the "is_composite" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateIsComposite() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateIsComposite()
 	})
 }
 
@@ -2301,6 +2384,20 @@ func (u *APIKeyUpsertBulk) UpdateGroupID() *APIKeyUpsertBulk {
 func (u *APIKeyUpsertBulk) ClearGroupID() *APIKeyUpsertBulk {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearGroupID()
+	})
+}
+
+// SetIsComposite sets the "is_composite" field.
+func (u *APIKeyUpsertBulk) SetIsComposite(v bool) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetIsComposite(v)
+	})
+}
+
+// UpdateIsComposite sets the "is_composite" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateIsComposite() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateIsComposite()
 	})
 }
 

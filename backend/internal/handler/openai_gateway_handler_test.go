@@ -1058,6 +1058,35 @@ func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T)
 	require.Contains(t, w.Body.String(), "previous_response_id")
 }
 
+func TestOpenAIResponses_NativeCompactionAllowsHTTPContinuationPreviousResponseID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := `{"model":"gpt-5.1","stream":true,"previous_response_id":"resp_native_previous","input":[{"type":"compaction_trigger"}]}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+
+	groupID := int64(2)
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID:      101,
+		GroupID: &groupID,
+		User:    &service.User{ID: 1},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
+		UserID:      1,
+		Concurrency: 1,
+	})
+
+	h := newOpenAIHandlerForPreviousResponseIDValidation(t, nil)
+	h.Responses(c)
+
+	require.True(t, service.IsOpenAINativeRemoteCompactionV2(c))
+	require.NotEqual(t, http.StatusBadRequest, w.Code)
+	require.NotContains(t, w.Body.String(), "previous_response_id is only supported on Responses WebSocket v2")
+}
+
 func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceDoesNotSuggestPreviousResponseReuse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1385,6 +1414,50 @@ func (r *contentModerationHandlerSettingRepo) GetAll(ctx context.Context) (map[s
 func (r *contentModerationHandlerSettingRepo) Delete(ctx context.Context, key string) error {
 	delete(r.values, key)
 	return nil
+}
+
+// cyberSessionBlockHandlerCacheStub 模拟已命中的会话屏蔽缓存，并记录读取次数。
+type cyberSessionBlockHandlerCacheStub struct {
+	blocked   bool
+	readCalls int
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) GetSessionAccountID(context.Context, int64, string) (int64, error) {
+	return 0, errors.New("not found")
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) SetSessionAccountID(context.Context, int64, string, int64, time.Duration) error {
+	return nil
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) RefreshSessionTTL(context.Context, int64, string, time.Duration) error {
+	return nil
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) DeleteSessionAccountID(context.Context, int64, string) error {
+	return nil
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) SetSessionOwnerGroupID(context.Context, int64, string, string, int64, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) GetSessionOwnerGroupID(context.Context, int64, string, string) (int64, error) {
+	return 0, errors.New("not found")
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) RefreshSessionOwnerTTL(context.Context, int64, string, string, time.Duration) error {
+	return nil
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) SetCyberSessionBlocked(context.Context, string, time.Duration) error {
+	s.blocked = true
+	return nil
+}
+
+func (s *cyberSessionBlockHandlerCacheStub) IsCyberSessionBlocked(context.Context, string) (bool, error) {
+	s.readCalls++
+	return s.blocked, nil
 }
 
 type contentModerationHandlerTestRepo struct {
@@ -1875,6 +1948,67 @@ func TestOpenAIRecordCyberPolicyIfMarked_SkipsSideEffectsOutOfScope(t *testing.T
 	require.False(t, handled)
 	require.Empty(t, repo.cyberWarnings)
 	require.False(t, c.GetBool(cyberPolicyRecordedKey))
+}
+
+func TestOpenAIRejectCyberSessionBlocked_OnlyChecksRiskControlGroups(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	selectedGroupID := int64(101)
+	outOfScopeGroupID := int64(202)
+	cfg := service.ContentModerationConfig{
+		AllGroups: false,
+		GroupIDs:  []int64{selectedGroupID},
+	}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	settingRepo := &contentModerationHandlerSettingRepo{values: map[string]string{
+		service.SettingKeyRiskControlEnabled:          "true",
+		service.SettingKeyContentModerationConfig:     string(rawCfg),
+		service.SettingKeyCyberSessionBlockEnabled:    "true",
+		service.SettingKeyCyberSessionBlockTTLSeconds: "3600",
+	}}
+	cache := &cyberSessionBlockHandlerCacheStub{blocked: true}
+	gatewaySvc := service.NewOpenAIGatewayService(
+		nil, nil, nil, nil, nil, nil, cache, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, service.NewSettingService(settingRepo, nil), nil, nil,
+	)
+	moderationSvc := service.NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil)
+	h := &OpenAIGatewayHandler{
+		gatewayService:           gatewaySvc,
+		contentModerationService: moderationSvc,
+	}
+	body := []byte(`{"prompt_cache_key":"cyber-scope-session"}`)
+	tests := []struct {
+		name        string
+		groupID     int64
+		wantBlocked bool
+		wantReads   int
+	}{
+		{name: "未纳入风控的分组放行", groupID: outOfScopeGroupID, wantBlocked: false, wantReads: 0},
+		{name: "已纳入风控的分组保持屏蔽", groupID: selectedGroupID, wantBlocked: true, wantReads: 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cache.readCalls = 0
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+			groupID := tc.groupID
+			apiKey := &service.APIKey{ID: 1001, GroupID: &groupID}
+
+			blocked := h.rejectIfCyberSessionBlocked(c, apiKey, body, "gpt-5.1", cyberBlockFormatResponses)
+
+			require.Equal(t, tc.wantBlocked, blocked)
+			require.Equal(t, tc.wantReads, cache.readCalls)
+			if tc.wantBlocked {
+				require.Equal(t, http.StatusForbidden, w.Code)
+				require.Contains(t, w.Body.String(), "session_blocked_by_cyber_policy")
+			} else {
+				require.Empty(t, w.Body.String())
+			}
+		})
+	}
 }
 
 func TestOpenAIResponsesWebSocket_PassthroughUsageLogPersistsUserAgentAndReasoningEffort(t *testing.T) {

@@ -56,7 +56,11 @@ type APIKey struct {
 	Key               string
 	Name              string
 	GroupID           *int64
-	Status            string
+	// IsComposite 表示该 Key 通过模型前缀选择多个分组。
+	IsComposite bool
+	// CompositeGroups 按用户配置顺序保存复合 Key 的分组映射。
+	CompositeGroups []APIKeyCompositeGroup
+	Status          string
 	// FastModePolicy 控制该 Key 的请求级 Fast 模式，系统策略仍拥有更高优先级。
 	FastModePolicy string
 	IPWhitelist    []string
@@ -101,6 +105,21 @@ type APIKey struct {
 	Window5hStart *time.Time // Start of current 5h window
 	Window1dStart *time.Time // Start of current 1d window
 	Window7dStart *time.Time // Start of current 7d window
+}
+
+// APIKeyCompositeGroup 表示复合 API Key 的一个分组前缀映射。
+type APIKeyCompositeGroup struct {
+	ID                       int64
+	APIKeyID                 int64
+	GroupID                  int64
+	Prefix                   string
+	NormalizedPrefix         string
+	SortOrder                int
+	DataSharingNoticeVersion int
+	DataSharingConfirmedAt   *time.Time
+	// UserGroupRPMOverride 是认证快照中的请求期配置，不写入映射表。
+	UserGroupRPMOverride *int
+	Group                *Group
 }
 
 func (k *APIKey) IsActive() bool {

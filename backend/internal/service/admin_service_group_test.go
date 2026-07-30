@@ -35,6 +35,7 @@ type groupRepoStubForAdmin struct {
 	allowForceHealthCheck      bool
 	forceHealthCheckCalls      int
 	forceHealthCheckErr        error
+	groupSortOrderLockCalls    int
 }
 
 func (s *groupRepoStubForAdmin) Create(_ context.Context, g *Group) error {
@@ -148,6 +149,12 @@ func (s *groupRepoStubForAdmin) ForceHealthCheck(_ context.Context, _ int64) err
 	}
 	s.forceHealthCheckCalls++
 	return s.forceHealthCheckErr
+}
+
+// LockGroupSortOrder 记录创建流程是否申请了排序位置锁。
+func (s *groupRepoStubForAdmin) LockGroupSortOrder(_ context.Context) error {
+	s.groupSortOrderLockCalls++
+	return nil
 }
 
 func TestAdminService_ListGroups_PassesSortParams(t *testing.T) {
@@ -452,6 +459,52 @@ func TestAdminService_CreateGroup_WithImagePricing(t *testing.T) {
 	require.InDelta(t, 0.10, *repo.created.ImagePrice1K, 0.0001)
 	require.InDelta(t, 0.15, *repo.created.ImagePrice2K, 0.0001)
 	require.InDelta(t, 0.30, *repo.created.ImagePrice4K, 0.0001)
+}
+
+func TestAdminService_CreateGroup_AppendsSortOrder(t *testing.T) {
+	repo := &groupRepoStubForAdmin{
+		listWithFiltersGroups: []Group{{ID: 9, SortOrder: 40}},
+	}
+	svc := &adminServiceImpl{
+		groupRepo:          repo,
+		groupSortOrderRepo: repo,
+	}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:           "appended-group",
+		RateMultiplier: 1,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 50, group.SortOrder)
+	require.Equal(t, 50, repo.created.SortOrder)
+	require.Equal(t, 1, repo.groupSortOrderLockCalls)
+	require.Equal(t, pagination.PaginationParams{
+		Page:      1,
+		PageSize:  1,
+		SortBy:    "sort_order",
+		SortOrder: "desc",
+	}, repo.listWithFiltersParams)
+}
+
+func TestAdminService_CreateGroup_PreservesExplicitSortOrder(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{
+		groupRepo:          repo,
+		groupSortOrderRepo: repo,
+	}
+	explicitSortOrder := 5
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:           "explicit-sort-group",
+		RateMultiplier: 1,
+		SortOrder:      &explicitSortOrder,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, explicitSortOrder, group.SortOrder)
+	require.Equal(t, 0, repo.groupSortOrderLockCalls)
+	require.Equal(t, 0, repo.listWithFiltersCalls)
 }
 
 func TestAdminService_CreateGroup_WithVideoPricing(t *testing.T) {
@@ -1448,8 +1501,22 @@ func (s *groupRepoStubForInvalidRequestFallback) List(_ context.Context, _ pagin
 	panic("unexpected List call")
 }
 
-func (s *groupRepoStubForInvalidRequestFallback) ListWithFilters(_ context.Context, _ pagination.PaginationParams, _, _, _ string, _ *bool) ([]Group, *pagination.PaginationResult, error) {
-	panic("unexpected ListWithFilters call")
+func (s *groupRepoStubForInvalidRequestFallback) ListWithFilters(_ context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]Group, *pagination.PaginationResult, error) {
+	// 创建流程只允许查询当前最大的分组排序值。
+	if params.Page != 1 || params.PageSize != 1 || params.SortBy != "sort_order" || params.SortOrder != "desc" || platform != "" || status != "" || search != "" || isExclusive != nil {
+		panic("unexpected ListWithFilters call")
+	}
+	var last *Group
+	for _, group := range s.groups {
+		group := group
+		if last == nil || group.SortOrder > last.SortOrder {
+			last = group
+		}
+	}
+	if last == nil {
+		return nil, &pagination.PaginationResult{Page: 1, PageSize: 1}, nil
+	}
+	return []Group{*last}, &pagination.PaginationResult{Total: int64(len(s.groups)), Page: 1, PageSize: 1}, nil
 }
 
 func (s *groupRepoStubForInvalidRequestFallback) ListActive(_ context.Context) ([]Group, error) {

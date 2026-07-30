@@ -306,7 +306,7 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		AccountID:             *job.AccountID,
 		RequestID:             strings.TrimSpace(requestID),
 		Model:                 job.Model,
-		RequestedModel:        job.Model,
+		RequestedModel:        batchImageRequestedModel(job),
 		InboundEndpoint:       &inboundEndpoint,
 		UpstreamEndpoint:      &upstreamEndpoint,
 		ImageCount:            job.SuccessCount,

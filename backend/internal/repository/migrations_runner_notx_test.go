@@ -155,25 +155,51 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_usage_logs_api_key_latest_ip
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPrepareNonTransactionalMigration_TeamAttributionIndexesDropInvalidBeforeRetry(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	for i, indexName := range teamAttributionIndexes {
-		invalid := i == 1
-		mock.ExpectQuery("SELECT EXISTS \\(").
-			WithArgs(indexName).
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(invalid))
-		if invalid {
-			mock.ExpectExec("DROP INDEX CONCURRENTLY IF EXISTS " + indexName).
-				WillReturnResult(sqlmock.NewResult(0, 0))
-		}
+func TestPrepareNonTransactionalMigration_ExistingTableIndexesDropInvalidBeforeRetry(t *testing.T) {
+	testCases := []struct {
+		name       string
+		migration  string
+		indexNames []string
+	}{
+		{
+			name:       "team attribution",
+			migration:  teamAttributionIndexMigration,
+			indexNames: teamAttributionIndexes[:],
+		},
+		{
+			name:       "content moderation attribution",
+			migration:  contentModerationAttributionIndexMigration,
+			indexNames: contentModerationAttributionIndexes[:],
+		},
+		{
+			name:       "composite API key",
+			migration:  compositeAPIKeyExistingTableIndexMigration,
+			indexNames: compositeAPIKeyExistingTableIndexes[:],
+		},
 	}
 
-	err = prepareNonTransactionalMigration(context.Background(), db, teamAttributionIndexMigration)
-	require.NoError(t, err)
-	require.NoError(t, mock.ExpectationsWereMet())
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+
+			for i, indexName := range testCase.indexNames {
+				invalid := i == 0
+				mock.ExpectQuery("SELECT EXISTS \\(").
+					WithArgs(indexName).
+					WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(invalid))
+				if invalid {
+					mock.ExpectExec("DROP INDEX CONCURRENTLY IF EXISTS " + indexName).
+						WillReturnResult(sqlmock.NewResult(0, 0))
+				}
+			}
+
+			err = prepareNonTransactionalMigration(context.Background(), db, testCase.migration)
+			require.NoError(t, err)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestApplyMigrationsFS_PaymentOrdersOutTradeNoUniqueMigration_FailsFastOnDuplicatePrecheck(t *testing.T) {

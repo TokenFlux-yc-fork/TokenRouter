@@ -21,6 +21,42 @@ vi.mock('@/composables/useClipboard', () => ({
 import UseKeyModal from '../UseKeyModal.vue'
 
 describe('UseKeyModal', () => {
+  it('renders and copies composite model examples', async () => {
+    copyToClipboardMock.mockClear()
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-composite-test',
+        baseUrl: 'https://example.com/v1',
+        platform: null,
+        compositeGroups: [
+          { group_id: 7, prefix: 'GPT', group: { id: 7, name: 'OpenAI', platform: 'openai' } },
+          { group_id: 8, prefix: 'Claude', group: { id: 8, name: 'Anthropic', platform: 'anthropic' } }
+        ]
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('GPT/gpt-5')
+    expect(wrapper.text()).toContain('Claude/claude-sonnet-4')
+    // 每个示例的复制按钮必须复制带前缀模型，而不是内部真实模型。
+    const copyButtons = wrapper.findAll('button').filter((button) =>
+      button.text().includes('keys.useKeyModal.copy')
+    )
+    expect(copyButtons).toHaveLength(2)
+    await copyButtons[1]!.trigger('click')
+    expect(copyToClipboardMock).toHaveBeenCalledWith('Claude/claude-sonnet-4', 'keys.copied')
+  })
+
   it('renders Grok Build and OpenCode setup for Grok groups', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -269,6 +305,9 @@ describe('UseKeyModal', () => {
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
     expect(wrapper.find('[data-testid="codex-api-key-restart-notice"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="codex-websocket-disabled"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="codex-websocket-enabled"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.cliTabs.codexCliWs')
   })
 
   it('renders API Key Mode authorization in OpenAI Codex config', async () => {
@@ -321,7 +360,7 @@ describe('UseKeyModal', () => {
     )
   })
 
-  it('keeps legacy OpenAI Codex WebSocket config as the default', async () => {
+  it('enables OpenAI Codex WebSocket config through the switch', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -341,12 +380,9 @@ describe('UseKeyModal', () => {
       }
     })
 
-    const wsTab = wrapper.findAll('button').find((button) =>
-      button.text().includes('keys.useKeyModal.cliTabs.codexCliWs')
-    )
-
-    expect(wsTab).toBeDefined()
-    await wsTab!.trigger('click')
+    const websocketEnabled = wrapper.get('[data-testid="codex-websocket-enabled"]')
+    expect(websocketEnabled.attributes('aria-checked')).toBe('false')
+    await websocketEnabled.trigger('click')
     await nextTick()
 
     const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
@@ -366,9 +402,10 @@ describe('UseKeyModal', () => {
     expect(configToml).toContain('[features]\nresponses_websockets_v2 = true\ngoals = true')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
+    expect(websocketEnabled.attributes('aria-checked')).toBe('true')
   })
 
-  it('preserves API Key Mode when switching to OpenAI Codex WebSocket config', async () => {
+  it('combines API Key Mode with the OpenAI Codex WebSocket config', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -390,12 +427,7 @@ describe('UseKeyModal', () => {
 
     const apiKeyMode = wrapper.get('[data-testid="codex-auth-mode-api-key"]')
     await apiKeyMode.trigger('click')
-
-    const wsTab = wrapper.findAll('button').find((button) =>
-      button.text().includes('keys.useKeyModal.cliTabs.codexCliWs')
-    )
-    expect(wsTab).toBeDefined()
-    await wsTab!.trigger('click')
+    await wrapper.get('[data-testid="codex-websocket-enabled"]').trigger('click')
     await nextTick()
 
     const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
@@ -412,7 +444,7 @@ describe('UseKeyModal', () => {
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
   })
 
-  it('resets Codex authentication mode when the modal reopens or platform changes', async () => {
+  it('resets Codex options when the modal reopens or platform changes', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -433,20 +465,26 @@ describe('UseKeyModal', () => {
     })
 
     await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await wrapper.get('[data-testid="codex-websocket-enabled"]').trigger('click')
     await wrapper.setProps({ show: false })
     await wrapper.setProps({ show: true })
     await nextTick()
 
     expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="codex-websocket-disabled"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).toContain('requires_openai_auth = true')
+    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).not.toContain('supports_websockets')
 
     await wrapper.get('[data-testid="codex-auth-mode-api-key"]').trigger('click')
+    await wrapper.get('[data-testid="codex-websocket-enabled"]').trigger('click')
     await wrapper.setProps({ platform: 'gemini' })
     await wrapper.setProps({ platform: 'openai' })
     await nextTick()
 
     expect(wrapper.get('[data-testid="codex-auth-mode-legacy"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="codex-websocket-disabled"]').attributes('aria-checked')).toBe('true')
     expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).not.toContain('x-openai-actor-authorization')
+    expect(wrapper.findAll('pre code').map((code) => code.text()).join('\n')).not.toContain('supports_websockets')
   })
 
   it('renders GPT-5.4 mini entry in OpenCode config', async () => {

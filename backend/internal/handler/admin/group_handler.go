@@ -48,7 +48,7 @@ type CreateGroupRequest struct {
 	Description    string  `json:"description"`
 	Platform       string  `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity qoder grok"`
 	DisplayBrand   string  `json:"display_brand"`
-	SortOrder      int     `json:"sort_order"`
+	SortOrder      *int    `json:"sort_order"`
 	RateMultiplier float64 `json:"rate_multiplier"`
 	IsExclusive    bool    `json:"is_exclusive"`
 	IsDefault      bool    `json:"is_default"`

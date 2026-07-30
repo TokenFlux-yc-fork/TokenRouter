@@ -1,7 +1,7 @@
 .PHONY: build generate test test-unit test-integration test-e2e
 
 VERSION ?= $(shell ./scripts/resolve-version.sh)
-FORK_ID ?=
+FORK_ID ?= yc-fork
 LDFLAGS ?= -s -w -X main.Version=$(VERSION) -X main.ForkID=$(FORK_ID)
 
 build:

@@ -143,6 +143,43 @@ func TestSchedulerCacheSnapshotAccountIDReusePreservesPayloadAndMembers(t *testi
 	require.Nil(t, missing)
 }
 
+func TestSchedulerCacheSnapshotRoundTripsOpenAINativeCompactionCapabilities(t *testing.T) {
+	ctx := context.Background()
+	cache := newSchedulerCacheUnit(t)
+	checkedAt := time.Date(2026, time.July, 30, 9, 15, 0, 0, time.UTC)
+	lastStatus := 200
+	account := service.Account{
+		ID:          711,
+		Name:        "native-compaction-capability",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Schedulable: true,
+		OpenAINativeCompactionCapabilities: []service.OpenAINativeCompactionCapability{{
+			Key: service.OpenAINativeCompactionCapabilityKey{
+				AccountID:           711,
+				UpstreamFingerprint: "upstream_v1_fixture",
+				EffectiveModel:      "gpt-fixture",
+				ContractVersion:     service.OpenAINativeCompactionContractVersion,
+			},
+			Supported:  true,
+			Mode:       service.OpenAINativeCompactionCapabilityModeAuto,
+			Source:     service.OpenAINativeCompactionCapabilitySourceProbe,
+			CheckedAt:  &checkedAt,
+			LastStatus: &lastStatus,
+		}},
+	}
+	bucket := service.SchedulerBucket{GroupID: 19, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{account}))
+
+	got, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, got, 1)
+	require.Equal(t, account.OpenAINativeCompactionCapabilities, got[0].OpenAINativeCompactionCapabilities)
+}
+
 func TestSchedulerCacheSetSnapshotMatchesIDPublishing(t *testing.T) {
 	ctx := context.Background()
 	cache, _ := newSchedulerCacheUnitWithRedis(t)

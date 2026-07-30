@@ -3,7 +3,7 @@
 # 兼容从 backend、deploy 或仓库根目录调用本 Makefile。
 VERSION_SCRIPT ?= $(firstword $(wildcard ./scripts/resolve-version.sh ../backend/scripts/resolve-version.sh backend/scripts/resolve-version.sh))
 VERSION ?= $(shell $(VERSION_SCRIPT))
-FORK_ID ?=
+FORK_ID ?= yc-fork
 LDFLAGS ?= -s -w -X main.Version=$(VERSION) -X main.ForkID=$(FORK_ID)
 
 wire:

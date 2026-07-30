@@ -39,6 +39,8 @@ type APIKey struct {
 	Name string `json:"name,omitempty"`
 	// GroupID holds the value of the "group_id" field.
 	GroupID *int64 `json:"group_id,omitempty"`
+	// 是否通过模型前缀在多个分组之间路由
+	IsComposite bool `json:"is_composite,omitempty"`
 	// Status holds the value of the "status" field.
 	Status string `json:"status,omitempty"`
 	// API Key 的 Fast 模式策略：follow_request、force_on 或 force_off
@@ -95,11 +97,13 @@ type APIKeyEdges struct {
 	Group *Group `json:"group,omitempty"`
 	// UsageLogs holds the value of the usage_logs edge.
 	UsageLogs []*UsageLog `json:"usage_logs,omitempty"`
+	// CompositeGroups holds the value of the composite_groups edge.
+	CompositeGroups []*APIKeyCompositeGroup `json:"composite_groups,omitempty"`
 	// Team holds the value of the team edge.
 	Team *Team `json:"team,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [4]bool
+	loadedTypes [5]bool
 }
 
 // UserOrErr returns the User value or an error if the edge
@@ -133,12 +137,21 @@ func (e APIKeyEdges) UsageLogsOrErr() ([]*UsageLog, error) {
 	return nil, &NotLoadedError{edge: "usage_logs"}
 }
 
+// CompositeGroupsOrErr returns the CompositeGroups value or an error if the edge
+// was not loaded in eager-loading.
+func (e APIKeyEdges) CompositeGroupsOrErr() ([]*APIKeyCompositeGroup, error) {
+	if e.loadedTypes[3] {
+		return e.CompositeGroups, nil
+	}
+	return nil, &NotLoadedError{edge: "composite_groups"}
+}
+
 // TeamOrErr returns the Team value or an error if the edge
 // was not loaded in eager-loading, or loaded but was not found.
 func (e APIKeyEdges) TeamOrErr() (*Team, error) {
 	if e.Team != nil {
 		return e.Team, nil
-	} else if e.loadedTypes[3] {
+	} else if e.loadedTypes[4] {
 		return nil, &NotFoundError{label: team.Label}
 	}
 	return nil, &NotLoadedError{edge: "team"}
@@ -151,7 +164,7 @@ func (*APIKey) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case apikey.FieldIPWhitelist, apikey.FieldIPBlacklist:
 			values[i] = new([]byte)
-		case apikey.FieldTeamOwnerDisabled, apikey.FieldFallbackToDefaultGroupWhenUnavailable:
+		case apikey.FieldTeamOwnerDisabled, apikey.FieldIsComposite, apikey.FieldFallbackToDefaultGroupWhenUnavailable:
 			values[i] = new(sql.NullBool)
 		case apikey.FieldQuota, apikey.FieldQuotaUsed, apikey.FieldRateLimit5h, apikey.FieldRateLimit1d, apikey.FieldRateLimit7d, apikey.FieldUsage5h, apikey.FieldUsage1d, apikey.FieldUsage7d:
 			values[i] = new(sql.NullFloat64)
@@ -238,6 +251,12 @@ func (_m *APIKey) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.GroupID = new(int64)
 				*_m.GroupID = value.Int64
+			}
+		case apikey.FieldIsComposite:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field is_composite", values[i])
+			} else if value.Valid {
+				_m.IsComposite = value.Bool
 			}
 		case apikey.FieldStatus:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -404,6 +423,11 @@ func (_m *APIKey) QueryUsageLogs() *UsageLogQuery {
 	return NewAPIKeyClient(_m.config).QueryUsageLogs(_m)
 }
 
+// QueryCompositeGroups queries the "composite_groups" edge of the APIKey entity.
+func (_m *APIKey) QueryCompositeGroups() *APIKeyCompositeGroupQuery {
+	return NewAPIKeyClient(_m.config).QueryCompositeGroups(_m)
+}
+
 // QueryTeam queries the "team" edge of the APIKey entity.
 func (_m *APIKey) QueryTeam() *TeamQuery {
 	return NewAPIKeyClient(_m.config).QueryTeam(_m)
@@ -464,6 +488,9 @@ func (_m *APIKey) String() string {
 		builder.WriteString("group_id=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("is_composite=")
+	builder.WriteString(fmt.Sprintf("%v", _m.IsComposite))
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(_m.Status)

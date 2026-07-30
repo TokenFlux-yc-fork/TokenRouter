@@ -2613,6 +2613,29 @@ func HasAPIKeysWith(preds ...predicate.APIKey) predicate.Group {
 	})
 }
 
+// HasAPIKeyCompositeGroups applies the HasEdge predicate on the "api_key_composite_groups" edge.
+func HasAPIKeyCompositeGroups() predicate.Group {
+	return predicate.Group(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, APIKeyCompositeGroupsTable, APIKeyCompositeGroupsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasAPIKeyCompositeGroupsWith applies the HasEdge predicate on the "api_key_composite_groups" edge with a given conditions (other predicates).
+func HasAPIKeyCompositeGroupsWith(preds ...predicate.APIKeyCompositeGroup) predicate.Group {
+	return predicate.Group(func(s *sql.Selector) {
+		step := newAPIKeyCompositeGroupsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasUsageLogs applies the HasEdge predicate on the "usage_logs" edge.
 func HasUsageLogs() predicate.Group {
 	return predicate.Group(func(s *sql.Selector) {

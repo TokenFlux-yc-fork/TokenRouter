@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/group"
 	"github.com/TokenFlux/TokenRouter/ent/predicate"
 	"github.com/TokenFlux/TokenRouter/ent/team"
@@ -24,15 +25,16 @@ import (
 // APIKeyQuery is the builder for querying APIKey entities.
 type APIKeyQuery struct {
 	config
-	ctx           *QueryContext
-	order         []apikey.OrderOption
-	inters        []Interceptor
-	predicates    []predicate.APIKey
-	withUser      *UserQuery
-	withGroup     *GroupQuery
-	withUsageLogs *UsageLogQuery
-	withTeam      *TeamQuery
-	modifiers     []func(*sql.Selector)
+	ctx                 *QueryContext
+	order               []apikey.OrderOption
+	inters              []Interceptor
+	predicates          []predicate.APIKey
+	withUser            *UserQuery
+	withGroup           *GroupQuery
+	withUsageLogs       *UsageLogQuery
+	withCompositeGroups *APIKeyCompositeGroupQuery
+	withTeam            *TeamQuery
+	modifiers           []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -128,6 +130,28 @@ func (_q *APIKeyQuery) QueryUsageLogs() *UsageLogQuery {
 			sqlgraph.From(apikey.Table, apikey.FieldID, selector),
 			sqlgraph.To(usagelog.Table, usagelog.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, apikey.UsageLogsTable, apikey.UsageLogsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryCompositeGroups chains the current query on the "composite_groups" edge.
+func (_q *APIKeyQuery) QueryCompositeGroups() *APIKeyCompositeGroupQuery {
+	query := (&APIKeyCompositeGroupClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(apikey.Table, apikey.FieldID, selector),
+			sqlgraph.To(apikeycompositegroup.Table, apikeycompositegroup.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, apikey.CompositeGroupsTable, apikey.CompositeGroupsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -344,15 +368,16 @@ func (_q *APIKeyQuery) Clone() *APIKeyQuery {
 		return nil
 	}
 	return &APIKeyQuery{
-		config:        _q.config,
-		ctx:           _q.ctx.Clone(),
-		order:         append([]apikey.OrderOption{}, _q.order...),
-		inters:        append([]Interceptor{}, _q.inters...),
-		predicates:    append([]predicate.APIKey{}, _q.predicates...),
-		withUser:      _q.withUser.Clone(),
-		withGroup:     _q.withGroup.Clone(),
-		withUsageLogs: _q.withUsageLogs.Clone(),
-		withTeam:      _q.withTeam.Clone(),
+		config:              _q.config,
+		ctx:                 _q.ctx.Clone(),
+		order:               append([]apikey.OrderOption{}, _q.order...),
+		inters:              append([]Interceptor{}, _q.inters...),
+		predicates:          append([]predicate.APIKey{}, _q.predicates...),
+		withUser:            _q.withUser.Clone(),
+		withGroup:           _q.withGroup.Clone(),
+		withUsageLogs:       _q.withUsageLogs.Clone(),
+		withCompositeGroups: _q.withCompositeGroups.Clone(),
+		withTeam:            _q.withTeam.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -389,6 +414,17 @@ func (_q *APIKeyQuery) WithUsageLogs(opts ...func(*UsageLogQuery)) *APIKeyQuery 
 		opt(query)
 	}
 	_q.withUsageLogs = query
+	return _q
+}
+
+// WithCompositeGroups tells the query-builder to eager-load the nodes that are connected to
+// the "composite_groups" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *APIKeyQuery) WithCompositeGroups(opts ...func(*APIKeyCompositeGroupQuery)) *APIKeyQuery {
+	query := (&APIKeyCompositeGroupClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withCompositeGroups = query
 	return _q
 }
 
@@ -481,10 +517,11 @@ func (_q *APIKeyQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*APIKe
 	var (
 		nodes       = []*APIKey{}
 		_spec       = _q.querySpec()
-		loadedTypes = [4]bool{
+		loadedTypes = [5]bool{
 			_q.withUser != nil,
 			_q.withGroup != nil,
 			_q.withUsageLogs != nil,
+			_q.withCompositeGroups != nil,
 			_q.withTeam != nil,
 		}
 	)
@@ -525,6 +562,13 @@ func (_q *APIKeyQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*APIKe
 		if err := _q.loadUsageLogs(ctx, query, nodes,
 			func(n *APIKey) { n.Edges.UsageLogs = []*UsageLog{} },
 			func(n *APIKey, e *UsageLog) { n.Edges.UsageLogs = append(n.Edges.UsageLogs, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withCompositeGroups; query != nil {
+		if err := _q.loadCompositeGroups(ctx, query, nodes,
+			func(n *APIKey) { n.Edges.CompositeGroups = []*APIKeyCompositeGroup{} },
+			func(n *APIKey, e *APIKeyCompositeGroup) { n.Edges.CompositeGroups = append(n.Edges.CompositeGroups, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -613,6 +657,36 @@ func (_q *APIKeyQuery) loadUsageLogs(ctx context.Context, query *UsageLogQuery, 
 	}
 	query.Where(predicate.UsageLog(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(apikey.UsageLogsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.APIKeyID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "api_key_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *APIKeyQuery) loadCompositeGroups(ctx context.Context, query *APIKeyCompositeGroupQuery, nodes []*APIKey, init func(*APIKey), assign func(*APIKey, *APIKeyCompositeGroup)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*APIKey)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(apikeycompositegroup.FieldAPIKeyID)
+	}
+	query.Where(predicate.APIKeyCompositeGroup(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(apikey.CompositeGroupsColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

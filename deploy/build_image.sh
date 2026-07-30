@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 docker build -t ghcr.io/tokenflux/tokenrouter:latest \
-    --build-arg FORK_ID="${FORK_ID:-}" \
+    --build-arg FORK_ID="${FORK_ID:-yc-fork}" \
     --build-arg GOPROXY=https://goproxy.cn,direct \
     --build-arg GOSUMDB=sum.golang.google.cn \
     -f "${REPO_ROOT}/Dockerfile" \

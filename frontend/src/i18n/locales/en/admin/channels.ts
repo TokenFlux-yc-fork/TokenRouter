@@ -293,6 +293,7 @@ riskControl: {
         allGroups: 'All Groups',
         allEndpoints: 'All Endpoints',
       },
+      teamAttribution: 'Team {teamId} · Billing UID {billingUserId}',
       table: {
         time: 'Time',
         group: 'Group',

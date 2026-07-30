@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/service"
@@ -13,10 +15,11 @@ import (
 )
 
 const (
-	stickySessionPrefix      = "sticky_session:"
-	stickySessionOwnerPrefix = "sticky_session_owner:"
-	cyberSessionBlockPrefix  = "cyber_session_block:"
-	liveCallPrefix           = "live:call:"
+	stickySessionPrefix             = "sticky_session:"
+	stickySessionOwnerPrefix        = "sticky_session_owner:"
+	openAICompatibilityDomainPrefix = "openai_compatibility_domain:"
+	cyberSessionBlockPrefix         = "cyber_session_block:"
+	liveCallPrefix                  = "live:call:"
 )
 
 type gatewayCache struct {
@@ -83,6 +86,51 @@ func (c *gatewayCache) RefreshSessionOwnerTTL(ctx context.Context, userID int64,
 
 var _ service.CyberSessionBlockStore = (*gatewayCache)(nil)
 var _ service.LiveCallStore = (*gatewayCache)(nil)
+var _ service.OpenAICompatibilityDomainCache = (*gatewayCache)(nil)
+
+func buildOpenAICompatibilityDomainKey(groupID int64, bindingKey string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(bindingKey)))
+	return fmt.Sprintf("%s%d:%s", openAICompatibilityDomainPrefix, groupID, hex.EncodeToString(sum[:]))
+}
+
+func (c *gatewayCache) SetOpenAICompatibilityDomain(
+	ctx context.Context,
+	groupID int64,
+	bindingKey string,
+	domain service.OpenAICompatibilityDomain,
+	ttl time.Duration,
+) error {
+	if strings.TrimSpace(bindingKey) == "" || !domain.Valid() || ttl <= 0 {
+		return service.ErrOpenAICompatibilityDomainUnknown
+	}
+	payload, err := json.Marshal(domain)
+	if err != nil {
+		return err
+	}
+	return c.rdb.Set(ctx, buildOpenAICompatibilityDomainKey(groupID, bindingKey), payload, ttl).Err()
+}
+
+func (c *gatewayCache) GetOpenAICompatibilityDomain(ctx context.Context, groupID int64, bindingKey string) (service.OpenAICompatibilityDomain, error) {
+	if strings.TrimSpace(bindingKey) == "" {
+		return service.OpenAICompatibilityDomain{}, service.ErrOpenAICompatibilityDomainUnknown
+	}
+	payload, err := c.rdb.Get(ctx, buildOpenAICompatibilityDomainKey(groupID, bindingKey)).Bytes()
+	if err != nil {
+		return service.OpenAICompatibilityDomain{}, err
+	}
+	var domain service.OpenAICompatibilityDomain
+	if err := json.Unmarshal(payload, &domain); err != nil || !domain.Valid() {
+		return service.OpenAICompatibilityDomain{}, service.ErrOpenAICompatibilityDomainUnknown
+	}
+	return domain, nil
+}
+
+func (c *gatewayCache) DeleteOpenAICompatibilityDomain(ctx context.Context, groupID int64, bindingKey string) error {
+	if strings.TrimSpace(bindingKey) == "" {
+		return nil
+	}
+	return c.rdb.Del(ctx, buildOpenAICompatibilityDomainKey(groupID, bindingKey)).Err()
+}
 
 // SetCyberSessionBlocked 把被 cyber_policy 命中的显式会话写入屏蔽表，TTL 到期后自动解除。
 func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, key string, ttl time.Duration) error {

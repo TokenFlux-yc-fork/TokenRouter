@@ -21,6 +21,9 @@ const (
 	// Model 请求模型标识（用于统一请求链路日志字段）。
 	Model Key = "ctx_model"
 
+	// ClientModel 保存复合 Key 去前缀前的客户端模型，用于日志展示。
+	ClientModel Key = "ctx_client_model"
+
 	// Platform 当前请求最终命中的平台（用于统一请求链路日志字段）。
 	Platform Key = "ctx_platform"
 

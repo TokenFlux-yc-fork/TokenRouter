@@ -10,6 +10,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/announcement"
 	"github.com/TokenFlux/TokenRouter/ent/announcementread"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/authidentity"
 	"github.com/TokenFlux/TokenRouter/ent/authidentitychannel"
 	"github.com/TokenFlux/TokenRouter/ent/batchimageevent"
@@ -114,58 +115,121 @@ func init() {
 			return nil
 		}
 	}()
+	// apikeyDescIsComposite is the schema descriptor for is_composite field.
+	apikeyDescIsComposite := apikeyFields[6].Descriptor()
+	// apikey.DefaultIsComposite holds the default value on creation for the is_composite field.
+	apikey.DefaultIsComposite = apikeyDescIsComposite.Default.(bool)
 	// apikeyDescStatus is the schema descriptor for status field.
-	apikeyDescStatus := apikeyFields[6].Descriptor()
+	apikeyDescStatus := apikeyFields[7].Descriptor()
 	// apikey.DefaultStatus holds the default value on creation for the status field.
 	apikey.DefaultStatus = apikeyDescStatus.Default.(string)
 	// apikey.StatusValidator is a validator for the "status" field. It is called by the builders before save.
 	apikey.StatusValidator = apikeyDescStatus.Validators[0].(func(string) error)
 	// apikeyDescFastModePolicy is the schema descriptor for fast_mode_policy field.
-	apikeyDescFastModePolicy := apikeyFields[7].Descriptor()
+	apikeyDescFastModePolicy := apikeyFields[8].Descriptor()
 	// apikey.DefaultFastModePolicy holds the default value on creation for the fast_mode_policy field.
 	apikey.DefaultFastModePolicy = apikeyDescFastModePolicy.Default.(string)
 	// apikey.FastModePolicyValidator is a validator for the "fast_mode_policy" field. It is called by the builders before save.
 	apikey.FastModePolicyValidator = apikeyDescFastModePolicy.Validators[0].(func(string) error)
 	// apikeyDescQuota is the schema descriptor for quota field.
-	apikeyDescQuota := apikeyFields[11].Descriptor()
+	apikeyDescQuota := apikeyFields[12].Descriptor()
 	// apikey.DefaultQuota holds the default value on creation for the quota field.
 	apikey.DefaultQuota = apikeyDescQuota.Default.(float64)
 	// apikeyDescQuotaUsed is the schema descriptor for quota_used field.
-	apikeyDescQuotaUsed := apikeyFields[12].Descriptor()
+	apikeyDescQuotaUsed := apikeyFields[13].Descriptor()
 	// apikey.DefaultQuotaUsed holds the default value on creation for the quota_used field.
 	apikey.DefaultQuotaUsed = apikeyDescQuotaUsed.Default.(float64)
 	// apikeyDescRateLimit5h is the schema descriptor for rate_limit_5h field.
-	apikeyDescRateLimit5h := apikeyFields[14].Descriptor()
+	apikeyDescRateLimit5h := apikeyFields[15].Descriptor()
 	// apikey.DefaultRateLimit5h holds the default value on creation for the rate_limit_5h field.
 	apikey.DefaultRateLimit5h = apikeyDescRateLimit5h.Default.(float64)
 	// apikeyDescRateLimit1d is the schema descriptor for rate_limit_1d field.
-	apikeyDescRateLimit1d := apikeyFields[15].Descriptor()
+	apikeyDescRateLimit1d := apikeyFields[16].Descriptor()
 	// apikey.DefaultRateLimit1d holds the default value on creation for the rate_limit_1d field.
 	apikey.DefaultRateLimit1d = apikeyDescRateLimit1d.Default.(float64)
 	// apikeyDescRateLimit7d is the schema descriptor for rate_limit_7d field.
-	apikeyDescRateLimit7d := apikeyFields[16].Descriptor()
+	apikeyDescRateLimit7d := apikeyFields[17].Descriptor()
 	// apikey.DefaultRateLimit7d holds the default value on creation for the rate_limit_7d field.
 	apikey.DefaultRateLimit7d = apikeyDescRateLimit7d.Default.(float64)
 	// apikeyDescUsage5h is the schema descriptor for usage_5h field.
-	apikeyDescUsage5h := apikeyFields[17].Descriptor()
+	apikeyDescUsage5h := apikeyFields[18].Descriptor()
 	// apikey.DefaultUsage5h holds the default value on creation for the usage_5h field.
 	apikey.DefaultUsage5h = apikeyDescUsage5h.Default.(float64)
 	// apikeyDescUsage1d is the schema descriptor for usage_1d field.
-	apikeyDescUsage1d := apikeyFields[18].Descriptor()
+	apikeyDescUsage1d := apikeyFields[19].Descriptor()
 	// apikey.DefaultUsage1d holds the default value on creation for the usage_1d field.
 	apikey.DefaultUsage1d = apikeyDescUsage1d.Default.(float64)
 	// apikeyDescUsage7d is the schema descriptor for usage_7d field.
-	apikeyDescUsage7d := apikeyFields[19].Descriptor()
+	apikeyDescUsage7d := apikeyFields[20].Descriptor()
 	// apikey.DefaultUsage7d holds the default value on creation for the usage_7d field.
 	apikey.DefaultUsage7d = apikeyDescUsage7d.Default.(float64)
 	// apikeyDescDataSharingNoticeVersion is the schema descriptor for data_sharing_notice_version field.
-	apikeyDescDataSharingNoticeVersion := apikeyFields[23].Descriptor()
+	apikeyDescDataSharingNoticeVersion := apikeyFields[24].Descriptor()
 	// apikey.DefaultDataSharingNoticeVersion holds the default value on creation for the data_sharing_notice_version field.
 	apikey.DefaultDataSharingNoticeVersion = apikeyDescDataSharingNoticeVersion.Default.(int)
 	// apikeyDescFallbackToDefaultGroupWhenUnavailable is the schema descriptor for fallback_to_default_group_when_unavailable field.
-	apikeyDescFallbackToDefaultGroupWhenUnavailable := apikeyFields[26].Descriptor()
+	apikeyDescFallbackToDefaultGroupWhenUnavailable := apikeyFields[27].Descriptor()
 	// apikey.DefaultFallbackToDefaultGroupWhenUnavailable holds the default value on creation for the fallback_to_default_group_when_unavailable field.
 	apikey.DefaultFallbackToDefaultGroupWhenUnavailable = apikeyDescFallbackToDefaultGroupWhenUnavailable.Default.(bool)
+	apikeycompositegroupMixin := schema.APIKeyCompositeGroup{}.Mixin()
+	apikeycompositegroupMixinFields0 := apikeycompositegroupMixin[0].Fields()
+	_ = apikeycompositegroupMixinFields0
+	apikeycompositegroupFields := schema.APIKeyCompositeGroup{}.Fields()
+	_ = apikeycompositegroupFields
+	// apikeycompositegroupDescCreatedAt is the schema descriptor for created_at field.
+	apikeycompositegroupDescCreatedAt := apikeycompositegroupMixinFields0[0].Descriptor()
+	// apikeycompositegroup.DefaultCreatedAt holds the default value on creation for the created_at field.
+	apikeycompositegroup.DefaultCreatedAt = apikeycompositegroupDescCreatedAt.Default.(func() time.Time)
+	// apikeycompositegroupDescUpdatedAt is the schema descriptor for updated_at field.
+	apikeycompositegroupDescUpdatedAt := apikeycompositegroupMixinFields0[1].Descriptor()
+	// apikeycompositegroup.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	apikeycompositegroup.DefaultUpdatedAt = apikeycompositegroupDescUpdatedAt.Default.(func() time.Time)
+	// apikeycompositegroup.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	apikeycompositegroup.UpdateDefaultUpdatedAt = apikeycompositegroupDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// apikeycompositegroupDescPrefix is the schema descriptor for prefix field.
+	apikeycompositegroupDescPrefix := apikeycompositegroupFields[2].Descriptor()
+	// apikeycompositegroup.PrefixValidator is a validator for the "prefix" field. It is called by the builders before save.
+	apikeycompositegroup.PrefixValidator = func() func(string) error {
+		validators := apikeycompositegroupDescPrefix.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(prefix string) error {
+			for _, fn := range fns {
+				if err := fn(prefix); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// apikeycompositegroupDescNormalizedPrefix is the schema descriptor for normalized_prefix field.
+	apikeycompositegroupDescNormalizedPrefix := apikeycompositegroupFields[3].Descriptor()
+	// apikeycompositegroup.NormalizedPrefixValidator is a validator for the "normalized_prefix" field. It is called by the builders before save.
+	apikeycompositegroup.NormalizedPrefixValidator = func() func(string) error {
+		validators := apikeycompositegroupDescNormalizedPrefix.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(normalized_prefix string) error {
+			for _, fn := range fns {
+				if err := fn(normalized_prefix); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// apikeycompositegroupDescSortOrder is the schema descriptor for sort_order field.
+	apikeycompositegroupDescSortOrder := apikeycompositegroupFields[4].Descriptor()
+	// apikeycompositegroup.DefaultSortOrder holds the default value on creation for the sort_order field.
+	apikeycompositegroup.DefaultSortOrder = apikeycompositegroupDescSortOrder.Default.(int)
+	// apikeycompositegroupDescDataSharingNoticeVersion is the schema descriptor for data_sharing_notice_version field.
+	apikeycompositegroupDescDataSharingNoticeVersion := apikeycompositegroupFields[5].Descriptor()
+	// apikeycompositegroup.DefaultDataSharingNoticeVersion holds the default value on creation for the data_sharing_notice_version field.
+	apikeycompositegroup.DefaultDataSharingNoticeVersion = apikeycompositegroupDescDataSharingNoticeVersion.Default.(int)
 	accountMixin := schema.Account{}.Mixin()
 	accountMixinHooks1 := accountMixin[1].Hooks()
 	account.Hooks[0] = accountMixinHooks1[0]

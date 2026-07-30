@@ -1,0 +1,5 @@
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"cmp_malformed","type":"compaction","status":"completed","encrypted_content":""}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_malformed","status":"completed","output":[]}}

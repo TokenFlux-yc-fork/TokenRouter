@@ -231,6 +231,20 @@ func TestSettingService_AffiliateAdminRechargeSetting(t *testing.T) {
 	})
 }
 
+// 页面功能开关必须独立持久化，避免保存其他设置时互相覆盖。
+func TestSettingService_PageFeatureFlagsArePersisted(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		TeamEnabled:        true,
+		DataSharingEnabled: false,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "true", repo.updates[SettingKeyTeamEnabled])
+	require.Equal(t, "false", repo.updates[SettingKeyDataSharingEnabled])
+}
+
 func (s *defaultSubPlanReaderStub) GetByID(ctx context.Context, id int64) (*SubscriptionPlan, error) {
 	s.calls = append(s.calls, id)
 	if err, ok := s.errBy[id]; ok {

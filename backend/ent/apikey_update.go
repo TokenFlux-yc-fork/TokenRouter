@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/group"
 	"github.com/TokenFlux/TokenRouter/ent/predicate"
 	"github.com/TokenFlux/TokenRouter/ent/team"
@@ -152,6 +153,20 @@ func (_u *APIKeyUpdate) SetNillableGroupID(v *int64) *APIKeyUpdate {
 // ClearGroupID clears the value of the "group_id" field.
 func (_u *APIKeyUpdate) ClearGroupID() *APIKeyUpdate {
 	_u.mutation.ClearGroupID()
+	return _u
+}
+
+// SetIsComposite sets the "is_composite" field.
+func (_u *APIKeyUpdate) SetIsComposite(v bool) *APIKeyUpdate {
+	_u.mutation.SetIsComposite(v)
+	return _u
+}
+
+// SetNillableIsComposite sets the "is_composite" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableIsComposite(v *bool) *APIKeyUpdate {
+	if v != nil {
+		_u.SetIsComposite(*v)
+	}
 	return _u
 }
 
@@ -594,6 +609,21 @@ func (_u *APIKeyUpdate) AddUsageLogs(v ...*UsageLog) *APIKeyUpdate {
 	return _u.AddUsageLogIDs(ids...)
 }
 
+// AddCompositeGroupIDs adds the "composite_groups" edge to the APIKeyCompositeGroup entity by IDs.
+func (_u *APIKeyUpdate) AddCompositeGroupIDs(ids ...int64) *APIKeyUpdate {
+	_u.mutation.AddCompositeGroupIDs(ids...)
+	return _u
+}
+
+// AddCompositeGroups adds the "composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_u *APIKeyUpdate) AddCompositeGroups(v ...*APIKeyCompositeGroup) *APIKeyUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddCompositeGroupIDs(ids...)
+}
+
 // SetTeam sets the "team" edge to the Team entity.
 func (_u *APIKeyUpdate) SetTeam(v *Team) *APIKeyUpdate {
 	return _u.SetTeamID(v.ID)
@@ -635,6 +665,27 @@ func (_u *APIKeyUpdate) RemoveUsageLogs(v ...*UsageLog) *APIKeyUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveUsageLogIDs(ids...)
+}
+
+// ClearCompositeGroups clears all "composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_u *APIKeyUpdate) ClearCompositeGroups() *APIKeyUpdate {
+	_u.mutation.ClearCompositeGroups()
+	return _u
+}
+
+// RemoveCompositeGroupIDs removes the "composite_groups" edge to APIKeyCompositeGroup entities by IDs.
+func (_u *APIKeyUpdate) RemoveCompositeGroupIDs(ids ...int64) *APIKeyUpdate {
+	_u.mutation.RemoveCompositeGroupIDs(ids...)
+	return _u
+}
+
+// RemoveCompositeGroups removes "composite_groups" edges to APIKeyCompositeGroup entities.
+func (_u *APIKeyUpdate) RemoveCompositeGroups(v ...*APIKeyCompositeGroup) *APIKeyUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveCompositeGroupIDs(ids...)
 }
 
 // ClearTeam clears the "team" edge to the Team entity.
@@ -742,6 +793,9 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.IsComposite(); ok {
+		_spec.SetField(apikey.FieldIsComposite, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -976,6 +1030,51 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.CompositeGroupsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.CompositeGroupsTable,
+			Columns: []string{apikey.CompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedCompositeGroupsIDs(); len(nodes) > 0 && !_u.mutation.CompositeGroupsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.CompositeGroupsTable,
+			Columns: []string{apikey.CompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.CompositeGroupsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.CompositeGroupsTable,
+			Columns: []string{apikey.CompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _u.mutation.TeamCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2O,
@@ -1144,6 +1243,20 @@ func (_u *APIKeyUpdateOne) SetNillableGroupID(v *int64) *APIKeyUpdateOne {
 // ClearGroupID clears the value of the "group_id" field.
 func (_u *APIKeyUpdateOne) ClearGroupID() *APIKeyUpdateOne {
 	_u.mutation.ClearGroupID()
+	return _u
+}
+
+// SetIsComposite sets the "is_composite" field.
+func (_u *APIKeyUpdateOne) SetIsComposite(v bool) *APIKeyUpdateOne {
+	_u.mutation.SetIsComposite(v)
+	return _u
+}
+
+// SetNillableIsComposite sets the "is_composite" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableIsComposite(v *bool) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetIsComposite(*v)
+	}
 	return _u
 }
 
@@ -1586,6 +1699,21 @@ func (_u *APIKeyUpdateOne) AddUsageLogs(v ...*UsageLog) *APIKeyUpdateOne {
 	return _u.AddUsageLogIDs(ids...)
 }
 
+// AddCompositeGroupIDs adds the "composite_groups" edge to the APIKeyCompositeGroup entity by IDs.
+func (_u *APIKeyUpdateOne) AddCompositeGroupIDs(ids ...int64) *APIKeyUpdateOne {
+	_u.mutation.AddCompositeGroupIDs(ids...)
+	return _u
+}
+
+// AddCompositeGroups adds the "composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_u *APIKeyUpdateOne) AddCompositeGroups(v ...*APIKeyCompositeGroup) *APIKeyUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddCompositeGroupIDs(ids...)
+}
+
 // SetTeam sets the "team" edge to the Team entity.
 func (_u *APIKeyUpdateOne) SetTeam(v *Team) *APIKeyUpdateOne {
 	return _u.SetTeamID(v.ID)
@@ -1627,6 +1755,27 @@ func (_u *APIKeyUpdateOne) RemoveUsageLogs(v ...*UsageLog) *APIKeyUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveUsageLogIDs(ids...)
+}
+
+// ClearCompositeGroups clears all "composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_u *APIKeyUpdateOne) ClearCompositeGroups() *APIKeyUpdateOne {
+	_u.mutation.ClearCompositeGroups()
+	return _u
+}
+
+// RemoveCompositeGroupIDs removes the "composite_groups" edge to APIKeyCompositeGroup entities by IDs.
+func (_u *APIKeyUpdateOne) RemoveCompositeGroupIDs(ids ...int64) *APIKeyUpdateOne {
+	_u.mutation.RemoveCompositeGroupIDs(ids...)
+	return _u
+}
+
+// RemoveCompositeGroups removes "composite_groups" edges to APIKeyCompositeGroup entities.
+func (_u *APIKeyUpdateOne) RemoveCompositeGroups(v ...*APIKeyCompositeGroup) *APIKeyUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveCompositeGroupIDs(ids...)
 }
 
 // ClearTeam clears the "team" edge to the Team entity.
@@ -1764,6 +1913,9 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.IsComposite(); ok {
+		_spec.SetField(apikey.FieldIsComposite, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -1991,6 +2143,51 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.CompositeGroupsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.CompositeGroupsTable,
+			Columns: []string{apikey.CompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedCompositeGroupsIDs(); len(nodes) > 0 && !_u.mutation.CompositeGroupsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.CompositeGroupsTable,
+			Columns: []string{apikey.CompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.CompositeGroupsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   apikey.CompositeGroupsTable,
+			Columns: []string{apikey.CompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

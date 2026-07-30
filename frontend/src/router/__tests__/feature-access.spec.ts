@@ -25,6 +25,8 @@ const appStore = vi.hoisted(() => ({
   cachedPublicSettings: null as null | {
     payment_enabled?: boolean
     risk_control_enabled?: boolean
+    team_enabled?: boolean
+    data_sharing_enabled?: boolean
     custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
@@ -142,8 +144,10 @@ describe('feature route guard', () => {
   it.each([
     ['payment', { requiresPayment: true }, '/purchase'],
     ['risk control', { requiresRiskControl: true }, '/admin/risk-control'],
+    ['team', { requiresTeam: true }, '/team'],
+    ['data sharing', { requiresDataSharing: true }, '/data-sharing'],
   ])('does not treat a failed %s settings load as explicitly disabled', async (_name, meta, path) => {
-    authStore.isAdmin = meta.requiresRiskControl === true
+    authStore.isAdmin = path.startsWith('/admin/')
     appStore.fetchPublicSettings.mockResolvedValue(null)
 
     const { navigation, next } = runGuard(meta, path)
@@ -155,15 +159,20 @@ describe('feature route guard', () => {
   })
 
   it.each([
-    ['payment', { requiresPayment: true }, { payment_enabled: false }, '/dashboard'],
+    ['payment', { requiresPayment: true }, { payment_enabled: false }, '/dashboard', false],
     [
       'risk control',
       { requiresRiskControl: true },
       { risk_control_enabled: false },
       '/admin/settings',
+      true,
     ],
-  ])('redirects when loaded settings explicitly disable %s', async (_name, meta, settings, target) => {
-    authStore.isAdmin = meta.requiresRiskControl === true
+    ['team', { requiresTeam: true }, { team_enabled: false }, '/dashboard', false],
+    ['admin team', { requiresTeam: true }, { team_enabled: false }, '/admin/settings', true],
+    ['data sharing', { requiresDataSharing: true }, { data_sharing_enabled: false }, '/dashboard', false],
+    ['admin data sharing', { requiresDataSharing: true }, { data_sharing_enabled: false }, '/admin/settings', true],
+  ])('redirects when loaded settings explicitly disable %s', async (_name, meta, settings, target, isAdmin) => {
+    authStore.isAdmin = isAdmin
     appStore.cachedPublicSettings = settings
     appStore.publicSettingsLoaded = true
 

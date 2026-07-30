@@ -85,6 +85,31 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "batch_image_jobs", "subscription_rate_multiplier", "numeric", 0, false)
 	requireColumn(t, tx, "batch_image_jobs", "balance_rate_multiplier", "numeric", 0, false)
 	requireColumn(t, tx, "batch_image_jobs", "plan_group_rate_multiplier_enabled", "boolean", 0, false)
+	// migration 226：历史任务归属与请求模型允许未知，索引由事务外迁移构建。
+	requireColumn(t, tx, "batch_image_jobs", "group_id", "bigint", 0, true)
+	requireColumn(t, tx, "batch_image_jobs", "requested_model", "character varying", 512, true)
+	requireColumnDefaultContains(t, tx, "batch_image_jobs", "requested_model", "''")
+	requireForeignKeyOnDelete(t, tx, "batch_image_jobs", "group_id", "groups", "SET NULL")
+	requireIndex(t, tx, "batch_image_jobs", "idx_batch_image_jobs_group_id")
+
+	// migration 225：内容风控历史归属保持可空，四个索引由事务外迁移构建。
+	for _, table := range []string{"content_moderation_logs", "content_moderation_cyber_warnings"} {
+		requireColumn(t, tx, table, "billing_user_id", "bigint", 0, true)
+		requireColumn(t, tx, table, "team_id", "bigint", 0, true)
+		requireForeignKeyOnDelete(t, tx, table, "billing_user_id", "users", "SET NULL")
+		requireForeignKeyOnDelete(t, tx, table, "team_id", "teams", "SET NULL")
+	}
+	requireIndex(t, tx, "content_moderation_logs", "idx_content_moderation_logs_billing_user_created_at")
+	requireIndex(t, tx, "content_moderation_logs", "idx_content_moderation_logs_team_created_at")
+	requireIndex(t, tx, "content_moderation_cyber_warnings", "idx_content_moderation_cyber_warnings_billing_user_created_at")
+	requireIndex(t, tx, "content_moderation_cyber_warnings", "idx_content_moderation_cyber_warnings_team_created_at")
+
+	// 复合 API Key 映射表及唯一性索引必须完整存在。
+	var compositeGroupRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.api_key_composite_groups')").Scan(&compositeGroupRegclass))
+	require.True(t, compositeGroupRegclass.Valid, "expected api_key_composite_groups table to exist")
+	requireIndex(t, tx, "api_key_composite_groups", "idx_api_key_composite_groups_key_group")
+	requireIndex(t, tx, "api_key_composite_groups", "idx_api_key_composite_groups_key_prefix")
 
 	// payment_orders: subscription order snapshot fields
 	requireColumn(t, tx, "payment_orders", "plan_id", "bigint", 0, true)
@@ -156,6 +181,41 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	// scheduler_outbox pending 事件去重支持。
 	requireColumn(t, tx, "scheduler_outbox", "dedup_key", "text", 0, true)
 	requireIndex(t, tx, "scheduler_outbox", "idx_scheduler_outbox_pending_dedup_key")
+
+	// migration 227：native remote compaction v2 能力与 probe audit 必须独立持久化。
+	var nativeCapabilityRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.openai_native_compaction_capabilities')").Scan(&nativeCapabilityRegclass))
+	require.True(t, nativeCapabilityRegclass.Valid, "expected openai_native_compaction_capabilities table to exist")
+	requireColumn(t, tx, "openai_native_compaction_capabilities", "upstream_fingerprint", "character varying", 128, false)
+	requireColumn(t, tx, "openai_native_compaction_capabilities", "effective_model", "character varying", 512, false)
+	requireColumn(t, tx, "openai_native_compaction_capabilities", "contract_version", "character varying", 64, false)
+	requireIndex(t, tx, "openai_native_compaction_capabilities", "idx_openai_native_compaction_capabilities_probe_due")
+
+	var nativeProbeAuditRegclass sql.NullString
+	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.openai_native_compaction_probe_results')").Scan(&nativeProbeAuditRegclass))
+	require.True(t, nativeProbeAuditRegclass.Valid, "expected openai_native_compaction_probe_results table to exist")
+	requireColumn(t, tx, "openai_native_compaction_probe_results", "stale_identity", "boolean", 0, false)
+	requireIndex(t, tx, "openai_native_compaction_probe_results", "idx_openai_native_compaction_probe_results_account_checked")
+	requireColumn(t, tx, "openai_native_compaction_probe_budgets", "reserved_micro_usd", "bigint", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budgets", "committed_micro_usd", "bigint", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budget_reservations", "reservation_id", "uuid", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budget_reservations", "amount_micro_usd", "bigint", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budget_reservations", "expires_at", "timestamp with time zone", 0, false)
+	requireColumn(t, tx, "openai_native_compaction_probe_budget_reservations", "authorization_principal_sha256", "character varying", 64, true)
+	requireColumn(t, tx, "openai_native_compaction_probe_results", "authorization_principal_sha256", "character varying", 64, true)
+	requireForeignKeyOnDelete(t, tx, "openai_native_compaction_probe_budget_reservations", "budget_day", "openai_native_compaction_probe_budgets", "RESTRICT")
+	requireIndex(t, tx, "openai_native_compaction_probe_budget_reservations", "idx_openai_native_compaction_probe_budget_reservations_day")
+	requireIndex(t, tx, "openai_native_compaction_probe_budget_reservations", "idx_openai_native_compaction_probe_reservations_expired")
+
+	// migration 228：每次真实 upstream attempt 独立、payload-free、unknown-safe 持久化。
+	requireColumn(t, tx, "upstream_attempt_attributions", "attempt_id", "character varying", 128, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "gateway_request_id", "character varying", 128, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "upstream_fingerprint", "character varying", 128, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "state_version", "bigint", 0, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "usage_observed", "boolean", 0, false)
+	requireColumn(t, tx, "upstream_attempt_attributions", "cost_usd", "numeric", 0, true)
+	requireIndex(t, tx, "upstream_attempt_attributions", "idx_upstream_attempt_attributions_gateway_request")
+	requireIndex(t, tx, "upstream_attempt_attributions", "idx_upstream_attempt_attributions_account_started")
 
 	// usage_billing_dedup: billing idempotency narrow table
 	var usageBillingDedupRegclass sql.NullString

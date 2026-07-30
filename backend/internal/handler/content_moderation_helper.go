@@ -73,6 +73,8 @@ func (h *OpenAIGatewayHandler) recordOpenAICyberWarningWithSnapshot(c *gin.Conte
 		reqLog.Info("content_moderation.cyber_warning_recorded",
 			zap.Int64("warning_id", warning.ID),
 			zap.Int64p("user_id", warning.UserID),
+			zap.Int64p("billing_user_id", warning.BillingUserID),
+			zap.Int64p("team_id", warning.TeamID),
 			zap.Int64p("account_id", warning.AccountID),
 			zap.Int("violation_count", warning.ViolationCount),
 			zap.Bool("auto_banned", warning.AutoBanned),
@@ -108,8 +110,13 @@ func (h *OpenAIGatewayHandler) recordOpenAIForwardErrorCyberWarning(c *gin.Conte
 }
 
 func buildOpenAICyberWarningInput(c *gin.Context, apiKey *service.APIKey, account *service.Account, model string, statusCode int, responseBody []byte, warningText string, promptExcerpt string) service.ContentModerationCyberWarningInput {
+	identity := resolveContentModerationIdentity(apiKey, middleware2.AuthSubject{})
 	input := service.ContentModerationCyberWarningInput{
 		RequestID:      contentModerationRequestID(c.Request.Context()),
+		UserID:         identity.UserID,
+		UserEmail:      identity.UserEmail,
+		BillingUserID:  identity.BillingUserID,
+		TeamID:         identity.TeamID,
 		Endpoint:       GetInboundEndpoint(c),
 		Model:          strings.TrimSpace(model),
 		UpstreamStatus: statusCode,
@@ -120,10 +127,6 @@ func buildOpenAICyberWarningInput(c *gin.Context, apiKey *service.APIKey, accoun
 	if apiKey != nil {
 		input.APIKeyID = apiKey.ID
 		input.APIKeyName = apiKey.Name
-		input.UserID = apiKey.UserID
-		if apiKey.User != nil {
-			input.UserEmail = apiKey.User.Email
-		}
 		if apiKey.GroupID != nil {
 			groupID := *apiKey.GroupID
 			input.GroupID = &groupID
@@ -196,6 +199,8 @@ func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.Conte
 		reqLog.Info("content_moderation.gateway_check_start",
 			zap.String("request_id", input.RequestID),
 			zap.Int64("user_id", input.UserID),
+			zap.Int64("billing_user_id", input.BillingUserID),
+			zap.Int64p("team_id", input.TeamID),
 			zap.Int64("api_key_id", input.APIKeyID),
 			zap.String("api_key_name", input.APIKeyName),
 			zap.Int64p("group_id", input.GroupID),
@@ -230,14 +235,18 @@ func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.Conte
 }
 
 func buildContentModerationInput(c *gin.Context, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) service.ContentModerationCheckInput {
+	identity := resolveContentModerationIdentity(apiKey, subject)
 	input := service.ContentModerationCheckInput{
-		RequestID: contentModerationRequestID(c.Request.Context()),
-		UserID:    subject.UserID,
-		Endpoint:  GetInboundEndpoint(c),
-		Provider:  contentModerationProvider(apiKey),
-		Model:     strings.TrimSpace(model),
-		Protocol:  protocol,
-		Body:      body,
+		RequestID:     contentModerationRequestID(c.Request.Context()),
+		UserID:        identity.UserID,
+		UserEmail:     identity.UserEmail,
+		BillingUserID: identity.BillingUserID,
+		TeamID:        identity.TeamID,
+		Endpoint:      GetInboundEndpoint(c),
+		Provider:      contentModerationProvider(apiKey),
+		Model:         strings.TrimSpace(model),
+		Protocol:      protocol,
+		Body:          body,
 	}
 	if forcedPlatform, ok := middleware2.GetForcePlatformFromContext(c); ok {
 		input.Provider = strings.TrimSpace(forcedPlatform)
@@ -245,9 +254,6 @@ func buildContentModerationInput(c *gin.Context, apiKey *service.APIKey, subject
 	if apiKey != nil {
 		input.APIKeyID = apiKey.ID
 		input.APIKeyName = apiKey.Name
-		if apiKey.User != nil {
-			input.UserEmail = apiKey.User.Email
-		}
 		if apiKey.GroupID != nil {
 			groupID := *apiKey.GroupID
 			input.GroupID = &groupID
@@ -260,6 +266,55 @@ func buildContentModerationInput(c *gin.Context, apiKey *service.APIKey, subject
 		input.Endpoint = c.Request.URL.Path
 	}
 	return input
+}
+
+// contentModerationIdentity 是网关进入风控前冻结的用户和归属快照。
+type contentModerationIdentity struct {
+	UserID        int64
+	UserEmail     string
+	BillingUserID int64
+	TeamID        *int64
+}
+
+// resolveContentModerationIdentity 将风控处置对象与付款归属拆开，避免团队成员触发规则时误封 Owner。
+func resolveContentModerationIdentity(apiKey *service.APIKey, subject middleware2.AuthSubject) contentModerationIdentity {
+	identity := contentModerationIdentity{
+		UserID:        subject.UserID,
+		BillingUserID: subject.UserID,
+	}
+	if apiKey == nil {
+		return identity
+	}
+
+	if apiKey.UserID > 0 {
+		identity.UserID = apiKey.UserID
+		if identity.BillingUserID <= 0 {
+			identity.BillingUserID = apiKey.UserID
+		}
+	}
+	if apiKey.User != nil && apiKey.User.ID > 0 {
+		identity.BillingUserID = apiKey.User.ID
+		if apiKey.User.ID == identity.UserID {
+			identity.UserEmail = strings.TrimSpace(apiKey.User.Email)
+		}
+	}
+	if apiKey.ActorUser != nil && apiKey.ActorUser.ID > 0 {
+		identity.UserID = apiKey.ActorUser.ID
+		identity.UserEmail = strings.TrimSpace(apiKey.ActorUser.Email)
+	} else if apiKey.TeamMembership != nil && apiKey.TeamMembership.UserID == identity.UserID {
+		identity.UserEmail = strings.TrimSpace(apiKey.TeamMembership.Email)
+	}
+	identity.TeamID = cloneContentModerationID(apiKey.TeamID)
+	return identity
+}
+
+// cloneContentModerationID 隔离 API Key 上的可变指针，避免异步审计读取到后续修改。
+func cloneContentModerationID(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func contentModerationProvider(apiKey *service.APIKey) string {

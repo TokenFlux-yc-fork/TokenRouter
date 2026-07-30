@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/TokenFlux/TokenRouter/ent/account"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/group"
 	"github.com/TokenFlux/TokenRouter/ent/predicate"
 	"github.com/TokenFlux/TokenRouter/ent/usagelog"
@@ -1169,6 +1170,21 @@ func (_u *GroupUpdate) AddAPIKeys(v ...*APIKey) *GroupUpdate {
 	return _u.AddAPIKeyIDs(ids...)
 }
 
+// AddAPIKeyCompositeGroupIDs adds the "api_key_composite_groups" edge to the APIKeyCompositeGroup entity by IDs.
+func (_u *GroupUpdate) AddAPIKeyCompositeGroupIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.AddAPIKeyCompositeGroupIDs(ids...)
+	return _u
+}
+
+// AddAPIKeyCompositeGroups adds the "api_key_composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_u *GroupUpdate) AddAPIKeyCompositeGroups(v ...*APIKeyCompositeGroup) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyCompositeGroupIDs(ids...)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_u *GroupUpdate) AddUsageLogIDs(ids ...int64) *GroupUpdate {
 	_u.mutation.AddUsageLogIDs(ids...)
@@ -1253,6 +1269,27 @@ func (_u *GroupUpdate) RemoveAPIKeys(v ...*APIKey) *GroupUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAPIKeyIDs(ids...)
+}
+
+// ClearAPIKeyCompositeGroups clears all "api_key_composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_u *GroupUpdate) ClearAPIKeyCompositeGroups() *GroupUpdate {
+	_u.mutation.ClearAPIKeyCompositeGroups()
+	return _u
+}
+
+// RemoveAPIKeyCompositeGroupIDs removes the "api_key_composite_groups" edge to APIKeyCompositeGroup entities by IDs.
+func (_u *GroupUpdate) RemoveAPIKeyCompositeGroupIDs(ids ...int64) *GroupUpdate {
+	_u.mutation.RemoveAPIKeyCompositeGroupIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeyCompositeGroups removes "api_key_composite_groups" edges to APIKeyCompositeGroup entities.
+func (_u *GroupUpdate) RemoveAPIKeyCompositeGroups(v ...*APIKeyCompositeGroup) *GroupUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyCompositeGroupIDs(ids...)
 }
 
 // ClearUsageLogs clears all "usage_logs" edges to the UsageLog entity.
@@ -1803,6 +1840,51 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeyCompositeGroupsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyCompositeGroupsTable,
+			Columns: []string{group.APIKeyCompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeyCompositeGroupsIDs(); len(nodes) > 0 && !_u.mutation.APIKeyCompositeGroupsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyCompositeGroupsTable,
+			Columns: []string{group.APIKeyCompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeyCompositeGroupsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyCompositeGroupsTable,
+			Columns: []string{group.APIKeyCompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -3181,6 +3263,21 @@ func (_u *GroupUpdateOne) AddAPIKeys(v ...*APIKey) *GroupUpdateOne {
 	return _u.AddAPIKeyIDs(ids...)
 }
 
+// AddAPIKeyCompositeGroupIDs adds the "api_key_composite_groups" edge to the APIKeyCompositeGroup entity by IDs.
+func (_u *GroupUpdateOne) AddAPIKeyCompositeGroupIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.AddAPIKeyCompositeGroupIDs(ids...)
+	return _u
+}
+
+// AddAPIKeyCompositeGroups adds the "api_key_composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_u *GroupUpdateOne) AddAPIKeyCompositeGroups(v ...*APIKeyCompositeGroup) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddAPIKeyCompositeGroupIDs(ids...)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_u *GroupUpdateOne) AddUsageLogIDs(ids ...int64) *GroupUpdateOne {
 	_u.mutation.AddUsageLogIDs(ids...)
@@ -3265,6 +3362,27 @@ func (_u *GroupUpdateOne) RemoveAPIKeys(v ...*APIKey) *GroupUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAPIKeyIDs(ids...)
+}
+
+// ClearAPIKeyCompositeGroups clears all "api_key_composite_groups" edges to the APIKeyCompositeGroup entity.
+func (_u *GroupUpdateOne) ClearAPIKeyCompositeGroups() *GroupUpdateOne {
+	_u.mutation.ClearAPIKeyCompositeGroups()
+	return _u
+}
+
+// RemoveAPIKeyCompositeGroupIDs removes the "api_key_composite_groups" edge to APIKeyCompositeGroup entities by IDs.
+func (_u *GroupUpdateOne) RemoveAPIKeyCompositeGroupIDs(ids ...int64) *GroupUpdateOne {
+	_u.mutation.RemoveAPIKeyCompositeGroupIDs(ids...)
+	return _u
+}
+
+// RemoveAPIKeyCompositeGroups removes "api_key_composite_groups" edges to APIKeyCompositeGroup entities.
+func (_u *GroupUpdateOne) RemoveAPIKeyCompositeGroups(v ...*APIKeyCompositeGroup) *GroupUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveAPIKeyCompositeGroupIDs(ids...)
 }
 
 // ClearUsageLogs clears all "usage_logs" edges to the UsageLog entity.
@@ -3845,6 +3963,51 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(apikey.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.APIKeyCompositeGroupsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyCompositeGroupsTable,
+			Columns: []string{group.APIKeyCompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedAPIKeyCompositeGroupsIDs(); len(nodes) > 0 && !_u.mutation.APIKeyCompositeGroupsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyCompositeGroupsTable,
+			Columns: []string{group.APIKeyCompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.APIKeyCompositeGroupsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   group.APIKeyCompositeGroupsTable,
+			Columns: []string{group.APIKeyCompositeGroupsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(apikeycompositegroup.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

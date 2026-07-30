@@ -235,6 +235,8 @@ func TestAPIContracts(t *testing.T) {
 					"key": "sk_custom_1234567890",
 					"name": "Key One",
 					"group_id": null,
+					"is_composite": false,
+					"composite_groups": [],
 					"status": "active",
 					"fast_mode_policy": "follow_request",
 					"ip_whitelist": null,
@@ -318,6 +320,8 @@ func TestAPIContracts(t *testing.T) {
 							"key": "sk_custom_1234567890",
 							"name": "Key One",
 							"group_id": null,
+							"is_composite": false,
+							"composite_groups": [],
 							"status": "active",
 							"fast_mode_policy": "follow_request",
 							"ip_whitelist": null,
@@ -1153,6 +1157,8 @@ func TestAPIContracts(t *testing.T) {
 					"balance_low_notify_enabled": false,
 					"account_quota_notify_enabled": false,
 					"subscription_expiry_notify_enabled": true,
+					"team_enabled": true,
+					"data_sharing_enabled": true,
 					"risk_control_enabled": false,
 					"balance_unit_name": "USD",
 					"balance_unit_symbol": "$",
@@ -1474,6 +1480,8 @@ func TestAPIContracts(t *testing.T) {
 					"balance_low_notify_enabled": false,
 					"account_quota_notify_enabled": false,
 					"subscription_expiry_notify_enabled": true,
+					"team_enabled": true,
+					"data_sharing_enabled": true,
 					"risk_control_enabled": false,
 					"balance_unit_name": "USD",
 					"balance_unit_symbol": "$",
@@ -2028,6 +2036,11 @@ func (stubGroupRepo) UpdateHealthCheckConfig(ctx context.Context, groupID int64,
 
 func (stubGroupRepo) ForceHealthCheck(ctx context.Context, groupID int64) error {
 	return errors.New("not implemented")
+}
+
+// LockGroupSortOrder 满足管理端分组仓储接口；合同测试不执行创建流程。
+func (stubGroupRepo) LockGroupSortOrder(ctx context.Context) error {
+	return nil
 }
 
 func (stubGroupRepo) FindByDuplicateOperationID(ctx context.Context, operationID string) (*service.Group, error) {

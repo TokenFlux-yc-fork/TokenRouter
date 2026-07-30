@@ -283,6 +283,10 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 	if err != nil {
 		return nil, err
 	}
+	capabilitiesByAccount, err := r.loadOpenAINativeCompactionCapabilities(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	outByID := make(map[int64]*service.Account, len(entAccounts))
 	for _, entAcc := range entAccounts {
@@ -305,6 +309,7 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 		if ags, ok := accountGroupsByAccount[entAcc.ID]; ok {
 			out.AccountGroups = ags
 		}
+		out.OpenAINativeCompactionCapabilities = capabilitiesByAccount[entAcc.ID]
 		outByID[entAcc.ID] = out
 	}
 
@@ -3007,6 +3012,10 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	if err != nil {
 		return nil, err
 	}
+	capabilitiesByAccount, err := r.loadOpenAINativeCompactionCapabilities(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	outAccounts := make([]service.Account, 0, len(accounts))
 	for _, acc := range accounts {
@@ -3035,10 +3044,108 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 		if ags, ok := accountGroupsByAccount[acc.ID]; ok {
 			out.AccountGroups = ags
 		}
+		out.OpenAINativeCompactionCapabilities = capabilitiesByAccount[acc.ID]
 		outAccounts = append(outAccounts, *out)
 	}
 
 	return outAccounts, nil
+}
+
+func (r *accountRepository) loadOpenAINativeCompactionCapabilities(
+	ctx context.Context,
+	accountIDs []int64,
+) (map[int64][]service.OpenAINativeCompactionCapability, error) {
+	result := make(map[int64][]service.OpenAINativeCompactionCapability)
+	if len(accountIDs) == 0 || r.sql == nil {
+		return result, nil
+	}
+
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT c.account_id, c.upstream_fingerprint, c.effective_model, c.contract_version,
+		       c.supported, c.mode, c.source, c.checked_at, c.last_status,
+		       c.last_semantic_failure, c.quarantined_until, c.override_actor,
+		       c.override_reason, c.override_created_at, c.override_expires_at,
+		       c.override_revoked_at
+		FROM openai_native_compaction_capabilities c
+		JOIN accounts a ON a.id = c.account_id AND a.deleted_at IS NULL
+		WHERE c.account_id = ANY($1)
+		  AND (
+			c.source <> $2 OR (
+				a.platform = $3
+				AND a.type = $4
+				AND c.contract_version = $5
+				AND c.upstream_fingerprint = $6
+			)
+		  )
+		ORDER BY c.account_id, c.upstream_fingerprint, c.effective_model, c.contract_version
+	`, pq.Array(accountIDs),
+		service.OpenAINativeCompactionCapabilitySourceTrustedOfficial,
+		service.PlatformOpenAI, service.AccountTypeOAuth,
+		service.OpenAINativeCompactionContractVersion,
+		mustOfficialOpenAINativeCompactionFingerprint(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var capability service.OpenAINativeCompactionCapability
+		var fingerprint string
+		var checkedAt, quarantinedUntil, overrideCreatedAt, overrideExpiresAt, overrideRevokedAt sql.NullTime
+		var lastStatus sql.NullInt64
+		if err := rows.Scan(
+			&capability.Key.AccountID,
+			&fingerprint,
+			&capability.Key.EffectiveModel,
+			&capability.Key.ContractVersion,
+			&capability.Supported,
+			&capability.Mode,
+			&capability.Source,
+			&checkedAt,
+			&lastStatus,
+			&capability.LastSemanticFailure,
+			&quarantinedUntil,
+			&capability.OverrideActor,
+			&capability.OverrideReason,
+			&overrideCreatedAt,
+			&overrideExpiresAt,
+			&overrideRevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		capability.Key.UpstreamFingerprint = service.OpenAIUpstreamFingerprint(fingerprint)
+		capability.CheckedAt = nullableTimePointer(checkedAt)
+		capability.QuarantinedUntil = nullableTimePointer(quarantinedUntil)
+		capability.OverrideCreatedAt = nullableTimePointer(overrideCreatedAt)
+		capability.OverrideExpiresAt = nullableTimePointer(overrideExpiresAt)
+		capability.OverrideRevokedAt = nullableTimePointer(overrideRevokedAt)
+		if lastStatus.Valid {
+			status := int(lastStatus.Int64)
+			capability.LastStatus = &status
+		}
+		result[capability.Key.AccountID] = append(result[capability.Key.AccountID], capability)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func mustOfficialOpenAINativeCompactionFingerprint() service.OpenAIUpstreamFingerprint {
+	fingerprint, err := service.OfficialOpenAINativeCompactionFingerprint()
+	if err != nil {
+		panic("invalid built-in OpenAI native compaction endpoint: " + err.Error())
+	}
+	return fingerprint
+}
+
+func nullableTimePointer(value sql.NullTime) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	parsed := value.Time
+	return &parsed
 }
 
 func tempUnschedulablePredicate() dbpredicate.Account {

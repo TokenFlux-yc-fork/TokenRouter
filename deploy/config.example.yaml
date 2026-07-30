@@ -398,6 +398,42 @@ gateway:
     failure_threshold: 2
     window_seconds: 60
     ttl_seconds: 600
+  # Native remote_compaction_v2 客户请求 whole-attempt staging 边界。
+  # 失败 attempt 的 staged bytes 仍计入 request cumulative budget，直至请求结束。
+  openai_native_compaction:
+    memory_threshold_bytes: 1048576
+    max_attempt_bytes: 67108864
+    max_attempt_events: 8192
+    max_attempt_duration_seconds: 900
+    max_process_staged_bytes: 536870912
+    max_request_cumulative_bytes: 134217728
+    semantic_quarantine_seconds: 900
+  # Native remote_compaction_v2 capability probe. Disabled by default.
+  # 仅使用隔离分组/API Key 和精确模型白名单；组内 API-key/custom HTTPS endpoint
+  # 仍受全局 URL policy 约束。费用均为整数 micro-USD。
+  openai_native_compaction_probe:
+    enabled: false
+    tick_interval_seconds: 30
+    max_workers: 2
+    claim_limit: 2
+    claim_ttl_seconds: 180
+    request_timeout_seconds: 90
+    max_response_bytes: 20971520
+    max_events: 256
+    success_reprobe_minutes: 1440
+    unsupported_reprobe_minutes: 360
+    retry_initial_seconds: 60
+    retry_max_seconds: 3600
+    retry_jitter_ratio: 0.2
+    isolated_group_id: 0
+    # Authorization sentinel / kill switch only. This key is never sent upstream
+    # and never represents the candidate account credential. Audit stores only
+    # its irreversible principal fingerprint.
+    isolated_api_key_id: 0
+    model_allowlist: []
+    max_output_tokens: 0
+    max_cost_per_run: 0
+    max_cost_per_day: 0
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts

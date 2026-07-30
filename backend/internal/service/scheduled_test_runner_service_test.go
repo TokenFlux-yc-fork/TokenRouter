@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -138,6 +139,24 @@ func scheduledResult(status string) *ScheduledTestResult {
 		FinishedAt: now,
 		CreatedAt:  now,
 	}
+}
+
+func TestScheduledTestRunnerStartHonorsInstanceSwitch(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		runner := &ScheduledTestRunnerService{cfg: &config.Config{ScheduledRunnerEnabled: false}}
+		runner.Start()
+		require.Nil(t, runner.cron)
+	})
+
+	t.Run("enabled", func(t *testing.T) {
+		runner := &ScheduledTestRunnerService{cfg: &config.Config{
+			ScheduledRunnerEnabled: true,
+			Timezone:               "UTC",
+		}, leaseCache: &scheduledRunnerLeaseFake{}, instanceID: "enabled-test"}
+		runner.Start()
+		t.Cleanup(runner.Stop)
+		require.NotNil(t, runner.cron)
+	})
 }
 
 func TestNormalizeScheduledTestPlanDefaultsClampsCircuitBreakerInputs(t *testing.T) {

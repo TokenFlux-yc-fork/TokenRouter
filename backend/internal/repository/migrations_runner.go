@@ -58,12 +58,25 @@ const schedulerOutboxPendingDedupKeyIndex = "idx_scheduler_outbox_pending_dedup_
 const latestAPIKeyIPIndexMigration = "201_add_usage_logs_api_key_latest_ip_index_notx.sql"
 const latestAPIKeyIPIndex = "idx_usage_logs_api_key_latest_ip"
 const teamAttributionIndexMigration = "221a_team_attribution_indexes_notx.sql"
+const contentModerationAttributionIndexMigration = "225a_content_moderation_team_attribution_indexes_notx.sql"
+const compositeAPIKeyExistingTableIndexMigration = "226a_composite_api_key_existing_table_indexes_notx.sql"
 
 var teamAttributionIndexes = [...]string{
 	"api_keys_team_id_idx",
 	"usage_logs_billing_user_created_idx",
 	"usage_logs_team_created_idx",
 	"batch_image_jobs_team_created_idx",
+}
+
+var contentModerationAttributionIndexes = [...]string{
+	"idx_content_moderation_logs_billing_user_created_at",
+	"idx_content_moderation_logs_team_created_at",
+	"idx_content_moderation_cyber_warnings_billing_user_created_at",
+	"idx_content_moderation_cyber_warnings_team_created_at",
+}
+
+var compositeAPIKeyExistingTableIndexes = [...]string{
+	"idx_batch_image_jobs_group_id",
 }
 
 type migrationChecksumCompatibilityRule struct {
@@ -292,12 +305,11 @@ func prepareNonTransactionalMigration(ctx context.Context, db migrationConnectio
 	case latestAPIKeyIPIndexMigration:
 		return dropInvalidIndexIfPresent(ctx, db, latestAPIKeyIPIndex)
 	case teamAttributionIndexMigration:
-		for _, indexName := range teamAttributionIndexes {
-			if err := dropInvalidIndexIfPresent(ctx, db, indexName); err != nil {
-				return err
-			}
-		}
-		return nil
+		return dropInvalidIndexesIfPresent(ctx, db, teamAttributionIndexes[:])
+	case contentModerationAttributionIndexMigration:
+		return dropInvalidIndexesIfPresent(ctx, db, contentModerationAttributionIndexes[:])
+	case compositeAPIKeyExistingTableIndexMigration:
+		return dropInvalidIndexesIfPresent(ctx, db, compositeAPIKeyExistingTableIndexes[:])
 	default:
 		return nil
 	}
@@ -317,6 +329,15 @@ func preparePaymentOrdersOutTradeNoUniqueMigration(ctx context.Context, db migra
 	}
 
 	return dropInvalidIndexIfPresent(ctx, db, paymentOrdersOutTradeNoUniqueIndex)
+}
+
+func dropInvalidIndexesIfPresent(ctx context.Context, db migrationConnection, indexNames []string) error {
+	for _, indexName := range indexNames {
+		if err := dropInvalidIndexIfPresent(ctx, db, indexName); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func dropInvalidIndexIfPresent(ctx context.Context, db migrationConnection, indexName string) error {

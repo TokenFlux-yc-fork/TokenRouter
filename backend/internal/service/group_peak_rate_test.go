@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
+	"github.com/gin-gonic/gin"
 )
 
 func init() {
-	// 测试固定全局时区为 UTC，确保判定可复现。
+	// 测试固定全局时区与 Gin 模式，避免并行用例重复写进程级状态。
 	_ = timezone.Init("UTC")
+	gin.SetMode(gin.TestMode)
 }
 
 func newPeakGroup(enabled bool, start, end string, mult float64) *Group {

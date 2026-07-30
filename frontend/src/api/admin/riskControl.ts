@@ -202,6 +202,8 @@ export interface ContentModerationLog {
   request_id: string
   user_id: number | null
   user_email: string
+  billing_user_id?: number | null
+  team_id?: number | null
   api_key_id: number | null
   api_key_name: string
   group_id: number | null
@@ -242,6 +244,8 @@ export interface ContentModerationCyberWarning {
   request_id: string
   user_id: number | null
   user_email: string
+  billing_user_id?: number | null
+  team_id?: number | null
   api_key_id: number | null
   api_key_name: string
   group_id: number | null

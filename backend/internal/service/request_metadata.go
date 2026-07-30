@@ -12,12 +12,14 @@ type requestMetadataContextKey struct{}
 var requestMetadataKey = requestMetadataContextKey{}
 
 type RequestMetadata struct {
-	IsMaxTokensOneHaikuRequest *bool
-	ThinkingEnabled            *bool
-	PrefetchedStickyAccountID  *int64
-	PrefetchedStickyGroupID    *int64
-	SingleAccountRetry         *bool
-	AccountSwitchCount         *int
+	IsMaxTokensOneHaikuRequest               *bool
+	ThinkingEnabled                          *bool
+	PrefetchedStickyAccountID                *int64
+	PrefetchedStickyGroupID                  *int64
+	SingleAccountRetry                       *bool
+	AccountSwitchCount                       *int
+	OpenAINativeRemoteCompactionV2           *bool
+	OpenAINativeCompactionRequestStageBudget *OpenAIStageBudget
 }
 
 var (
@@ -114,6 +116,33 @@ func WithAccountSwitchCount(ctx context.Context, value int, bridgeOldKeys bool) 
 	}, func(base context.Context) context.Context {
 		return context.WithValue(base, ctxkey.AccountSwitchCount, value)
 	})
+}
+
+func WithOpenAINativeRemoteCompactionV2(ctx context.Context, value bool) context.Context {
+	return updateRequestMetadata(ctx, false, func(md *RequestMetadata) {
+		v := value
+		md.OpenAINativeRemoteCompactionV2 = &v
+	}, nil)
+}
+
+func OpenAINativeRemoteCompactionV2FromContext(ctx context.Context) (bool, bool) {
+	if md := metadataFromContext(ctx); md != nil && md.OpenAINativeRemoteCompactionV2 != nil {
+		return *md.OpenAINativeRemoteCompactionV2, true
+	}
+	return false, false
+}
+
+func WithOpenAINativeCompactionRequestStageBudget(ctx context.Context, budget *OpenAIStageBudget) context.Context {
+	return updateRequestMetadata(ctx, false, func(md *RequestMetadata) {
+		md.OpenAINativeCompactionRequestStageBudget = budget
+	}, nil)
+}
+
+func OpenAINativeCompactionRequestStageBudgetFromContext(ctx context.Context) *OpenAIStageBudget {
+	if md := metadataFromContext(ctx); md != nil {
+		return md.OpenAINativeCompactionRequestStageBudget
+	}
+	return nil
 }
 
 func IsMaxTokensOneHaikuRequestFromContext(ctx context.Context) (bool, bool) {

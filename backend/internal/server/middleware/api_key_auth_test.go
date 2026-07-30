@@ -1809,6 +1809,36 @@ func TestAPIKeyAuthAllowsBatchManagementAfterQuotaExhaustion(t *testing.T) {
 	}
 }
 
+func TestAPIKeyAuthCompositeModelListStillChecksQuota(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := &service.User{ID: 11, Role: service.RoleUser, Status: service.StatusActive, Balance: 10}
+	group := &service.Group{ID: 9, Platform: service.PlatformOpenAI, Status: service.StatusActive, Hydrated: true}
+	apiKey := &service.APIKey{
+		ID: 107, UserID: user.ID, Key: "composite-model-list-exhausted", Status: service.StatusAPIKeyQuotaExhausted,
+		User: user, IsComposite: true, Quota: 1, QuotaUsed: 1,
+		CompositeGroups: []service.APIKeyCompositeGroup{{GroupID: group.ID, Prefix: "GPT", NormalizedPrefix: "gpt", Group: group}},
+	}
+	repo := &stubApiKeyRepo{getByKey: func(_ context.Context, key string) (*service.APIKey, error) {
+		if key != apiKey.Key {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		clone := *apiKey
+		return &clone, nil
+	}}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	router := newAuthTestRouter(service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg), nil, cfg)
+
+	for _, path := range []string{"/v1/models", "/v1/images/batches/models"} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("x-api-key", apiKey.Key)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusTooManyRequests, w.Code, path)
+		requireAPIKeyAuthError(t, w, "API_KEY_QUOTA_EXHAUSTED", "API key 额度已用完")
+	}
+}
+
 func newAuthTestRouter(apiKeyService *service.APIKeyService, subscriptionService *service.SubscriptionService, cfg *config.Config) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, cfg)))
@@ -1819,6 +1849,8 @@ func newAuthTestRouter(apiKeyService *service.APIKeyService, subscriptionService
 	router.POST("/v1/responses", ok)
 	router.POST("/v1/messages", ok)
 	router.GET("/v1/usage", ok)
+	router.GET("/v1/models", ok)
+	router.GET("/v1/images/batches/models", ok)
 	router.GET("/v1/sub2api/billing", ok)
 	router.GET("/v1/images/batches", ok)
 	router.GET("/v1/images/batches/:id", ok)

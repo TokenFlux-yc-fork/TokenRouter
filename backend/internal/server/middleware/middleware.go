@@ -124,7 +124,8 @@ func GoogleErrorWriter(c *gin.Context, status int, message string) {
 func RequireGroupAssignment(settingService *service.SettingService, writeError GatewayErrorWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		apiKey, ok := GetAPIKeyFromContext(c)
-		if !ok || apiKey.GroupID != nil {
+		_, compositeNoGroup := c.Get(compositeKeyNoGroupContextKey)
+		if !ok || apiKey.GroupID != nil || (apiKey.IsComposite && compositeNoGroup) {
 			c.Next()
 			return
 		}

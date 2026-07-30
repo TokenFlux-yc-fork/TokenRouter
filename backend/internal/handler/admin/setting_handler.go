@@ -243,6 +243,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		FooterText:                                             settings.FooterText,
 		DefaultConcurrency:                                     settings.DefaultConcurrency,
 		DefaultBalance:                                         settings.DefaultBalance,
+		TeamEnabled:                                            settings.TeamEnabled,
+		DataSharingEnabled:                                     settings.DataSharingEnabled,
 		RiskControlEnabled:                                     settings.RiskControlEnabled,
 		CyberSessionBlockEnabled:                               settings.CyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:                            settings.CyberSessionBlockTTLSeconds,

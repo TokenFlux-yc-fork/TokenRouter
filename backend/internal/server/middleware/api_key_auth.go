@@ -181,6 +181,12 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
 			return
 		}
+		apiKey, err = resolveCompositeAPIKeyRequest(c, apiKeyService, apiKey)
+		if err != nil {
+			abortCompositeKeyError(c, err)
+			return
+		}
+		SetOpsFallbackAPIKey(c, apiKey)
 		if abortIfAPIKeyGroupUnavailable(c, apiKey) {
 			return
 		}
@@ -194,7 +200,8 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		// 异步图片任务管理只读取已有数据或释放冻结；即使任务耗尽额度，结果仍应可取回或取消。
 		skipBilling := c.Request.URL.Path == "/v1/usage" || billingInfoRequest ||
 			isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) ||
-			isBatchImageManagementRequest(c.Request.Method, c.Request.URL.Path)
+			isBatchImageBillingBypassRequest(c.Request.Method, c.Request.URL.Path) ||
+			(apiKey.IsComposite && isGrokVideoTaskRead(c.Request.Method, c.Request.URL.Path))
 
 		// ── 4. SimpleMode → early return ─────────────────────────────
 
@@ -373,6 +380,12 @@ func isBatchImageManagementRequest(method, path string) bool {
 	return method == http.MethodPost && strings.HasPrefix(path, root+"/") && strings.HasSuffix(path, "/cancel")
 }
 
+// isBatchImageBillingBypassRequest 排除模型列表，仅让既有批任务的查询和管理绕过计费。
+func isBatchImageBillingBypassRequest(method, path string) bool {
+	path = strings.TrimRight(path, "/")
+	return path != "/v1/images/batches/models" && isBatchImageManagementRequest(method, path)
+}
+
 // isAPIKeyNonConsumingRequest 标识只读取已有状态或释放资源的网关请求。
 // 未知路径默认视为会产生消费，避免新增路由自动绕过团队限额。
 func isAPIKeyNonConsumingRequest(method, path string) bool {
@@ -381,7 +394,7 @@ func isAPIKeyNonConsumingRequest(method, path string) bool {
 		if path == "/v1/usage" || path == "/antigravity/v1/usage" || path == "/v1/sub2api/billing" {
 			return true
 		}
-		if strings.HasSuffix(path, "/models") || isAsyncImageTaskRead(method, path) || isBatchImageManagementRequest(method, path) {
+		if strings.HasSuffix(path, "/models") || isAsyncImageTaskRead(method, path) || isBatchImageManagementRequest(method, path) || isGrokVideoTaskRead(method, path) {
 			return true
 		}
 	}

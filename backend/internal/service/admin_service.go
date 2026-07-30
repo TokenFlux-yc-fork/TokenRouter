@@ -219,7 +219,7 @@ type CreateGroupInput struct {
 	Description    string
 	Platform       string
 	DisplayBrand   string
-	SortOrder      int
+	SortOrder      *int
 	RateMultiplier float64
 	IsExclusive    bool
 	IsDefault      bool
@@ -654,6 +654,7 @@ type adminServiceImpl struct {
 	userRepo             UserRepository
 	groupRepo            GroupRepository
 	groupDuplicateRepo   GroupDuplicateRepository
+	groupSortOrderRepo   GroupSortOrderRepository
 	accountRepo          AccountRepository
 	accountDuplicateRepo AccountDuplicateRepository
 	proxyRepo            ProxyRepository
@@ -713,6 +714,7 @@ func NewAdminService(
 		userRepo:             userRepo,
 		groupRepo:            groupRepo,
 		groupDuplicateRepo:   groupRepo,
+		groupSortOrderRepo:   groupRepo,
 		accountRepo:          accountRepo,
 		accountDuplicateRepo: accountRepo,
 		proxyRepo:            proxyRepo,

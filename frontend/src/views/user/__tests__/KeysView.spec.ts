@@ -59,6 +59,19 @@ const messages: Record<string, string> = {
   'keys.created': 'Created',
   'keys.expiresAt': 'Expires',
   'keys.group': 'Group',
+  'keys.groupRequired': 'Group required',
+  'keys.composite.label': 'Composite key',
+  'keys.composite.hint': 'Choose a group with a prefix/model ID.',
+  'keys.composite.addMapping': 'Add group mapping',
+  'keys.composite.editMappings': 'Edit composite key mappings',
+  'keys.composite.prefixPlaceholder': 'For example, GPT',
+  'keys.composite.groupRequired': 'Select a group',
+  'keys.composite.prefixRequired': 'Enter a prefix',
+  'keys.composite.prefixInvalid': 'Invalid prefix',
+  'keys.composite.prefixDuplicate': 'Duplicate prefix',
+  'keys.composite.groupDuplicate': 'Duplicate group',
+  'keys.composite.mappingRequired': 'Mapping required',
+  'keys.composite.tooManyMappings': 'Too many mappings',
   'keys.id': 'ID',
   'keys.currentConcurrency': 'Current Concurrency',
   'keys.lastUsedAt': 'Last Used',
@@ -202,7 +215,7 @@ const TablePageLayoutStub = {
 
 const DataTableStub = {
   name: 'DataTable',
-  props: ['columns', 'data'],
+  props: ['columns', 'data', 'loading'],
   emits: ['sort'],
   template: `
     <div>
@@ -211,6 +224,7 @@ const DataTableStub = {
       <button data-test="sort-current-concurrency" @click="$emit('sort', 'current_concurrency', 'asc')">
         Sort Current Concurrency
       </button>
+      <div v-if="loading" data-test="table-loading">Loading</div>
       <div v-for="row in data" :key="row.id">
         <div
           v-if="columns.some((col) => col.key === 'id')"
@@ -219,6 +233,7 @@ const DataTableStub = {
           <slot name="cell-id" :value="row.id" :row="row" />
         </div>
         <slot name="cell-name" :value="row.name" :row="row" />
+        <div data-test="group"><slot name="cell-group" :value="row.group" :row="row" /></div>
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
         </div>
@@ -235,7 +250,7 @@ const DataTableStub = {
           <slot name="cell-last_used_ip" :value="row.last_used_ip" :row="row" />
         </div>
       </div>
-      <slot name="empty" />
+      <div v-if="!loading && data.length === 0" data-test="table-empty"><slot name="empty" /></div>
     </div>
   `,
 }
@@ -254,6 +269,13 @@ const SearchInputStub = {
   template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
 }
 
+const ToggleStub = {
+  name: 'Toggle',
+  props: ['modelValue'],
+  emits: ['update:modelValue'],
+  template: '<button type="button" @click="$emit(\'update:modelValue\', !modelValue)"></button>',
+}
+
 const PaginationStub = {
   name: 'Pagination',
   props: ['page', 'total', 'pageSize'],
@@ -270,7 +292,7 @@ const IconStub = {
   template: '<span data-test="icon">{{ name }}</span>',
 }
 
-const mountView = async () => {
+const mountView = async (settle = true) => {
   const wrapper = mount(KeysView, {
     global: {
       stubs: {
@@ -282,7 +304,7 @@ const mountView = async () => {
         ConfirmDialog: true,
         EmptyState: true,
         Select: SelectStub,
-        Toggle: true,
+        Toggle: ToggleStub,
         SearchInput: SearchInputStub,
         Icon: IconStub,
         UseKeyModal: true,
@@ -293,8 +315,10 @@ const mountView = async () => {
       },
     },
   })
-  await flushPromises()
-  await nextTick()
+  if (settle) {
+    await flushPromises()
+    await nextTick()
+  }
   return wrapper
 }
 
@@ -347,6 +371,28 @@ describe('user KeysView column settings', () => {
     isCurrentStep.mockReturnValue(false)
     createKey.mockResolvedValue(createApiKey())
     updateKey.mockResolvedValue(createApiKey())
+  })
+
+  it('keeps the table loading until the first API key request completes', async () => {
+    let resolvePublicSettings!: (settings: Record<string, never>) => void
+    getPublicSettings.mockReturnValueOnce(new Promise((resolve) => {
+      resolvePublicSettings = resolve
+    }))
+
+    const wrapper = await mountView(false)
+    await nextTick()
+
+    expect(wrapper.find('[data-test="table-loading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="table-empty"]').exists()).toBe(false)
+    expect(listKeys).not.toHaveBeenCalled()
+
+    resolvePublicSettings({})
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-test="table-loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="table-empty"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="status"]').exists()).toBe(true)
   })
 
   it('uses the default API key columns with low-frequency columns hidden', async () => {
@@ -671,5 +717,207 @@ describe('user KeysView column settings', () => {
     await flushPromises()
 
     expect(showError).toHaveBeenCalledWith('API key limit reached')
+  })
+
+  it('creates a composite key with ordered group prefix mappings', async () => {
+    getAvailableGroups.mockResolvedValueOnce([
+      { id: 42, name: 'OpenAI', platform: 'openai', rate_multiplier: 1, data_sharing_enabled: false },
+      { id: 43, name: 'Claude', platform: 'anthropic', rate_multiplier: 1, data_sharing_enabled: false },
+    ])
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await wrapper.get('[data-tour="key-form-name"]').setValue('composite-key')
+    await wrapper.get('[data-test="composite-key-toggle"]').trigger('click')
+    await nextTick()
+
+    let editor = wrapper.get('[data-test="composite-group-editor"]')
+    await editor.findAllComponents({ name: 'Select' })[0]!.vm.$emit('update:modelValue', 42)
+    await editor.findAll('input')[0]!.setValue('GPT')
+    await getButtonByText(wrapper, 'Add group mapping').trigger('click')
+    await nextTick()
+
+    editor = wrapper.get('[data-test="composite-group-editor"]')
+    await editor.findAllComponents({ name: 'Select' })[1]!.vm.$emit('update:modelValue', 43)
+    await editor.findAll('input')[1]!.setValue('Claude')
+    await wrapper.get('form#key-form').trigger('submit')
+    await flushPromises()
+
+    expect(createKey).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'composite-key',
+      group_id: undefined,
+      is_composite: true,
+      composite_groups: [
+        { group_id: 42, prefix: 'GPT' },
+        { group_id: 43, prefix: 'Claude' },
+      ],
+    }))
+  })
+
+  it('shows composite mappings in the group column and opens full editing', async () => {
+    listKeys.mockResolvedValueOnce({
+      items: [{
+        ...createApiKey(),
+        is_composite: true,
+        composite_groups: [
+          { group_id: 42, prefix: 'GPT', group: { id: 42, name: 'OpenAI', platform: 'openai' } },
+          { group_id: 43, prefix: 'Claude', group: { id: 43, name: 'Claude', platform: 'anthropic' } },
+        ],
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = await mountView()
+
+    expect(wrapper.get('[data-test="group"]').text()).toContain('GPT')
+    expect(wrapper.get('[data-test="group"]').text()).toContain('Claude')
+    await wrapper.get('[data-test="group"] button').trigger('click')
+    await nextTick()
+
+    expect(wrapper.get('[data-test="composite-group-editor"]').findAll('input')).toHaveLength(2)
+  })
+
+  it('blocks case-insensitive duplicate composite prefixes', async () => {
+    getAvailableGroups.mockResolvedValueOnce([
+      { id: 42, name: 'OpenAI', platform: 'openai', rate_multiplier: 1, data_sharing_enabled: false },
+      { id: 43, name: 'Claude', platform: 'anthropic', rate_multiplier: 1, data_sharing_enabled: false },
+    ])
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await wrapper.get('[data-test="composite-key-toggle"]').trigger('click')
+    let editor = wrapper.get('[data-test="composite-group-editor"]')
+    await editor.findAllComponents({ name: 'Select' })[0]!.vm.$emit('update:modelValue', 42)
+    await editor.findAll('input')[0]!.setValue('GPT')
+    await getButtonByText(wrapper, 'Add group mapping').trigger('click')
+    await nextTick()
+
+    editor = wrapper.get('[data-test="composite-group-editor"]')
+    await editor.findAllComponents({ name: 'Select' })[1]!.vm.$emit('update:modelValue', 43)
+    await editor.findAll('input')[1]!.setValue('gpt')
+    await wrapper.get('form#key-form').trigger('submit')
+    await nextTick()
+
+    expect(showError).toHaveBeenCalledWith('Duplicate prefix')
+    expect(createKey).not.toHaveBeenCalled()
+  })
+
+  it('blocks duplicate groups in composite mappings', async () => {
+    getAvailableGroups.mockResolvedValueOnce([
+      { id: 42, name: 'OpenAI', platform: 'openai', rate_multiplier: 1, data_sharing_enabled: false },
+    ])
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'Create API Key').trigger('click')
+    await wrapper.get('[data-test="composite-key-toggle"]').trigger('click')
+    let editor = wrapper.get('[data-test="composite-group-editor"]')
+    await editor.findAllComponents({ name: 'Select' })[0]!.vm.$emit('update:modelValue', 42)
+    await editor.findAll('input')[0]!.setValue('GPT')
+    await getButtonByText(wrapper, 'Add group mapping').trigger('click')
+    await nextTick()
+
+    editor = wrapper.get('[data-test="composite-group-editor"]')
+    await editor.findAllComponents({ name: 'Select' })[1]!.vm.$emit('update:modelValue', 42)
+    await editor.findAll('input')[1]!.setValue('Backup')
+    await wrapper.get('form#key-form').trigger('submit')
+    await nextTick()
+
+    expect(showError).toHaveBeenCalledWith('Duplicate group')
+    expect(createKey).not.toHaveBeenCalled()
+  })
+
+  it('uses one data sharing confirmation for every new composite mapping', async () => {
+    vi.useFakeTimers()
+    getAvailableGroups.mockResolvedValueOnce([
+      { id: 42, name: 'OpenAI', platform: 'openai', rate_multiplier: 1, data_sharing_enabled: true },
+      { id: 43, name: 'Claude', platform: 'anthropic', rate_multiplier: 1, data_sharing_enabled: true },
+    ])
+    getDataSharingNotice.mockResolvedValue({ version: 7, content: 'notice' })
+    confirmDataSharingNotice.mockResolvedValue(undefined)
+    const wrapper = await mountView()
+
+    try {
+      await getButtonByText(wrapper, 'Create API Key').trigger('click')
+      await wrapper.get('[data-tour="key-form-name"]').setValue('sharing-composite')
+      await wrapper.get('[data-test="composite-key-toggle"]').trigger('click')
+      let editor = wrapper.get('[data-test="composite-group-editor"]')
+      await editor.findAllComponents({ name: 'Select' })[0]!.vm.$emit('update:modelValue', 42)
+      await editor.findAll('input')[0]!.setValue('GPT')
+      await getButtonByText(wrapper, 'Add group mapping').trigger('click')
+      await nextTick()
+
+      editor = wrapper.get('[data-test="composite-group-editor"]')
+      await editor.findAllComponents({ name: 'Select' })[1]!.vm.$emit('update:modelValue', 43)
+      await editor.findAll('input')[1]!.setValue('Claude')
+      await wrapper.get('form#key-form').trigger('submit')
+      await flushPromises()
+
+      expect(getDataSharingNotice).toHaveBeenCalledTimes(1)
+      expect(getDataSharingNotice).toHaveBeenCalledWith(42)
+      expect(createKey).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(10_000)
+      await nextTick()
+      await getButtonByText(wrapper, '我已阅读并确认').trigger('click')
+      await flushPromises()
+
+      expect(confirmDataSharingNotice).toHaveBeenCalledWith(42, 7)
+      expect(createKey).toHaveBeenCalledWith(expect.objectContaining({
+        is_composite: true,
+        composite_groups: [
+          { group_id: 42, prefix: 'GPT' },
+          { group_id: 43, prefix: 'Claude' },
+        ],
+        data_sharing_confirmed: true,
+        data_sharing_notice_version: 7,
+      }))
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('requires an explicit target group when converting composite to ordinary', async () => {
+    getAvailableGroups.mockResolvedValueOnce([
+      { id: 42, name: 'OpenAI', platform: 'openai', rate_multiplier: 1, data_sharing_enabled: false },
+    ])
+    listKeys.mockResolvedValueOnce({
+      items: [{
+        ...createApiKey(),
+        group_id: null,
+        is_composite: true,
+        composite_groups: [
+          { group_id: 42, prefix: 'GPT', group: { id: 42, name: 'OpenAI', platform: 'openai' } },
+        ],
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'Edit').trigger('click')
+    await wrapper.get('[data-test="composite-key-toggle"]').trigger('click')
+    await wrapper.get('form#key-form').trigger('submit')
+    await nextTick()
+    expect(showError).toHaveBeenCalledWith('Group required')
+    expect(updateKey).not.toHaveBeenCalled()
+
+    const groupSelect = wrapper.findAllComponents({ name: 'Select' }).find(
+      (select) => select.attributes('data-tour') === 'key-form-group'
+    )
+    expect(groupSelect).toBeDefined()
+    await groupSelect!.vm.$emit('update:modelValue', 42)
+    await wrapper.get('form#key-form').trigger('submit')
+    await flushPromises()
+
+    expect(updateKey).toHaveBeenCalledWith(1, expect.objectContaining({
+      group_id: 42,
+      is_composite: false,
+      composite_groups: undefined,
+    }))
   })
 })

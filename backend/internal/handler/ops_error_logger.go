@@ -445,6 +445,9 @@ func setOpsRequestContext(c *gin.Context, model string, stream bool) {
 		return
 	}
 	model = strings.TrimSpace(model)
+	if clientModel, _, ok := middleware2.GetCompositeModelFromContext(c); ok {
+		model = clientModel
+	}
 	c.Set(opsModelKey, model)
 	c.Set(opsStreamKey, stream)
 	if c.Request != nil && model != "" {

@@ -374,11 +374,11 @@ func ProvideDeferredService(accountRepo AccountRepository, timingWheel *TimingWh
 	return svc
 }
 
-// ProvideConcurrencyService creates ConcurrencyService and starts slot cleanup worker.
+// ProvideConcurrencyService creates ConcurrencyService and starts TTL-based slot cleanup.
 func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountRepository, cfg *config.Config) *ConcurrencyService {
 	svc := NewConcurrencyService(cache)
 	if err := svc.CleanupStaleProcessSlots(context.Background()); err != nil {
-		logger.LegacyPrintf("service.concurrency", "Warning: startup cleanup stale process slots failed: %v", err)
+		logger.LegacyPrintf("service.concurrency", "Warning: startup reconcile expired concurrency slots failed: %v", err)
 	}
 	if cfg != nil {
 		svc.SetAccountLoadBatchCacheTTL(time.Duration(cfg.Gateway.Scheduling.LoadBatchCacheTTLMS) * time.Millisecond)
@@ -557,11 +557,12 @@ func ProvideScheduledTestRunnerService(
 	accountTestSvc *AccountTestService,
 	rateLimitSvc *RateLimitService,
 	cfg *config.Config,
+	leaseCache FencedLeaderLeaseCache,
 ) *ScheduledTestRunnerService {
 	if rateLimitSvc != nil {
 		rateLimitSvc.SetScheduledTestPlanReader(planRepo)
 	}
-	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg)
+	svc := NewScheduledTestRunnerService(planRepo, scheduledSvc, accountTestSvc, rateLimitSvc, cfg, leaseCache)
 	svc.Start()
 	return svc
 }
@@ -802,6 +803,87 @@ func defaultDataShareExportDataDir() string {
 	return "."
 }
 
+// ProvideOpenAIGatewayService 构造 OpenAI 网关并注入仅供运营探测使用的原始 provider 定价和费用账本。
+func ProvideOpenAIGatewayService(
+	accountRepo AccountRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	httpUpstream HTTPUpstream,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	deferredService *DeferredService,
+	openAITokenProvider *OpenAITokenProvider,
+	grokTokenProvider *GrokTokenProvider,
+	resolver *ModelPricingResolver,
+	channelService *ChannelService,
+	balanceNotifyService *BalanceNotifyService,
+	settingService *SettingService,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	dataSharingService *DataSharingService,
+	pricingService *PricingService,
+	probeBudgetRepo OpenAINativeCompactionProbeBudgetRepository,
+	capabilityRepo OpenAINativeCompactionCapabilityRepository,
+	attemptAttributionRepo UpstreamAttemptAttributionRepository,
+	tlsFPRouterServices ...*TLSFingerprintRouterService,
+) *OpenAIGatewayService {
+	svc := NewOpenAIGatewayService(
+		accountRepo,
+		usageLogRepo,
+		usageBillingRepo,
+		userRepo,
+		userSubRepo,
+		userGroupRateRepo,
+		cache,
+		cfg,
+		schedulerSnapshot,
+		concurrencyService,
+		billingService,
+		rateLimitService,
+		billingCacheService,
+		httpUpstream,
+		tlsFPProfileService,
+		deferredService,
+		openAITokenProvider,
+		grokTokenProvider,
+		resolver,
+		channelService,
+		balanceNotifyService,
+		settingService,
+		userPlatformQuotaRepo,
+		dataSharingService,
+		tlsFPRouterServices...,
+	)
+	svc.openAIProbePriceLookup = pricingService
+	svc.openAIProbeBudgetRepo = probeBudgetRepo
+	svc.openAINativeCompactionCapabilityRepo = capabilityRepo
+	svc.upstreamAttemptAttributionRepo = attemptAttributionRepo
+	return svc
+}
+
+// ProvideOpenAINativeCompactionProbeRunnerService 构造并启动隔离的 native-v2 能力探测 runner。
+func ProvideOpenAINativeCompactionProbeRunnerService(
+	accountRepo AccountRepository,
+	apiKeyRepo APIKeyRepository,
+	userRepo UserRepository,
+	groupRepo GroupRepository,
+	capabilityRepo OpenAINativeCompactionCapabilityRepository,
+	gateway *OpenAIGatewayService,
+	cfg *config.Config,
+) *OpenAINativeCompactionProbeRunnerService {
+	svc := NewOpenAINativeCompactionProbeRunnerService(accountRepo, apiKeyRepo, userRepo, groupRepo, capabilityRepo, gateway, cfg)
+	svc.Start()
+	return svc
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
@@ -830,7 +912,8 @@ var ProviderSet = wire.NewSet(
 	NewQoderTokenProvider,
 	NewQoderGatewayService,
 	ProvideOpenAIGatewayTLSFingerprintRouterServices,
-	NewOpenAIGatewayService,
+	ProvideOpenAIGatewayService,
+	ProvideOpenAINativeCompactionProbeRunnerService,
 	NewCodexInviteResetService,
 	ProvideOpenAIQuotaService,
 	ProvideImageStorageSettingService,

@@ -56,6 +56,18 @@ declare module 'vue-router' {
     requiresRiskControl?: boolean
 
     /**
+     * 是否要求团队功能开关已启用
+     * @default false
+     */
+    requiresTeam?: boolean
+
+    /**
+     * 是否要求数据共享功能开关已启用
+     * @default false
+     */
+    requiresDataSharing?: boolean
+
+    /**
      * 是否要求邀请返利功能开关已启用
      * @default false
      */

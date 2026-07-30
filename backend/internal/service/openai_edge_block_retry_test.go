@@ -124,6 +124,43 @@ func TestOpenAIGatewayServiceForwardStopsNeutralEdgeBlockRetryWhenContextCancele
 	require.False(t, recorded)
 }
 
+func TestOpenAIGatewayServiceForwardBoundsNeutralEdgeBlockRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	responses := make([]*http.Response, 0, 3)
+	for range 3 {
+		responses = append(responses, &http.Response{
+			StatusCode: http.StatusForbidden,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"message":"Your request was blocked."}}`,
+			)),
+		})
+	}
+	upstream := &httpUpstreamRecorder{responses: responses}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream: upstream,
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+
+	result, err := svc.Forward(
+		context.Background(),
+		c,
+		openAIEdgeRetryTestAccount(),
+		[]byte(`{"model":"gpt-5.2","stream":false,"input":"hello"}`),
+	)
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusForbidden, failoverErr.StatusCode)
+	require.Len(t, upstream.requests, 3, "one initial attempt plus two bounded retries")
+}
+
 func TestOpenAIGatewayServiceForwardOrdinaryForbiddenStillFailsOver(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

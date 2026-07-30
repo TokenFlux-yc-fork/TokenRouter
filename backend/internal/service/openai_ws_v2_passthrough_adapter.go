@@ -56,6 +56,15 @@ type openAIWSTurnPayload struct {
 	ReasoningEffort    *string
 	PreviousResponseID string
 	Source             string
+	NativeCompaction   bool
+	WSTurnID           WSTurnID
+}
+
+type openAIWSNativeTurnCompletion struct {
+	attempt           *openAIUpstreamAttemptCoordinator
+	validation        OpenAINativeCompactionValidationResult
+	deliveryCommitted bool
+	deliveryStarted   bool
 }
 
 type openAIWSTurnPayloadQueue struct {
@@ -835,6 +844,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// turn 快照的异常和最终汇总路径兜底使用。
 	usageMeta.initFromFirstFrame(firstClientMessage, firstUpstreamModel)
 	promptCacheKey := strings.TrimSpace(gjson.GetBytes(firstClientMessage, "prompt_cache_key").String())
+	ctx, closeBudget := ensureOpenAINativeCompactionRequestStageBudget(ctx, s)
+	defer closeBudget()
+	wsConnectionID := NewOpenAIWSConnectionID()
+	var startNativeTurn func(openAIWSTurnPayload) error
 	turnPayloads := newOpenAIWSTurnPayloadQueue()
 	turnPayloads.Push(openAIWSTurnPayload{
 		RequestBody:        firstClientMessage,
@@ -845,6 +858,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		ReasoningEffort:    usageMeta.reasoningEffort.Load(),
 		PreviousResponseID: requestPreviousResponseID,
 		Source:             "passthrough",
+		NativeCompaction:   isOpenAINativeCompactionTurn(c, firstClientMessage),
+		WSTurnID:           NewOpenAIWSTurnID(),
 	})
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
@@ -983,9 +998,44 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 		},
 	}
+	var nativeStageMu sync.Mutex
+	var nativeStage *OpenAINativeCompactionAttemptStage
+	var nativeValidator *OpenAINativeCompactionValidator
+	var nativeAttempt *openAIUpstreamAttemptCoordinator
+	var completedNativeTurn *openAIWSNativeTurnCompletion
+	var nativeClientDisconnected atomic.Bool
+	startNativeTurn = func(turnPayload openAIWSTurnPayload) error {
+		if !turnPayload.NativeCompaction {
+			return nil
+		}
+		nativeStageMu.Lock()
+		defer nativeStageMu.Unlock()
+		if nativeStage != nil {
+			return errors.New("native compaction turn already active")
+		}
+		stage, stageErr := newOpenAINativeCompactionAttemptStage(ctx, s)
+		if stageErr != nil {
+			return s.newOpenAINativeCompactionWSFailoverError(c, account, true, handshakeHeaders, joinOpenAINativeCompactionStageSemanticError(stageErr))
+		}
+		nativeStage = stage
+		nativeValidator = NewOpenAINativeCompactionValidator()
+		nativeAttempt = s.beginOpenAINativeWSAttempt(
+			ctx,
+			account,
+			turnPayload.RoutingModel,
+			openAIServiceTierIsPriority(turnPayload.ServiceTier),
+			true,
+			UpstreamAttemptTransportWebSocket,
+			wsConnectionID,
+			turnPayload.WSTurnID,
+		)
+		if nativeAttempt != nil {
+			nativeAttempt.observeWebSocket(handshakeHeaders)
+		}
+		return nil
+	}
 
 	completedTurns := atomic.Int32{}
-	var terminalWritePayload atomic.Pointer[openAIWSTurnPayload]
 	turnLifecycle := newOpenAIWSPassthroughTurnLifecycle(true)
 	clientFrameConn := &openAIWSClientFrameConn{
 		conn:                 clientConn,
@@ -1108,7 +1158,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					}
 				}
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
-				turnPayloads.Push(openAIWSTurnPayload{
+				turnPayload := openAIWSTurnPayload{
 					RequestBody:        out,
 					OriginalModel:      requestModelForThisFrame,
 					RoutingModel:       routingModel,
@@ -1117,7 +1167,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					ReasoningEffort:    usageMeta.reasoningEffort.Load(),
 					PreviousResponseID: strings.TrimSpace(gjson.GetBytes(out, "previous_response_id").String()),
 					Source:             "passthrough",
-				})
+					NativeCompaction:   isOpenAINativeCompactionTurn(c, out),
+					WSTurnID:           NewOpenAIWSTurnID(),
+				}
+				if err := startNativeTurn(turnPayload); err != nil {
+					return payload, nil, err
+				}
+				turnPayloads.Push(turnPayload)
 				acceptedTurn = true
 			}
 			return out, blocked, policyErr
@@ -1129,11 +1185,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 			turnPayload := turnPayloads.Peek()
-			if isOpenAIWSTerminalEvent(eventType) {
-				if completed := terminalWritePayload.Swap(nil); completed != nil {
-					turnPayload = *completed
-				}
-			}
 			if !openAIWSEventMayContainModel(eventType) {
 				return payload, nil
 			}
@@ -1162,6 +1213,32 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			cancel()
 		},
 	}
+	if err := startNativeTurn(turnPayloads.Peek()); err != nil {
+		s.quarantineOpenAINativeCompactionFailureForRoutingModel(ctx, c, account, firstRoutingModel, err)
+		return err
+	}
+	defer func() {
+		nativeStageMu.Lock()
+		stage := nativeStage
+		validator := nativeValidator
+		attempt := nativeAttempt
+		completion := completedNativeTurn
+		nativeStage = nil
+		nativeValidator = nil
+		nativeAttempt = nil
+		completedNativeTurn = nil
+		nativeStageMu.Unlock()
+		if stage != nil {
+			_ = stage.Discard()
+			_ = stage.Close()
+		}
+		if attempt != nil {
+			attempt.finishWebSocket(validator.Finish(), "", nil, false, false, !nativeClientDisconnected.Load(), errors.New("websocket relay ended before native compaction terminal"))
+		}
+		if completion != nil && completion.attempt != nil {
+			completion.attempt.finishWebSocket(completion.validation, "", nil, false, completion.deliveryCommitted, !completion.deliveryStarted, nil)
+		}
+	}()
 	upstreamFirstMessageSent := false
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
@@ -1205,6 +1282,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		observedErrorSignal.message = ""
 		observedErrorSignal.Unlock()
 	}
+	firstTurnNativeCompaction := turnPayloads.Peek().NativeCompaction
 	relayResult, relayExit := openaiwsv2.RunEntry(openaiwsv2.EntryInput{
 		Ctx:                ctx,
 		ClientConn:         policyClientConn,
@@ -1217,7 +1295,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			IdleTimeout:                     0,
 			FirstMessageType:                coderws.MessageText,
 			FirstMessageSent:                upstreamFirstMessageSent,
-			StartClientAfterFirstDownstream: true,
+			StartClientAfterFirstDownstream: !firstTurnNativeCompaction,
 			ReadClientFrame:                 readNextClientFrame,
 			OnUsageParseFailure: func(eventType string, usageRaw string) {
 				logOpenAIWSV2Passthrough(
@@ -1240,14 +1318,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
 				turnNo := int(completedTurns.Add(1))
 				turnPayload := turnPayloads.Pop()
-				turnPayloadForWrite := turnPayload
-				terminalWritePayload.Store(&turnPayloadForWrite)
 				turnOriginalModel := strings.TrimSpace(turnPayload.OriginalModel)
 				if turnOriginalModel == "" {
 					turnOriginalModel = turn.RequestModel
 				}
 				turnResult := &OpenAIForwardResult{
-					RequestID: turn.RequestID,
+					RequestID:      turn.RequestID,
+					ResponseID:     turn.RequestID,
+					WSConnectionID: wsConnectionID,
+					WSTurnID:       turnPayload.WSTurnID,
 					Usage: OpenAIUsage{
 						InputTokens:              turn.Usage.InputTokens,
 						OutputTokens:             turn.Usage.OutputTokens,
@@ -1266,6 +1345,29 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					ResponseBody:          cloneDataSharingRequestBody(turn.TerminalResponseBody),
 					Duration:              turn.Duration,
 					FirstTokenMs:          turn.FirstTokenMs,
+				}
+				if turnPayload.NativeCompaction {
+					nativeStageMu.Lock()
+					completion := completedNativeTurn
+					completedNativeTurn = nil
+					nativeStageMu.Unlock()
+					if completion != nil && completion.attempt != nil {
+						_, usageObserved := extractOpenAIUsageFromJSONBytes(turn.TerminalResponseBody)
+						completion.attempt.finishWebSocket(
+							completion.validation,
+							turn.RequestID,
+							&turnResult.Usage,
+							usageObserved,
+							completion.deliveryCommitted,
+							!completion.deliveryStarted,
+							nil,
+						)
+					}
+					var attempt *openAIUpstreamAttemptCoordinator
+					if completion != nil {
+						attempt = completion.attempt
+					}
+					finalizeOpenAINativeForwardResult(turnResult, account, attempt, true, UpstreamAttemptTransportWebSocket)
 				}
 				logOpenAIWSV2Passthrough(
 					"relay_turn_completed account_id=%d turn=%d request_id=%s terminal_event=%s duration_ms=%d first_token_ms=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d",
@@ -1290,6 +1392,89 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					})
 				}
 			},
+			WriteClient: func(writeCtx context.Context, msgType coderws.MessageType, payload []byte) (bool, error) {
+				rawPayload := payload
+				if msgType == coderws.MessageText {
+					filteredPayload, filterErr := policyClientConn.writeFilter(msgType, payload)
+					if filterErr != nil {
+						return false, filterErr
+					}
+					payload = filteredPayload
+				}
+				nativeStageMu.Lock()
+				stage := nativeStage
+				validator := nativeValidator
+				attempt := nativeAttempt
+				if stage == nil || validator == nil {
+					nativeStageMu.Unlock()
+					if writeErr := clientFrameConn.WriteFrame(writeCtx, msgType, payload); writeErr != nil {
+						return false, writeErr
+					}
+					return true, nil
+				}
+				if msgType == coderws.MessageText {
+					validator.Observe(rawPayload)
+				}
+				if stageErr := openAINativeCompactionStageWSFrame(stage, msgType, payload); stageErr != nil {
+					_ = stage.Discard()
+					nativeStage = nil
+					nativeValidator = nil
+					nativeAttempt = nil
+					nativeStageMu.Unlock()
+					_ = stage.Close()
+					terminalErr := joinOpenAINativeCompactionStageSemanticError(stageErr)
+					validation := validator.Finish()
+					if openAINativeCompactionStageSemanticError(stageErr) != nil {
+						validation.Outcome = OpenAINativeCompactionResourceLimit
+					}
+					if attempt != nil {
+						attempt.finishWebSocket(validation, extractOpenAIResponseIDFromJSONBytes(rawPayload), nil, false, false, true, terminalErr)
+					}
+					return false, s.newOpenAINativeCompactionWSFailoverError(c, account, true, handshakeHeaders, terminalErr)
+				}
+				if msgType != coderws.MessageText || !openAIWSPassthroughIsTerminalOutput(payload) {
+					nativeStageMu.Unlock()
+					return false, nil
+				}
+				validation := validator.Finish()
+				if !validation.Valid() {
+					_ = stage.Discard()
+					nativeStage = nil
+					nativeValidator = nil
+					nativeAttempt = nil
+					nativeStageMu.Unlock()
+					_ = stage.Close()
+					semanticErr := newOpenAINativeCompactionSemanticError(validation.Outcome)
+					if attempt != nil {
+						usage, usageObserved := extractOpenAIUsageFromJSONBytes(rawPayload)
+						attempt.finishWebSocket(validation, extractOpenAIResponseIDFromJSONBytes(rawPayload), &usage, usageObserved, false, true, semanticErr)
+					}
+					return false, s.newOpenAINativeCompactionWSFailoverError(c, account, true, handshakeHeaders, semanticErr)
+				}
+				commitErr := commitOpenAINativeCompactionWSFrames(stage, func(frameType coderws.MessageType, frame []byte) error {
+					return clientFrameConn.WriteFrame(writeCtx, frameType, frame)
+				})
+				nativeStage = nil
+				nativeValidator = nil
+				nativeAttempt = nil
+				if commitErr == nil {
+					completedNativeTurn = &openAIWSNativeTurnCompletion{
+						attempt:           attempt,
+						validation:        validation,
+						deliveryCommitted: true,
+						deliveryStarted:   true,
+					}
+				}
+				nativeStageMu.Unlock()
+				_ = stage.Close()
+				if commitErr != nil && attempt != nil {
+					usage, usageObserved := extractOpenAIUsageFromJSONBytes(rawPayload)
+					attempt.finishWebSocket(validation, extractOpenAIResponseIDFromJSONBytes(rawPayload), &usage, usageObserved, false, false, commitErr)
+				}
+				// Commit may have written one or more staged frames before failing, so
+				// conservatively cross the no-failover boundary once it starts.
+				return true, commitErr
+			},
 			BeforeClientWrite: func(msgType coderws.MessageType, payload []byte) {
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
 					turnLifecycle.beginTerminalWrite()
@@ -1301,6 +1486,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 			},
 			BeforeRelayCancel: func(exit openaiwsv2.RelayExit) {
+				if exit.Stage == "read_client" {
+					nativeClientDisconnected.Store(true)
+				}
 				if context.Cause(ctx) != nil {
 					return
 				}
@@ -1310,6 +1498,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 				_ = clientConn.Close(status, reason)
 				_ = clientConn.CloseNow()
+			},
+			CancelUpstreamOnClientDisconnect: func() bool {
+				nativeStageMu.Lock()
+				defer nativeStageMu.Unlock()
+				return nativeStage != nil
 			},
 			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error {
 				if msgType != coderws.MessageText {
@@ -1332,6 +1525,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				routingModel := strings.TrimSpace(turnPayload.RoutingModel)
 				if routingModel == "" {
 					routingModel = loadCapturedModel(&capturedSessionRoutingModel)
+				}
+				if turnPayload.NativeCompaction && (eventType == "error" || eventType == "response.failed") {
+					if continuationCode := openAINativeCompactionContinuationErrorCode(extractUpstreamErrorCode(payload)); continuationCode != "" {
+						return s.newOpenAINativeCompactionWSFailoverError(c, account, true, handshakeHeaders, newOpenAINativeCompactionContinuationError(continuationCode))
+					}
 				}
 				if isOpenAIWSTerminalEvent(eventType) {
 					s.handleOpenAIWSTerminalTransientFailure(ctx, account, routingModel, handshakeHeaders, payload)
@@ -1567,6 +1765,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		relayErr,
 		relayExit.WroteDownstream,
 	)
+	s.quarantineOpenAINativeCompactionFailureForRoutingModel(ctx, c, account, loadCapturedModel(&capturedSessionRoutingModel), turnErr)
 	if hooks != nil && hooks.AfterTurn != nil && turnPayloads.Len() > 0 {
 		turnPayload := turnPayloads.Pop()
 		hooks.AfterTurn(OpenAIWSTurnCapture{

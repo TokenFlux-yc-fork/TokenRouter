@@ -3,15 +3,19 @@
     <Transition name="modal">
       <div
         v-if="show"
-        class="modal-overlay min-w-0 overflow-x-hidden"
+        class="modal-overlay h-[100dvh] w-[100dvw] min-w-0 overflow-hidden"
         :style="zIndexStyle"
         :aria-labelledby="dialogId"
         role="dialog"
         aria-modal="true"
         @click.self="handleClose"
       >
-        <!-- 弹窗面板 -->
-        <div ref="dialogRef" :class="['modal-content min-w-0', widthClasses]" @click.stop>
+        <!-- 动态视口单位避开移动端浏览器工具栏，vh/vw 规则由公共样式作为旧浏览器兜底。 -->
+        <div
+          ref="dialogRef"
+          :class="['modal-content min-h-0 min-w-0 max-h-[95dvh] sm:max-h-[90dvh]', widthClasses]"
+          @click.stop
+        >
           <!-- 头部 -->
           <div class="modal-header min-w-0 max-w-full">
             <h3 :id="dialogId" class="modal-title min-w-0 break-words">
@@ -27,7 +31,7 @@
           </div>
 
           <!-- 内容区 -->
-          <div class="modal-body min-w-0 max-w-full">
+          <div class="modal-body min-h-0 min-w-0 max-w-full">
             <slot></slot>
           </div>
 

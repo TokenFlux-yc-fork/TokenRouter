@@ -32,9 +32,9 @@ const {
 
 const messages: Record<string, string> = {
   'admin.groups.columnSettings': 'Column Settings',
+  'admin.groups.form.sortOrder': 'Manual Sort Value',
   'admin.groups.columns.name': 'Name',
   'admin.groups.columns.id': 'ID',
-  'admin.groups.columns.sortOrder': 'Sort',
   'admin.groups.columns.platform': 'Platform',
   'admin.groups.columns.displayBrand': 'Brand Type',
   'admin.groups.columns.rateMultiplier': 'Rate Multiplier',
@@ -278,12 +278,11 @@ describe('admin GroupsView column settings', () => {
     wrapper.unmount()
   })
 
-  it('hides the id column by default while keeping other group columns visible', async () => {
+  it('hides the id column and internal sort values by default', async () => {
     const wrapper = await mountView()
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
-      'sort_order',
       'platform',
       'display_brand',
       'rate_multiplier',
@@ -301,6 +300,14 @@ describe('admin GroupsView column settings', () => {
     expect(localStorage.getItem('group-column-settings-version')).toBe('2')
   })
 
+  it('does not expose a manual sort value in the create form', async () => {
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-tour="groups-create-btn"]').trigger('click')
+
+    expect(wrapper.text()).not.toContain('Manual Sort Value')
+  })
+
   it('applies saved hidden columns on mount and ignores unknown keys', async () => {
     localStorage.setItem(
       'group-hidden-columns',
@@ -313,7 +320,6 @@ describe('admin GroupsView column settings', () => {
     expect(columnKeys(wrapper)).toEqual([
       'name',
       'id',
-      'sort_order',
       'platform',
       'display_brand',
       'rate_multiplier',
@@ -335,7 +341,6 @@ describe('admin GroupsView column settings', () => {
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
-      'sort_order',
       'platform',
       'display_brand',
       'rate_multiplier',
@@ -373,7 +378,6 @@ describe('admin GroupsView column settings', () => {
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
-      'sort_order',
       'platform',
       'display_brand',
       'rate_multiplier',
@@ -400,7 +404,6 @@ describe('admin GroupsView column settings', () => {
     expect(columnKeys(wrapper)).toEqual([
       'name',
       'id',
-      'sort_order',
       'platform',
       'display_brand',
       'rate_multiplier',

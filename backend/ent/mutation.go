@@ -17,6 +17,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent/announcement"
 	"github.com/TokenFlux/TokenRouter/ent/announcementread"
 	"github.com/TokenFlux/TokenRouter/ent/apikey"
+	"github.com/TokenFlux/TokenRouter/ent/apikeycompositegroup"
 	"github.com/TokenFlux/TokenRouter/ent/authidentity"
 	"github.com/TokenFlux/TokenRouter/ent/authidentitychannel"
 	"github.com/TokenFlux/TokenRouter/ent/batchimageevent"
@@ -69,6 +70,7 @@ const (
 
 	// Node types.
 	TypeAPIKey                   = "APIKey"
+	TypeAPIKeyCompositeGroup     = "APIKeyCompositeGroup"
 	TypeAccount                  = "Account"
 	TypeAccountGroup             = "AccountGroup"
 	TypeAnnouncement             = "Announcement"
@@ -124,6 +126,7 @@ type APIKeyMutation struct {
 	team_owner_disabled                        *bool
 	key                                        *string
 	name                                       *string
+	is_composite                               *bool
 	status                                     *string
 	fast_mode_policy                           *string
 	last_used_at                               *time.Time
@@ -165,6 +168,9 @@ type APIKeyMutation struct {
 	usage_logs                                 map[int64]struct{}
 	removedusage_logs                          map[int64]struct{}
 	clearedusage_logs                          bool
+	composite_groups                           map[int64]struct{}
+	removedcomposite_groups                    map[int64]struct{}
+	clearedcomposite_groups                    bool
 	team                                       *int64
 	clearedteam                                bool
 	done                                       bool
@@ -631,6 +637,42 @@ func (m *APIKeyMutation) GroupIDCleared() bool {
 func (m *APIKeyMutation) ResetGroupID() {
 	m.group = nil
 	delete(m.clearedFields, apikey.FieldGroupID)
+}
+
+// SetIsComposite sets the "is_composite" field.
+func (m *APIKeyMutation) SetIsComposite(b bool) {
+	m.is_composite = &b
+}
+
+// IsComposite returns the value of the "is_composite" field in the mutation.
+func (m *APIKeyMutation) IsComposite() (r bool, exists bool) {
+	v := m.is_composite
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIsComposite returns the old "is_composite" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldIsComposite(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIsComposite is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIsComposite requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIsComposite: %w", err)
+	}
+	return oldValue.IsComposite, nil
+}
+
+// ResetIsComposite resets all changes to the "is_composite" field.
+func (m *APIKeyMutation) ResetIsComposite() {
+	m.is_composite = nil
 }
 
 // SetStatus sets the "status" field.
@@ -1847,6 +1889,60 @@ func (m *APIKeyMutation) ResetUsageLogs() {
 	m.removedusage_logs = nil
 }
 
+// AddCompositeGroupIDs adds the "composite_groups" edge to the APIKeyCompositeGroup entity by ids.
+func (m *APIKeyMutation) AddCompositeGroupIDs(ids ...int64) {
+	if m.composite_groups == nil {
+		m.composite_groups = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.composite_groups[ids[i]] = struct{}{}
+	}
+}
+
+// ClearCompositeGroups clears the "composite_groups" edge to the APIKeyCompositeGroup entity.
+func (m *APIKeyMutation) ClearCompositeGroups() {
+	m.clearedcomposite_groups = true
+}
+
+// CompositeGroupsCleared reports if the "composite_groups" edge to the APIKeyCompositeGroup entity was cleared.
+func (m *APIKeyMutation) CompositeGroupsCleared() bool {
+	return m.clearedcomposite_groups
+}
+
+// RemoveCompositeGroupIDs removes the "composite_groups" edge to the APIKeyCompositeGroup entity by IDs.
+func (m *APIKeyMutation) RemoveCompositeGroupIDs(ids ...int64) {
+	if m.removedcomposite_groups == nil {
+		m.removedcomposite_groups = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.composite_groups, ids[i])
+		m.removedcomposite_groups[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedCompositeGroups returns the removed IDs of the "composite_groups" edge to the APIKeyCompositeGroup entity.
+func (m *APIKeyMutation) RemovedCompositeGroupsIDs() (ids []int64) {
+	for id := range m.removedcomposite_groups {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// CompositeGroupsIDs returns the "composite_groups" edge IDs in the mutation.
+func (m *APIKeyMutation) CompositeGroupsIDs() (ids []int64) {
+	for id := range m.composite_groups {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetCompositeGroups resets all changes to the "composite_groups" edge.
+func (m *APIKeyMutation) ResetCompositeGroups() {
+	m.composite_groups = nil
+	m.clearedcomposite_groups = false
+	m.removedcomposite_groups = nil
+}
+
 // ClearTeam clears the "team" edge to the Team entity.
 func (m *APIKeyMutation) ClearTeam() {
 	m.clearedteam = true
@@ -1908,7 +2004,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 30)
+	fields := make([]string, 0, 31)
 	if m.created_at != nil {
 		fields = append(fields, apikey.FieldCreatedAt)
 	}
@@ -1935,6 +2031,9 @@ func (m *APIKeyMutation) Fields() []string {
 	}
 	if m.group != nil {
 		fields = append(fields, apikey.FieldGroupID)
+	}
+	if m.is_composite != nil {
+		fields = append(fields, apikey.FieldIsComposite)
 	}
 	if m.status != nil {
 		fields = append(fields, apikey.FieldStatus)
@@ -2025,6 +2124,8 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case apikey.FieldGroupID:
 		return m.GroupID()
+	case apikey.FieldIsComposite:
+		return m.IsComposite()
 	case apikey.FieldStatus:
 		return m.Status()
 	case apikey.FieldFastModePolicy:
@@ -2094,6 +2195,8 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldName(ctx)
 	case apikey.FieldGroupID:
 		return m.OldGroupID(ctx)
+	case apikey.FieldIsComposite:
+		return m.OldIsComposite(ctx)
 	case apikey.FieldStatus:
 		return m.OldStatus(ctx)
 	case apikey.FieldFastModePolicy:
@@ -2207,6 +2310,13 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetGroupID(v)
+		return nil
+	case apikey.FieldIsComposite:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIsComposite(v)
 		return nil
 	case apikey.FieldStatus:
 		v, ok := value.(string)
@@ -2629,6 +2739,9 @@ func (m *APIKeyMutation) ResetField(name string) error {
 	case apikey.FieldGroupID:
 		m.ResetGroupID()
 		return nil
+	case apikey.FieldIsComposite:
+		m.ResetIsComposite()
+		return nil
 	case apikey.FieldStatus:
 		m.ResetStatus()
 		return nil
@@ -2698,7 +2811,7 @@ func (m *APIKeyMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *APIKeyMutation) AddedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.user != nil {
 		edges = append(edges, apikey.EdgeUser)
 	}
@@ -2707,6 +2820,9 @@ func (m *APIKeyMutation) AddedEdges() []string {
 	}
 	if m.usage_logs != nil {
 		edges = append(edges, apikey.EdgeUsageLogs)
+	}
+	if m.composite_groups != nil {
+		edges = append(edges, apikey.EdgeCompositeGroups)
 	}
 	if m.team != nil {
 		edges = append(edges, apikey.EdgeTeam)
@@ -2732,6 +2848,12 @@ func (m *APIKeyMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case apikey.EdgeCompositeGroups:
+		ids := make([]ent.Value, 0, len(m.composite_groups))
+		for id := range m.composite_groups {
+			ids = append(ids, id)
+		}
+		return ids
 	case apikey.EdgeTeam:
 		if id := m.team; id != nil {
 			return []ent.Value{*id}
@@ -2742,9 +2864,12 @@ func (m *APIKeyMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *APIKeyMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.removedusage_logs != nil {
 		edges = append(edges, apikey.EdgeUsageLogs)
+	}
+	if m.removedcomposite_groups != nil {
+		edges = append(edges, apikey.EdgeCompositeGroups)
 	}
 	return edges
 }
@@ -2759,13 +2884,19 @@ func (m *APIKeyMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case apikey.EdgeCompositeGroups:
+		ids := make([]ent.Value, 0, len(m.removedcomposite_groups))
+		for id := range m.removedcomposite_groups {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *APIKeyMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.cleareduser {
 		edges = append(edges, apikey.EdgeUser)
 	}
@@ -2774,6 +2905,9 @@ func (m *APIKeyMutation) ClearedEdges() []string {
 	}
 	if m.clearedusage_logs {
 		edges = append(edges, apikey.EdgeUsageLogs)
+	}
+	if m.clearedcomposite_groups {
+		edges = append(edges, apikey.EdgeCompositeGroups)
 	}
 	if m.clearedteam {
 		edges = append(edges, apikey.EdgeTeam)
@@ -2791,6 +2925,8 @@ func (m *APIKeyMutation) EdgeCleared(name string) bool {
 		return m.clearedgroup
 	case apikey.EdgeUsageLogs:
 		return m.clearedusage_logs
+	case apikey.EdgeCompositeGroups:
+		return m.clearedcomposite_groups
 	case apikey.EdgeTeam:
 		return m.clearedteam
 	}
@@ -2827,11 +2963,963 @@ func (m *APIKeyMutation) ResetEdge(name string) error {
 	case apikey.EdgeUsageLogs:
 		m.ResetUsageLogs()
 		return nil
+	case apikey.EdgeCompositeGroups:
+		m.ResetCompositeGroups()
+		return nil
 	case apikey.EdgeTeam:
 		m.ResetTeam()
 		return nil
 	}
 	return fmt.Errorf("unknown APIKey edge %s", name)
+}
+
+// APIKeyCompositeGroupMutation represents an operation that mutates the APIKeyCompositeGroup nodes in the graph.
+type APIKeyCompositeGroupMutation struct {
+	config
+	op                             Op
+	typ                            string
+	id                             *int64
+	created_at                     *time.Time
+	updated_at                     *time.Time
+	prefix                         *string
+	normalized_prefix              *string
+	sort_order                     *int
+	addsort_order                  *int
+	data_sharing_notice_version    *int
+	adddata_sharing_notice_version *int
+	data_sharing_confirmed_at      *time.Time
+	clearedFields                  map[string]struct{}
+	api_key                        *int64
+	clearedapi_key                 bool
+	group                          *int64
+	clearedgroup                   bool
+	done                           bool
+	oldValue                       func(context.Context) (*APIKeyCompositeGroup, error)
+	predicates                     []predicate.APIKeyCompositeGroup
+}
+
+var _ ent.Mutation = (*APIKeyCompositeGroupMutation)(nil)
+
+// apikeycompositegroupOption allows management of the mutation configuration using functional options.
+type apikeycompositegroupOption func(*APIKeyCompositeGroupMutation)
+
+// newAPIKeyCompositeGroupMutation creates new mutation for the APIKeyCompositeGroup entity.
+func newAPIKeyCompositeGroupMutation(c config, op Op, opts ...apikeycompositegroupOption) *APIKeyCompositeGroupMutation {
+	m := &APIKeyCompositeGroupMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeAPIKeyCompositeGroup,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withAPIKeyCompositeGroupID sets the ID field of the mutation.
+func withAPIKeyCompositeGroupID(id int64) apikeycompositegroupOption {
+	return func(m *APIKeyCompositeGroupMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *APIKeyCompositeGroup
+		)
+		m.oldValue = func(ctx context.Context) (*APIKeyCompositeGroup, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().APIKeyCompositeGroup.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withAPIKeyCompositeGroup sets the old APIKeyCompositeGroup of the mutation.
+func withAPIKeyCompositeGroup(node *APIKeyCompositeGroup) apikeycompositegroupOption {
+	return func(m *APIKeyCompositeGroupMutation) {
+		m.oldValue = func(context.Context) (*APIKeyCompositeGroup, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m APIKeyCompositeGroupMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m APIKeyCompositeGroupMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *APIKeyCompositeGroupMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *APIKeyCompositeGroupMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().APIKeyCompositeGroup.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *APIKeyCompositeGroupMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *APIKeyCompositeGroupMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *APIKeyCompositeGroupMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *APIKeyCompositeGroupMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetAPIKeyID sets the "api_key_id" field.
+func (m *APIKeyCompositeGroupMutation) SetAPIKeyID(i int64) {
+	m.api_key = &i
+}
+
+// APIKeyID returns the value of the "api_key_id" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) APIKeyID() (r int64, exists bool) {
+	v := m.api_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyID returns the old "api_key_id" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldAPIKeyID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyID: %w", err)
+	}
+	return oldValue.APIKeyID, nil
+}
+
+// ResetAPIKeyID resets all changes to the "api_key_id" field.
+func (m *APIKeyCompositeGroupMutation) ResetAPIKeyID() {
+	m.api_key = nil
+}
+
+// SetGroupID sets the "group_id" field.
+func (m *APIKeyCompositeGroupMutation) SetGroupID(i int64) {
+	m.group = &i
+}
+
+// GroupID returns the value of the "group_id" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) GroupID() (r int64, exists bool) {
+	v := m.group
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupID returns the old "group_id" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldGroupID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupID: %w", err)
+	}
+	return oldValue.GroupID, nil
+}
+
+// ResetGroupID resets all changes to the "group_id" field.
+func (m *APIKeyCompositeGroupMutation) ResetGroupID() {
+	m.group = nil
+}
+
+// SetPrefix sets the "prefix" field.
+func (m *APIKeyCompositeGroupMutation) SetPrefix(s string) {
+	m.prefix = &s
+}
+
+// Prefix returns the value of the "prefix" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) Prefix() (r string, exists bool) {
+	v := m.prefix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPrefix returns the old "prefix" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldPrefix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPrefix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPrefix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPrefix: %w", err)
+	}
+	return oldValue.Prefix, nil
+}
+
+// ResetPrefix resets all changes to the "prefix" field.
+func (m *APIKeyCompositeGroupMutation) ResetPrefix() {
+	m.prefix = nil
+}
+
+// SetNormalizedPrefix sets the "normalized_prefix" field.
+func (m *APIKeyCompositeGroupMutation) SetNormalizedPrefix(s string) {
+	m.normalized_prefix = &s
+}
+
+// NormalizedPrefix returns the value of the "normalized_prefix" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) NormalizedPrefix() (r string, exists bool) {
+	v := m.normalized_prefix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNormalizedPrefix returns the old "normalized_prefix" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldNormalizedPrefix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNormalizedPrefix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNormalizedPrefix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNormalizedPrefix: %w", err)
+	}
+	return oldValue.NormalizedPrefix, nil
+}
+
+// ResetNormalizedPrefix resets all changes to the "normalized_prefix" field.
+func (m *APIKeyCompositeGroupMutation) ResetNormalizedPrefix() {
+	m.normalized_prefix = nil
+}
+
+// SetSortOrder sets the "sort_order" field.
+func (m *APIKeyCompositeGroupMutation) SetSortOrder(i int) {
+	m.sort_order = &i
+	m.addsort_order = nil
+}
+
+// SortOrder returns the value of the "sort_order" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) SortOrder() (r int, exists bool) {
+	v := m.sort_order
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSortOrder returns the old "sort_order" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldSortOrder(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSortOrder is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSortOrder requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSortOrder: %w", err)
+	}
+	return oldValue.SortOrder, nil
+}
+
+// AddSortOrder adds i to the "sort_order" field.
+func (m *APIKeyCompositeGroupMutation) AddSortOrder(i int) {
+	if m.addsort_order != nil {
+		*m.addsort_order += i
+	} else {
+		m.addsort_order = &i
+	}
+}
+
+// AddedSortOrder returns the value that was added to the "sort_order" field in this mutation.
+func (m *APIKeyCompositeGroupMutation) AddedSortOrder() (r int, exists bool) {
+	v := m.addsort_order
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSortOrder resets all changes to the "sort_order" field.
+func (m *APIKeyCompositeGroupMutation) ResetSortOrder() {
+	m.sort_order = nil
+	m.addsort_order = nil
+}
+
+// SetDataSharingNoticeVersion sets the "data_sharing_notice_version" field.
+func (m *APIKeyCompositeGroupMutation) SetDataSharingNoticeVersion(i int) {
+	m.data_sharing_notice_version = &i
+	m.adddata_sharing_notice_version = nil
+}
+
+// DataSharingNoticeVersion returns the value of the "data_sharing_notice_version" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) DataSharingNoticeVersion() (r int, exists bool) {
+	v := m.data_sharing_notice_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDataSharingNoticeVersion returns the old "data_sharing_notice_version" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldDataSharingNoticeVersion(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDataSharingNoticeVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDataSharingNoticeVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDataSharingNoticeVersion: %w", err)
+	}
+	return oldValue.DataSharingNoticeVersion, nil
+}
+
+// AddDataSharingNoticeVersion adds i to the "data_sharing_notice_version" field.
+func (m *APIKeyCompositeGroupMutation) AddDataSharingNoticeVersion(i int) {
+	if m.adddata_sharing_notice_version != nil {
+		*m.adddata_sharing_notice_version += i
+	} else {
+		m.adddata_sharing_notice_version = &i
+	}
+}
+
+// AddedDataSharingNoticeVersion returns the value that was added to the "data_sharing_notice_version" field in this mutation.
+func (m *APIKeyCompositeGroupMutation) AddedDataSharingNoticeVersion() (r int, exists bool) {
+	v := m.adddata_sharing_notice_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDataSharingNoticeVersion resets all changes to the "data_sharing_notice_version" field.
+func (m *APIKeyCompositeGroupMutation) ResetDataSharingNoticeVersion() {
+	m.data_sharing_notice_version = nil
+	m.adddata_sharing_notice_version = nil
+}
+
+// SetDataSharingConfirmedAt sets the "data_sharing_confirmed_at" field.
+func (m *APIKeyCompositeGroupMutation) SetDataSharingConfirmedAt(t time.Time) {
+	m.data_sharing_confirmed_at = &t
+}
+
+// DataSharingConfirmedAt returns the value of the "data_sharing_confirmed_at" field in the mutation.
+func (m *APIKeyCompositeGroupMutation) DataSharingConfirmedAt() (r time.Time, exists bool) {
+	v := m.data_sharing_confirmed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDataSharingConfirmedAt returns the old "data_sharing_confirmed_at" field's value of the APIKeyCompositeGroup entity.
+// If the APIKeyCompositeGroup object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyCompositeGroupMutation) OldDataSharingConfirmedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDataSharingConfirmedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDataSharingConfirmedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDataSharingConfirmedAt: %w", err)
+	}
+	return oldValue.DataSharingConfirmedAt, nil
+}
+
+// ClearDataSharingConfirmedAt clears the value of the "data_sharing_confirmed_at" field.
+func (m *APIKeyCompositeGroupMutation) ClearDataSharingConfirmedAt() {
+	m.data_sharing_confirmed_at = nil
+	m.clearedFields[apikeycompositegroup.FieldDataSharingConfirmedAt] = struct{}{}
+}
+
+// DataSharingConfirmedAtCleared returns if the "data_sharing_confirmed_at" field was cleared in this mutation.
+func (m *APIKeyCompositeGroupMutation) DataSharingConfirmedAtCleared() bool {
+	_, ok := m.clearedFields[apikeycompositegroup.FieldDataSharingConfirmedAt]
+	return ok
+}
+
+// ResetDataSharingConfirmedAt resets all changes to the "data_sharing_confirmed_at" field.
+func (m *APIKeyCompositeGroupMutation) ResetDataSharingConfirmedAt() {
+	m.data_sharing_confirmed_at = nil
+	delete(m.clearedFields, apikeycompositegroup.FieldDataSharingConfirmedAt)
+}
+
+// ClearAPIKey clears the "api_key" edge to the APIKey entity.
+func (m *APIKeyCompositeGroupMutation) ClearAPIKey() {
+	m.clearedapi_key = true
+	m.clearedFields[apikeycompositegroup.FieldAPIKeyID] = struct{}{}
+}
+
+// APIKeyCleared reports if the "api_key" edge to the APIKey entity was cleared.
+func (m *APIKeyCompositeGroupMutation) APIKeyCleared() bool {
+	return m.clearedapi_key
+}
+
+// APIKeyIDs returns the "api_key" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// APIKeyID instead. It exists only for internal usage by the builders.
+func (m *APIKeyCompositeGroupMutation) APIKeyIDs() (ids []int64) {
+	if id := m.api_key; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetAPIKey resets all changes to the "api_key" edge.
+func (m *APIKeyCompositeGroupMutation) ResetAPIKey() {
+	m.api_key = nil
+	m.clearedapi_key = false
+}
+
+// ClearGroup clears the "group" edge to the Group entity.
+func (m *APIKeyCompositeGroupMutation) ClearGroup() {
+	m.clearedgroup = true
+	m.clearedFields[apikeycompositegroup.FieldGroupID] = struct{}{}
+}
+
+// GroupCleared reports if the "group" edge to the Group entity was cleared.
+func (m *APIKeyCompositeGroupMutation) GroupCleared() bool {
+	return m.clearedgroup
+}
+
+// GroupIDs returns the "group" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// GroupID instead. It exists only for internal usage by the builders.
+func (m *APIKeyCompositeGroupMutation) GroupIDs() (ids []int64) {
+	if id := m.group; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetGroup resets all changes to the "group" edge.
+func (m *APIKeyCompositeGroupMutation) ResetGroup() {
+	m.group = nil
+	m.clearedgroup = false
+}
+
+// Where appends a list predicates to the APIKeyCompositeGroupMutation builder.
+func (m *APIKeyCompositeGroupMutation) Where(ps ...predicate.APIKeyCompositeGroup) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the APIKeyCompositeGroupMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *APIKeyCompositeGroupMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.APIKeyCompositeGroup, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *APIKeyCompositeGroupMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *APIKeyCompositeGroupMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (APIKeyCompositeGroup).
+func (m *APIKeyCompositeGroupMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *APIKeyCompositeGroupMutation) Fields() []string {
+	fields := make([]string, 0, 9)
+	if m.created_at != nil {
+		fields = append(fields, apikeycompositegroup.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, apikeycompositegroup.FieldUpdatedAt)
+	}
+	if m.api_key != nil {
+		fields = append(fields, apikeycompositegroup.FieldAPIKeyID)
+	}
+	if m.group != nil {
+		fields = append(fields, apikeycompositegroup.FieldGroupID)
+	}
+	if m.prefix != nil {
+		fields = append(fields, apikeycompositegroup.FieldPrefix)
+	}
+	if m.normalized_prefix != nil {
+		fields = append(fields, apikeycompositegroup.FieldNormalizedPrefix)
+	}
+	if m.sort_order != nil {
+		fields = append(fields, apikeycompositegroup.FieldSortOrder)
+	}
+	if m.data_sharing_notice_version != nil {
+		fields = append(fields, apikeycompositegroup.FieldDataSharingNoticeVersion)
+	}
+	if m.data_sharing_confirmed_at != nil {
+		fields = append(fields, apikeycompositegroup.FieldDataSharingConfirmedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *APIKeyCompositeGroupMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case apikeycompositegroup.FieldCreatedAt:
+		return m.CreatedAt()
+	case apikeycompositegroup.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case apikeycompositegroup.FieldAPIKeyID:
+		return m.APIKeyID()
+	case apikeycompositegroup.FieldGroupID:
+		return m.GroupID()
+	case apikeycompositegroup.FieldPrefix:
+		return m.Prefix()
+	case apikeycompositegroup.FieldNormalizedPrefix:
+		return m.NormalizedPrefix()
+	case apikeycompositegroup.FieldSortOrder:
+		return m.SortOrder()
+	case apikeycompositegroup.FieldDataSharingNoticeVersion:
+		return m.DataSharingNoticeVersion()
+	case apikeycompositegroup.FieldDataSharingConfirmedAt:
+		return m.DataSharingConfirmedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *APIKeyCompositeGroupMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case apikeycompositegroup.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case apikeycompositegroup.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case apikeycompositegroup.FieldAPIKeyID:
+		return m.OldAPIKeyID(ctx)
+	case apikeycompositegroup.FieldGroupID:
+		return m.OldGroupID(ctx)
+	case apikeycompositegroup.FieldPrefix:
+		return m.OldPrefix(ctx)
+	case apikeycompositegroup.FieldNormalizedPrefix:
+		return m.OldNormalizedPrefix(ctx)
+	case apikeycompositegroup.FieldSortOrder:
+		return m.OldSortOrder(ctx)
+	case apikeycompositegroup.FieldDataSharingNoticeVersion:
+		return m.OldDataSharingNoticeVersion(ctx)
+	case apikeycompositegroup.FieldDataSharingConfirmedAt:
+		return m.OldDataSharingConfirmedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown APIKeyCompositeGroup field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *APIKeyCompositeGroupMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case apikeycompositegroup.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case apikeycompositegroup.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case apikeycompositegroup.FieldAPIKeyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyID(v)
+		return nil
+	case apikeycompositegroup.FieldGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupID(v)
+		return nil
+	case apikeycompositegroup.FieldPrefix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPrefix(v)
+		return nil
+	case apikeycompositegroup.FieldNormalizedPrefix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNormalizedPrefix(v)
+		return nil
+	case apikeycompositegroup.FieldSortOrder:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSortOrder(v)
+		return nil
+	case apikeycompositegroup.FieldDataSharingNoticeVersion:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDataSharingNoticeVersion(v)
+		return nil
+	case apikeycompositegroup.FieldDataSharingConfirmedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDataSharingConfirmedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyCompositeGroup field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *APIKeyCompositeGroupMutation) AddedFields() []string {
+	var fields []string
+	if m.addsort_order != nil {
+		fields = append(fields, apikeycompositegroup.FieldSortOrder)
+	}
+	if m.adddata_sharing_notice_version != nil {
+		fields = append(fields, apikeycompositegroup.FieldDataSharingNoticeVersion)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *APIKeyCompositeGroupMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case apikeycompositegroup.FieldSortOrder:
+		return m.AddedSortOrder()
+	case apikeycompositegroup.FieldDataSharingNoticeVersion:
+		return m.AddedDataSharingNoticeVersion()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *APIKeyCompositeGroupMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case apikeycompositegroup.FieldSortOrder:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSortOrder(v)
+		return nil
+	case apikeycompositegroup.FieldDataSharingNoticeVersion:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDataSharingNoticeVersion(v)
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyCompositeGroup numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *APIKeyCompositeGroupMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(apikeycompositegroup.FieldDataSharingConfirmedAt) {
+		fields = append(fields, apikeycompositegroup.FieldDataSharingConfirmedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *APIKeyCompositeGroupMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *APIKeyCompositeGroupMutation) ClearField(name string) error {
+	switch name {
+	case apikeycompositegroup.FieldDataSharingConfirmedAt:
+		m.ClearDataSharingConfirmedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyCompositeGroup nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *APIKeyCompositeGroupMutation) ResetField(name string) error {
+	switch name {
+	case apikeycompositegroup.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case apikeycompositegroup.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case apikeycompositegroup.FieldAPIKeyID:
+		m.ResetAPIKeyID()
+		return nil
+	case apikeycompositegroup.FieldGroupID:
+		m.ResetGroupID()
+		return nil
+	case apikeycompositegroup.FieldPrefix:
+		m.ResetPrefix()
+		return nil
+	case apikeycompositegroup.FieldNormalizedPrefix:
+		m.ResetNormalizedPrefix()
+		return nil
+	case apikeycompositegroup.FieldSortOrder:
+		m.ResetSortOrder()
+		return nil
+	case apikeycompositegroup.FieldDataSharingNoticeVersion:
+		m.ResetDataSharingNoticeVersion()
+		return nil
+	case apikeycompositegroup.FieldDataSharingConfirmedAt:
+		m.ResetDataSharingConfirmedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyCompositeGroup field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *APIKeyCompositeGroupMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.api_key != nil {
+		edges = append(edges, apikeycompositegroup.EdgeAPIKey)
+	}
+	if m.group != nil {
+		edges = append(edges, apikeycompositegroup.EdgeGroup)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *APIKeyCompositeGroupMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case apikeycompositegroup.EdgeAPIKey:
+		if id := m.api_key; id != nil {
+			return []ent.Value{*id}
+		}
+	case apikeycompositegroup.EdgeGroup:
+		if id := m.group; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *APIKeyCompositeGroupMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *APIKeyCompositeGroupMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *APIKeyCompositeGroupMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedapi_key {
+		edges = append(edges, apikeycompositegroup.EdgeAPIKey)
+	}
+	if m.clearedgroup {
+		edges = append(edges, apikeycompositegroup.EdgeGroup)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *APIKeyCompositeGroupMutation) EdgeCleared(name string) bool {
+	switch name {
+	case apikeycompositegroup.EdgeAPIKey:
+		return m.clearedapi_key
+	case apikeycompositegroup.EdgeGroup:
+		return m.clearedgroup
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *APIKeyCompositeGroupMutation) ClearEdge(name string) error {
+	switch name {
+	case apikeycompositegroup.EdgeAPIKey:
+		m.ClearAPIKey()
+		return nil
+	case apikeycompositegroup.EdgeGroup:
+		m.ClearGroup()
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyCompositeGroup unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *APIKeyCompositeGroupMutation) ResetEdge(name string) error {
+	switch name {
+	case apikeycompositegroup.EdgeAPIKey:
+		m.ResetAPIKey()
+		return nil
+	case apikeycompositegroup.EdgeGroup:
+		m.ResetGroup()
+		return nil
+	}
+	return fmt.Errorf("unknown APIKeyCompositeGroup edge %s", name)
 }
 
 // AccountMutation represents an operation that mutates the Account nodes in the graph.
@@ -19860,6 +20948,9 @@ type GroupMutation struct {
 	api_keys                                map[int64]struct{}
 	removedapi_keys                         map[int64]struct{}
 	clearedapi_keys                         bool
+	api_key_composite_groups                map[int64]struct{}
+	removedapi_key_composite_groups         map[int64]struct{}
+	clearedapi_key_composite_groups         bool
 	usage_logs                              map[int64]struct{}
 	removedusage_logs                       map[int64]struct{}
 	clearedusage_logs                       bool
@@ -23102,6 +24193,60 @@ func (m *GroupMutation) ResetAPIKeys() {
 	m.removedapi_keys = nil
 }
 
+// AddAPIKeyCompositeGroupIDs adds the "api_key_composite_groups" edge to the APIKeyCompositeGroup entity by ids.
+func (m *GroupMutation) AddAPIKeyCompositeGroupIDs(ids ...int64) {
+	if m.api_key_composite_groups == nil {
+		m.api_key_composite_groups = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.api_key_composite_groups[ids[i]] = struct{}{}
+	}
+}
+
+// ClearAPIKeyCompositeGroups clears the "api_key_composite_groups" edge to the APIKeyCompositeGroup entity.
+func (m *GroupMutation) ClearAPIKeyCompositeGroups() {
+	m.clearedapi_key_composite_groups = true
+}
+
+// APIKeyCompositeGroupsCleared reports if the "api_key_composite_groups" edge to the APIKeyCompositeGroup entity was cleared.
+func (m *GroupMutation) APIKeyCompositeGroupsCleared() bool {
+	return m.clearedapi_key_composite_groups
+}
+
+// RemoveAPIKeyCompositeGroupIDs removes the "api_key_composite_groups" edge to the APIKeyCompositeGroup entity by IDs.
+func (m *GroupMutation) RemoveAPIKeyCompositeGroupIDs(ids ...int64) {
+	if m.removedapi_key_composite_groups == nil {
+		m.removedapi_key_composite_groups = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.api_key_composite_groups, ids[i])
+		m.removedapi_key_composite_groups[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedAPIKeyCompositeGroups returns the removed IDs of the "api_key_composite_groups" edge to the APIKeyCompositeGroup entity.
+func (m *GroupMutation) RemovedAPIKeyCompositeGroupsIDs() (ids []int64) {
+	for id := range m.removedapi_key_composite_groups {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// APIKeyCompositeGroupsIDs returns the "api_key_composite_groups" edge IDs in the mutation.
+func (m *GroupMutation) APIKeyCompositeGroupsIDs() (ids []int64) {
+	for id := range m.api_key_composite_groups {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetAPIKeyCompositeGroups resets all changes to the "api_key_composite_groups" edge.
+func (m *GroupMutation) ResetAPIKeyCompositeGroups() {
+	m.api_key_composite_groups = nil
+	m.clearedapi_key_composite_groups = false
+	m.removedapi_key_composite_groups = nil
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by ids.
 func (m *GroupMutation) AddUsageLogIDs(ids ...int64) {
 	if m.usage_logs == nil {
@@ -24936,9 +26081,12 @@ func (m *GroupMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *GroupMutation) AddedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.api_keys != nil {
 		edges = append(edges, group.EdgeAPIKeys)
+	}
+	if m.api_key_composite_groups != nil {
+		edges = append(edges, group.EdgeAPIKeyCompositeGroups)
 	}
 	if m.usage_logs != nil {
 		edges = append(edges, group.EdgeUsageLogs)
@@ -24962,6 +26110,12 @@ func (m *GroupMutation) AddedIDs(name string) []ent.Value {
 	case group.EdgeAPIKeys:
 		ids := make([]ent.Value, 0, len(m.api_keys))
 		for id := range m.api_keys {
+			ids = append(ids, id)
+		}
+		return ids
+	case group.EdgeAPIKeyCompositeGroups:
+		ids := make([]ent.Value, 0, len(m.api_key_composite_groups))
+		for id := range m.api_key_composite_groups {
 			ids = append(ids, id)
 		}
 		return ids
@@ -24995,9 +26149,12 @@ func (m *GroupMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *GroupMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.removedapi_keys != nil {
 		edges = append(edges, group.EdgeAPIKeys)
+	}
+	if m.removedapi_key_composite_groups != nil {
+		edges = append(edges, group.EdgeAPIKeyCompositeGroups)
 	}
 	if m.removedusage_logs != nil {
 		edges = append(edges, group.EdgeUsageLogs)
@@ -25021,6 +26178,12 @@ func (m *GroupMutation) RemovedIDs(name string) []ent.Value {
 	case group.EdgeAPIKeys:
 		ids := make([]ent.Value, 0, len(m.removedapi_keys))
 		for id := range m.removedapi_keys {
+			ids = append(ids, id)
+		}
+		return ids
+	case group.EdgeAPIKeyCompositeGroups:
+		ids := make([]ent.Value, 0, len(m.removedapi_key_composite_groups))
+		for id := range m.removedapi_key_composite_groups {
 			ids = append(ids, id)
 		}
 		return ids
@@ -25054,9 +26217,12 @@ func (m *GroupMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *GroupMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.clearedapi_keys {
 		edges = append(edges, group.EdgeAPIKeys)
+	}
+	if m.clearedapi_key_composite_groups {
+		edges = append(edges, group.EdgeAPIKeyCompositeGroups)
 	}
 	if m.clearedusage_logs {
 		edges = append(edges, group.EdgeUsageLogs)
@@ -25079,6 +26245,8 @@ func (m *GroupMutation) EdgeCleared(name string) bool {
 	switch name {
 	case group.EdgeAPIKeys:
 		return m.clearedapi_keys
+	case group.EdgeAPIKeyCompositeGroups:
+		return m.clearedapi_key_composite_groups
 	case group.EdgeUsageLogs:
 		return m.clearedusage_logs
 	case group.EdgeAccounts:
@@ -25105,6 +26273,9 @@ func (m *GroupMutation) ResetEdge(name string) error {
 	switch name {
 	case group.EdgeAPIKeys:
 		m.ResetAPIKeys()
+		return nil
+	case group.EdgeAPIKeyCompositeGroups:
+		m.ResetAPIKeyCompositeGroups()
 		return nil
 	case group.EdgeUsageLogs:
 		m.ResetUsageLogs()

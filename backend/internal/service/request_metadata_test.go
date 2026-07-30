@@ -15,6 +15,9 @@ func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 	ctx = WithPrefetchedStickySession(ctx, 123, 456, false)
 	ctx = WithSingleAccountRetry(ctx, true, false)
 	ctx = WithAccountSwitchCount(ctx, 2, false)
+	ctx = WithOpenAINativeRemoteCompactionV2(ctx, true)
+	requestStageBudget := NewOpenAIStageBudget(1024)
+	ctx = WithOpenAINativeCompactionRequestStageBudget(ctx, requestStageBudget)
 
 	isHaiku, ok := IsMaxTokensOneHaikuRequestFromContext(ctx)
 	require.True(t, ok)
@@ -39,6 +42,11 @@ func TestRequestMetadataWriteAndRead_NoBridge(t *testing.T) {
 	switchCount, ok := AccountSwitchCountFromContext(ctx)
 	require.True(t, ok)
 	require.Equal(t, 2, switchCount)
+
+	nativeCompaction, ok := OpenAINativeRemoteCompactionV2FromContext(ctx)
+	require.True(t, ok)
+	require.True(t, nativeCompaction)
+	require.Same(t, requestStageBudget, OpenAINativeCompactionRequestStageBudgetFromContext(ctx))
 
 	require.Nil(t, ctx.Value(ctxkey.IsMaxTokensOneHaikuRequest))
 	require.Nil(t, ctx.Value(ctxkey.ThinkingEnabled))
@@ -106,6 +114,18 @@ func TestRequestMetadataRead_LegacyFallbackAndStats(t *testing.T) {
 	require.Equal(t, beforeGroup+1, afterGroup)
 	require.Equal(t, beforeSingleRetry+1, afterSingleRetry)
 	require.Equal(t, beforeSwitchCount+1, afterSwitchCount)
+}
+
+func TestOpenAINativeRemoteCompactionV2MetadataAbsentAndCopyOnWrite(t *testing.T) {
+	value, ok := OpenAINativeRemoteCompactionV2FromContext(context.Background())
+	require.False(t, ok)
+	require.False(t, value)
+
+	ctx := WithOpenAINativeRemoteCompactionV2(context.Background(), true)
+	ctx = WithThinkingEnabled(ctx, true, false)
+	value, ok = OpenAINativeRemoteCompactionV2FromContext(ctx)
+	require.True(t, ok)
+	require.True(t, value)
 }
 
 func TestRequestMetadataRead_PreferMetadataOverLegacy(t *testing.T) {

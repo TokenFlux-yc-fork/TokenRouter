@@ -93,6 +93,7 @@ type Config struct {
 	TokenRefresh            TokenRefreshConfig            `mapstructure:"token_refresh"`
 	RunMode                 string                        `mapstructure:"run_mode" yaml:"run_mode"`
 	Timezone                string                        `mapstructure:"timezone"` // e.g. "Asia/Shanghai", "UTC"
+	ScheduledRunnerEnabled  bool                          `mapstructure:"scheduled_test_runner_enabled"`
 	Gemini                  GeminiConfig                  `mapstructure:"gemini"`
 	Update                  UpdateConfig                  `mapstructure:"update"`
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
@@ -937,6 +938,10 @@ type GatewayConfig struct {
 	OpenAIHTTP2 GatewayOpenAIHTTP2Config `mapstructure:"openai_http2"`
 	// OpenAIProxyStreamCircuit: Responses SSE 代理断流熔断策略。
 	OpenAIProxyStreamCircuit GatewayOpenAIProxyStreamCircuitConfig `mapstructure:"openai_proxy_stream_circuit"`
+	// OpenAINativeCompaction: native-v2 客户请求 whole-attempt staging 配置。
+	OpenAINativeCompaction GatewayOpenAINativeCompactionConfig `mapstructure:"openai_native_compaction"`
+	// OpenAINativeCompactionProbe: native-v2 能力探测配置，默认关闭。
+	OpenAINativeCompactionProbe GatewayOpenAINativeCompactionProbeConfig `mapstructure:"openai_native_compaction_probe"`
 	// ImageConcurrency: 图片生成独立并发限制配置（默认关闭）
 	ImageConcurrency ImageConcurrencyConfig `mapstructure:"image_concurrency"`
 
@@ -1050,6 +1055,40 @@ type GatewayOpenAIProxyStreamCircuitConfig struct {
 	WindowSeconds int `mapstructure:"window_seconds"`
 	// TTLSeconds: 代理隔离持续时间（秒）。
 	TTLSeconds int `mapstructure:"ttl_seconds"`
+}
+
+// GatewayOpenAINativeCompactionConfig 配置客户请求的 whole-attempt staging 边界。
+type GatewayOpenAINativeCompactionConfig struct {
+	MemoryThresholdBytes      int64 `mapstructure:"memory_threshold_bytes"`
+	MaxAttemptBytes           int64 `mapstructure:"max_attempt_bytes"`
+	MaxAttemptEvents          int   `mapstructure:"max_attempt_events"`
+	MaxAttemptDurationSeconds int   `mapstructure:"max_attempt_duration_seconds"`
+	MaxProcessStagedBytes     int64 `mapstructure:"max_process_staged_bytes"`
+	MaxRequestCumulativeBytes int64 `mapstructure:"max_request_cumulative_bytes"`
+	SemanticQuarantineSeconds int   `mapstructure:"semantic_quarantine_seconds"`
+}
+
+// GatewayOpenAINativeCompactionProbeConfig 配置隔离、定额的 native-v2 能力探测。
+type GatewayOpenAINativeCompactionProbeConfig struct {
+	Enabled                   bool     `mapstructure:"enabled"`
+	TickIntervalSeconds       int      `mapstructure:"tick_interval_seconds"`
+	MaxWorkers                int      `mapstructure:"max_workers"`
+	ClaimLimit                int      `mapstructure:"claim_limit"`
+	ClaimTTLSeconds           int      `mapstructure:"claim_ttl_seconds"`
+	RequestTimeoutSeconds     int      `mapstructure:"request_timeout_seconds"`
+	MaxResponseBytes          int64    `mapstructure:"max_response_bytes"`
+	MaxEvents                 int      `mapstructure:"max_events"`
+	SuccessReprobeMinutes     int      `mapstructure:"success_reprobe_minutes"`
+	UnsupportedReprobeMinutes int      `mapstructure:"unsupported_reprobe_minutes"`
+	RetryInitialSeconds       int      `mapstructure:"retry_initial_seconds"`
+	RetryMaxSeconds           int      `mapstructure:"retry_max_seconds"`
+	RetryJitterRatio          float64  `mapstructure:"retry_jitter_ratio"`
+	IsolatedGroupID           int64    `mapstructure:"isolated_group_id"`
+	IsolatedAPIKeyID          int64    `mapstructure:"isolated_api_key_id"`
+	ModelAllowlist            []string `mapstructure:"model_allowlist"`
+	MaxOutputTokens           int      `mapstructure:"max_output_tokens"`
+	MaxCostPerRunMicroUSD     int64    `mapstructure:"max_cost_per_run"`
+	MaxCostPerDayMicroUSD     int64    `mapstructure:"max_cost_per_day"`
 }
 
 // UserMessageQueueConfig 用户消息串行队列配置
@@ -2177,6 +2216,7 @@ func setDefaults() {
 
 	// Timezone (default to Asia/Shanghai for Chinese users)
 	viper.SetDefault("timezone", "Asia/Shanghai")
+	viper.SetDefault("scheduled_test_runner_enabled", true)
 	viper.SetDefault("team.enabled", true)
 	viper.SetDefault("team.self_service_enabled", true)
 	viper.SetDefault("team.default_member_limit", 10)
@@ -2317,6 +2357,32 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.failure_threshold", 2)
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.window_seconds", 60)
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.ttl_seconds", 600)
+	viper.SetDefault("gateway.openai_native_compaction.memory_threshold_bytes", int64(1024*1024))
+	viper.SetDefault("gateway.openai_native_compaction.max_attempt_bytes", int64(64*1024*1024))
+	viper.SetDefault("gateway.openai_native_compaction.max_attempt_events", 8192)
+	viper.SetDefault("gateway.openai_native_compaction.max_attempt_duration_seconds", 900)
+	viper.SetDefault("gateway.openai_native_compaction.max_process_staged_bytes", int64(512*1024*1024))
+	viper.SetDefault("gateway.openai_native_compaction.max_request_cumulative_bytes", int64(128*1024*1024))
+	viper.SetDefault("gateway.openai_native_compaction.semantic_quarantine_seconds", 900)
+	viper.SetDefault("gateway.openai_native_compaction_probe.enabled", false)
+	viper.SetDefault("gateway.openai_native_compaction_probe.tick_interval_seconds", 30)
+	viper.SetDefault("gateway.openai_native_compaction_probe.max_workers", 2)
+	viper.SetDefault("gateway.openai_native_compaction_probe.claim_limit", 2)
+	viper.SetDefault("gateway.openai_native_compaction_probe.claim_ttl_seconds", 180)
+	viper.SetDefault("gateway.openai_native_compaction_probe.request_timeout_seconds", 90)
+	viper.SetDefault("gateway.openai_native_compaction_probe.max_response_bytes", int64(20*1024*1024))
+	viper.SetDefault("gateway.openai_native_compaction_probe.max_events", 256)
+	viper.SetDefault("gateway.openai_native_compaction_probe.success_reprobe_minutes", 1440)
+	viper.SetDefault("gateway.openai_native_compaction_probe.unsupported_reprobe_minutes", 360)
+	viper.SetDefault("gateway.openai_native_compaction_probe.retry_initial_seconds", 60)
+	viper.SetDefault("gateway.openai_native_compaction_probe.retry_max_seconds", 3600)
+	viper.SetDefault("gateway.openai_native_compaction_probe.retry_jitter_ratio", 0.2)
+	viper.SetDefault("gateway.openai_native_compaction_probe.isolated_group_id", int64(0))
+	viper.SetDefault("gateway.openai_native_compaction_probe.isolated_api_key_id", int64(0))
+	viper.SetDefault("gateway.openai_native_compaction_probe.model_allowlist", []string{})
+	viper.SetDefault("gateway.openai_native_compaction_probe.max_output_tokens", 0)
+	viper.SetDefault("gateway.openai_native_compaction_probe.max_cost_per_run", int64(0))
+	viper.SetDefault("gateway.openai_native_compaction_probe.max_cost_per_day", int64(0))
 	viper.SetDefault("gateway.image_concurrency.enabled", false)
 	viper.SetDefault("gateway.image_concurrency.max_concurrent_requests", 0)
 	viper.SetDefault("gateway.image_concurrency.overflow_mode", ImageConcurrencyOverflowModeReject)
@@ -3316,6 +3382,64 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIProxyStreamCircuit.TTLSeconds < 0 {
 		return fmt.Errorf("gateway.openai_proxy_stream_circuit.ttl_seconds must be non-negative")
+	}
+	nativeCompaction := c.Gateway.OpenAINativeCompaction
+	if nativeCompaction.MemoryThresholdBytes <= 0 || nativeCompaction.MaxAttemptBytes <= 0 ||
+		nativeCompaction.MaxAttemptEvents <= 0 || nativeCompaction.MaxAttemptDurationSeconds <= 0 ||
+		nativeCompaction.MaxProcessStagedBytes <= 0 || nativeCompaction.MaxRequestCumulativeBytes <= 0 ||
+		nativeCompaction.SemanticQuarantineSeconds <= 0 {
+		return fmt.Errorf("gateway.openai_native_compaction limits must be positive")
+	}
+	if nativeCompaction.MemoryThresholdBytes > nativeCompaction.MaxAttemptBytes {
+		return fmt.Errorf("gateway.openai_native_compaction.memory_threshold_bytes must be <= max_attempt_bytes")
+	}
+	if nativeCompaction.MaxAttemptBytes > nativeCompaction.MaxProcessStagedBytes {
+		return fmt.Errorf("gateway.openai_native_compaction.max_attempt_bytes must be <= max_process_staged_bytes")
+	}
+	if nativeCompaction.MaxAttemptBytes > nativeCompaction.MaxRequestCumulativeBytes {
+		return fmt.Errorf("gateway.openai_native_compaction.max_attempt_bytes must be <= max_request_cumulative_bytes")
+	}
+	probe := c.Gateway.OpenAINativeCompactionProbe
+	if probe.TickIntervalSeconds <= 0 || probe.MaxWorkers <= 0 || probe.ClaimLimit <= 0 ||
+		probe.ClaimTTLSeconds <= 0 || probe.RequestTimeoutSeconds <= 0 || probe.MaxEvents <= 0 ||
+		probe.SuccessReprobeMinutes <= 0 || probe.UnsupportedReprobeMinutes <= 0 ||
+		probe.RetryInitialSeconds <= 0 || probe.RetryMaxSeconds <= 0 {
+		return fmt.Errorf("gateway.openai_native_compaction_probe intervals and limits must be positive")
+	}
+	if probe.ClaimLimit > probe.MaxWorkers {
+		return fmt.Errorf("gateway.openai_native_compaction_probe.claim_limit must be <= max_workers")
+	}
+	if probe.ClaimTTLSeconds < probe.RequestTimeoutSeconds+30 {
+		return fmt.Errorf("gateway.openai_native_compaction_probe.claim_ttl_seconds must be at least request_timeout_seconds + 30")
+	}
+	if probe.MaxResponseBytes < 16*1024*1024 {
+		return fmt.Errorf("gateway.openai_native_compaction_probe.max_response_bytes must be at least 16 MiB")
+	}
+	if probe.RetryMaxSeconds < probe.RetryInitialSeconds {
+		return fmt.Errorf("gateway.openai_native_compaction_probe.retry_max_seconds must be >= retry_initial_seconds")
+	}
+	if probe.RetryJitterRatio < 0 || probe.RetryJitterRatio > 1 || math.IsNaN(probe.RetryJitterRatio) || math.IsInf(probe.RetryJitterRatio, 0) {
+		return fmt.Errorf("gateway.openai_native_compaction_probe.retry_jitter_ratio must be finite and within [0,1]")
+	}
+	if probe.Enabled {
+		if probe.IsolatedGroupID <= 0 || probe.IsolatedAPIKeyID <= 0 {
+			return fmt.Errorf("gateway.openai_native_compaction_probe isolated_group_id and isolated_api_key_id must be positive when enabled")
+		}
+		allowedModels := 0
+		for _, model := range probe.ModelAllowlist {
+			if strings.TrimSpace(model) != "" {
+				allowedModels++
+			}
+		}
+		if allowedModels == 0 {
+			return fmt.Errorf("gateway.openai_native_compaction_probe.model_allowlist must not be empty when enabled")
+		}
+		if probe.MaxOutputTokens <= 0 || probe.MaxCostPerRunMicroUSD <= 0 || probe.MaxCostPerDayMicroUSD <= 0 {
+			return fmt.Errorf("gateway.openai_native_compaction_probe output and cost limits must be positive when enabled")
+		}
+		if probe.MaxCostPerDayMicroUSD < probe.MaxCostPerRunMicroUSD {
+			return fmt.Errorf("gateway.openai_native_compaction_probe.max_cost_per_day must be >= max_cost_per_run")
+		}
 	}
 	weights := c.Gateway.OpenAIWS.SchedulerScoreWeights
 	for _, weight := range []float64{

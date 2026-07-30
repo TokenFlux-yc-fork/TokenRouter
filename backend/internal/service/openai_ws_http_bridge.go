@@ -23,6 +23,45 @@ const (
 	openAIWSHTTPBridgeTurnRetryLimit              = 1
 )
 
+func splitOpenAIWSHTTPBridgeSSEEvent(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	lineStart := 0
+	for index, value := range data {
+		if value != '\n' {
+			continue
+		}
+		lineEnd := index
+		if lineEnd > lineStart && data[lineEnd-1] == '\r' {
+			lineEnd--
+		}
+		if lineEnd == lineStart {
+			return index + 1, data[:index+1], nil
+		}
+		lineStart = index + 1
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+func parseOpenAIWSHTTPBridgeSSEEvent(frame []byte) (eventType, data string, ok bool) {
+	dataLines := make([]string, 0, 1)
+	for _, rawLine := range strings.Split(string(frame), "\n") {
+		line := strings.TrimSuffix(rawLine, "\r")
+		if value, found := extractOpenAISSEEventLine(line); found {
+			eventType = value
+			continue
+		}
+		if value, found := extractOpenAISSEDataLine(line); found {
+			dataLines = append(dataLines, value)
+		}
+	}
+	if len(dataLines) == 0 {
+		return eventType, "", false
+	}
+	return eventType, strings.Join(dataLines, "\n"), true
+}
+
 // ResolveOpenAIWSClientFirstMessageTimeout 返回生效的客户端入站首消息截止时间。
 func ResolveOpenAIWSClientFirstMessageTimeout(cfg *config.Config) time.Duration {
 	seconds := config.DefaultOpenAIWSClientFirstMessageTimeoutSeconds
@@ -69,7 +108,7 @@ func (s *OpenAIGatewayService) shouldBridgeOpenAIWSHTTP(account *Account, payloa
 }
 
 // prepareOpenAIWSHTTPBridgeBody 将 response.create WS payload 转成 HTTP Responses body。
-func prepareOpenAIWSHTTPBridgeBody(payload []byte) ([]byte, error) {
+func prepareOpenAIWSHTTPBridgeBody(payload []byte, preservePreviousResponseID bool) ([]byte, error) {
 	var body map[string]any
 	if err := json.Unmarshal(payload, &body); err != nil {
 		return nil, err
@@ -79,7 +118,9 @@ func prepareOpenAIWSHTTPBridgeBody(payload []byte) ([]byte, error) {
 	}
 	delete(body, "type")
 	delete(body, "generate")
-	delete(body, "previous_response_id")
+	if !preservePreviousResponseID {
+		delete(body, "previous_response_id")
+	}
 	body["stream"] = true
 	return json.Marshal(body)
 }
@@ -179,7 +220,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	turn int,
 	writeClientMessage func([]byte) error,
 	routerMatch ...TLSFingerprintRouterMatchResult,
-) (*OpenAIForwardResult, error) {
+) (forwardResult *OpenAIForwardResult, forwardErr error) {
 	if s == nil {
 		return nil, errors.New("service is nil")
 	}
@@ -193,12 +234,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		return nil, errors.New("client websocket writer is nil")
 	}
 
-	body, err := prepareOpenAIWSHTTPBridgeBody(payload)
+	nativeCompaction := isOpenAINativeCompactionTurn(c, payload)
+	body, err := prepareOpenAIWSHTTPBridgeBody(payload, nativeCompaction)
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
+	nativeAttemptCtx, releaseNativeAttemptCtx := withOpenAIWSNativeClientDisconnect(ctx, nativeCompaction)
+	defer releaseNativeAttemptCtx()
 
-	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+	upstreamCtx, releaseUpstreamCtx := openAIUpstreamContextForCompactionAttempt(nativeAttemptCtx, nativeCompaction)
 	var upstreamReq *http.Request
 	if account.Platform == PlatformGrok {
 		upstreamModel := resolveGrokWSUpstreamModel(account, body, routingModel)
@@ -241,8 +285,56 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 
 	turnStart := time.Now()
+	wsIdentity := openAIWSAttemptIdentityFromContext(ctx)
+	if wsIdentity.ConnectionID == "" {
+		wsIdentity.ConnectionID = NewOpenAIWSConnectionID()
+	}
+	if wsIdentity.TurnID == "" {
+		wsIdentity.TurnID = NewOpenAIWSTurnID()
+	}
+	var nativeStage *OpenAINativeCompactionAttemptStage
+	var nativeValidator *OpenAINativeCompactionValidator
+	var nativeValidation OpenAINativeCompactionValidationResult
+	nativeDeliveryCommitted := false
+	nativeDeliveryStarted := false
+	responseID := ""
+	usage := OpenAIUsage{}
+	usageObserved := false
+	clientDisconnected := false
+	if nativeCompaction {
+		nativeStage, err = newOpenAINativeCompactionAttemptStage(nativeAttemptCtx, s)
+		if err != nil {
+			return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, true, nil, joinOpenAINativeCompactionStageSemanticError(err))
+		}
+		defer func() { _ = nativeStage.Close() }()
+		nativeValidator = NewOpenAINativeCompactionValidator()
+	}
+	upstreamAttempt := s.beginOpenAINativeWSAttempt(
+		ctx,
+		account,
+		routingModel,
+		openAIServiceTierIsPriority(extractOpenAIServiceTierFromBody(body)),
+		nativeCompaction,
+		UpstreamAttemptTransportHTTP,
+		wsIdentity.ConnectionID,
+		wsIdentity.TurnID,
+	)
+	defer func() {
+		if upstreamAttempt == nil {
+			return
+		}
+		if nativeValidation.Outcome == "" || nativeValidation.Outcome == OpenAINativeCompactionPending {
+			nativeValidation = nativeValidator.Finish()
+		}
+		upstreamAttempt.finishWebSocket(nativeValidation, responseID, &usage, usageObserved, nativeDeliveryCommitted && !clientDisconnected, !nativeDeliveryStarted && !clientDisconnected, forwardErr)
+		finalizeOpenAINativeForwardResult(forwardResult, account, upstreamAttempt, nativeCompaction, UpstreamAttemptTransportHTTP)
+	}()
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, routerMatch...))
 	if err != nil {
+		if disconnectErr := openAIWSClientReadPumpDisconnectError(ctx); nativeCompaction && disconnectErr != nil {
+			clientDisconnected = true
+			return nil, disconnectErr
+		}
 		if turn == 1 {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 		}
@@ -251,9 +343,17 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		return nil, fmt.Errorf("upstream http bridge request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if upstreamAttempt != nil {
+		upstreamAttempt.observeTransport(resp)
+	}
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
+		if nativeCompaction {
+			if continuationCode := openAINativeCompactionContinuationErrorCode(extractUpstreamErrorCode(respBody)); continuationCode != "" {
+				return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, true, resp.Header, newOpenAINativeCompactionContinuationError(continuationCode))
+			}
+		}
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if upstreamMsg == "" {
 			upstreamMsg = http.StatusText(resp.StatusCode)
@@ -279,8 +379,6 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
 	}
 
-	responseID := ""
-	usage := OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	reqStream := openAIWSPayloadBoolFromRaw(body, "stream", true)
@@ -293,7 +391,6 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	upstreamTerminalEvent := ""
 	sawDone := false
 	wroteDownstream := false
-	clientDisconnected := false
 	pendingPreamble := make([][]byte, 0, 4)
 	pendingTerminalTail := make([][]byte, 0, 4)
 	holdingTerminalTail := false
@@ -350,6 +447,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			ResponseHeaders:       cloneHeader(resp.Header),
 			Duration:              time.Since(turnStart),
 			FirstTokenMs:          firstTokenMs,
+			ClientDisconnect:      clientDisconnected,
 		}
 		if replayInput := replayCollector.Items(); len(replayInput) > 0 {
 			result.wsReplayInput = replayInput
@@ -371,20 +469,33 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
 	scanBuf := getSSEScannerBuf64K()
+	if nativeValidator != nil {
+		scanner.Split(splitOpenAIWSHTTPBridgeSSEEvent)
+		maxLineSize = openAINativeCompactionScannerLimit(maxLineSize, nativeStage)
+	}
 	scanner.Buffer(scanBuf[:0], maxLineSize)
 	defer putSSEScannerBuf64K(scanBuf)
 	pendingSSEEventType := ""
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		data, ok := extractOpenAISSEDataLine(line)
-		if !ok {
-			if eventName, eventOK := extractOpenAISSEEventLine(line); eventOK {
-				pendingSSEEventType = eventName
-			} else if strings.TrimSpace(line) == "" {
-				pendingSSEEventType = ""
+		var data string
+		var ok bool
+		if nativeValidator != nil {
+			pendingSSEEventType, data, ok = parseOpenAIWSHTTPBridgeSSEEvent(scanner.Bytes())
+			if !ok {
+				continue
 			}
-			continue
+		} else {
+			line := scanner.Text()
+			data, ok = extractOpenAISSEDataLine(line)
+			if !ok {
+				if eventName, eventOK := extractOpenAISSEEventLine(line); eventOK {
+					pendingSSEEventType = eventName
+				} else if strings.TrimSpace(line) == "" {
+					pendingSSEEventType = ""
+				}
+				continue
+			}
 		}
 		trimmedData := strings.TrimSpace(data)
 		if trimmedData == "" {
@@ -392,16 +503,34 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		if trimmedData == "[DONE]" {
 			sawDone = true
+			if nativeValidator != nil {
+				nativeValidator.Observe([]byte("[DONE]"))
+			}
 			pendingSSEEventType = ""
 			continue
 		}
 
 		upstreamMessage := []byte(trimmedData)
-		if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
-			upstreamMessage = normalized
+		if nativeValidator != nil {
+			upstreamMessage = []byte(data)
+			nativeValidator.Observe(upstreamMessage)
+			if stageErr := openAINativeCompactionStageWSMessage(nativeStage, upstreamMessage); stageErr != nil {
+				_ = nativeStage.Discard()
+				if disconnectErr := openAIWSClientReadPumpDisconnectError(ctx); disconnectErr != nil {
+					clientDisconnected = true
+					nativeValidation = nativeValidator.Finish()
+					return nil, disconnectErr
+				}
+				return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, true, resp.Header, joinOpenAINativeCompactionStageSemanticError(stageErr))
+			}
+		}
+		if nativeValidator == nil {
+			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
+				upstreamMessage = normalized
+			}
 		}
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
-		if eventType == "" && pendingSSEEventType != "" {
+		if nativeValidator == nil && eventType == "" && pendingSSEEventType != "" {
 			trimmedData = openAICompatPayloadWithEventType(trimmedData, pendingSSEEventType)
 			upstreamMessage = []byte(trimmedData)
 			eventType = pendingSSEEventType
@@ -425,10 +554,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			}
 		}
 		if openAIWSEventShouldParseUsage(eventType) {
-			parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
+			if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(upstreamMessage); ok {
+				usage = parsedUsage
+				usageObserved = true
+			}
 		}
 		imageCounter.AddSSEData(upstreamMessage)
-
 		if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && strings.Contains(trimmedData, mappedModel) {
 			upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
 		}
@@ -460,6 +591,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
+			if nativeCompaction {
+				if continuationCode := openAINativeCompactionContinuationErrorCode(errCodeRaw); continuationCode != "" {
+					_ = nativeStage.Discard()
+					return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, true, resp.Header, newOpenAINativeCompactionContinuationError(continuationCode))
+				}
+			}
 			errMessage := strings.TrimSpace(errMsgRaw)
 			if errMessage == "" {
 				errMessage = "upstream error event"
@@ -506,6 +643,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		if eventType == "response.failed" {
 			failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
+			if nativeCompaction {
+				if continuationCode := openAINativeCompactionContinuationErrorCode(extractUpstreamErrorCode(upstreamMessage)); continuationCode != "" {
+					_ = nativeStage.Discard()
+					return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, true, resp.Header, newOpenAINativeCompactionContinuationError(continuationCode))
+				}
+			}
 			if openAIStreamEventShouldFailover(upstreamMessage, eventType, failedMessage) {
 				if !wroteDownstream && !clientDisconnected {
 					return resultWithUsage(), s.newOpenAIStreamFailoverError(
@@ -524,7 +667,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			}
 		}
 
-		if !clientDisconnected {
+		if !clientDisconnected && nativeStage == nil {
 			if openAIStreamEventDefersUntilSuccessfulTerminal(eventType) {
 				holdingTerminalTail = true
 				pendingTerminalTail = append(pendingTerminalTail, append([]byte(nil), upstreamMessage...))
@@ -587,6 +730,20 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			return resultWithUsage(), errors.New(errMessage)
 		}
 		if isOpenAIWSTerminalEvent(eventType) {
+			if nativeValidator != nil {
+				validation := nativeValidator.Finish()
+				nativeValidation = validation
+				if !validation.Valid() {
+					_ = nativeStage.Discard()
+					semanticErr := newOpenAINativeCompactionSemanticError(validation.Outcome)
+					return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, true, resp.Header, semanticErr)
+				}
+				nativeDeliveryStarted = true
+				if commitErr := commitOpenAINativeCompactionWSMessages(nativeStage, emitClientMessage); commitErr != nil {
+					return nil, wrapOpenAIWSIngressTurnError("native_compaction_commit", commitErr, true)
+				}
+				nativeDeliveryCommitted = !clientDisconnected
+			}
 			upstreamTerminalEvent = s.handleOpenAIWSTerminalTransientFailure(ctx, account, canonicalOpenAIAccountSchedulingModel(account, routingModel), resp.Header, upstreamMessage)
 			terminalEventCount++
 			firstTokenMsValue := -1
@@ -612,6 +769,17 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		if nativeValidator != nil {
+			validation := nativeValidator.Finish()
+			nativeValidation = validation
+			_ = nativeStage.Discard()
+			if disconnectErr := openAIWSClientReadPumpDisconnectError(ctx); disconnectErr != nil {
+				clientDisconnected = true
+				return nil, disconnectErr
+			}
+			semanticErr := newOpenAINativeCompactionSemanticError(validation.Outcome)
+			return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, true, resp.Header, semanticErr)
+		}
 		streamErr := fmt.Errorf("read upstream http bridge stream: %w", err)
 		if !wroteDownstream && !clientDisconnected {
 			if turn == 1 {
@@ -623,6 +791,17 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			return resultWithUsage(), newOpenAIWSRetryableCloseError("upstream stream interrupted after downstream output")
 		}
 		return resultWithUsage(), streamErr
+	}
+	if nativeValidator != nil {
+		validation := nativeValidator.Finish()
+		nativeValidation = validation
+		_ = nativeStage.Discard()
+		if disconnectErr := openAIWSClientReadPumpDisconnectError(ctx); disconnectErr != nil {
+			clientDisconnected = true
+			return nil, disconnectErr
+		}
+		semanticErr := newOpenAINativeCompactionSemanticError(validation.Outcome)
+		return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, true, resp.Header, semanticErr)
 	}
 	terminalErr := errors.New("upstream http bridge stream ended before terminal event")
 	if sawDone {
@@ -641,7 +820,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 }
 
 func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, payload []byte, routingModel string) (string, error) {
-	body, err := prepareOpenAIWSHTTPBridgeBody(payload)
+	body, err := prepareOpenAIWSHTTPBridgeBody(payload, false)
 	if err != nil {
 		return "", err
 	}

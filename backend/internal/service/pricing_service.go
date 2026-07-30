@@ -686,6 +686,33 @@ func (s *PricingService) validatePricingURL(raw string) (string, error) {
 	return normalized, nil
 }
 
+// GetExactOpenAIProviderPricing 返回可证明属于 OpenAI provider 的精确价格。
+// 它只允许安全的 canonical alias，不执行 family/default-model 模糊回退。
+func (s *PricingService) GetExactOpenAIProviderPricing(modelName string) (*LiteLLMModelPricing, string, error) {
+	if s == nil {
+		return nil, "", ErrModelPricingUnavailable
+	}
+	rawModel := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.HasPrefix(rawModel, "openai/") {
+		rawModel = strings.TrimPrefix(rawModel, "openai/")
+	} else if strings.Contains(rawModel, "/") {
+		return nil, "", ErrModelPricingUnavailable
+	}
+	canonical := normalizeModelNameForPricing(rawModel)
+	if canonical == "" || strings.Contains(canonical, "/") {
+		return nil, "", ErrModelPricingUnavailable
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	pricing, ok := s.pricingData[canonical]
+	if !ok || pricing == nil || pricing.TokenPricingAbsent || !strings.EqualFold(strings.TrimSpace(pricing.LiteLLMProvider), "openai") {
+		return nil, "", ErrModelPricingUnavailable
+	}
+	copy := *pricing
+	return &copy, canonical, nil
+}
+
 // GetModelPricing 获取模型价格（带模糊匹配）
 func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing {
 	s.mu.RLock()

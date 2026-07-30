@@ -24,7 +24,7 @@ ENV NODE_OPTIONS=--max-old-space-size=2048
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 # Install dependencies first (better caching)
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # 复制前端源码并构建。
@@ -41,7 +41,7 @@ FROM ${GOLANG_IMAGE} AS backend-builder
 
 # 构建版本信息参数，由 CI 或手工构建传入
 ARG VERSION=
-ARG FORK_ID=
+ARG FORK_ID=yc-fork
 ARG COMMIT=docker
 ARG DATE
 ARG GOPROXY

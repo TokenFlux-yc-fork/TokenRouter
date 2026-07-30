@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
+	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -146,6 +147,105 @@ func TestLogOpenAIRemoteCompactOutcome_Succeeded(t *testing.T) {
 	require.True(t, logSink.ContainsFieldValue("request_model", "gpt-5.3-codex"))
 	require.True(t, logSink.ContainsFieldValue("account_id", "123"))
 	require.True(t, logSink.ContainsFieldValue("upstream_request_id", "rid-compact-ok"))
+}
+
+func TestLogOpenAIRemoteCompactOutcome_NativeRequiresDurableDeliveryContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logSink, restore := captureHandlerStructuredLog(t)
+	defer restore()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	service.MarkOpenAINativeRemoteCompactionV2(c)
+	markOpenAINativeCompactionAttemptForLog(c, nil)
+	c.Status(http.StatusOK)
+
+	h := &OpenAIGatewayHandler{}
+	h.logOpenAIRemoteCompactOutcome(c, time.Now())
+
+	require.False(t, logSink.ContainsMessageAtLevel("codex.remote_compact.succeeded", "info"))
+	require.True(t, logSink.ContainsMessageAtLevel("codex.remote_compact.failed", "warn"))
+	require.True(t, logSink.ContainsFieldValue("semantic_output_committed", "false"))
+	require.True(t, logSink.ContainsFieldValue("attribution_persisted", "false"))
+}
+
+func TestLogOpenAIRemoteCompactOutcome_NativeSuccessUsesBoundedAttemptTelemetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logSink, restore := captureHandlerStructuredLog(t)
+	defer restore()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	service.MarkOpenAINativeRemoteCompactionV2(c)
+	markOpenAINativeCompactionAttemptForLog(c, &service.OpenAIForwardResult{
+		AttemptID:                service.AttemptID("attempt-fixture"),
+		WSConnectionID:           service.WSConnectionID("wsconn-fixture"),
+		WSTurnID:                 service.WSTurnID("wsturn-fixture"),
+		Transport:                service.UpstreamAttemptTransportWebSocket,
+		AccountType:              service.AccountTypeAPIKey,
+		CapabilitySource:         service.OpenAINativeCompactionCapabilitySourceProbe,
+		UpstreamFingerprint:      service.OpenAIUpstreamFingerprint("upstream_v1_fixture"),
+		Model:                    "requested-model",
+		UpstreamModel:            "mapped-model",
+		NativeRemoteCompactionV2: true,
+		SemanticOutcome:          service.OpenAINativeCompactionValid,
+		OutputItemDoneCount:      2,
+		CompactionItemCount:      1,
+		TerminalEventCount:       1,
+		UpstreamTerminalEvent:    "response.completed",
+		FailoverCount:            1,
+		DeliveryCommitted:        true,
+		AttributionPersisted:     true,
+	})
+	c.Status(http.StatusOK)
+
+	h := &OpenAIGatewayHandler{}
+	h.logOpenAIRemoteCompactOutcome(c, time.Now())
+
+	require.True(t, logSink.ContainsMessageAtLevel("codex.remote_compact.succeeded", "info"))
+	require.False(t, logSink.ContainsMessageAtLevel("codex.remote_compact.failed", "warn"))
+	for field, value := range map[string]string{
+		"transport":                 "websocket",
+		"account_type":              service.AccountTypeAPIKey,
+		"final_account_type":        service.AccountTypeAPIKey,
+		"upstream_fingerprint":      "upstream_v1_fixture",
+		"requested_model":           "requested-model",
+		"mapped_model":              "mapped-model",
+		"capability_source":         service.OpenAINativeCompactionCapabilitySourceProbe,
+		"output_item_count":         "2",
+		"compaction_item_count":     "1",
+		"terminal_type":             "response.completed",
+		"semantic_outcome":          string(service.OpenAINativeCompactionValid),
+		"semantic_output_committed": "true",
+		"attribution_persisted":     "true",
+		"safe_to_failover":          "false",
+		"failover_count":            "1",
+		"attempt_id":                "attempt-fixture",
+		"ws_connection_id":          "wsconn-fixture",
+		"ws_turn_id":                "wsturn-fixture",
+	} {
+		require.Truef(t, logSink.ContainsFieldValue(field, value), "missing %s=%s", field, value)
+	}
+}
+
+func TestLogOpenAIRemoteCompactOutcome_NativeCapabilityDeclarationWithoutTurnSkips(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logSink, restore := captureHandlerStructuredLog(t)
+	defer restore()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	service.MarkOpenAINativeRemoteCompactionV2(c)
+	c.Status(http.StatusOK)
+
+	h := &OpenAIGatewayHandler{}
+	h.logOpenAIRemoteCompactOutcome(c, time.Now())
+
+	require.False(t, logSink.ContainsMessageAtLevel("codex.remote_compact.succeeded", "info"))
+	require.False(t, logSink.ContainsMessageAtLevel("codex.remote_compact.failed", "warn"))
 }
 
 func TestLogOpenAIRemoteCompactOutcome_Failed(t *testing.T) {

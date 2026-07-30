@@ -146,6 +146,8 @@ const (
 	FieldSessionIsolationEnabled = "session_isolation_enabled"
 	// EdgeAPIKeys holds the string denoting the api_keys edge name in mutations.
 	EdgeAPIKeys = "api_keys"
+	// EdgeAPIKeyCompositeGroups holds the string denoting the api_key_composite_groups edge name in mutations.
+	EdgeAPIKeyCompositeGroups = "api_key_composite_groups"
 	// EdgeUsageLogs holds the string denoting the usage_logs edge name in mutations.
 	EdgeUsageLogs = "usage_logs"
 	// EdgeAccounts holds the string denoting the accounts edge name in mutations.
@@ -169,6 +171,13 @@ const (
 	APIKeysInverseTable = "api_keys"
 	// APIKeysColumn is the table column denoting the api_keys relation/edge.
 	APIKeysColumn = "group_id"
+	// APIKeyCompositeGroupsTable is the table that holds the api_key_composite_groups relation/edge.
+	APIKeyCompositeGroupsTable = "api_key_composite_groups"
+	// APIKeyCompositeGroupsInverseTable is the table name for the APIKeyCompositeGroup entity.
+	// It exists in this package in order to avoid circular dependency with the "apikeycompositegroup" package.
+	APIKeyCompositeGroupsInverseTable = "api_key_composite_groups"
+	// APIKeyCompositeGroupsColumn is the table column denoting the api_key_composite_groups relation/edge.
+	APIKeyCompositeGroupsColumn = "group_id"
 	// UsageLogsTable is the table that holds the usage_logs relation/edge.
 	UsageLogsTable = "usage_logs"
 	// UsageLogsInverseTable is the table name for the UsageLog entity.
@@ -743,6 +752,20 @@ func ByAPIKeys(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByAPIKeyCompositeGroupsCount orders the results by api_key_composite_groups count.
+func ByAPIKeyCompositeGroupsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newAPIKeyCompositeGroupsStep(), opts...)
+	}
+}
+
+// ByAPIKeyCompositeGroups orders the results by api_key_composite_groups terms.
+func ByAPIKeyCompositeGroups(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newAPIKeyCompositeGroupsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByUsageLogsCount orders the results by usage_logs count.
 func ByUsageLogsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -845,6 +868,13 @@ func newAPIKeysStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(APIKeysInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, APIKeysTable, APIKeysColumn),
+	)
+}
+func newAPIKeyCompositeGroupsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(APIKeyCompositeGroupsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, APIKeyCompositeGroupsTable, APIKeyCompositeGroupsColumn),
 	)
 }
 func newUsageLogsStep() *sqlgraph.Step {

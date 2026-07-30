@@ -78,6 +78,7 @@ type OpenAIAccountScheduleRequest struct {
 	PreviousResponseID      string
 	PreviousResponseCanMove bool
 	UseUpstreamTokenCost    bool
+	DeferStickyBinding      bool   // native-v2 publishes session state only after delivery commit.
 	RequestedModel          string // 客户端请求模型 R，用于限制、错误和会话语义。
 	RoutingModel            string // 账号层模型：普通请求为 C，Messages 为分组映射后的 D。
 	RequiredTransport       OpenAIUpstreamTransport
@@ -414,7 +415,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			decision.StickyPreviousHit = true
 			decision.SelectedAccountID = selection.Account.ID
 			decision.SelectedAccountType = selection.Account.Type
-			if req.SessionHash != "" {
+			if req.SessionHash != "" && !req.DeferStickyBinding {
 				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, selection.Account.ID)
 			}
 			return selection, decision, nil
@@ -1177,7 +1178,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 				continue
 			}
 		}
-		if req.SessionHash != "" && !req.PreserveStickyBinding {
+		if req.SessionHash != "" && !req.PreserveStickyBinding && !req.DeferStickyBinding {
 			_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, fresh.ID)
 		}
 		return &AccountSelectionResult{
@@ -1256,7 +1257,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			return nil, acquireErr
 		}
 		if result != nil && result.Acquired {
-			if req.SessionHash != "" && !req.PreserveStickyBinding {
+			if req.SessionHash != "" && !req.PreserveStickyBinding && !req.DeferStickyBinding {
 				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, account.ID)
 			}
 			return &AccountSelectionResult{
@@ -1710,6 +1711,12 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}
 	if !accountSupportsOpenAICapabilities(account, req.RequiredCapability, req.RequiredImageCapability) {
 		return false, "capability_mismatch"
+	}
+	// Native remote compaction evidence is candidate-specific. Apply the exact
+	// account/fingerprint/effective-model/contract gate before TopK construction,
+	// otherwise unsupported high-priority accounts can crowd out valid candidates.
+	if !accountSupportsOpenAINativeCompactionForRequest(ctx, account, req.routingModel()) {
+		return false, "native_compaction_capability_mismatch"
 	}
 	return true, ""
 }
@@ -2188,6 +2195,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerForRouting(
 		PreviousResponseID:      previousResponseID,
 		PreviousResponseCanMove: previousResponseCanMove,
 		UseUpstreamTokenCost:    useUpstreamTokenCost,
+		DeferStickyBinding:      nativeOpenAICompatibilityDomainRequired(ctx),
 		RequestedModel:          requestedModel,
 		RoutingModel:            routingModel,
 		RequiredTransport:       requiredTransport,

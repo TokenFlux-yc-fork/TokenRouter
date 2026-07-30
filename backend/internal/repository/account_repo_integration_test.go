@@ -1018,6 +1018,66 @@ func (s *AccountRepoSuite) TestTempUnschedulableFieldsLoadedByGetByIDAndGetByIDs
 	s.Require().Equal("", cacheRecorder.setAccounts[0].TempUnschedulableReason)
 }
 
+func (s *AccountRepoSuite) TestOpenAINativeCompactionCapabilitiesLoadedByGetByIDAndGetByIDs() {
+	acc1 := mustCreateAccount(s.T(), s.client, &service.Account{Name: "native-capability-1", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey})
+	acc2 := mustCreateAccount(s.T(), s.client, &service.Account{Name: "native-capability-2", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth})
+	checkedAt := time.Now().UTC().Truncate(time.Second)
+	officialFingerprint, err := service.OfficialOpenAINativeCompactionFingerprint()
+	s.Require().NoError(err)
+	_, err = s.repo.sql.ExecContext(s.ctx, `
+		INSERT INTO openai_native_compaction_capabilities (
+			account_id, upstream_fingerprint, effective_model, contract_version,
+			supported, mode, source, checked_at, last_status
+		) VALUES
+			($1, 'upstream_v1_b', 'model-b', 'remote_compaction_v2', TRUE, 'auto', 'probe', $3, 200),
+			($1, 'upstream_v1_a', 'model-a', 'remote_compaction_v2', FALSE, 'auto', 'probe', NULL, NULL),
+			($2, $4, 'model-c', 'remote_compaction_v2', TRUE, 'auto', 'trusted_official', $3, 204)
+	`, acc1.ID, acc2.ID, checkedAt, officialFingerprint)
+	s.Require().NoError(err)
+
+	gotByID, err := s.repo.GetByID(s.ctx, acc1.ID)
+	s.Require().NoError(err)
+	s.Require().Len(gotByID.OpenAINativeCompactionCapabilities, 2)
+	s.Require().Equal(service.OpenAIUpstreamFingerprint("upstream_v1_a"), gotByID.OpenAINativeCompactionCapabilities[0].Key.UpstreamFingerprint)
+	s.Require().Nil(gotByID.OpenAINativeCompactionCapabilities[0].CheckedAt)
+	s.Require().Nil(gotByID.OpenAINativeCompactionCapabilities[0].LastStatus)
+	s.Require().NotNil(gotByID.OpenAINativeCompactionCapabilities[1].CheckedAt)
+	s.Require().NotNil(gotByID.OpenAINativeCompactionCapabilities[1].LastStatus)
+	s.Require().Equal(200, *gotByID.OpenAINativeCompactionCapabilities[1].LastStatus)
+
+	gotByIDs, err := s.repo.GetByIDs(s.ctx, []int64{acc2.ID, acc1.ID})
+	s.Require().NoError(err)
+	s.Require().Len(gotByIDs, 2)
+	s.Require().Equal(acc2.ID, gotByIDs[0].ID)
+	s.Require().Len(gotByIDs[0].OpenAINativeCompactionCapabilities, 1)
+	s.Require().Equal(service.OpenAINativeCompactionCapabilitySourceTrustedOfficial, gotByIDs[0].OpenAINativeCompactionCapabilities[0].Source)
+	s.Require().Equal(officialFingerprint, gotByIDs[0].OpenAINativeCompactionCapabilities[0].Key.UpstreamFingerprint)
+	s.Require().Equal(acc1.ID, gotByIDs[1].ID)
+	s.Require().Equal(gotByID.OpenAINativeCompactionCapabilities, gotByIDs[1].OpenAINativeCompactionCapabilities)
+}
+
+func (s *AccountRepoSuite) TestOpenAINativeCompactionLoaderRejectsTrustedOfficialAPIKeyAndCustomOAuthRows() {
+	apiKey := mustCreateAccount(s.T(), s.client, &service.Account{Name: "native-trusted-apikey", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey})
+	oauth := mustCreateAccount(s.T(), s.client, &service.Account{Name: "native-trusted-custom-oauth", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth})
+	officialFingerprint, err := service.OfficialOpenAINativeCompactionFingerprint()
+	s.Require().NoError(err)
+	_, err = s.repo.sql.ExecContext(s.ctx, `
+		INSERT INTO openai_native_compaction_capabilities (
+			account_id, upstream_fingerprint, effective_model, contract_version,
+			supported, mode, source
+		) VALUES
+			($1, $3, 'gpt-5', 'remote_compaction_v2', TRUE, 'auto', 'trusted_official'),
+			($2, 'upstream_v1_custom_oauth', 'gpt-5', 'remote_compaction_v2', TRUE, 'auto', 'trusted_official')
+	`, apiKey.ID, oauth.ID, officialFingerprint)
+	s.Require().NoError(err)
+
+	accounts, err := s.repo.GetByIDs(s.ctx, []int64{apiKey.ID, oauth.ID})
+	s.Require().NoError(err)
+	s.Require().Len(accounts, 2)
+	s.Require().Empty(accounts[0].OpenAINativeCompactionCapabilities)
+	s.Require().Empty(accounts[1].OpenAINativeCompactionCapabilities)
+}
+
 func (s *AccountRepoSuite) TestSetTempUnschedulableSkipsOutboxWhenWindowDoesNotExtend() {
 	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-temp-noop"})
 	cacheRecorder := &schedulerCacheRecorder{}

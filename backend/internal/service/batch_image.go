@@ -107,8 +107,10 @@ type BatchImageJob struct {
 	TeamID            *int64
 	APIKeyID          *int64
 	AccountID         *int64
+	GroupID           *int64
 	Provider          string
 	Model             string
+	RequestedModel    string
 	TaskName          string
 	ParentBatchID     *string
 	Status            string
@@ -177,8 +179,10 @@ type CreateBatchImageJobParams struct {
 	TeamID            *int64
 	APIKeyID          *int64
 	AccountID         *int64
+	GroupID           *int64
 	Provider          string
 	Model             string
+	RequestedModel    string
 	TaskName          string
 	ParentBatchID     *string
 	Status            string

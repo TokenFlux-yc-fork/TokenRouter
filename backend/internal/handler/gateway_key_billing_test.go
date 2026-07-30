@@ -135,6 +135,38 @@ func TestGatewayHandlerKeyBillingInfoUsesUserOverride(t *testing.T) {
 	require.Equal(t, 0.5, got.EffectiveRateMultiplier)
 }
 
+func TestGatewayHandlerCompositeKeyBillingInfoReturnsEveryMapping(t *testing.T) {
+	apiKey := &service.APIKey{
+		UserID: 11, IsComposite: true,
+		CompositeGroups: []service.APIKeyCompositeGroup{
+			{
+				GroupID: 7, Prefix: "GPT",
+				Group: &service.Group{ID: 7, Platform: service.PlatformOpenAI, Status: service.StatusActive, RateMultiplier: 0.75},
+			},
+			{
+				GroupID: 8, Prefix: "Claude",
+				Group: &service.Group{ID: 8, Platform: service.PlatformAnthropic, Status: service.StatusActive, RateMultiplier: 1.2},
+			},
+		},
+	}
+	c, w := newKeyBillingContext(apiKey)
+
+	newKeyBillingHandler(nil).KeyBillingInfo(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var got compositeKeyBillingInfoResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Equal(t, "sub2api.composite_key_billing", got.Object)
+	require.Len(t, got.Mappings, 2)
+	require.Equal(t, "GPT", got.Mappings[0].Prefix)
+	require.Equal(t, int64(7), got.Mappings[0].GroupID)
+	require.Equal(t, 0.75, got.Mappings[0].Billing.EffectiveRateMultiplier)
+	require.Equal(t, "Claude", got.Mappings[1].Prefix)
+	require.Equal(t, int64(8), got.Mappings[1].GroupID)
+	require.Equal(t, 1.2, got.Mappings[1].Billing.EffectiveRateMultiplier)
+	require.Nil(t, apiKey.GroupID)
+}
+
 func TestBuildKeyBillingInfoAppliesPeakMultiplier(t *testing.T) {
 	groupID := int64(7)
 	apiKey := &service.APIKey{

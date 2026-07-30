@@ -18,6 +18,7 @@ var (
 		{Name: "team_owner_disabled", Type: field.TypeBool, Default: false},
 		{Name: "key", Type: field.TypeString, Unique: true, Size: 128},
 		{Name: "name", Type: field.TypeString, Size: 100},
+		{Name: "is_composite", Type: field.TypeBool, Default: false},
 		{Name: "status", Type: field.TypeString, Size: 20, Default: "active"},
 		{Name: "fast_mode_policy", Type: field.TypeString, Size: 32, Default: "follow_request"},
 		{Name: "last_used_at", Type: field.TypeTime, Nullable: true},
@@ -51,19 +52,19 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "api_keys_groups_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[28]},
+				Columns:    []*schema.Column{APIKeysColumns[29]},
 				RefColumns: []*schema.Column{GroupsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "api_keys_teams_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[29]},
+				Columns:    []*schema.Column{APIKeysColumns[30]},
 				RefColumns: []*schema.Column{TeamsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "api_keys_users_api_keys",
-				Columns:    []*schema.Column{APIKeysColumns[30]},
+				Columns:    []*schema.Column{APIKeysColumns[31]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -72,22 +73,22 @@ var (
 			{
 				Name:    "apikey_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[30]},
+				Columns: []*schema.Column{APIKeysColumns[31]},
 			},
 			{
 				Name:    "apikey_team_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[29]},
+				Columns: []*schema.Column{APIKeysColumns[30]},
 			},
 			{
 				Name:    "apikey_group_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[28]},
+				Columns: []*schema.Column{APIKeysColumns[29]},
 			},
 			{
 				Name:    "apikey_status",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[7]},
+				Columns: []*schema.Column{APIKeysColumns[8]},
 			},
 			{
 				Name:    "apikey_deleted_at",
@@ -97,22 +98,77 @@ var (
 			{
 				Name:    "apikey_last_used_at",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[9]},
+				Columns: []*schema.Column{APIKeysColumns[10]},
 			},
 			{
 				Name:    "apikey_quota_quota_used",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[12], APIKeysColumns[13]},
+				Columns: []*schema.Column{APIKeysColumns[13], APIKeysColumns[14]},
 			},
 			{
 				Name:    "apikey_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[14]},
+				Columns: []*schema.Column{APIKeysColumns[15]},
 			},
 			{
 				Name:    "apikey_data_sharing_confirmed_group_id",
 				Unique:  false,
-				Columns: []*schema.Column{APIKeysColumns[25]},
+				Columns: []*schema.Column{APIKeysColumns[26]},
+			},
+		},
+	}
+	// APIKeyCompositeGroupsColumns holds the columns for the "api_key_composite_groups" table.
+	APIKeyCompositeGroupsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "prefix", Type: field.TypeString, Size: 32},
+		{Name: "normalized_prefix", Type: field.TypeString, Size: 32},
+		{Name: "sort_order", Type: field.TypeInt, Default: 0},
+		{Name: "data_sharing_notice_version", Type: field.TypeInt, Default: 0},
+		{Name: "data_sharing_confirmed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "api_key_id", Type: field.TypeInt64},
+		{Name: "group_id", Type: field.TypeInt64},
+	}
+	// APIKeyCompositeGroupsTable holds the schema information for the "api_key_composite_groups" table.
+	APIKeyCompositeGroupsTable = &schema.Table{
+		Name:       "api_key_composite_groups",
+		Columns:    APIKeyCompositeGroupsColumns,
+		PrimaryKey: []*schema.Column{APIKeyCompositeGroupsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "api_key_composite_groups_api_keys_composite_groups",
+				Columns:    []*schema.Column{APIKeyCompositeGroupsColumns[8]},
+				RefColumns: []*schema.Column{APIKeysColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "api_key_composite_groups_groups_api_key_composite_groups",
+				Columns:    []*schema.Column{APIKeyCompositeGroupsColumns[9]},
+				RefColumns: []*schema.Column{GroupsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "apikeycompositegroup_api_key_id_group_id",
+				Unique:  true,
+				Columns: []*schema.Column{APIKeyCompositeGroupsColumns[8], APIKeyCompositeGroupsColumns[9]},
+			},
+			{
+				Name:    "apikeycompositegroup_api_key_id_normalized_prefix",
+				Unique:  true,
+				Columns: []*schema.Column{APIKeyCompositeGroupsColumns[8], APIKeyCompositeGroupsColumns[4]},
+			},
+			{
+				Name:    "apikeycompositegroup_group_id",
+				Unique:  false,
+				Columns: []*schema.Column{APIKeyCompositeGroupsColumns[9]},
+			},
+			{
+				Name:    "apikeycompositegroup_api_key_id_sort_order",
+				Unique:  false,
+				Columns: []*schema.Column{APIKeyCompositeGroupsColumns[8], APIKeyCompositeGroupsColumns[5]},
 			},
 		},
 	}
@@ -2334,6 +2390,7 @@ var (
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		APIKeysTable,
+		APIKeyCompositeGroupsTable,
 		AccountsTable,
 		AccountGroupsTable,
 		AnnouncementsTable,
@@ -2384,6 +2441,11 @@ func init() {
 	APIKeysTable.ForeignKeys[2].RefTable = UsersTable
 	APIKeysTable.Annotation = &entsql.Annotation{
 		Table: "api_keys",
+	}
+	APIKeyCompositeGroupsTable.ForeignKeys[0].RefTable = APIKeysTable
+	APIKeyCompositeGroupsTable.ForeignKeys[1].RefTable = GroupsTable
+	APIKeyCompositeGroupsTable.Annotation = &entsql.Annotation{
+		Table: "api_key_composite_groups",
 	}
 	AccountsTable.ForeignKeys[0].RefTable = ProxiesTable
 	AccountsTable.ForeignKeys[1].RefTable = AccountsTable

@@ -33,6 +33,8 @@ const (
 	FieldName = "name"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
+	// FieldIsComposite holds the string denoting the is_composite field in the database.
+	FieldIsComposite = "is_composite"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldFastModePolicy holds the string denoting the fast_mode_policy field in the database.
@@ -81,6 +83,8 @@ const (
 	EdgeGroup = "group"
 	// EdgeUsageLogs holds the string denoting the usage_logs edge name in mutations.
 	EdgeUsageLogs = "usage_logs"
+	// EdgeCompositeGroups holds the string denoting the composite_groups edge name in mutations.
+	EdgeCompositeGroups = "composite_groups"
 	// EdgeTeam holds the string denoting the team edge name in mutations.
 	EdgeTeam = "team"
 	// Table holds the table name of the apikey in the database.
@@ -106,6 +110,13 @@ const (
 	UsageLogsInverseTable = "usage_logs"
 	// UsageLogsColumn is the table column denoting the usage_logs relation/edge.
 	UsageLogsColumn = "api_key_id"
+	// CompositeGroupsTable is the table that holds the composite_groups relation/edge.
+	CompositeGroupsTable = "api_key_composite_groups"
+	// CompositeGroupsInverseTable is the table name for the APIKeyCompositeGroup entity.
+	// It exists in this package in order to avoid circular dependency with the "apikeycompositegroup" package.
+	CompositeGroupsInverseTable = "api_key_composite_groups"
+	// CompositeGroupsColumn is the table column denoting the composite_groups relation/edge.
+	CompositeGroupsColumn = "api_key_id"
 	// TeamTable is the table that holds the team relation/edge.
 	TeamTable = "api_keys"
 	// TeamInverseTable is the table name for the Team entity.
@@ -127,6 +138,7 @@ var Columns = []string{
 	FieldKey,
 	FieldName,
 	FieldGroupID,
+	FieldIsComposite,
 	FieldStatus,
 	FieldFastModePolicy,
 	FieldLastUsedAt,
@@ -180,6 +192,8 @@ var (
 	KeyValidator func(string) error
 	// NameValidator is a validator for the "name" field. It is called by the builders before save.
 	NameValidator func(string) error
+	// DefaultIsComposite holds the default value on creation for the "is_composite" field.
+	DefaultIsComposite bool
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -261,6 +275,11 @@ func ByName(opts ...sql.OrderTermOption) OrderOption {
 // ByGroupID orders the results by the group_id field.
 func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
+}
+
+// ByIsComposite orders the results by the is_composite field.
+func ByIsComposite(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldIsComposite, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.
@@ -386,6 +405,20 @@ func ByUsageLogs(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByCompositeGroupsCount orders the results by composite_groups count.
+func ByCompositeGroupsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newCompositeGroupsStep(), opts...)
+	}
+}
+
+// ByCompositeGroups orders the results by composite_groups terms.
+func ByCompositeGroups(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newCompositeGroupsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByTeamField orders the results by team field.
 func ByTeamField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -411,6 +444,13 @@ func newUsageLogsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(UsageLogsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, UsageLogsTable, UsageLogsColumn),
+	)
+}
+func newCompositeGroupsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(CompositeGroupsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, CompositeGroupsTable, CompositeGroupsColumn),
 	)
 }
 func newTeamStep() *sqlgraph.Step {
