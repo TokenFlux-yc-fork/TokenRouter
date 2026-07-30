@@ -1,0 +1,5 @@
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"cmp_added_only","type":"compaction","status":"in_progress","encrypted_content":"fixture-added-only"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_added_only","status":"completed","output":[]}}

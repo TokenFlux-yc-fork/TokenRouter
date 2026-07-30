@@ -1233,6 +1233,192 @@ func TestOpenAIGatewayService_Forward_WSv2_PoolReuseNotOneToOne(t *testing.T) {
 	require.GreaterOrEqual(t, metrics.ConnPickTotal, int64(1))
 }
 
+func TestOpenAIGatewayService_Forward_WSv2_NativeCompactionRejectsCompletedWithoutDoneItem(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+	MarkOpenAINativeRemoteCompactionV2(c)
+
+	cfg := newOpenAIWSV2TestConfig()
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+
+	captureConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp_compaction_zero","model":"gpt-5.1","status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`),
+	}}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+		openaiWSPool:     pool,
+	}
+	account := &Account{
+		ID:          28,
+		Name:        "openai-native-compaction",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "synthetic-test-token"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"input_text","text":"synthetic"},{"type":"compaction_trigger"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.NotContains(t, rec.Body.String(), "resp_compaction_zero")
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_NativeCompactionRejectsConcatenatedMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+	MarkOpenAINativeRemoteCompactionV2(c)
+
+	cfg := newOpenAIWSV2TestConfig()
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	joined := []byte(
+		`{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"fixture-state"}}` +
+			`{"type":"response.completed","response":{"id":"resp_compaction_joined","status":"completed"}}`,
+	)
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: &openAIWSCaptureConn{events: [][]byte{joined}}})
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+		openaiWSPool:     pool,
+	}
+	account := &Account{
+		ID:          30,
+		Name:        "openai-native-compaction-joined",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "synthetic-test-token"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+	body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"compaction_trigger"}]}`)
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.True(t, failoverErr.SafeToFailoverAfterWrite)
+	require.Empty(t, rec.Body.String())
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_NativeCompactionFixtureParity(t *testing.T) {
+	fixtures := []struct {
+		name      string
+		wantError bool
+	}{
+		{name: "valid_one"},
+		{name: "zero_compaction", wantError: true},
+		{name: "two_compactions", wantError: true},
+		{name: "malformed_compaction", wantError: true},
+		{name: "incomplete_eof", wantError: true},
+	}
+	for _, tt := range fixtures {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+			c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+			MarkOpenAINativeRemoteCompactionV2(c)
+
+			var events [][]byte
+			forEachOpenAISSEDataPayload(readOpenAINativeCompactionFixture(t, tt.name), func(payload []byte) {
+				events = append(events, append([]byte(nil), payload...))
+			})
+			cfg := newOpenAIWSV2TestConfig()
+			cfg.Security.URLAllowlist.Enabled = false
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+			pool := newOpenAIWSConnPool(cfg)
+			pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: &openAIWSCaptureConn{events: events}})
+			attemptRepo := &stubUpstreamAttemptAttributionRepository{}
+			svc := &OpenAIGatewayService{
+				cfg: cfg, httpUpstream: &httpUpstreamRecorder{}, cache: &stubGatewayCache{},
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector(), openaiWSPool: pool,
+				upstreamAttemptAttributionRepo: attemptRepo,
+			}
+			account := &Account{ID: 29, Name: "openai-native-compaction", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+				Status: StatusActive, Schedulable: true, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "synthetic-test-token"}, Extra: map[string]any{"responses_websockets_v2_enabled": true}}
+			body := []byte(`{"model":"gpt-5.1","stream":true,"input":[{"type":"compaction_trigger"}]}`)
+			result, err := svc.Forward(context.Background(), c, account, body)
+			if tt.wantError {
+				require.Error(t, err)
+				require.Nil(t, result)
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, err, &failoverErr)
+				require.True(t, failoverErr.SafeToFailoverAfterWrite)
+				require.Empty(t, rec.Body.String(), "invalid attempt must not leak staged SSE")
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Contains(t, rec.Body.String(), `"type":"response.output_item.done"`)
+			require.Contains(t, rec.Body.String(), `"type":"response.completed"`)
+			require.Equal(t, "resp_valid_one", result.ResponseID)
+			require.True(t, result.NativeRemoteCompactionV2)
+			require.Equal(t, OpenAINativeCompactionValid, result.SemanticOutcome)
+			require.True(t, result.DeliveryCommitted)
+			require.True(t, result.AttributionPersisted)
+			require.True(t, result.CustomerSettlementAllowed())
+			require.Equal(t, UpstreamAttemptTransportWebSocket, result.Transport)
+			require.NotEmpty(t, result.AttemptID)
+			require.NotEmpty(t, result.WSConnectionID)
+			require.NotEmpty(t, result.WSTurnID)
+			require.True(t, result.UpstreamUsageObserved)
+
+			var terminal *UpstreamAttemptAttribution
+			for _, row := range attemptRepo.snapshot() {
+				if row.State == UpstreamAttemptStateTerminal {
+					rowCopy := row
+					terminal = &rowCopy
+				}
+			}
+			require.NotNil(t, terminal)
+			require.Equal(t, result.AttemptID, terminal.AttemptID)
+			require.Equal(t, UpstreamResponseID("resp_valid_one"), terminal.UpstreamResponseID)
+			require.Equal(t, string(OpenAINativeCompactionValid), terminal.Semantic.Outcome)
+			require.Equal(t, int64(1), terminal.Semantic.CompactionItemCount)
+			require.True(t, terminal.DeliveryCommitted)
+			require.True(t, terminal.Usage.Observed)
+		})
+	}
+}
+
 func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

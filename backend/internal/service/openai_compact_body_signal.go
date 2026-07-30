@@ -1,30 +1,68 @@
 package service
 
 import (
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
-const openAINativeRemoteCompactionV2Key = "openai_native_remote_compaction_v2"
-
 // MarkOpenAINativeRemoteCompactionV2 records that this request uses the native
 // streaming remote-compaction wire retained by the upstream route normalizer.
 func MarkOpenAINativeRemoteCompactionV2(c *gin.Context) {
-	if c != nil {
-		c.Set(openAINativeRemoteCompactionV2Key, true)
+	if c == nil || c.Request == nil {
+		return
 	}
+	ctx := WithOpenAINativeRemoteCompactionV2(c.Request.Context(), true)
+	c.Request = c.Request.WithContext(ctx)
 }
 
 func IsOpenAINativeRemoteCompactionV2(c *gin.Context) bool {
-	if c == nil {
+	if c == nil || c.Request == nil {
 		return false
 	}
-	value, ok := c.Get(openAINativeRemoteCompactionV2Key)
-	if !ok {
-		return false
-	}
-	native, _ := value.(bool)
+	native, _ := OpenAINativeRemoteCompactionV2FromContext(c.Request.Context())
 	return native
+}
+
+func IsOpenAINativeRemoteCompactionV2Request(body []byte, betaFeatureHeaders []string) bool {
+	stream := gjson.GetBytes(body, "stream")
+	if stream.Type != gjson.True {
+		return false
+	}
+	return IsOpenAINativeRemoteCompactionV2Turn(body, betaFeatureHeaders)
+}
+
+// IsOpenAINativeRemoteCompactionV2Turn recognizes a compaction response.create
+// payload. WebSocket ingress is intrinsically streaming, so it need not carry
+// the HTTP-only stream=true field on every turn.
+func IsOpenAINativeRemoteCompactionV2Turn(body []byte, betaFeatureHeaders []string) bool {
+	betaEnabled := false
+	for _, header := range betaFeatureHeaders {
+		for _, feature := range strings.Split(header, ",") {
+			if strings.TrimSpace(feature) == "remote_compaction_v2" {
+				betaEnabled = true
+				break
+			}
+		}
+		if betaEnabled {
+			break
+		}
+	}
+	if !betaEnabled {
+		return false
+	}
+
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
+		return false
+	}
+	items := input.Array()
+	if len(items) == 0 || !items[len(items)-1].IsObject() {
+		return false
+	}
+	itemType := items[len(items)-1].Get("type")
+	return itemType.Type == gjson.String && itemType.String() == "compaction_trigger"
 }
 
 // HasCompactionTriggerInInput 检测 input 中 type="compaction_trigger" 的条目。

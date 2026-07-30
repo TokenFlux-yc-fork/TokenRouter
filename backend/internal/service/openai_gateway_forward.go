@@ -13,12 +13,16 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai_compat"
+	"github.com/TokenFlux/TokenRouter/internal/util/httputil"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	ctx, closeRequestStageBudget := ensureOpenAINativeCompactionRequestStageBudget(ctx, s)
+	defer closeRequestStageBudget()
+	nativeRemoteCompactionV2 := IsOpenAINativeRemoteCompactionV2(c)
 	clearGrokResponsesClientToolMapping(c)
 	startTime := time.Now()
 	// 固定渠道映射后的请求级 canonical body；账号 normalize/strip 不得改写跨 failover hint。
@@ -119,7 +123,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
-		if IsOpenAINativeRemoteCompactionV2(c) {
+		if nativeRemoteCompactionV2 {
 			return nil, errors.New("native remote compaction v2 requires a Responses-capable account")
 		}
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, tlsRouterMatch)
@@ -483,7 +487,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 	}
-	if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 && gjson.GetBytes(body, "previous_response_id").Exists() {
+	if !nativeRemoteCompactionV2 && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 && gjson.GetBytes(body, "previous_response_id").Exists() {
 		markPatchDelete("previous_response_id")
 	}
 	if openAIRequestBodyMayContainEmptyBase64InputImage(body) {
@@ -591,6 +595,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		wsPrevResponseRecoveryTried := false
 		wsInvalidEncryptedContentRecoveryTried := false
 		recoverPrevResponseNotFound := func(attempt int) bool {
+			if nativeRemoteCompactionV2 {
+				return false
+			}
 			if wsPrevResponseRecoveryTried {
 				return false
 			}
@@ -623,6 +630,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			return true
 		}
 		recoverInvalidEncryptedContent := func(attempt int) bool {
+			if nativeRemoteCompactionV2 {
+				return false
+			}
 			if wsInvalidEncryptedContentRecoveryTried {
 				return false
 			}
@@ -786,6 +796,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return wsResult, nil
 		}
+		s.quarantineOpenAINativeCompactionFailure(ctx, c, account, upstreamModel, wsErr)
+		if nativeRemoteCompactionV2 {
+			if continuationCode := openAINativeCompactionWSContinuationErrorCode(wsErr); continuationCode != "" {
+				return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, false, nil, newOpenAINativeCompactionContinuationError(continuationCode))
+			}
+			if openAINativeCompactionFailureSafeToReplay(wsErr) {
+				return nil, s.newOpenAINativeCompactionWSFailoverError(c, account, false, nil, wsErr)
+			}
+		}
 		var failoverErr *UpstreamFailoverError
 		if errors.As(wsErr, &failoverErr) && failoverErr != nil {
 			requestID := ""
@@ -821,10 +840,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	httpInvalidEncryptedContentRetryTried := false
 	agentTaskRecoveryTried := false
+	const maxNeutralEdgeBlockRetries = 2
+	neutralEdgeBlockRetries := 0
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	for {
 
-		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+		upstreamCtx, releaseUpstreamCtx := openAIUpstreamContextForCompactionAttempt(ctx, nativeRemoteCompactionV2)
 		var headerGuard *openAIFirstOutputHeaderGuard
 		if firstOutputTimeout > 0 {
 			upstreamCtx, headerGuard = newOpenAIFirstOutputHeaderGuard(
@@ -847,10 +868,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			proxyURL = account.Proxy.URL()
 		}
 
+		attempt := s.beginOpenAINativeHTTPAttempt(ctx, c, account, originalModel, openAIServiceTierIsPriority(extractOpenAIServiceTierFromBody(body)))
 		upstreamStart := time.Now()
 		resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch))
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+		attempt.observeTransport(resp)
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
+			attempt.finishHTTPError(resp, string(OpenAINativeCompactionIncompleteStream), true)
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
@@ -869,6 +893,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			// 传输层故障（代理、DNS、TCP、TLS，且没有 HTTP 响应）转为 failover，
 			// 让 handler 切换到健康账号；持久故障会临时摘除账号。
+			attempt.finishHTTPError(resp, string(OpenAINativeCompactionTransportFailure), true)
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
 		if headerGuard != nil {
@@ -879,6 +904,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			attempt.finishHTTPError(resp, string(OpenAINativeCompactionHTTPFailure), true)
+			if isOpenAINeutralEdgeBlockResponse(resp.StatusCode, resp.Header, respBody) && neutralEdgeBlockRetries < maxNeutralEdgeBlockRetries {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				neutralEdgeBlockRetries++
+				continue
+			}
 
 			if !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 				agentTaskRecoveryTried = true
@@ -893,7 +926,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 			upstreamCode := extractUpstreamErrorCode(respBody)
-			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
+			if !nativeRemoteCompactionV2 && !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
 				decoded, decodeErr := ensureReqBody()
 				if decodeErr != nil {
 					return nil, decodeErr
@@ -910,14 +943,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				}
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Skip non-WSv2 invalid_encrypted_content retry because encrypted reasoning items are missing (account: %s)", account.Name)
 			}
-			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {
-				return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
-			} else if changed && rejectedFieldRetryState.Allow(retryBody) {
-				body = retryBody
-				requestView = newOpenAIRequestView(body)
-				reqBody = nil
-				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying non-WSv2 request after %s (account: %s)", reason, account.Name)
-				continue
+			if !nativeRemoteCompactionV2 {
+				if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {
+					return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
+				} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+					body = retryBody
+					requestView = newOpenAIRequestView(body)
+					reqBody = nil
+					logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying non-WSv2 request after %s (account: %s)", reason, account.Name)
+					continue
+				}
+			}
+			if continuationCode := openAINativeCompactionContinuationErrorCode(upstreamCode); nativeRemoteCompactionV2 && continuationCode != "" {
+				return nil, newOpenAINativeCompactionHTTPContinuationFailoverError(resp.StatusCode, resp.Header, continuationCode, false)
 			}
 			if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
 				upstreamDetail := ""
@@ -965,7 +1003,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		var responseBody []byte
 		if reqStream {
 			streamResult, err := s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
+			attempt.finishStreaming(streamResult, err)
 			if err != nil {
+				s.quarantineOpenAINativeCompactionFailure(ctx, c, account, upstreamModel, err)
 				return nil, err
 			}
 			usage = streamResult.usage
@@ -1022,8 +1062,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			forwardResult.ImageOutputSizes = imageOutputSizes
 			forwardResult.BillingModel = imageBillingModel
 		}
+		finalizeOpenAINativeHTTPForwardResult(c, forwardResult, account, attempt)
 		return forwardResult, nil
 	}
+}
+
+func isOpenAINeutralEdgeBlockResponse(statusCode int, headers http.Header, body []byte) bool {
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	return isOpenAIRequestBlockedError(statusCode, extractUpstreamErrorMessage(body), body) ||
+		httputil.IsCloudflareChallengeResponse(statusCode, headers, body)
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool, routerMatch ...TLSFingerprintRouterMatchResult) (*http.Request, error) {

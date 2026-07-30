@@ -1,0 +1,5 @@
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"must-not-leak"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_zero","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}

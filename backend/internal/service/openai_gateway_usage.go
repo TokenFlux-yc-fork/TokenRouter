@@ -119,6 +119,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result == nil {
 		return errors.New("openai usage result is nil")
 	}
+	if !result.CustomerSettlementAllowed() {
+		return nil
+	}
 	if s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI {
 		s.rateLimitService.ResetOpenAI403Counter(ctx, input.Account.ID)
 	}
@@ -258,9 +261,15 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// Create usage log
 	durationMs := int(result.Duration.Milliseconds())
 	accountRateMultiplier := account.BillingRateMultiplier()
+	// HTTP settlement remains request-level idempotent. A WebSocket connection can
+	// contain multiple billable turns, so native-v2 uses its gateway-generated turn
+	// identity while ordinary WS keeps the established upstream turn identifier.
+	// ResponseID is never used as a native-v2 billing identity.
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
 	if result.OpenAIWSMode {
-		if upstreamRequestID := strings.TrimSpace(result.RequestID); upstreamRequestID != "" {
+		if result.NativeRemoteCompactionV2 && strings.TrimSpace(string(result.WSTurnID)) != "" {
+			requestID = "ws-turn:" + strings.TrimSpace(string(result.WSTurnID))
+		} else if upstreamRequestID := strings.TrimSpace(result.RequestID); upstreamRequestID != "" {
 			requestID = upstreamRequestID
 		}
 	}

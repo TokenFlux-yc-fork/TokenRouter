@@ -72,3 +72,79 @@ func TestLeaderLockCache_TTLExpires(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 }
+
+func TestFencedLeaderLeaseCache_AcquireRenewAndInspect(t *testing.T) {
+	cache, _ := newLeaderLockTestCache(t)
+	ctx := context.Background()
+	const key = "scheduled-test-runner"
+
+	token, acquired, err := cache.TryAcquireFencedLeaderLease(ctx, key, "instance-a", time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Equal(t, int64(1), token)
+
+	lease, err := cache.GetFencedLeaderLease(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, "instance-a", lease.Owner)
+	require.Equal(t, token, lease.FencingToken)
+	require.Positive(t, lease.TTL)
+
+	renewed, err := cache.RenewFencedLeaderLease(ctx, key, "instance-a", token, 2*time.Minute)
+	require.NoError(t, err)
+	require.True(t, renewed)
+
+	lease, err = cache.GetFencedLeaderLease(ctx, key)
+	require.NoError(t, err)
+	require.Greater(t, lease.TTL, time.Minute)
+}
+
+func TestFencedLeaderLeaseCache_ContendedTakeoverIncrementsToken(t *testing.T) {
+	cache, mr := newLeaderLockTestCache(t)
+	ctx := context.Background()
+	const key = "scheduled-test-runner"
+
+	firstToken, acquired, err := cache.TryAcquireFencedLeaderLease(ctx, key, "instance-a", time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	observedToken, acquired, err := cache.TryAcquireFencedLeaderLease(ctx, key, "instance-b", time.Minute)
+	require.NoError(t, err)
+	require.False(t, acquired)
+	require.Equal(t, firstToken, observedToken)
+
+	mr.FastForward(2 * time.Minute)
+	secondToken, acquired, err := cache.TryAcquireFencedLeaderLease(ctx, key, "instance-b", time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Greater(t, secondToken, firstToken)
+
+	renewed, err := cache.RenewFencedLeaderLease(ctx, key, "instance-a", firstToken, time.Minute)
+	require.NoError(t, err)
+	require.False(t, renewed)
+
+	released, err := cache.ReleaseFencedLeaderLease(ctx, key, "instance-a", firstToken)
+	require.NoError(t, err)
+	require.False(t, released)
+	lease, err := cache.GetFencedLeaderLease(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, "instance-b", lease.Owner)
+	require.Equal(t, secondToken, lease.FencingToken)
+}
+
+func TestFencedLeaderLeaseCache_ReleaseAllowsImmediateFencedHandoff(t *testing.T) {
+	cache, _ := newLeaderLockTestCache(t)
+	ctx := context.Background()
+	const key = "scheduled-test-runner"
+
+	firstToken, acquired, err := cache.TryAcquireFencedLeaderLease(ctx, key, "instance-a", time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	released, err := cache.ReleaseFencedLeaderLease(ctx, key, "instance-a", firstToken)
+	require.NoError(t, err)
+	require.True(t, released)
+
+	secondToken, acquired, err := cache.TryAcquireFencedLeaderLease(ctx, key, "instance-b", time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Greater(t, secondToken, firstToken)
+}

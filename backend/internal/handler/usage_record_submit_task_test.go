@@ -163,6 +163,28 @@ func TestOpenAIGatewayHandlerSubmitMandatoryUsageRecordTask_DroppedTaskSyncFallb
 	require.True(t, called.Load(), "mandatory usage task must run synchronously when async submit is dropped")
 }
 
+func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_NativeSettlementGate(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	tests := []struct {
+		name   string
+		result *service.OpenAIForwardResult
+		want   bool
+	}{
+		{name: "valid committed", result: &service.OpenAIForwardResult{NativeRemoteCompactionV2: true, SemanticOutcome: service.OpenAINativeCompactionValid, DeliveryCommitted: true, AttributionPersisted: true}, want: true},
+		{name: "valid committed without durable attribution", result: &service.OpenAIForwardResult{NativeRemoteCompactionV2: true, SemanticOutcome: service.OpenAINativeCompactionValid, DeliveryCommitted: true}, want: false},
+		{name: "valid uncommitted", result: &service.OpenAIForwardResult{NativeRemoteCompactionV2: true, SemanticOutcome: service.OpenAINativeCompactionValid}, want: false},
+		{name: "invalid committed", result: &service.OpenAIForwardResult{NativeRemoteCompactionV2: true, SemanticOutcome: service.OpenAINativeCompactionZeroCompaction, DeliveryCommitted: true}, want: false},
+		{name: "client canceled", result: &service.OpenAIForwardResult{NativeRemoteCompactionV2: true, SemanticOutcome: service.OpenAINativeCompactionValid, DeliveryCommitted: true, ClientDisconnect: true}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var called atomic.Bool
+			h.submitOpenAIUsageRecordTask(nil, tt.result, func(context.Context) { called.Store(true) })
+			require.Equal(t, tt.want, called.Load())
+		})
+	}
+}
+
 func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_ImageResultUsesMandatoryFallback(t *testing.T) {
 	pool := service.NewUsageRecordWorkerPoolWithOptions(service.UsageRecordWorkerPoolOptions{
 		WorkerCount:           1,

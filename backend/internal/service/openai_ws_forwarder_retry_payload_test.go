@@ -48,3 +48,25 @@ func TestApplyOpenAIWSRetryPayloadStrategy_AttemptSixKeepsSemanticFields(t *test
 	require.Contains(t, payload, "parallel_tool_calls")
 	require.Contains(t, payload, "text")
 }
+
+func TestApplyOpenAIWSRetryPayloadStrategyForRequest_NativeCompactionKeepsInclude(t *testing.T) {
+	payload := map[string]any{
+		"previous_response_id": "resp_native",
+		"include":              []any{"reasoning.encrypted_content"},
+		"input": []any{
+			map[string]any{"type": "reasoning", "encrypted_content": "fixture-state"},
+			map[string]any{"type": "compaction_trigger"},
+		},
+	}
+
+	strategy, removed := applyOpenAIWSRetryPayloadStrategyForRequest(payload, 3, true)
+	require.Equal(t, "full", strategy)
+	require.Empty(t, removed)
+	require.Equal(t, "resp_native", payload["previous_response_id"])
+	require.Contains(t, payload, "include")
+	input, ok := payload["input"].([]any)
+	require.True(t, ok)
+	firstInput, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "fixture-state", firstInput["encrypted_content"])
+}

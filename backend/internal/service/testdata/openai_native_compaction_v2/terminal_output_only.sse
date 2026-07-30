@@ -1,0 +1,2 @@
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_terminal_only","status":"completed","output":[{"id":"cmp_terminal_only","type":"compaction","status":"completed","encrypted_content":"fixture-terminal-only"}]}}

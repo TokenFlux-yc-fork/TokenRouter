@@ -93,6 +93,32 @@ func (s *GatewayCacheSuite) TestDeleteSessionAccountID() {
 	require.True(s.T(), errors.Is(err, redis.Nil), "expected redis.Nil after delete")
 }
 
+func (s *GatewayCacheSuite) TestOpenAICompatibilityDomainCrossInstance() {
+	first, ok := s.cache.(service.OpenAICompatibilityDomainCache)
+	require.True(s.T(), ok)
+	second, ok := NewGatewayCache(s.rdb).(service.OpenAICompatibilityDomainCache)
+	require.True(s.T(), ok)
+	fingerprint, err := service.NewOpenAIUpstreamFingerprint("https://api.example.test/v1/responses", "responses")
+	require.NoError(s.T(), err)
+	domain := service.OpenAICompatibilityDomain{
+		Provider:            service.OpenAIUpstreamProvider(service.PlatformOpenAI),
+		UpstreamFingerprint: fingerprint,
+		EffectiveModel:      "gpt-test",
+		ContractVersion:     service.OpenAINativeCompactionContractVersion,
+	}
+
+	require.NoError(s.T(), first.SetOpenAICompatibilityDomain(s.ctx, 7, "response\x00resp_handoff", domain, time.Minute))
+	loaded, err := second.GetOpenAICompatibilityDomain(s.ctx, 7, "response\x00resp_handoff")
+	require.NoError(s.T(), err)
+	require.True(s.T(), domain.CompatibleWith(loaded))
+	_, err = second.GetOpenAICompatibilityDomain(s.ctx, 8, "response\x00resp_handoff")
+	require.ErrorIs(s.T(), err, redis.Nil)
+
+	require.NoError(s.T(), second.DeleteOpenAICompatibilityDomain(s.ctx, 7, "response\x00resp_handoff"))
+	_, err = first.GetOpenAICompatibilityDomain(s.ctx, 7, "response\x00resp_handoff")
+	require.ErrorIs(s.T(), err, redis.Nil)
+}
+
 func (s *GatewayCacheSuite) TestGetSessionAccountID_CorruptedValue() {
 	sessionID := "corrupted"
 	groupID := int64(1)

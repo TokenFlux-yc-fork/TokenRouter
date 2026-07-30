@@ -446,6 +446,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if err != nil {
 		return err
 	}
+	ctx, closeBudget := ensureOpenAINativeCompactionRequestStageBudget(ctx, s)
+	defer closeBudget()
+	wsConnectionID := NewOpenAIWSConnectionID()
+	wsTurnIDs := make(map[int]WSTurnID)
+	wsTurnID := func(turn int) WSTurnID {
+		if id := wsTurnIDs[turn]; id != "" {
+			return id
+		}
+		id := NewOpenAIWSTurnID()
+		wsTurnIDs[turn] = id
+		return id
+	}
 
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 	stateStore := s.getOpenAIWSStateStore()
@@ -516,7 +528,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			bridgePayloadRaw := currentBridgePayload.payloadRaw
 			bridgePayloadBytes := currentBridgePayload.payloadBytes
-			needsBridgeReplay := currentBridgePayload.previousResponseID != "" || openAIWSRawPayloadHasToolCallOutput(currentBridgePayload.payloadRaw)
+			nativeBridgeTurn := isOpenAINativeCompactionTurn(c, currentBridgePayload.payloadRaw)
+			needsBridgeReplay := !nativeBridgeTurn && (currentBridgePayload.previousResponseID != "" || openAIWSRawPayloadHasToolCallOutput(currentBridgePayload.payloadRaw))
 			turnReplayInput, turnReplayInputExists, replayInputErr := buildOpenAIWSReplayInputSequence(
 				bridgeReplayInput,
 				bridgeReplayInputExists,
@@ -557,7 +570,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			var bridgeErr error
 			for bridgeRetry := 0; ; bridgeRetry++ {
 				result, bridgeErr = s.proxyOpenAIWSHTTPBridgeTurn(
-					ctx,
+					withOpenAIWSAttemptIdentity(ctx, wsConnectionID, wsTurnID(turn)),
 					c,
 					account,
 					token,
@@ -575,7 +588,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				)
 				var failoverErr *UpstreamFailoverError
 				if bridgeErr == nil || bridgeRetry >= openAIWSHTTPBridgeTurnRetryLimit ||
-					!errors.As(bridgeErr, &failoverErr) || ctx.Err() != nil {
+					!errors.As(bridgeErr, &failoverErr) ||
+					openAINativeCompactionFailureSafeToReplay(bridgeErr) || ctx.Err() != nil {
 					break
 				}
 				retry := bridgeRetry + 1
@@ -618,6 +632,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				})
 			}
 			if bridgeErr != nil {
+				s.quarantineOpenAINativeCompactionFailureForRoutingModel(ctx, c, account, currentBridgePayload.routingModel, bridgeErr)
 				if turn > 1 {
 					var failoverErr *UpstreamFailoverError
 					if errors.As(bridgeErr, &failoverErr) {
@@ -844,13 +859,65 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return lease, nil
 	}
 
-	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, routingModel string, imageBillingModel string, imageSizeTier string, imageInputSize string) (*OpenAIForwardResult, error) {
+	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, routingModel string, imageBillingModel string, imageSizeTier string, imageInputSize string) (forwardResult *OpenAIForwardResult, forwardErr error) {
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
-		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
+		nativeCompaction := isOpenAINativeCompactionTurn(c, payload)
+		turnUpstreamCtx, releaseTurnUpstreamCtx := withOpenAIWSNativeClientDisconnect(ctx, nativeCompaction)
+		defer releaseTurnUpstreamCtx()
+		var nativeStage *OpenAINativeCompactionAttemptStage
+		var nativeValidator *OpenAINativeCompactionValidator
+		var nativeValidation OpenAINativeCompactionValidationResult
+		nativeDeliveryCommitted := false
+		nativeDeliveryStarted := false
+		responseID := ""
+		usage := OpenAIUsage{}
+		usageObserved := false
+		clientDisconnected := false
+		if nativeCompaction {
+			var stageErr error
+			nativeStage, stageErr = newOpenAINativeCompactionAttemptStage(turnUpstreamCtx, s)
+			if stageErr != nil {
+				return nil, wrapOpenAIWSIngressTurnError(
+					"native_compaction_stage",
+					s.newOpenAINativeCompactionWSFailoverError(c, account, true, lease.HandshakeHeaders(), joinOpenAINativeCompactionStageSemanticError(stageErr)),
+					false,
+				)
+			}
+			defer func() { _ = nativeStage.Close() }()
+			nativeValidator = NewOpenAINativeCompactionValidator()
+		}
+		wsAttempt := s.beginOpenAINativeWSAttempt(
+			ctx,
+			account,
+			routingModel,
+			openAIServiceTierIsPriority(extractOpenAIServiceTierFromBody(payload)),
+			nativeCompaction,
+			UpstreamAttemptTransportWebSocket,
+			wsConnectionID,
+			wsTurnID(turn),
+		)
+		defer func() {
+			if wsAttempt == nil {
+				return
+			}
+			if nativeValidation.Outcome == "" || nativeValidation.Outcome == OpenAINativeCompactionPending {
+				nativeValidation = nativeValidator.Finish()
+			}
+			wsAttempt.finishWebSocket(nativeValidation, responseID, &usage, usageObserved, nativeDeliveryCommitted && !clientDisconnected, !nativeDeliveryStarted && !clientDisconnected, forwardErr)
+			finalizeOpenAINativeForwardResult(forwardResult, account, wsAttempt, nativeCompaction, UpstreamAttemptTransportWebSocket)
+		}()
+		if wsAttempt != nil {
+			wsAttempt.observeWebSocket(lease.HandshakeHeaders())
+		}
+		if err := lease.WriteJSONWithContextTimeout(turnUpstreamCtx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
+			if disconnectErr := openAIWSClientReadPumpDisconnectError(ctx); nativeCompaction && disconnectErr != nil {
+				clientDisconnected = true
+				return nil, wrapOpenAIWSIngressTurnError("client_disconnected", disconnectErr, false)
+			}
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
 				fmt.Errorf("write upstream websocket request: %w", err),
@@ -867,8 +934,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
-		responseID := ""
-		usage := OpenAIUsage{}
 		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
@@ -893,7 +958,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		pendingErrorType := ""
 		pendingErrorMessage := ""
 		needModelReplace := false
-		clientDisconnected := false
 		emitClientMessage := func(message []byte) error {
 			if clientDisconnected {
 				return nil
@@ -931,9 +995,24 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		for {
-			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
+			upstreamMessage, readErr := lease.ReadMessageWithContextTimeout(turnUpstreamCtx, s.openAIWSReadTimeout())
 			if readErr != nil {
 				lease.MarkBroken()
+				if nativeValidator != nil {
+					validation := nativeValidator.Finish()
+					nativeValidation = validation
+					_ = nativeStage.Discard()
+					if disconnectErr := openAIWSClientReadPumpDisconnectError(ctx); disconnectErr != nil {
+						clientDisconnected = true
+						return nil, wrapOpenAIWSIngressTurnError("client_disconnected", disconnectErr, false)
+					}
+					semanticErr := newOpenAINativeCompactionSemanticError(validation.Outcome)
+					return nil, wrapOpenAIWSIngressTurnError(
+						"native_compaction_"+string(validation.Outcome),
+						s.newOpenAINativeCompactionWSFailoverError(c, account, true, lease.HandshakeHeaders(), semanticErr),
+						false,
+					)
+				}
 				if len(pendingErrorBody) > 0 {
 					s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, pendingErrorBody, pendingErrorCode, pendingErrorType, pendingErrorMessage)
 				}
@@ -943,11 +1022,40 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					wroteDownstream,
 				)
 			}
+			if nativeValidator != nil {
+				nativeValidator.Observe(upstreamMessage)
+				if stageErr := openAINativeCompactionStageWSMessage(nativeStage, upstreamMessage); stageErr != nil {
+					lease.MarkBroken()
+					_ = nativeStage.Discard()
+					if disconnectErr := openAIWSClientReadPumpDisconnectError(ctx); disconnectErr != nil {
+						clientDisconnected = true
+						nativeValidation = nativeValidator.Finish()
+						return nil, wrapOpenAIWSIngressTurnError("client_disconnected", disconnectErr, false)
+					}
+					terminalErr := joinOpenAINativeCompactionStageSemanticError(stageErr)
+					return nil, wrapOpenAIWSIngressTurnError(
+						"native_compaction_stage",
+						s.newOpenAINativeCompactionWSFailoverError(c, account, true, lease.HandshakeHeaders(), terminalErr),
+						false,
+					)
+				}
+			}
 			if normalized, changed := normalizeCompletedImageGenerationStatus(upstreamMessage); changed {
 				upstreamMessage = normalized
 			}
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+			if nativeCompaction && (eventType == "error" || eventType == "response.failed") {
+				if continuationCode := openAINativeCompactionContinuationErrorCode(extractUpstreamErrorCode(upstreamMessage)); continuationCode != "" {
+					lease.MarkBroken()
+					_ = nativeStage.Discard()
+					return nil, wrapOpenAIWSIngressTurnError(
+						"native_compaction_continuation",
+						s.newOpenAINativeCompactionWSFailoverError(c, account, true, lease.HandshakeHeaders(), newOpenAINativeCompactionContinuationError(continuationCode)),
+						false,
+					)
+				}
+			}
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}
@@ -966,6 +1074,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				recoverablePrevNotFound := fallbackReason == openAIWSIngressStagePreviousResponseNotFound &&
+					!nativeCompaction &&
 					turnPreviousResponseID != "" &&
 					!turnHasFunctionCallOutput &&
 					s.openAIWSIngressPreviousResponseRecoveryEnabled() &&
@@ -1066,7 +1175,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				firstTokenMs = &ms
 			}
 			if openAIWSEventShouldParseUsage(eventType) {
-				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
+				if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(upstreamMessage); ok {
+					usage = parsedUsage
+					usageObserved = true
+				}
 			}
 			if eventType == "response.failed" {
 				if hit, code, msg := detectOpenAICyberPolicy(upstreamMessage); hit {
@@ -1118,8 +1230,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			imageCounter.AddSSEData(upstreamMessage)
-
-			if !clientDisconnected {
+			if !clientDisconnected && nativeStage == nil {
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
 				}
@@ -1188,6 +1299,27 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				)
 			}
 			if isTerminalEvent {
+				if nativeValidator != nil {
+					validation := nativeValidator.Finish()
+					nativeValidation = validation
+					if !validation.Valid() {
+						_ = nativeStage.Discard()
+						lease.MarkBroken()
+						semanticErr := newOpenAINativeCompactionSemanticError(validation.Outcome)
+						return nil, wrapOpenAIWSIngressTurnError(
+							"native_compaction_"+string(validation.Outcome),
+							s.newOpenAINativeCompactionWSFailoverError(c, account, true, lease.HandshakeHeaders(), semanticErr),
+							false,
+						)
+					}
+					nativeDeliveryStarted = true
+					commitErr := commitOpenAINativeCompactionWSMessages(nativeStage, emitClientMessage)
+					if commitErr != nil {
+						lease.MarkBroken()
+						return nil, wrapOpenAIWSIngressTurnError("native_compaction_commit", commitErr, true)
+					}
+					nativeDeliveryCommitted = !clientDisconnected
+				}
 				switch eventType {
 				case "response.completed", "response.done":
 					pendingErrorBody = nil
@@ -1227,6 +1359,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				imageCount := imageCounter.Count()
 				result := &OpenAIForwardResult{
 					RequestID:             responseID,
+					ResponseID:            responseID,
 					Usage:                 usage,
 					Model:                 originalModel,
 					UpstreamModel:         mappedModel,
@@ -1239,6 +1372,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					ResponseBody:          cloneDataSharingRequestBody(terminalResponseBody),
 					Duration:              time.Since(turnStart),
 					FirstTokenMs:          firstTokenMs,
+					ClientDisconnect:      clientDisconnected,
 				}
 				if replayInput := replayCollector.Items(); len(replayInput) > 0 {
 					result.wsReplayInput = replayInput
@@ -1350,6 +1484,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		preferredConnID = ""
 	}
 	recoverIngressPrevResponseNotFound := func(relayErr error, turn int, connID string) bool {
+		if isOpenAINativeCompactionTurn(c, currentPayload) {
+			return false
+		}
 		if !isOpenAIWSIngressPreviousResponseNotFound(relayErr) {
 			return false
 		}
@@ -1461,6 +1598,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		skipBeforeTurn = false
 		currentPreviousResponseID := openAIWSPayloadStringFromRaw(currentPayload, "previous_response_id")
+		nativeCompactionTurn := isOpenAINativeCompactionTurn(c, currentPayload)
 		expectedPrev := strings.TrimSpace(lastTurnResponseID)
 		toolSignals := ToolContinuationSignals{
 			HasFunctionCallOutput: openAIWSRawPayloadHasToolCallOutput(currentPayload),
@@ -1527,7 +1665,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		replayHasFunctionCallOutput := currentTurnReplayInputExists &&
 			openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayInput)
 		hasFunctionCallOutput = hasFunctionCallOutput || replayHasFunctionCallOutput
-		if storeDisabled && turn > 1 && currentPreviousResponseID != "" {
+		if !nativeCompactionTurn && storeDisabled && turn > 1 && currentPreviousResponseID != "" {
 			shouldKeepPreviousResponseID := false
 			strictReason := ""
 			var strictErr error
@@ -1612,7 +1750,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 		}
-		forcePreferredConn := isStrictAffinityTurn(currentPayload)
+		forcePreferredConn := !nativeCompactionTurn && isStrictAffinityTurn(currentPayload)
 		if sessionLease == nil {
 			acquiredLease, acquireErr := acquireTurnLease(turn, preferredConnID, forcePreferredConn)
 			if acquireErr != nil {
@@ -1790,6 +1928,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				})
 			}
 			sessionLease.MarkBroken()
+			s.quarantineOpenAINativeCompactionFailureForRoutingModel(ctx, c, account, currentRoutingModel, relayErr)
 			return finalErr
 		}
 		turnRetry = 0

@@ -114,6 +114,7 @@ func provideCleanup(
 	quotaFlusher *service.UserPlatformQuotaUsageFlusher,
 	tlsFingerprintCollector *service.TLSFingerprintCollectorService,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	nativeCompactionProbeRunner *service.OpenAINativeCompactionProbeRunnerService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 ) func() {
@@ -350,6 +351,12 @@ func provideCleanup(
 			{"UpstreamBillingProbeService", func() error {
 				if upstreamBillingProbe != nil {
 					upstreamBillingProbe.Stop()
+				}
+				return nil
+			}},
+			{"OpenAINativeCompactionProbeRunnerService", func() error {
+				if nativeCompactionProbeRunner != nil {
+					nativeCompactionProbeRunner.Stop()
 				}
 				return nil
 			}},

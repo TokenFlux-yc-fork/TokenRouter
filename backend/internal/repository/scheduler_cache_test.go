@@ -1,8 +1,10 @@
 package repository
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/stretchr/testify/require"
@@ -35,6 +37,36 @@ func TestSchedulerMetadataAccountKeepsOpenAISubscriptionIdentity(t *testing.T) {
 
 	require.True(t, metadata.IsOpenAIChatGPTSubscription())
 	require.Empty(t, metadata.GetCredential("access_token"))
+}
+
+func TestSchedulerMetadataAccountProjectsNativeCompactionCapabilities(t *testing.T) {
+	checkedAt := time.Date(2026, time.July, 30, 9, 15, 0, 0, time.UTC)
+	account := service.Account{
+		ID:       51,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeAPIKey,
+		OpenAINativeCompactionCapabilities: []service.OpenAINativeCompactionCapability{{
+			Key: service.OpenAINativeCompactionCapabilityKey{
+				AccountID:           51,
+				UpstreamFingerprint: "upstream_v1_fixture",
+				EffectiveModel:      "gpt-fixture",
+				ContractVersion:     service.OpenAINativeCompactionContractVersion,
+			},
+			Supported: true,
+			Mode:      service.OpenAINativeCompactionCapabilityModeAuto,
+			Source:    service.OpenAINativeCompactionCapabilitySourceProbe,
+			CheckedAt: &checkedAt,
+		}},
+	}
+
+	metadata := buildSchedulerMetadataAccount(account)
+	require.Equal(t, account.OpenAINativeCompactionCapabilities, metadata.OpenAINativeCompactionCapabilities)
+
+	_, metaPayload, err := marshalSchedulerCacheAccount(account)
+	require.NoError(t, err)
+	var roundTrip service.Account
+	require.NoError(t, json.Unmarshal(metaPayload, &roundTrip))
+	require.Equal(t, account.OpenAINativeCompactionCapabilities, roundTrip.OpenAINativeCompactionCapabilities)
 }
 
 func TestSchedulerMetadataAccountProjectsUpstreamBillingProbe(t *testing.T) {

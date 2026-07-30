@@ -356,6 +356,208 @@ func TestOpenAIGatewayService_Forward_HTTPIngressRetriesWrappedInvalidEncryptedC
 	require.Equal(t, "client_protocol_http", reason)
 }
 
+func TestOpenAIGatewayService_Forward_HTTPNativeCompactionContinuationFailurePreservesRequestForFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		upstreamCode string
+		passthrough  bool
+	}{
+		{upstreamCode: "invalid_encrypted_content"},
+		{upstreamCode: "previous_response_not_found"},
+		{upstreamCode: "invalid_encrypted_content", passthrough: true},
+		{upstreamCode: "previous_response_not_found", passthrough: true},
+	}
+	for _, tt := range tests {
+		name := tt.upstreamCode
+		if tt.passthrough {
+			name += "_passthrough"
+		}
+		t.Run(name, func(t *testing.T) {
+			upstreamServer := httptest.NewServer(http.NotFoundHandler())
+			defer upstreamServer.Close()
+
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/fixture")
+			c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+			SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+			MarkOpenAINativeRemoteCompactionV2(c)
+
+			upstream := &httpUpstreamSequenceRecorder{responses: []*http.Response{{
+				StatusCode: http.StatusBadRequest,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"error":{"code":"` + tt.upstreamCode + `","type":"invalid_request_error","message":"fixture-sensitive-echo"}}`,
+				)),
+			}}}
+			cfg := &config.Config{}
+			cfg.Security.URLAllowlist.Enabled = false
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+			cfg.Gateway.OpenAIWS.Enabled = true
+			cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+			cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+			cfg.Gateway.LogUpstreamErrorBody = true
+			svc := &OpenAIGatewayService{
+				cfg:              cfg,
+				httpUpstream:     upstream,
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+			}
+			account := &Account{
+				ID:          104,
+				Name:        "native-continuation",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeAPIKey,
+				Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-fixture", "base_url": upstreamServer.URL},
+				Extra: map[string]any{
+					"responses_websockets_v2_enabled": true,
+					"openai_passthrough":              tt.passthrough,
+				},
+			}
+			body := []byte(`{"model":"gpt-5.1","stream":true,"previous_response_id":"resp_native_chain","include":["reasoning.encrypted_content"],"max_output_tokens":321,"input":[{"type":"reasoning","encrypted_content":"fixture-state"},{"type":"compaction_trigger"}]}`)
+
+			result, err := svc.Forward(context.Background(), c, account, body)
+
+			require.Nil(t, result)
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.False(t, failoverErr.RetryableOnSameAccount)
+			require.Empty(t, failoverErr.ResponseBody)
+			require.NotContains(t, err.Error(), "fixture-sensitive-echo")
+			require.Equal(t, 1, upstream.callCount, "native continuation failures must switch account without a mutated same-account retry")
+			require.Len(t, upstream.bodies, 1)
+			sent := upstream.bodies[0]
+			require.Equal(t, "resp_native_chain", gjson.GetBytes(sent, "previous_response_id").String())
+			require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(sent, "include.0").String())
+			require.Equal(t, "fixture-state", gjson.GetBytes(sent, "input.0.encrypted_content").String())
+			require.Equal(t, int64(321), gjson.GetBytes(sent, "max_output_tokens").Int())
+			require.Equal(t, "compaction_trigger", gjson.GetBytes(sent, "input.1.type").String())
+		})
+	}
+}
+
+func TestOpenAIGatewayService_Forward_WSv2NativeCompactionContinuationFailureDoesNotMutateOrRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name               string
+		upstreamEvent      map[string]any
+		body               []byte
+		previousResponseID string
+		prewarmEnabled     bool
+	}{
+		{
+			name: "error",
+			upstreamEvent: map[string]any{
+				"type": "error",
+				"error": map[string]any{
+					"code":    "invalid_encrypted_content",
+					"type":    "invalid_request_error",
+					"message": "fixture-sensitive-echo",
+				},
+			},
+			body:               []byte(`{"model":"gpt-5.1","stream":true,"previous_response_id":"resp_native_ws","include":["reasoning.encrypted_content"],"input":[{"type":"reasoning","encrypted_content":"fixture-ws-state"},{"type":"compaction_trigger"}]}`),
+			previousResponseID: "resp_native_ws",
+		},
+		{
+			name: "response_failed_with_prewarm_enabled",
+			upstreamEvent: map[string]any{
+				"type": "response.failed",
+				"response": map[string]any{
+					"status": "failed",
+					"error": map[string]any{
+						"code":    "previous_response_not_found",
+						"type":    "invalid_request_error",
+						"message": "fixture-sensitive-echo",
+					},
+				},
+			},
+			body:           []byte(`{"model":"gpt-5.1","stream":true,"include":["reasoning.encrypted_content"],"input":[{"type":"reasoning","encrypted_content":"fixture-ws-state"},{"type":"compaction_trigger"}]}`),
+			prewarmEnabled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var wsAttempts atomic.Int32
+			var requestPayload []byte
+			var requestMu sync.Mutex
+			upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+			wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				wsAttempts.Add(1)
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("upgrade websocket failed: %v", err)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+
+				var req map[string]any
+				if err := conn.ReadJSON(&req); err != nil {
+					t.Errorf("read ws request failed: %v", err)
+					return
+				}
+				requestMu.Lock()
+				requestPayload, _ = json.Marshal(req)
+				requestMu.Unlock()
+				_ = conn.WriteJSON(tt.upstreamEvent)
+			}))
+			defer wsServer.Close()
+
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/fixture")
+			c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+			MarkOpenAINativeRemoteCompactionV2(c)
+
+			cfg := &config.Config{}
+			cfg.Security.URLAllowlist.Enabled = false
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+			cfg.Gateway.OpenAIWS.Enabled = true
+			cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+			cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+			cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled = tt.prewarmEnabled
+			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+			svc := &OpenAIGatewayService{
+				cfg:              cfg,
+				httpUpstream:     &httpUpstreamRecorder{},
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+				toolCorrector:    NewCodexToolCorrector(),
+			}
+			account := &Account{
+				ID:          105,
+				Name:        "native-ws-continuation",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeAPIKey,
+				Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-fixture", "base_url": wsServer.URL},
+				Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+			}
+
+			result, err := svc.Forward(context.Background(), c, account, tt.body)
+
+			require.Nil(t, result)
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.True(t, failoverErr.SafeToFailoverAfterWrite)
+			require.NotContains(t, err.Error(), "fixture-sensitive-echo")
+			require.Equal(t, int32(1), wsAttempts.Load())
+			require.Empty(t, rec.Body.Bytes(), "rejected native attempt must not commit its error frame")
+			requestMu.Lock()
+			sent := append([]byte(nil), requestPayload...)
+			requestMu.Unlock()
+			require.Equal(t, tt.previousResponseID, gjson.GetBytes(sent, "previous_response_id").String())
+			require.False(t, gjson.GetBytes(sent, "generate").Exists(), "native compaction must bypass generate=false prewarm")
+			require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(sent, "include.0").String())
+			require.Equal(t, "fixture-ws-state", gjson.GetBytes(sent, "input.0.encrypted_content").String())
+			require.Equal(t, "compaction_trigger", gjson.GetBytes(sent, "input.1.type").String())
+		})
+	}
+}
+
 func TestOpenAIGatewayService_Forward_RemovePreviousResponseIDWhenWSDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	wsFallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

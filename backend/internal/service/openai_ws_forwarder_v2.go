@@ -35,11 +35,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	lastFailureReason string,
 	tlsRouterMatch TLSFingerprintRouterMatchResult,
 	agentTaskRecoveryTried *bool,
-) (*OpenAIForwardResult, error) {
+) (forwardResult *OpenAIForwardResult, forwardErr error) {
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
-
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
 	if err != nil {
 		return nil, wrapOpenAIWSFallback("build_ws_url", err)
@@ -63,7 +62,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 
 	payload := s.buildOpenAIWSCreatePayload(reqBody, account)
-	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategy(payload, attempt)
+	nativeCompaction := isOpenAINativeCompactionTurn(c, payloadAsJSONBytes(payload))
+	payloadStrategy, removedKeys := applyOpenAIWSRetryPayloadStrategyForRequest(payload, attempt, nativeCompaction)
 	previousResponseID := openAIWSPayloadString(payload, "previous_response_id")
 	previousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 	promptCacheKey := openAIWSPayloadString(payload, "prompt_cache_key")
@@ -175,6 +175,44 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		account.ProxyID != nil && account.Proxy != nil,
 	)
 
+	var nativeStage *OpenAINativeCompactionAttemptStage
+	var nativeValidator *OpenAINativeCompactionValidator
+	var nativeValidation OpenAINativeCompactionValidationResult
+	nativeDeliveryCommitted := false
+	nativeDeliveryStarted := false
+	usage := &OpenAIUsage{}
+	usageObserved := false
+	responseID := ""
+	clientDisconnected := false
+	if nativeCompaction {
+		nativeStage, err = newOpenAINativeCompactionAttemptStage(ctx, s)
+		if err != nil {
+			return nil, wrapOpenAIWSFallback("native_compaction_stage", joinOpenAINativeCompactionStageSemanticError(err))
+		}
+		defer func() { _ = nativeStage.Close() }()
+		nativeValidator = NewOpenAINativeCompactionValidator()
+	}
+	wsAttempt := s.beginOpenAINativeWSAttempt(
+		ctx,
+		account,
+		originalModel,
+		openAIServiceTierIsPriority(extractOpenAIServiceTier(reqBody)),
+		nativeCompaction,
+		UpstreamAttemptTransportWebSocket,
+		NewOpenAIWSConnectionID(),
+		NewOpenAIWSTurnID(),
+	)
+	defer func() {
+		if wsAttempt == nil {
+			return
+		}
+		if nativeValidation.Outcome == "" || nativeValidation.Outcome == OpenAINativeCompactionPending {
+			nativeValidation = nativeValidator.Finish()
+		}
+		wsAttempt.finishWebSocket(nativeValidation, responseID, usage, usageObserved, nativeDeliveryCommitted && !clientDisconnected, !nativeDeliveryStarted, forwardErr)
+		finalizeOpenAINativeForwardResult(forwardResult, account, wsAttempt, nativeCompaction, UpstreamAttemptTransportWebSocket)
+	}()
+
 	acquireCtx, acquireCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 	defer acquireCancel()
 	tlsProfile, tlsProfileKey := s.resolveOpenAIWSTLSProfile(account, tlsRouterMatch)
@@ -252,6 +290,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		lease.Release()
 	}()
 	connID := strings.TrimSpace(lease.ConnID())
+	if wsAttempt != nil {
+		wsAttempt.observeWebSocket(lease.HandshakeHeaders())
+	}
 	logOpenAIWSModeDebug(
 		"connected account_id=%d account_type=%s transport=%s conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d has_previous_response_id=%v",
 		account.ID,
@@ -310,18 +351,20 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 
-	if err := s.performOpenAIWSGeneratePrewarm(
-		ctx,
-		lease,
-		decision,
-		payload,
-		previousResponseID,
-		reqBody,
-		account,
-		stateStore,
-		groupID,
-	); err != nil {
-		return nil, err
+	if !nativeCompaction {
+		if err := s.performOpenAIWSGeneratePrewarm(
+			ctx,
+			lease,
+			decision,
+			payload,
+			previousResponseID,
+			reqBody,
+			account,
+			stateStore,
+			groupID,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
@@ -346,10 +389,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		)
 	}
 
-	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
-	responseID := ""
 	var finalResponse []byte
 	responseAccumulator := apicompat.NewBufferedResponseAccumulator()
 	wroteDownstream := false
@@ -388,7 +429,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		flusher = f
 	}
 
-	clientDisconnected := false
 	flushBatchSize := s.openAIWSEventFlushBatchSize()
 	flushInterval := s.openAIWSEventFlushInterval()
 	pendingFlushEvents := 0
@@ -407,7 +447,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		lastFlushAt = time.Now()
 	}
 	emitStreamMessage := func(message []byte, forceFlush bool) {
-		if clientDisconnected {
+		if clientDisconnected || nativeStage != nil {
 			return
 		}
 		frame := make([]byte, 0, len(message)+8)
@@ -459,7 +499,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			pendingJSONDocuments = pendingJSONDocuments[1:]
 		} else {
 			message, readErr = lease.ReadMessageWithContextTimeout(ctx, readTimeout)
-			if readErr == nil {
+			if readErr == nil && nativeValidator == nil {
 				if documents, repaired := splitOpenAIConcatenatedJSONDocuments(message); repaired {
 					logOpenAIWSModeInfo(
 						"concatenated_json_repaired account_id=%d conn_id=%s documents=%d bytes=%d",
@@ -489,12 +529,23 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				wroteDownstream,
 			)
 			if !wroteDownstream {
+				if nativeValidator != nil {
+					nativeValidator.Observe(message)
+					validation := nativeValidator.Finish()
+					_ = nativeStage.Discard()
+					return nil, wrapOpenAIWSFallback("native_compaction_"+string(validation.Outcome), newOpenAINativeCompactionSemanticError(validation.Outcome))
+				}
 				return nil, wrapOpenAIWSFallback("invalid_event_json", errors.New("upstream websocket returned malformed Responses event JSON"))
 			}
 			return nil, errors.New("upstream websocket returned malformed Responses event JSON after downstream output")
 		}
 		if readErr != nil {
 			lease.MarkBroken()
+			if nativeValidator != nil {
+				validation := nativeValidator.Finish()
+				_ = nativeStage.Discard()
+				return nil, wrapOpenAIWSFallback("native_compaction_"+string(validation.Outcome), newOpenAINativeCompactionSemanticError(validation.Outcome))
+			}
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
 			logOpenAIWSModeInfo(
 				"read_fail account_id=%d conn_id=%s wrote_downstream=%v close_status=%s close_reason=%s cause=%s events=%d token_events=%d terminal_events=%d buffered_pending=%d buffered_flushed=%d first_event=%s last_event=%s",
@@ -521,13 +572,22 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(readErr.Error()), "")
 			return nil, fmt.Errorf("openai ws read event: %w", readErr)
 		}
+		if nativeValidator != nil {
+			nativeValidator.Observe(message)
+		}
 		if normalized, changed := normalizeCompletedImageGenerationStatus(message); changed {
 			message = normalized
 		}
-
 		eventType, eventResponseID, responseField := parseOpenAIWSEventEnvelope(message)
 		if eventType == "" {
 			continue
+		}
+		if nativeCompaction && (eventType == "error" || eventType == "response.failed") {
+			if continuationCode := openAINativeCompactionContinuationErrorCode(extractUpstreamErrorCode(message)); continuationCode != "" {
+				lease.MarkBroken()
+				_ = nativeStage.Discard()
+				return nil, wrapOpenAIWSFallback(continuationCode, newOpenAINativeCompactionContinuationError(continuationCode))
+			}
 		}
 		eventCount++
 		if firstEventType == "" {
@@ -576,7 +636,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 		}
 		if openAIWSEventShouldParseUsage(eventType) {
-			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
+			if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(message); ok {
+				*usage = parsedUsage
+				usageObserved = true
+			}
+		}
+		if nativeValidator != nil {
+			if err := openAINativeCompactionStageFrame(nativeStage, []string{"data: " + string(message)}); err != nil {
+				lease.MarkBroken()
+				_ = nativeStage.Discard()
+				return nil, wrapOpenAIWSFallback("native_compaction_stage", joinOpenAINativeCompactionStageSemanticError(err))
+			}
 		}
 		if eventType == "response.failed" {
 			if hit, code, msg := detectOpenAICyberPolicy(message); hit {
@@ -818,7 +888,32 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			// 终止事件必须是当前 WS 消息中的最后一个 JSON 文档；尾随文档不再写给已完成的
 			// 客户端请求，同时禁止复用语义不明确的上游连接。
 			cleanExit = len(pendingJSONDocuments) == 0
+			if nativeValidator != nil {
+				for _, trailingDocument := range pendingJSONDocuments {
+					nativeValidator.Observe(trailingDocument)
+				}
+			}
 			break
+		}
+	}
+
+	if nativeValidator != nil {
+		validation := nativeValidator.Finish()
+		nativeValidation = validation
+		if !validation.Valid() {
+			_ = nativeStage.Discard()
+			lease.MarkBroken()
+			return nil, wrapOpenAIWSFallback("native_compaction_"+string(validation.Outcome), newOpenAINativeCompactionSemanticError(validation.Outcome))
+		}
+		nativeDeliveryStarted = true
+		if err := nativeStage.CommitTo(c.Writer); err != nil {
+			lease.MarkBroken()
+			return nil, fmt.Errorf("commit OpenAI native compaction WS attempt: %w", err)
+		}
+		wroteDownstream = true
+		nativeDeliveryCommitted = true
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
 
@@ -894,6 +989,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	return &OpenAIForwardResult{
 		RequestID:             responseID,
+		ResponseID:            responseID,
 		Usage:                 *usage,
 		Model:                 originalModel,
 		UpstreamModel:         mappedModel,
@@ -908,6 +1004,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		ResponseBody:          cloneDataSharingRequestBody(finalResponse),
 		Duration:              time.Since(startTime),
 		FirstTokenMs:          firstTokenMs,
+		ClientDisconnect:      clientDisconnected,
 		UpstreamWarning:       upstreamWarning,
 	}, nil
 }

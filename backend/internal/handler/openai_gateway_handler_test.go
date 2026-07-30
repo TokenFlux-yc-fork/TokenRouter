@@ -1058,6 +1058,35 @@ func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T)
 	require.Contains(t, w.Body.String(), "previous_response_id")
 }
 
+func TestOpenAIResponses_NativeCompactionAllowsHTTPContinuationPreviousResponseID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := `{"model":"gpt-5.1","stream":true,"previous_response_id":"resp_native_previous","input":[{"type":"compaction_trigger"}]}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+
+	groupID := int64(2)
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID:      101,
+		GroupID: &groupID,
+		User:    &service.User{ID: 1},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
+		UserID:      1,
+		Concurrency: 1,
+	})
+
+	h := newOpenAIHandlerForPreviousResponseIDValidation(t, nil)
+	h.Responses(c)
+
+	require.True(t, service.IsOpenAINativeRemoteCompactionV2(c))
+	require.NotEqual(t, http.StatusBadRequest, w.Code)
+	require.NotContains(t, w.Body.String(), "previous_response_id is only supported on Responses WebSocket v2")
+}
+
 func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceDoesNotSuggestPreviousResponseReuse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

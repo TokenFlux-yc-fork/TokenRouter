@@ -471,6 +471,16 @@ type GatewayCache interface {
 	RefreshSessionOwnerTTL(ctx context.Context, userID int64, source, sessionHash string, ttl time.Duration) error
 }
 
+// OpenAICompatibilityDomainCache is an optional distributed extension used by
+// native-v2 continuation state. Implementations persist only the sanitized
+// provider/fingerprint/model/contract tuple; payloads and credentials are not
+// representable in OpenAICompatibilityDomain.
+type OpenAICompatibilityDomainCache interface {
+	SetOpenAICompatibilityDomain(ctx context.Context, groupID int64, bindingKey string, domain OpenAICompatibilityDomain, ttl time.Duration) error
+	GetOpenAICompatibilityDomain(ctx context.Context, groupID int64, bindingKey string) (OpenAICompatibilityDomain, error)
+	DeleteOpenAICompatibilityDomain(ctx context.Context, groupID int64, bindingKey string) error
+}
+
 // derefGroupID safely dereferences *int64 to int64, returning 0 if nil
 func derefGroupID(groupID *int64) int64 {
 	if groupID == nil {

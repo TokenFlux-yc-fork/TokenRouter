@@ -256,6 +256,25 @@ func TestOpenAIFirstOutputStageCommitCopiesSpoolAndRemovesTemp(t *testing.T) {
 	require.NoError(t, stage.Close())
 }
 
+func TestOpenAIFirstOutputStageMemoryOnlyAllowsFullStageLimit(t *testing.T) {
+	const limit = 80 * 1024
+	stage := newOpenAIFirstOutputStage(limit)
+	stage.memoryOnly = true
+
+	require.EqualValues(t, limit, stage.fallbackMemoryLimit)
+	payload := bytes.Repeat([]byte("m"), limit)
+	_, err := stage.Write(payload)
+	require.NoError(t, err)
+	require.EqualValues(t, limit, stage.Buffered())
+	require.Nil(t, stage.tempFile)
+
+	var downstream bytes.Buffer
+	require.NoError(t, stage.CommitTo(&downstream))
+	require.Equal(t, payload, downstream.Bytes())
+	require.Zero(t, stage.Buffered())
+	require.NoError(t, stage.Close())
+}
+
 func TestOpenAIFirstOutputStageUnlinkFailurePermanentlyFallsBackToMemoryAndRetriesCleanup(t *testing.T) {
 	stage := newDefaultOpenAIFirstOutputStage()
 	stage.memoryOnly = false

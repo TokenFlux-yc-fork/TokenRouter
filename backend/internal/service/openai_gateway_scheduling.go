@@ -336,10 +336,35 @@ func isOpenAICompatibleAccountEligibleForRequest(ctx context.Context, account *A
 		}
 		return false
 	}
+	if !accountSupportsOpenAINativeCompactionForRequest(ctx, account, requestedModel) {
+		return false
+	}
 	if requireCompact && openAICompactSupportTier(account) == 0 {
 		return false
 	}
 	return true
+}
+
+func accountSupportsOpenAINativeCompactionForRequest(ctx context.Context, account *Account, requestedModel string) bool {
+	native, _ := OpenAINativeRemoteCompactionV2FromContext(ctx)
+	if !native {
+		return true
+	}
+	if account == nil || !account.IsOpenAICompatible() {
+		return false
+	}
+
+	effectiveModel := resolveOpenAIAccountUpstreamModelForRequest(
+		account,
+		requestedModel,
+		false,
+		openAIHTTPPassthroughRoutingFromContext(ctx),
+	)
+	key, err := ResolveOpenAINativeCompactionCapabilityKey(account, effectiveModel)
+	if err != nil {
+		return false
+	}
+	return account.SupportsOpenAINativeRemoteCompactionV2(key, time.Now())
 }
 
 type openAIQuotaAutoPauseDecision struct {
@@ -748,7 +773,7 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusionsForRouting(ctx
 		return nil, err
 	}
 
-	if sessionHash != "" {
+	if sessionHash != "" && !nativeOpenAICompatibilityDomainRequired(ctx) {
 		_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, selected.ID, openaiStickySessionTTL)
 	}
 
@@ -1174,7 +1199,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForRouting(ctx cont
 				if selectErr != nil {
 					return nil, true, selectErr
 				}
-				if sessionHash != "" {
+				if sessionHash != "" && !nativeOpenAICompatibilityDomainRequired(ctx) {
 					_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, fresh.ID, openaiStickySessionTTL)
 				}
 				return selection, true, nil
@@ -1213,7 +1238,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessForRouting(ctx cont
 				if selectErr != nil {
 					return nil, selectErr
 				}
-				if sessionHash != "" {
+				if sessionHash != "" && !nativeOpenAICompatibilityDomainRequired(ctx) {
 					_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, fresh.ID, openaiStickySessionTTL)
 				}
 				return selection, nil

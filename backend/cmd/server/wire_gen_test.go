@@ -103,6 +103,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // quotaFlusher
 		nil, // tlsFingerprintCollector
 		nil, // upstreamBillingProbe
+		nil, // nativeCompactionProbeRunner
 		nil, // ollamaCloudUsage
 		nil, // auditLog
 	)

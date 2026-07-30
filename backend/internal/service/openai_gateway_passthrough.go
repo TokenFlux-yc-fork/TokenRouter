@@ -183,18 +183,22 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	agentTaskRecoveryTried := false
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	var resp *http.Response
+	var attempt *openAIUpstreamAttemptCoordinator
 	for {
-		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+		upstreamCtx, releaseUpstreamCtx := openAIUpstreamContextForCompactionAttempt(ctx, IsOpenAINativeRemoteCompactionV2(c))
 		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token, tlsRouterMatch...)
 		releaseUpstreamCtx()
 		if buildErr != nil {
 			return nil, buildErr
 		}
 
+		attempt = s.beginOpenAINativeHTTPAttempt(ctx, c, account, reqModel, openAIServiceTierIsPriority(extractOpenAIServiceTierFromBody(body)))
 		upstreamStart := time.Now()
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+		attempt.observeTransport(resp)
 		if err != nil {
+			attempt.finishHTTPError(resp, string(OpenAINativeCompactionTransportFailure), true)
 			// 未收到 HTTP 响应时交给外层切换账号，持久故障仍由统一处理器临时摘除。
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 		}
@@ -206,6 +210,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		probeBody := s.readUpstreamErrorBody(resp)
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(probeBody))
+		attempt.finishHTTPError(resp, string(OpenAINativeCompactionHTTPFailure), true)
 		if !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, probeBody) {
 			agentTaskRecoveryTried = true
 			expectedTaskID := account.GetCredential("task_id")
@@ -226,6 +231,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 		// 透传模式默认保持原样代理；容量错误以及 API-key 上游的瞬时
 		// 5xx 应先触发多账号 failover；probeBody 已在 task 探测时读取，不再重复消费响应体。
+		if continuationCode := openAINativeCompactionContinuationErrorCode(extractUpstreamErrorCode(probeBody)); IsOpenAINativeRemoteCompactionV2(c) && continuationCode != "" {
+			return nil, newOpenAINativeCompactionHTTPContinuationFailoverError(resp.StatusCode, resp.Header, continuationCode, false)
+		}
 		if shouldFailoverOpenAIPassthroughResponse(account, resp.StatusCode, probeBody) {
 			return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
 		}
@@ -243,7 +251,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	var responseBody []byte
 	if reqStream {
 		result, err := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
+		attempt.finishStreamingPassthrough(result, err)
 		if err != nil {
+			s.quarantineOpenAINativeCompactionFailure(ctx, c, account, upstreamPassthroughModel, err)
 			return nil, err
 		}
 		usage = result.usage
@@ -299,6 +309,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		forwardResult.ImageOutputSizes = imageOutputSizes
 		forwardResult.BillingModel = imageBillingModel
 	}
+	finalizeOpenAINativeHTTPForwardResult(c, forwardResult, account, attempt)
 	return forwardResult, nil
 }
 
@@ -748,13 +759,16 @@ func collectOpenAIPassthroughTimeoutHeaders(h http.Header) []string {
 }
 
 type openaiStreamingResultPassthrough struct {
-	usage            *OpenAIUsage
-	firstTokenMs     *int
-	responseID       string
-	clientDisconnect bool
-	imageCount       int
-	imageOutputSizes []string
-	responseBody     []byte
+	usage             *OpenAIUsage
+	usageObserved     bool
+	firstTokenMs      *int
+	responseID        string
+	clientDisconnect  bool
+	deliveryCommitted bool
+	nativeValidation  OpenAINativeCompactionValidationResult
+	imageCount        int
+	imageOutputSizes  []string
+	responseBody      []byte
 }
 
 type openaiNonStreamingResultPassthrough struct {
@@ -1103,6 +1117,24 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	originalModel string,
 	mappedModel string,
 ) (*openaiStreamingResultPassthrough, error) {
+	if IsOpenAINativeRemoteCompactionV2(c) {
+		result, err := s.handleOpenAINativeCompactionStreamingResponse(ctx, resp, c, account, startTime, originalModel, mappedModel, true)
+		if result == nil {
+			return nil, err
+		}
+		return &openaiStreamingResultPassthrough{
+			usage:             result.usage,
+			usageObserved:     result.usageObserved,
+			firstTokenMs:      result.firstTokenMs,
+			responseID:        result.responseID,
+			clientDisconnect:  result.clientDisconnect,
+			deliveryCommitted: result.deliveryCommitted,
+			nativeValidation:  result.nativeValidation,
+			imageCount:        result.imageCount,
+			imageOutputSizes:  result.imageOutputSizes,
+			responseBody:      result.responseBody,
+		}, err
+	}
 	outputBaseline := captureOpenAIStreamOutputBaseline(c)
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 

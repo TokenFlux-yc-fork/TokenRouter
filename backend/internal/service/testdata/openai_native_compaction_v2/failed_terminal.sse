@@ -1,0 +1,5 @@
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"cmp_before_failure","type":"compaction","status":"completed","encrypted_content":"fixture-before-failure"}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"code":"synthetic_failure","message":"synthetic fixture failure"}}}

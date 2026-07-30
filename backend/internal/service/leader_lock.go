@@ -15,6 +15,24 @@ type LeaderLockCache interface {
 	ReleaseLeaderLock(ctx context.Context, key, owner string) error
 }
 
+// FencedLeaderLease describes an inspectable renewable lease.
+// FencingToken increases on every successful handoff and is unchanged by renewals.
+type FencedLeaderLease struct {
+	Owner        string
+	FencingToken int64
+	TTL          time.Duration
+}
+
+// FencedLeaderLeaseCache provides a fail-closed renewable lease for long-lived
+// background runners. Implementations must compare both owner and fencing token
+// when renewing or releasing a lease.
+type FencedLeaderLeaseCache interface {
+	TryAcquireFencedLeaderLease(ctx context.Context, key, owner string, ttl time.Duration) (token int64, acquired bool, err error)
+	RenewFencedLeaderLease(ctx context.Context, key, owner string, token int64, ttl time.Duration) (renewed bool, err error)
+	ReleaseFencedLeaderLease(ctx context.Context, key, owner string, token int64) (released bool, err error)
+	GetFencedLeaderLease(ctx context.Context, key string) (*FencedLeaderLease, error)
+}
+
 // tryAcquireSingletonLeaderLock 为周期性后台任务提供单实例执行保护。
 //
 // 语义：

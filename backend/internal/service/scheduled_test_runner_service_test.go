@@ -152,7 +152,7 @@ func TestScheduledTestRunnerStartHonorsInstanceSwitch(t *testing.T) {
 		runner := &ScheduledTestRunnerService{cfg: &config.Config{
 			ScheduledRunnerEnabled: true,
 			Timezone:               "UTC",
-		}}
+		}, leaseCache: &scheduledRunnerLeaseFake{}, instanceID: "enabled-test"}
 		runner.Start()
 		t.Cleanup(runner.Stop)
 		require.NotNil(t, runner.cron)

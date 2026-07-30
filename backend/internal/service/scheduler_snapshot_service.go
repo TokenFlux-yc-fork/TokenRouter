@@ -647,6 +647,9 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 			}
 			return s.rebuildByGroupIDs(ctx, groupIDs, "account_miss", seen)
 		}
+		if s.cache != nil {
+			return errors.Join(err, s.cache.DeleteAccount(ctx, *accountID))
+		}
 		return err
 	}
 	if s.cache != nil {

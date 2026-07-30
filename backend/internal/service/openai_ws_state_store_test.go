@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,6 +98,155 @@ func TestOpenAIWSStateStore_SessionConnTTL(t *testing.T) {
 
 	time.Sleep(60 * time.Millisecond)
 	_, ok = store.GetSessionConn(9, "session_hash_conn_1")
+	require.False(t, ok)
+}
+
+func testOpenAICompatibilityDomain(t *testing.T) OpenAICompatibilityDomain {
+	t.Helper()
+	fingerprint, err := NewOpenAIUpstreamFingerprint("https://api.example.test/v1/responses", "responses")
+	require.NoError(t, err)
+	return OpenAICompatibilityDomain{
+		Provider:            OpenAIUpstreamProvider(PlatformOpenAI),
+		UpstreamFingerprint: fingerprint,
+		EffectiveModel:      "gpt-test",
+		ContractVersion:     OpenAINativeCompactionContractVersion,
+	}
+}
+
+type sharedOpenAICompatibilityDomainCache struct {
+	mu       sync.Mutex
+	bindings map[string]openAICompatibilityDomainBinding
+}
+
+type distributedOpenAICompatibilityDomainCacheStub struct {
+	*stubGatewayCache
+	shared *sharedOpenAICompatibilityDomainCache
+}
+
+func (c *distributedOpenAICompatibilityDomainCacheStub) SetOpenAICompatibilityDomain(
+	_ context.Context,
+	groupID int64,
+	bindingKey string,
+	domain OpenAICompatibilityDomain,
+	ttl time.Duration,
+) error {
+	if c == nil || c.shared == nil || !domain.Valid() || ttl <= 0 {
+		return ErrOpenAICompatibilityDomainUnknown
+	}
+	c.shared.mu.Lock()
+	defer c.shared.mu.Unlock()
+	c.shared.bindings[fmt.Sprintf("%d:%s", groupID, bindingKey)] = openAICompatibilityDomainBinding{
+		domain: domain, expiresAt: time.Now().Add(ttl),
+	}
+	return nil
+}
+
+func (c *distributedOpenAICompatibilityDomainCacheStub) GetOpenAICompatibilityDomain(
+	_ context.Context,
+	groupID int64,
+	bindingKey string,
+) (OpenAICompatibilityDomain, error) {
+	if c == nil || c.shared == nil {
+		return OpenAICompatibilityDomain{}, ErrOpenAICompatibilityDomainUnknown
+	}
+	c.shared.mu.Lock()
+	defer c.shared.mu.Unlock()
+	key := fmt.Sprintf("%d:%s", groupID, bindingKey)
+	binding, ok := c.shared.bindings[key]
+	if !ok || !time.Now().Before(binding.expiresAt) || !binding.domain.Valid() {
+		delete(c.shared.bindings, key)
+		return OpenAICompatibilityDomain{}, ErrOpenAICompatibilityDomainUnknown
+	}
+	return binding.domain, nil
+}
+
+func (c *distributedOpenAICompatibilityDomainCacheStub) DeleteOpenAICompatibilityDomain(
+	_ context.Context,
+	groupID int64,
+	bindingKey string,
+) error {
+	if c == nil || c.shared == nil {
+		return nil
+	}
+	c.shared.mu.Lock()
+	delete(c.shared.bindings, fmt.Sprintf("%d:%s", groupID, bindingKey))
+	c.shared.mu.Unlock()
+	return nil
+}
+
+func newDistributedOpenAICompatibilityDomainCachePair() (GatewayCache, GatewayCache) {
+	shared := &sharedOpenAICompatibilityDomainCache{bindings: make(map[string]openAICompatibilityDomainBinding)}
+	return &distributedOpenAICompatibilityDomainCacheStub{stubGatewayCache: &stubGatewayCache{}, shared: shared},
+		&distributedOpenAICompatibilityDomainCacheStub{stubGatewayCache: &stubGatewayCache{}, shared: shared}
+}
+
+func TestOpenAIWSStateStore_CompatibilityDomainSurvivesInstanceHandoff(t *testing.T) {
+	firstCache, secondCache := newDistributedOpenAICompatibilityDomainCachePair()
+	first := NewOpenAIWSStateStore(firstCache)
+	second := NewOpenAIWSStateStore(secondCache)
+	ctx := context.Background()
+	domain := testOpenAICompatibilityDomain(t)
+
+	require.True(t, first.BindResponseDomain(ctx, 7, "resp_handoff", domain, time.Minute))
+	require.True(t, first.BindSessionDomain(ctx, 7, "session_handoff", domain, time.Minute))
+	responseDomain, ok := second.GetResponseDomain(ctx, 7, "resp_handoff")
+	require.True(t, ok)
+	require.True(t, domain.CompatibleWith(responseDomain))
+	sessionDomain, ok := second.GetSessionDomain(ctx, 7, "session_handoff")
+	require.True(t, ok)
+	require.True(t, domain.CompatibleWith(sessionDomain))
+
+	_, ok = second.GetResponseDomain(ctx, 8, "resp_handoff")
+	require.False(t, ok)
+	_, ok = second.GetSessionDomain(ctx, 8, "session_handoff")
+	require.False(t, ok)
+}
+
+func TestOpenAIWSStateStore_CompatibilityDomainFailClosed(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	domain := testOpenAICompatibilityDomain(t)
+	ctx := context.Background()
+
+	require.False(t, store.BindResponseDomain(ctx, 7, "resp_invalid", OpenAICompatibilityDomain{}, time.Minute))
+	_, ok := store.GetResponseDomain(ctx, 7, "resp_invalid")
+	require.False(t, ok)
+	require.False(t, store.BindSessionDomain(ctx, 7, "session_invalid", OpenAICompatibilityDomain{}, time.Minute))
+	_, ok = store.GetSessionDomain(ctx, 7, "session_invalid")
+	require.False(t, ok)
+
+	require.True(t, store.BindResponseDomain(ctx, 7, "resp_domain", domain, time.Minute))
+	gotResponse, ok := store.GetResponseDomain(ctx, 7, "resp_domain")
+	require.True(t, ok)
+	require.True(t, domain.CompatibleWith(gotResponse))
+	_, ok = store.GetResponseDomain(ctx, 8, "resp_domain")
+	require.False(t, ok, "response domain must be group scoped")
+
+	require.True(t, store.BindSessionDomain(ctx, 7, "session_domain", domain, time.Minute))
+	gotSession, ok := store.GetSessionDomain(ctx, 7, "session_domain")
+	require.True(t, ok)
+	require.True(t, domain.CompatibleWith(gotSession))
+	_, ok = store.GetSessionDomain(ctx, 8, "session_domain")
+	require.False(t, ok, "session domain must be group scoped")
+
+	require.NoError(t, store.DeleteResponseDomain(ctx, 7, "resp_domain"))
+	_, ok = store.GetResponseDomain(ctx, 7, "resp_domain")
+	require.False(t, ok)
+	require.NoError(t, store.DeleteSessionDomain(ctx, 7, "session_domain"))
+	_, ok = store.GetSessionDomain(ctx, 7, "session_domain")
+	require.False(t, ok)
+}
+
+func TestOpenAIWSStateStore_CompatibilityDomainTTL(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	domain := testOpenAICompatibilityDomain(t)
+	ctx := context.Background()
+	require.True(t, store.BindResponseDomain(ctx, 9, "resp_ttl", domain, 30*time.Millisecond))
+	require.True(t, store.BindSessionDomain(ctx, 9, "session_ttl", domain, 30*time.Millisecond))
+
+	time.Sleep(60 * time.Millisecond)
+	_, ok := store.GetResponseDomain(ctx, 9, "resp_ttl")
+	require.False(t, ok)
+	_, ok = store.GetSessionDomain(ctx, 9, "session_ttl")
 	require.False(t, ok)
 }
 

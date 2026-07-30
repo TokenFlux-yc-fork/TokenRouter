@@ -57,6 +57,10 @@ type Account struct {
 	// QuotaAutoPaused 是 OpenAI 账号配额自动暂停的运行时派生状态，不会持久化到数据库。
 	QuotaAutoPaused bool `json:"-"`
 
+	// OpenAINativeCompactionCapabilities is a candidate-specific projection.
+	// It contains no credentials, payloads, or encrypted compaction content.
+	OpenAINativeCompactionCapabilities []OpenAINativeCompactionCapability
+
 	SessionWindowStart  *time.Time
 	SessionWindowEnd    *time.Time
 	SessionWindowStatus string
@@ -106,6 +110,9 @@ const (
 	// compaction v2 的 /v1/responses 调度，避免把请求调度到会在 forward 阶段
 	// 被降级为 Chat Completions 的账号（#4417）。
 	OpenAIEndpointCapabilityResponses OpenAIEndpointCapability = "responses"
+	// OpenAIEndpointCapabilityNativeRemoteCompactionV2 is intentionally
+	// independent from generic Responses and legacy /responses/compact support.
+	OpenAIEndpointCapabilityNativeRemoteCompactionV2 OpenAIEndpointCapability = "native_remote_compaction_v2"
 )
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
@@ -1652,6 +1659,11 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 			a.Type == AccountTypeOAuth &&
 			!a.IsOpenAIPersonalAccessToken() &&
 			!a.IsOpenAIAgentIdentity()
+	case OpenAIEndpointCapabilityNativeRemoteCompactionV2:
+		// Candidate-specific model/fingerprint/contract state cannot be decided by
+		// this account-only API. Call SupportsOpenAINativeRemoteCompactionV2 with
+		// the exact key instead; unknown context must fail closed.
+		return false
 	case OpenAIEndpointCapabilityResponses:
 		// Responses 支持状态由 accounts.extra 的自动探测标记决定，而非
 		// credentials 能力集。已探测确认不支持 /v1/responses 的 APIKey 上游
