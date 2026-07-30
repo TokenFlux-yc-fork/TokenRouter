@@ -57,6 +57,8 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 
 	// groups: OpenAI Live 默认关闭，管理员显式开启后才可访问。
 	requireColumn(t, tx, "groups", "allow_live", "boolean", 0, false)
+	requireColumn(t, tx, "groups", "openai_passthrough_strip_fields", "jsonb", 0, false)
+	requireColumnDefaultContains(t, tx, "groups", "openai_passthrough_strip_fields", "max_output_tokens")
 
 	// api_keys: key length should be 128
 	requireColumn(t, tx, "api_keys", "key", "character varying", 128, false)

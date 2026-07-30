@@ -358,6 +358,47 @@ describe('EditAccountModal', () => {
     listTLSProfilesMock.mockResolvedValue([])
   })
 
+  it('keeps API key passthrough field policy inherited when the account key is absent', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await flushPromises()
+
+    expect(
+      (wrapper.get('#edit-account-openai-passthrough-strip-inherit').element as HTMLInputElement).checked
+    ).toBe(true)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_passthrough_strip_fields).toBeUndefined()
+  })
+
+  it('round-trips an explicit empty API key passthrough field override', async () => {
+    const account = buildAccount()
+    account.extra = {
+      openai_passthrough: true,
+      openai_passthrough_strip_fields: []
+    }
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await flushPromises()
+
+    expect(
+      (wrapper.get('#edit-account-openai-passthrough-strip-inherit').element as HTMLInputElement).checked
+    ).toBe(false)
+    expect(wrapper.text()).toContain('admin.accounts.openai.passthroughStripFields.empty')
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_passthrough_strip_fields).toEqual([])
+  })
+
   it('renders the shared account model rule copy', async () => {
     const account = buildAccount()
     account.credentials.model_whitelist = []

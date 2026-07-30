@@ -268,6 +268,10 @@ func (Group) Fields() []ent.Field {
 			Default([]domain.ReasoningEffortMapping{}).
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
 			Comment("OpenAI reasoning effort 自定义精确映射；先映射再应用上限"),
+		field.JSON("openai_passthrough_strip_fields", []string{}).
+			Default([]string{"max_output_tokens"}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("OpenAI API-key Responses 透传首包中剥离的 JSON 字段路径"),
 
 		// 数据共享开关：开启后该分组产生的 Agent session 会进入数据共享采集流程。
 		field.Bool("data_sharing_enabled").

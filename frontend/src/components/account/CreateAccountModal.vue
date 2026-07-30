@@ -3056,6 +3056,19 @@
         </div>
       </div>
 
+      <div
+        v-if="form.platform === 'openai' && accountCategory === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <OpenAIPassthroughStripFieldsEditor
+          id-prefix="create-account-openai-passthrough-strip"
+          context="account"
+          allow-inherit
+          v-model="openaiPassthroughStripFields"
+          v-model:inherit="openaiPassthroughStripFieldsInherited"
+        />
+      </div>
+
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
       <div
         v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
@@ -3945,6 +3958,7 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import OpenAIPassthroughStripFieldsEditor from '@/components/admin/OpenAIPassthroughStripFieldsEditor.vue'
 import {
   applyAntigravityProjectID,
   applyHeaderOverride,
@@ -4238,6 +4252,8 @@ const autoPause7dThreshold = ref<number | null>(null)
 const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
 const openaiPassthroughEnabled = ref(false)
+const openaiPassthroughStripFieldsInherited = ref(true)
+const openaiPassthroughStripFields = ref<string[]>(['max_output_tokens'])
 const openAILongContextBillingEnabled = ref(false)
 const openAILongContextBillingTouched = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
@@ -4980,6 +4996,8 @@ watch(
     }
     if (newPlatform !== 'openai') {
       openaiPassthroughEnabled.value = false
+      openaiPassthroughStripFieldsInherited.value = true
+      openaiPassthroughStripFields.value = ['max_output_tokens']
       openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -5478,6 +5496,8 @@ const resetForm = () => {
   autoPause5hDisabled.value = false
   autoPause7dDisabled.value = false
   openaiPassthroughEnabled.value = false
+  openaiPassthroughStripFieldsInherited.value = true
+  openaiPassthroughStripFields.value = ['max_output_tokens']
   openAILongContextBillingEnabled.value = false
   openAILongContextBillingTouched.value = false
   openAICompactMode.value = 'auto'
@@ -5587,6 +5607,11 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   } else {
     delete extra.openai_passthrough
     delete extra.openai_oauth_passthrough
+  }
+  if (accountCategory.value === 'apikey' && !openaiPassthroughStripFieldsInherited.value) {
+    extra.openai_passthrough_strip_fields = [...openaiPassthroughStripFields.value]
+  } else {
+    delete extra.openai_passthrough_strip_fields
   }
   extra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
 

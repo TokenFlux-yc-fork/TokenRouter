@@ -241,6 +241,8 @@ type AdminGroup struct {
 	ModelsListConfig            domain.GroupModelsListConfig             `json:"models_list_config"`
 	// AvailabilityProbeConfig 控制分组主动可用性探测，仅管理员接口返回。
 	AvailabilityProbeConfig domain.GroupAvailabilityProbeConfig `json:"availability_probe_config"`
+	// OpenAIPassthroughStripFields 仅管理员可见的 API-key 透传首包字段策略。
+	OpenAIPassthroughStripFields []string `json:"openai_passthrough_strip_fields"`
 
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes    []string       `json:"supported_model_scopes"`

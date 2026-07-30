@@ -517,6 +517,21 @@ export default {
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',
+        passthroughStripFields: {
+          title: 'API key passthrough field policy',
+          description: 'Applies to OpenAI API key Responses requests. An account-level list replaces the group policy.',
+          inherit: 'Inherit group policy',
+          inheritHint: 'Use the list from the group selected for the request. For multiple groups, the active request group is used.',
+          fieldLabel: 'Field path',
+          placeholder: 'For example input[].status or reasoning.mode',
+          add: 'Add field',
+          remove: 'Remove field {field}',
+          empty: 'No first-request fields are configured.',
+          syntaxHint: 'Supports dot paths, input[] array wildcards, and input[0] indices. model, input, and stream cannot be stripped.',
+          invalidPath: 'The field path is invalid or targets a required request field.',
+          duplicatePath: 'This field has already been added.',
+          limitReached: 'At most {count} fields can be configured.'
+        },
         longContextBilling: 'API long-context pricing',
         longContextBillingDesc:
           'Disabled by default. Enable only when this account\'s upstream charges OpenAI API long-context rates above the model threshold.',

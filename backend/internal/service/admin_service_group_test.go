@@ -1080,6 +1080,83 @@ func TestAdminService_UpdateGroup_ReasoningEffortMappingsTriState(t *testing.T) 
 	}
 }
 
+func TestAdminService_CreateGroup_DefaultsOpenAIPassthroughStripFields(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name:           "openai-passthrough",
+		Platform:       PlatformOpenAI,
+		RateMultiplier: 1,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"max_output_tokens"}, group.OpenAIPassthroughStripFields)
+}
+
+func TestAdminService_UpdateGroup_OpenAIPassthroughStripFieldsTriState(t *testing.T) {
+	tests := []struct {
+		name  string
+		input *UpdateGroupInput
+		want  []string
+	}{
+		{
+			name:  "nil preserves existing fields",
+			input: &UpdateGroupInput{},
+			want:  []string{"max_output_tokens"},
+		},
+		{
+			name: "empty array disables proactive stripping",
+			input: func() *UpdateGroupInput {
+				empty := []string{}
+				return &UpdateGroupInput{OpenAIPassthroughStripFields: &empty}
+			}(),
+			want: []string{},
+		},
+		{
+			name: "non empty array replaces and normalizes fields",
+			input: func() *UpdateGroupInput {
+				fields := []string{" input[].status ", "reasoning.mode", "input[].status"}
+				return &UpdateGroupInput{OpenAIPassthroughStripFields: &fields}
+			}(),
+			want: []string{"input[].status", "reasoning.mode"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := &Group{
+				ID:                           1,
+				Name:                         "openai-group",
+				Platform:                     PlatformOpenAI,
+				Status:                       StatusActive,
+				OpenAIPassthroughStripFields: []string{"max_output_tokens"},
+			}
+			repo := &groupRepoStubForAdmin{getByID: existing}
+			svc := &adminServiceImpl{groupRepo: repo}
+
+			_, err := svc.UpdateGroup(context.Background(), existing.ID, tt.input)
+
+			require.NoError(t, err)
+			require.Equal(t, tt.want, repo.updated.OpenAIPassthroughStripFields)
+		})
+	}
+}
+
+func TestAdminService_UpdateGroup_RejectsInvalidOpenAIPassthroughStripFields(t *testing.T) {
+	existing := &Group{ID: 1, Name: "openai", Platform: PlatformOpenAI, Status: StatusActive}
+	repo := &groupRepoStubForAdmin{getByID: existing}
+	svc := &adminServiceImpl{groupRepo: repo}
+	invalid := []string{"input"}
+
+	_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+		OpenAIPassthroughStripFields: &invalid,
+	})
+
+	require.Error(t, err)
+	require.Nil(t, repo.updated)
+}
+
 func TestAdminService_UpdateGroup_RejectsInvalidReasoningEffortMappings(t *testing.T) {
 	existing := &Group{
 		ID:             1,

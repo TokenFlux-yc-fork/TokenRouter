@@ -286,6 +286,8 @@ type CreateGroupInput struct {
 	MaxReasoningEffort string
 	// ReasoningEffortMappings OpenAI/Codex 推理强度精确映射。
 	ReasoningEffortMappings []ReasoningEffortMapping
+	// OpenAIPassthroughStripFields nil 使用 OpenAI 默认值，空数组显式关闭首包剥离。
+	OpenAIPassthroughStripFields *[]string
 	// 从指定分组复制账号（创建分组后在同一事务内绑定）
 	CopyAccountsFromGroupIDs []int64
 }
@@ -363,6 +365,8 @@ type UpdateGroupInput struct {
 	MaxReasoningEffort *string
 	// ReasoningEffortMappings nil 表示不修改，空数组表示清空，非空数组表示替换。
 	ReasoningEffortMappings *[]ReasoningEffortMapping
+	// OpenAIPassthroughStripFields nil 表示不修改，空数组显式关闭首包剥离。
+	OpenAIPassthroughStripFields *[]string
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
 	CopyAccountsFromGroupIDs []int64
 }

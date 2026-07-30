@@ -139,6 +139,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_REASONING_EFFORT_MAPPING", "%v", err)
 	}
+	openAIPassthroughStripFields, err := normalizeGroupOpenAIPassthroughStripFields(platform, input.OpenAIPassthroughStripFields)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_OPENAI_PASSTHROUGH_STRIP_FIELDS", "%v", err)
+	}
 
 	// 图片价格：负数表示清除（使用默认价格），0 保留（表示免费）
 	imagePrice1K := normalizePrice(input.ImagePrice1K)
@@ -343,6 +347,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		RPMLimit:                        input.RPMLimit,
 		MaxReasoningEffort:              maxReasoningEffort,
 		ReasoningEffortMappings:         reasoningEffortMappings,
+		OpenAIPassthroughStripFields:    openAIPassthroughStripFields,
 	}
 	sanitizeGroupMessagesDispatchFields(group)
 	if group.Platform != PlatformOpenAI {
@@ -564,6 +569,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		return nil, err
 	}
 
+	originalPlatform := group.Platform
 	if input.Name != "" {
 		group.Name = input.Name
 	}
@@ -862,6 +868,17 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_REASONING_EFFORT_MAPPING", "%v", err)
 		}
 		group.ReasoningEffortMappings = reasoningEffortMappings
+	}
+	if group.Platform != PlatformOpenAI {
+		group.OpenAIPassthroughStripFields = []string{}
+	} else if input.OpenAIPassthroughStripFields != nil {
+		stripFields, err := normalizeGroupOpenAIPassthroughStripFields(group.Platform, input.OpenAIPassthroughStripFields)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_OPENAI_PASSTHROUGH_STRIP_FIELDS", "%v", err)
+		}
+		group.OpenAIPassthroughStripFields = stripFields
+	} else if originalPlatform != PlatformOpenAI || group.OpenAIPassthroughStripFields == nil {
+		group.OpenAIPassthroughStripFields = append([]string(nil), defaultOpenAIPassthroughStripFields...)
 	}
 	sanitizeGroupMessagesDispatchFields(group)
 	if group.Platform != PlatformOpenAI {

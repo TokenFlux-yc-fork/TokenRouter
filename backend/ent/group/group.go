@@ -140,6 +140,8 @@ const (
 	FieldMaxReasoningEffort = "max_reasoning_effort"
 	// FieldReasoningEffortMappings holds the string denoting the reasoning_effort_mappings field in the database.
 	FieldReasoningEffortMappings = "reasoning_effort_mappings"
+	// FieldOpenaiPassthroughStripFields holds the string denoting the openai_passthrough_strip_fields field in the database.
+	FieldOpenaiPassthroughStripFields = "openai_passthrough_strip_fields"
 	// FieldDataSharingEnabled holds the string denoting the data_sharing_enabled field in the database.
 	FieldDataSharingEnabled = "data_sharing_enabled"
 	// FieldSessionIsolationEnabled holds the string denoting the session_isolation_enabled field in the database.
@@ -288,6 +290,7 @@ var Columns = []string{
 	FieldRpmLimit,
 	FieldMaxReasoningEffort,
 	FieldReasoningEffortMappings,
+	FieldOpenaiPassthroughStripFields,
 	FieldDataSharingEnabled,
 	FieldSessionIsolationEnabled,
 }
@@ -434,6 +437,8 @@ var (
 	MaxReasoningEffortValidator func(string) error
 	// DefaultReasoningEffortMappings holds the default value on creation for the "reasoning_effort_mappings" field.
 	DefaultReasoningEffortMappings []domain.ReasoningEffortMapping
+	// DefaultOpenaiPassthroughStripFields holds the default value on creation for the "openai_passthrough_strip_fields" field.
+	DefaultOpenaiPassthroughStripFields []string
 	// DefaultDataSharingEnabled holds the default value on creation for the "data_sharing_enabled" field.
 	DefaultDataSharingEnabled bool
 	// DefaultSessionIsolationEnabled holds the default value on creation for the "session_isolation_enabled" field.

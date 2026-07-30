@@ -864,6 +864,12 @@ func (_c *GroupCreate) SetReasoningEffortMappings(v []domain.ReasoningEffortMapp
 	return _c
 }
 
+// SetOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field.
+func (_c *GroupCreate) SetOpenaiPassthroughStripFields(v []string) *GroupCreate {
+	_c.mutation.SetOpenaiPassthroughStripFields(v)
+	return _c
+}
+
 // SetDataSharingEnabled sets the "data_sharing_enabled" field.
 func (_c *GroupCreate) SetDataSharingEnabled(v bool) *GroupCreate {
 	_c.mutation.SetDataSharingEnabled(v)
@@ -1205,6 +1211,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultReasoningEffortMappings
 		_c.mutation.SetReasoningEffortMappings(v)
 	}
+	if _, ok := _c.mutation.OpenaiPassthroughStripFields(); !ok {
+		v := group.DefaultOpenaiPassthroughStripFields
+		_c.mutation.SetOpenaiPassthroughStripFields(v)
+	}
 	if _, ok := _c.mutation.DataSharingEnabled(); !ok {
 		v := group.DefaultDataSharingEnabled
 		_c.mutation.SetDataSharingEnabled(v)
@@ -1405,6 +1415,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.ReasoningEffortMappings(); !ok {
 		return &ValidationError{Name: "reasoning_effort_mappings", err: errors.New(`ent: missing required field "Group.reasoning_effort_mappings"`)}
+	}
+	if _, ok := _c.mutation.OpenaiPassthroughStripFields(); !ok {
+		return &ValidationError{Name: "openai_passthrough_strip_fields", err: errors.New(`ent: missing required field "Group.openai_passthrough_strip_fields"`)}
 	}
 	if _, ok := _c.mutation.DataSharingEnabled(); !ok {
 		return &ValidationError{Name: "data_sharing_enabled", err: errors.New(`ent: missing required field "Group.data_sharing_enabled"`)}
@@ -1686,6 +1699,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ReasoningEffortMappings(); ok {
 		_spec.SetField(group.FieldReasoningEffortMappings, field.TypeJSON, value)
 		_node.ReasoningEffortMappings = value
+	}
+	if value, ok := _c.mutation.OpenaiPassthroughStripFields(); ok {
+		_spec.SetField(group.FieldOpenaiPassthroughStripFields, field.TypeJSON, value)
+		_node.OpenaiPassthroughStripFields = value
 	}
 	if value, ok := _c.mutation.DataSharingEnabled(); ok {
 		_spec.SetField(group.FieldDataSharingEnabled, field.TypeBool, value)
@@ -2818,6 +2835,18 @@ func (u *GroupUpsert) SetReasoningEffortMappings(v []domain.ReasoningEffortMappi
 // UpdateReasoningEffortMappings sets the "reasoning_effort_mappings" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateReasoningEffortMappings() *GroupUpsert {
 	u.SetExcluded(group.FieldReasoningEffortMappings)
+	return u
+}
+
+// SetOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field.
+func (u *GroupUpsert) SetOpenaiPassthroughStripFields(v []string) *GroupUpsert {
+	u.Set(group.FieldOpenaiPassthroughStripFields, v)
+	return u
+}
+
+// UpdateOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateOpenaiPassthroughStripFields() *GroupUpsert {
+	u.SetExcluded(group.FieldOpenaiPassthroughStripFields)
 	return u
 }
 
@@ -4017,6 +4046,20 @@ func (u *GroupUpsertOne) SetReasoningEffortMappings(v []domain.ReasoningEffortMa
 func (u *GroupUpsertOne) UpdateReasoningEffortMappings() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateReasoningEffortMappings()
+	})
+}
+
+// SetOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field.
+func (u *GroupUpsertOne) SetOpenaiPassthroughStripFields(v []string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetOpenaiPassthroughStripFields(v)
+	})
+}
+
+// UpdateOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateOpenaiPassthroughStripFields() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateOpenaiPassthroughStripFields()
 	})
 }
 
@@ -5386,6 +5429,20 @@ func (u *GroupUpsertBulk) SetReasoningEffortMappings(v []domain.ReasoningEffortM
 func (u *GroupUpsertBulk) UpdateReasoningEffortMappings() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateReasoningEffortMappings()
+	})
+}
+
+// SetOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field.
+func (u *GroupUpsertBulk) SetOpenaiPassthroughStripFields(v []string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetOpenaiPassthroughStripFields(v)
+	})
+}
+
+// UpdateOpenaiPassthroughStripFields sets the "openai_passthrough_strip_fields" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateOpenaiPassthroughStripFields() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateOpenaiPassthroughStripFields()
 	})
 }
 

@@ -60,6 +60,8 @@ func cloneGroupForDuplicateTest(group *Group) *Group {
 	cloned.SupportedModelScopes = append([]string(nil), group.SupportedModelScopes...)
 	cloned.MessagesDispatchModelConfig = cloneGroupMessagesDispatchModelConfig(group.MessagesDispatchModelConfig)
 	cloned.ModelsListConfig.Models = append([]string(nil), group.ModelsListConfig.Models...)
+	cloned.ReasoningEffortMappings = append([]ReasoningEffortMapping(nil), group.ReasoningEffortMappings...)
+	cloned.OpenAIPassthroughStripFields = append([]string(nil), group.OpenAIPassthroughStripFields...)
 	cloned.AccountGroups = append([]AccountGroup(nil), group.AccountGroups...)
 	return &cloned
 }
@@ -170,18 +172,19 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 			HaikuMappedModel:   "gpt-5-mini",
 			ExactModelMappings: map[string]string{"claude-special": "gpt-special"},
 		},
-		ModelsListConfig:        GroupModelsListConfig{Enabled: true, Models: []string{"gpt-5.4", "gpt-5-mini"}},
-		AvailabilityProbeConfig: GroupAvailabilityProbeConfig{Enabled: true, ModelID: "gpt-5.4", Prompt: "ping", TimeoutSeconds: 15},
-		RPMLimit:                99,
-		MaxReasoningEffort:      "medium",
-		ReasoningEffortMappings: []ReasoningEffortMapping{{From: "max", To: "xhigh"}},
-		CreatedAt:               createdAt,
-		UpdatedAt:               createdAt,
-		AccountCount:            12,
-		ActiveAccountCount:      8,
-		RateLimitedAccountCount: 2,
-		DuplicateOperationID:    "old-operation-must-not-copy",
-		AccountGroups:           []AccountGroup{{AccountID: 13, GroupID: 41, Priority: 37}},
+		ModelsListConfig:             GroupModelsListConfig{Enabled: true, Models: []string{"gpt-5.4", "gpt-5-mini"}},
+		AvailabilityProbeConfig:      GroupAvailabilityProbeConfig{Enabled: true, ModelID: "gpt-5.4", Prompt: "ping", TimeoutSeconds: 15},
+		RPMLimit:                     99,
+		MaxReasoningEffort:           "medium",
+		ReasoningEffortMappings:      []ReasoningEffortMapping{{From: "max", To: "xhigh"}},
+		OpenAIPassthroughStripFields: []string{"max_output_tokens", "input[].status"},
+		CreatedAt:                    createdAt,
+		UpdatedAt:                    createdAt,
+		AccountCount:                 12,
+		ActiveAccountCount:           8,
+		RateLimitedAccountCount:      2,
+		DuplicateOperationID:         "old-operation-must-not-copy",
+		AccountGroups:                []AccountGroup{{AccountID: 13, GroupID: 41, Priority: 37}},
 	}
 	repo := newDuplicateGroupRepoStub(source)
 	repo.sourceBindings[source.ID] = []AccountGroup{
@@ -216,6 +219,7 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	require.Equal(t, source.RPMLimit, duplicate.RPMLimit)
 	require.Equal(t, source.MaxReasoningEffort, duplicate.MaxReasoningEffort)
 	require.Equal(t, source.ReasoningEffortMappings, duplicate.ReasoningEffortMappings)
+	require.Equal(t, source.OpenAIPassthroughStripFields, duplicate.OpenAIPassthroughStripFields)
 	require.EqualValues(t, 2, duplicate.AccountCount)
 	require.EqualValues(t, 2, duplicate.ActiveAccountCount)
 	require.NotEmpty(t, duplicate.DuplicateOperationID)
@@ -230,6 +234,7 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	duplicate.MessagesDispatchModelConfig.ExactModelMappings["claude-special"] = "changed"
 	duplicate.ModelsListConfig.Models[0] = "changed"
 	duplicate.ReasoningEffortMappings[0].To = "changed"
+	duplicate.OpenAIPassthroughStripFields[0] = "changed"
 	*duplicate.ImagePrice1K = 999
 	*duplicate.UnavailableFallbackGroupID = 999
 	require.Equal(t, int64(13), source.ModelRouting["gpt-*"][0])
@@ -237,8 +242,18 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	require.Equal(t, "gpt-special", source.MessagesDispatchModelConfig.ExactModelMappings["claude-special"])
 	require.Equal(t, "gpt-5.4", source.ModelsListConfig.Models[0])
 	require.Equal(t, "xhigh", source.ReasoningEffortMappings[0].To)
+	require.Equal(t, "max_output_tokens", source.OpenAIPassthroughStripFields[0])
 	require.Equal(t, 0.01, *source.ImagePrice1K)
 	require.Equal(t, int64(9), *source.UnavailableFallbackGroupID)
+}
+
+func TestCloneGroupForDuplicatePreservesPassthroughStripFieldsTriState(t *testing.T) {
+	explicitEmpty := cloneGroupForDuplicate(&Group{OpenAIPassthroughStripFields: []string{}}, "operation")
+	legacyNil := cloneGroupForDuplicate(&Group{}, "operation")
+
+	require.NotNil(t, explicitEmpty.OpenAIPassthroughStripFields)
+	require.Empty(t, explicitEmpty.OpenAIPassthroughStripFields)
+	require.Nil(t, legacyNil.OpenAIPassthroughStripFields)
 }
 
 func TestDuplicateGroupRecoversSameOperationAndScopesByAdmin(t *testing.T) {

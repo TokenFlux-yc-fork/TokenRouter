@@ -579,6 +579,21 @@ export default {
         oauthPassthrough: '自动透传（仅替换认证）',
         oauthPassthroughDesc:
           '开启后，该 OpenAI 账号将自动透传请求与响应，仅替换认证并保留计费/并发/审计及必要安全过滤；如遇兼容性问题可随时关闭回滚。',
+        passthroughStripFields: {
+          title: 'API Key 透传字段策略',
+          description: '对 OpenAI API Key 的 Responses 请求生效；账号配置存在时会整体覆盖分组策略。',
+          inherit: '继承分组策略',
+          inheritHint: '使用账号所属分组的字段列表；如果账号属于多个分组，按当前请求分组生效。',
+          fieldLabel: '字段路径',
+          placeholder: '例如 input[].status 或 reasoning.mode',
+          add: '添加字段',
+          remove: '移除字段 {field}',
+          empty: '当前没有配置首包剥离字段。',
+          syntaxHint: '支持点路径、input[] 通配数组和 input[0] 精确数组下标；model、input、stream 不允许剥离。',
+          invalidPath: '字段路径格式无效，或尝试剥离请求核心字段。',
+          duplicatePath: '该字段已添加。',
+          limitReached: '最多配置 {count} 个字段。'
+        },
         longContextBilling: 'API 长上下文计费',
         longContextBillingDesc: '默认关闭。仅当该账号的上游会按模型阈值收取 OpenAI API 长上下文费率时开启。',
         responsesWebsocketsV2: 'Responses WebSocket v2',

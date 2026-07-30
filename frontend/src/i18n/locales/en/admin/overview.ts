@@ -1168,6 +1168,21 @@ affiliates: {
         unsupportedMessage: 'This TokenRouter server cannot generate the required Live attestation. Live will not work even if enabled. Continue anyway?',
         enableAnyway: 'Enable anyway'
       },
+      openaiPassthroughStripFields: {
+        title: 'API key passthrough first-request fields',
+        description: 'Remove selected optional fields before the request reaches the upstream. max_output_tokens is removed by default; add fields explicitly rejected by an upstream.',
+        inherit: 'Inherit group policy',
+        inheritHint: 'When disabled, this account replaces the group policy. An empty list means no proactive stripping.',
+        fieldLabel: 'Field path',
+        placeholder: 'For example input[].status or reasoning.mode',
+        add: 'Add field',
+        remove: 'Remove field {field}',
+        empty: 'No first-request fields are configured.',
+        syntaxHint: 'Supports dot paths, input[] array wildcards, and input[0] indices. model, input, and stream cannot be stripped.',
+        invalidPath: 'The field path is invalid or targets a required request field.',
+        duplicatePath: 'This field has already been added.',
+        limitReached: 'At most {count} fields can be configured.'
+      },
       invalidRequestFallback: {
         title: 'Invalid Request Fallback Group',
         hint: 'Triggered only when upstream explicitly returns prompt too long. Leave empty to disable fallback.',
