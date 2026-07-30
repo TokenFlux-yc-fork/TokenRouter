@@ -55,6 +55,7 @@ func StartOpenAICompactSSEKeepalive(c *gin.Context, interval time.Duration) func
 	k := &openAICompactSSEKeepalive{
 		ginContext: c,
 		writer:     originalWriter,
+		started:    originalWriter.Written(),
 		stop:       make(chan struct{}),
 	}
 	c.Set(openAICompactSSEKeepaliveKey, k)

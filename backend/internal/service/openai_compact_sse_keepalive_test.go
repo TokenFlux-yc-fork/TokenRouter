@@ -312,6 +312,22 @@ func TestOpenAISemanticWrittenSize_ExcludesProtocolKeepaliveBytes(t *testing.T) 
 	require.NotEqual(t, before, OpenAISemanticWrittenSize(c))
 }
 
+func TestStartOpenAICompactSSEKeepaliveRecognizesPrecommittedStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	MarkOpenAICompactClientStream(c)
+	c.Writer.WriteHeader(http.StatusOK)
+	_, err := writeOpenAINativeRemoteCompactionPing(c, c.Writer)
+	require.NoError(t, err)
+
+	stop := StartOpenAICompactSSEKeepalive(c, time.Hour)
+	defer stop()
+
+	require.True(t, StopOpenAICompactSSEKeepaliveCommitted(c))
+}
+
 // fast policy block 在心跳未提交时保持 403 JSON 原语义。
 func TestWriteOpenAIFastPolicyBlockedResponse_BeforeKeepaliveCommit(t *testing.T) {
 	c, rec := newCompactBridgeTestContext(t, true)

@@ -337,7 +337,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 反向代理空闲超时掐断长压缩连接（#3887）。首拍延迟一个心跳间隔，快速
 	// 失败仍走 JSON+状态码链路；未标记客户端流式或间隔为 0 时是 no-op。
 	stopCompactKeepalive := service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
-	defer stopCompactKeepalive()
+	defer func() { stopCompactKeepalive() }()
 
 	// 校验请求体 JSON 合法性
 	if !gjson.ValidBytes(body) {
@@ -486,25 +486,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	requireCompact := isOpenAIRemoteCompactPath(c)
 	nativeRemoteCompactionV2 := service.IsOpenAINativeRemoteCompactionV2(c)
 	var compatibilityAttempt *service.OpenAICompatibilityDomainAttempt
-	if nativeRemoteCompactionV2 {
-		requestStageBudget := service.NewOpenAIStageBudget(h.cfg.Gateway.OpenAINativeCompaction.MaxRequestCumulativeBytes)
-		defer requestStageBudget.Close()
-		selectionCtx = service.WithOpenAINativeCompactionRequestStageBudget(selectionCtx, requestStageBudget)
-		c.Request = c.Request.WithContext(selectionCtx)
-
-		compatibilityAttempt, err = h.gatewayService.NewOpenAINativeCompatibilityDomainAttempt(
-			selectionCtx,
-			apiKey.GroupID,
-			previousResponseID,
-			sessionHash,
-		)
-		if err != nil {
-			reqLog.Warn("openai.compatibility_domain_continuation_rejected", zap.Error(err))
-			h.handleStreamingAwareError(c, http.StatusConflict, "compatibility_domain_error", "Native compaction continuation compatibility is unknown or mismatched", streamStarted)
-			return
-		}
-	}
-
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	firstOutputTimeoutSwitchCount := 0
@@ -521,6 +502,84 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 避免大 tools 请求重复扫描。
 	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
 	requiredCapability := openAIResponsesRequiredCapability(imageIntent, nativeRemoteCompactionV2, requestPlatform)
+	nativeLegacyFallbackAttempted := false
+	fallbackNativeToLegacy := func(reason string, cause error) bool {
+		if !nativeRemoteCompactionV2 || nativeLegacyFallbackAttempted || service.IsResponseCommitted(c) || service.OpenAISemanticWrittenSize(c) >= 0 {
+			return false
+		}
+		normalizedBody, _, normalizeErr := service.NormalizeOpenAICompactRequestBodyForTest(body)
+		if normalizeErr != nil {
+			reqLog.Warn("codex.remote_compact.fallback_legacy_failed",
+				zap.String("reason", reason),
+				zap.Error(normalizeErr),
+			)
+			return false
+		}
+
+		nativeFailedAccountCount := len(failedAccountIDs)
+		nativeSwitchCount := switchCount
+		nativeLegacyFallbackAttempted = true
+		if compactSeed := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()); compactSeed != "" {
+			c.Set(service.OpenAICompactSessionSeedKeyForTest(), compactSeed)
+		}
+		body = normalizedBody
+		c.Request.URL.Path = strings.TrimRight(c.Request.URL.Path, "/") + "/compact"
+		service.MarkOpenAICompactClientStream(c)
+		removeOpenAIRemoteCompactionV2Feature(c.Request.Header)
+
+		selectionCtx = service.WithOpenAINativeRemoteCompactionV2(selectionCtx, false)
+		c.Request = c.Request.WithContext(selectionCtx)
+		nativeRemoteCompactionV2 = false
+		requireCompact = true
+		compatibilityAttempt = nil
+		forwardBody, routingModel, forwardImageIntent = resolveOpenAIChannelMappedImageIntent(
+			"/v1/responses/compact", reqModel, body, channelMapping, requestPlatform, h.gatewayService.ReplaceModelInBody,
+		)
+		imageIntent = service.IsExplicitImageGenerationIntent("/v1/responses/compact", routingModel, forwardBody)
+		requiredCapability = openAIResponsesRequiredCapability(imageIntent, false, requestPlatform)
+
+		switchCount = 0
+		firstOutputTimeoutSwitchCount = 0
+		failedAccountIDs = make(map[int64]struct{})
+		compatibilityCandidateRejected = false
+		sameAccountRetryCount = make(map[int64]int)
+		lastFailoverErr = nil
+		oauth429FailoverState = service.OpenAIOAuth429FailoverState{}
+		stopCompactKeepalive()
+		stopCompactKeepalive = service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
+
+		fields := []zap.Field{
+			zap.String("reason", reason),
+			zap.Int("native_failed_account_count", nativeFailedAccountCount),
+			zap.Int("native_switch_count", nativeSwitchCount),
+		}
+		if cause != nil {
+			fields = append(fields, zap.Error(cause))
+		}
+		reqLog.Warn("codex.remote_compact.fallback_legacy", fields...)
+		return true
+	}
+
+	if nativeRemoteCompactionV2 {
+		requestStageBudget := service.NewOpenAIStageBudget(h.cfg.Gateway.OpenAINativeCompaction.MaxRequestCumulativeBytes)
+		defer requestStageBudget.Close()
+		selectionCtx = service.WithOpenAINativeCompactionRequestStageBudget(selectionCtx, requestStageBudget)
+		c.Request = c.Request.WithContext(selectionCtx)
+
+		compatibilityAttempt, err = h.gatewayService.NewOpenAINativeCompatibilityDomainAttempt(
+			selectionCtx,
+			apiKey.GroupID,
+			previousResponseID,
+			sessionHash,
+		)
+		if err != nil {
+			reqLog.Warn("openai.compatibility_domain_continuation_rejected", zap.Error(err))
+			if !fallbackNativeToLegacy("compatibility_domain_unavailable", err) {
+				h.handleStreamingAwareError(c, http.StatusConflict, "compatibility_domain_error", "Native compaction continuation compatibility is unknown or mismatched", streamStarted)
+				return
+			}
+		}
+	}
 
 	for {
 		// 流式 Forward 会主动分离上游请求，以便客户端断开后继续回收用量；每次账号尝试前
@@ -553,6 +612,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if fallbackNativeToLegacy("native_account_selection_failed", err) {
+				continue
+			}
 			if len(failedAccountIDs) == 0 {
 				if errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -579,6 +641,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		if selection == nil || selection.Account == nil {
+			if fallbackNativeToLegacy("native_account_selection_empty", nil) {
+				continue
+			}
 			if compatibilityCandidateRejected {
 				h.handleStreamingAwareError(c, http.StatusConflict, "compatibility_domain_error", "No native compaction account matches the required compatibility domain", streamStarted)
 			} else {
@@ -703,6 +768,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					}
 					h.recordOpenAICyberWarning(c, reqLog, apiKey, account, reqModel, failoverErr.StatusCode, failoverErr.ResponseBody, err.Error())
 					if !openAIForwardMayFailover(c, writerSizeBeforeForward, failoverErr) {
+						if fallbackNativeToLegacy("native_failover_not_replayable", err) {
+							continue
+						}
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}
@@ -713,10 +781,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(channelMapping.MappedModel), false, nil)
 					}
 					if !failoverErr.ShouldRetryNextAccount() {
+						if fallbackNativeToLegacy("native_failover_non_retryable", err) {
+							continue
+						}
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					if openAIFirstOutputFailoverExhausted(failoverErr, &firstOutputTimeoutSwitchCount) {
+						if fallbackNativeToLegacy("native_first_output_failover_exhausted", err) {
+							continue
+						}
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -744,11 +818,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
 					if switchCount >= maxAccountSwitches {
+						if fallbackNativeToLegacy("native_account_switches_exhausted", err) {
+							continue
+						}
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
 					switchCount++
 					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+						if fallbackNativeToLegacy("native_oauth_429_failover_stopped", err) {
+							continue
+						}
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -760,6 +840,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					}
 					failoverSwitchFields = appendOpenAIAccountProxyLogFields(failoverSwitchFields, account)
 					reqLog.Warn("openai.upstream_failover_switching", failoverSwitchFields...)
+					continue
+				}
+				if fallbackNativeToLegacy("native_forward_failed", err) {
 					continue
 				}
 				statusCode := 0
@@ -880,6 +963,35 @@ func hasOpenAIRemoteCompactionV2Feature(betaFeatureHeaders []string) bool {
 		}
 	}
 	return false
+}
+
+func removeOpenAIRemoteCompactionV2Feature(header http.Header) bool {
+	if header == nil {
+		return false
+	}
+	values := header.Values("x-codex-beta-features")
+	if len(values) == 0 {
+		return false
+	}
+	header.Del("x-codex-beta-features")
+	removed := false
+	for _, value := range values {
+		features := make([]string, 0, len(strings.Split(value, ",")))
+		for _, feature := range strings.Split(value, ",") {
+			feature = strings.TrimSpace(feature)
+			if feature == "remote_compaction_v2" {
+				removed = true
+				continue
+			}
+			if feature != "" {
+				features = append(features, feature)
+			}
+		}
+		if len(features) > 0 {
+			header.Add("x-codex-beta-features", strings.Join(features, ", "))
+		}
+	}
+	return removed
 }
 
 // normalizeOpenAIResponsesCompactRequest 保留 Codex remote compaction v2 原生的
