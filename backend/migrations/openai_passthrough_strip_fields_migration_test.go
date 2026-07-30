@@ -8,7 +8,7 @@ import (
 )
 
 func TestOpenAIPassthroughStripFieldsMigrationDefaultsMaxOutputTokens(t *testing.T) {
-	content, err := FS.ReadFile("227_group_openai_passthrough_strip_fields.sql")
+	content, err := FS.ReadFile("232_group_openai_passthrough_strip_fields.sql")
 	require.NoError(t, err)
 
 	sql := strings.ToLower(strings.Join(strings.Fields(string(content)), " "))
