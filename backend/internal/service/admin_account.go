@@ -311,6 +311,10 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err != nil {
 		return nil, fmt.Errorf("normalize duplicate account extra: %w", err)
 	}
+	accountExtra, err = normalizeOpenAIPassthroughStripFieldsExtra(input.Platform, accountExtra)
+	if err != nil {
+		return nil, fmt.Errorf("normalize duplicate account passthrough strip fields: %w", err)
+	}
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
@@ -519,6 +523,10 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	accountExtra, err = normalizeOpenAIPassthroughStripFieldsExtra(input.Platform, accountExtra)
+	if err != nil {
+		return nil, err
+	}
 	accountExtra, err = normalizeGrokMediaEligibilityExtra(input.Platform, accountExtra)
 	if err != nil {
 		return nil, err
@@ -611,6 +619,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
+		if err != nil {
+			return nil, err
+		}
+		normalizedExtra, err = normalizeOpenAIPassthroughStripFieldsExtra(account.Platform, normalizedExtra)
 		if err != nil {
 			return nil, err
 		}
@@ -871,13 +883,24 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageSessionExtraKey)
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
-	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
+	_, hasLongContextBillingUpdate := updates[openAILongContextBillingEnabledKey]
+	_, hasPassthroughStripFieldsUpdate := updates[openAIPassthroughStripFieldsExtraKey]
+	if hasLongContextBillingUpdate || hasPassthroughStripFieldsUpdate {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
 			return err
 		}
-		if err := ValidateOpenAILongContextBillingExtra(account.Platform, updates); err != nil {
-			return err
+		if hasLongContextBillingUpdate {
+			if err := ValidateOpenAILongContextBillingExtra(account.Platform, updates); err != nil {
+				return err
+			}
+		}
+		if hasPassthroughStripFieldsUpdate {
+			normalized, normalizeErr := normalizeOpenAIPassthroughStripFieldsExtra(account.Platform, updates)
+			if normalizeErr != nil {
+				return normalizeErr
+			}
+			updates = normalized
 		}
 	}
 	if len(updates) == 0 {
@@ -921,10 +944,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
 	_, hasLongContextBillingUpdate := input.Extra[openAILongContextBillingEnabledKey]
+	_, hasPassthroughStripFieldsUpdate := input.Extra[openAIPassthroughStripFieldsExtraKey]
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || input.ProbeEnabled != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || hasPassthroughStripFieldsUpdate || input.ProbeEnabled != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -956,6 +980,19 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if err := ValidateOpenAILongContextBillingExtra(account.Platform, input.Extra); err != nil {
 				return nil, err
 			}
+			break
+		}
+	}
+	if hasPassthroughStripFieldsUpdate {
+		for _, account := range cachedTargets {
+			if account == nil || account.Platform != PlatformOpenAI {
+				continue
+			}
+			normalized, normalizeErr := normalizeOpenAIPassthroughStripFieldsExtra(account.Platform, input.Extra)
+			if normalizeErr != nil {
+				return nil, normalizeErr
+			}
+			input.Extra = normalized
 			break
 		}
 	}

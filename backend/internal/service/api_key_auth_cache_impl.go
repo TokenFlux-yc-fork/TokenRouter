@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"slices"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 26 // v26：认证快照包含复合 Key 的有序分组映射
+const apiKeyAuthSnapshotVersion = 27 // v27：分组快照包含 OpenAI API-key 透传字段剥离策略
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -476,6 +477,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			RPMLimit:                        apiKey.Group.RPMLimit,
 			MaxReasoningEffort:              apiKey.Group.MaxReasoningEffort,
 			ReasoningEffortMappings:         apiKey.Group.ReasoningEffortMappings,
+			OpenAIPassthroughStripFields:    slices.Clone(apiKey.Group.OpenAIPassthroughStripFields),
 			PeakRateEnabled:                 apiKey.Group.PeakRateEnabled,
 			PeakStart:                       apiKey.Group.PeakStart,
 			PeakEnd:                         apiKey.Group.PeakEnd,
@@ -601,6 +603,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			RPMLimit:                        snapshot.Group.RPMLimit,
 			MaxReasoningEffort:              snapshot.Group.MaxReasoningEffort,
 			ReasoningEffortMappings:         snapshot.Group.ReasoningEffortMappings,
+			OpenAIPassthroughStripFields:    slices.Clone(snapshot.Group.OpenAIPassthroughStripFields),
 			PeakRateEnabled:                 snapshot.Group.PeakRateEnabled,
 			PeakStart:                       snapshot.Group.PeakStart,
 			PeakEnd:                         snapshot.Group.PeakEnd,
@@ -651,7 +654,8 @@ func authGroupSnapshotFromGroup(group *Group) *APIKeyAuthGroupSnapshot {
 		MessagesDispatchModelConfig: group.MessagesDispatchModelConfig, ModelsListConfig: group.ModelsListConfig,
 		RPMLimit: group.RPMLimit, MaxReasoningEffort: group.MaxReasoningEffort,
 		ReasoningEffortMappings: group.ReasoningEffortMappings, PeakRateEnabled: group.PeakRateEnabled,
-		PeakStart: group.PeakStart, PeakEnd: group.PeakEnd, PeakRateMultiplier: group.PeakRateMultiplier,
+		OpenAIPassthroughStripFields: slices.Clone(group.OpenAIPassthroughStripFields),
+		PeakStart:                    group.PeakStart, PeakEnd: group.PeakEnd, PeakRateMultiplier: group.PeakRateMultiplier,
 	}
 }
 
@@ -679,6 +683,7 @@ func groupFromAuthSnapshot(snapshot *APIKeyAuthGroupSnapshot) *Group {
 		MessagesDispatchModelConfig: snapshot.MessagesDispatchModelConfig, ModelsListConfig: snapshot.ModelsListConfig,
 		RPMLimit: snapshot.RPMLimit, MaxReasoningEffort: snapshot.MaxReasoningEffort,
 		ReasoningEffortMappings: snapshot.ReasoningEffortMappings, PeakRateEnabled: snapshot.PeakRateEnabled,
-		PeakStart: snapshot.PeakStart, PeakEnd: snapshot.PeakEnd, PeakRateMultiplier: snapshot.PeakRateMultiplier,
+		OpenAIPassthroughStripFields: slices.Clone(snapshot.OpenAIPassthroughStripFields),
+		PeakStart:                    snapshot.PeakStart, PeakEnd: snapshot.PeakEnd, PeakRateMultiplier: snapshot.PeakRateMultiplier,
 	}
 }

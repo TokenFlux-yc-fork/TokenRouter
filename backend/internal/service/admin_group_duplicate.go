@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -128,10 +129,11 @@ func cloneGroupForDuplicate(source *Group, operationID string) *Group {
 			Enabled: source.ModelsListConfig.Enabled,
 			Models:  append([]string(nil), source.ModelsListConfig.Models...),
 		},
-		AvailabilityProbeConfig: source.AvailabilityProbeConfig,
-		RPMLimit:                source.RPMLimit,
-		MaxReasoningEffort:      source.MaxReasoningEffort,
-		ReasoningEffortMappings: append([]ReasoningEffortMapping(nil), source.ReasoningEffortMappings...),
+		AvailabilityProbeConfig:      source.AvailabilityProbeConfig,
+		RPMLimit:                     source.RPMLimit,
+		MaxReasoningEffort:           source.MaxReasoningEffort,
+		ReasoningEffortMappings:      append([]ReasoningEffortMapping(nil), source.ReasoningEffortMappings...),
+		OpenAIPassthroughStripFields: slices.Clone(source.OpenAIPassthroughStripFields),
 	}
 }
 

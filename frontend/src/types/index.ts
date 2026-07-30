@@ -715,6 +715,9 @@ export interface AdminGroup extends Group {
   backup_pool_group_id: number | null
   backup_pool_refill_threshold_points: number
 
+  // OpenAI API-key Responses 透传首包字段剥离策略（仅管理员可见）
+  openai_passthrough_strip_fields?: string[]
+
   // 模型路由配置（仅管理员可见，内部信息）
   model_routing: Record<string, number[]> | null
   model_routing_enabled: boolean
@@ -891,6 +894,7 @@ export interface CreateGroupRequest {
   rpm_limit?: number
   max_reasoning_effort?: string
   reasoning_effort_mappings?: ReasoningEffortMapping[]
+  openai_passthrough_strip_fields?: string[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
   // 从指定分组复制账号
@@ -952,6 +956,7 @@ export interface UpdateGroupRequest {
   rpm_limit?: number
   max_reasoning_effort?: string
   reasoning_effort_mappings?: ReasoningEffortMapping[]
+  openai_passthrough_strip_fields?: string[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
   copy_accounts_from_group_ids?: number[]

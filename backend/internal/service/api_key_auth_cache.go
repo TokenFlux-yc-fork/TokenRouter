@@ -149,6 +149,8 @@ type APIKeyAuthGroupSnapshot struct {
 	MaxReasoningEffort string `json:"max_reasoning_effort,omitempty"`
 	// ReasoningEffortMappings 在应用上限前改写显式的推理强度值。
 	ReasoningEffortMappings []ReasoningEffortMapping `json:"reasoning_effort_mappings"`
+	// OpenAIPassthroughStripFields API-key Responses 透传首包字段策略。
+	OpenAIPassthroughStripFields []string `json:"openai_passthrough_strip_fields"`
 
 	// 高峰时段倍率：PeakRateEnabled 为 true 且请求时刻处于 [PeakStart, PeakEnd) 时，
 	// token 计费倍率额外乘以 PeakRateMultiplier（详见 Group.PeakMultiplierAt）。

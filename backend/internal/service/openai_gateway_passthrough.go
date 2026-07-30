@@ -181,6 +181,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	agentTaskRecoveryTried := false
+	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	var resp *http.Response
 	var attempt *openAIUpstreamAttemptCoordinator
 	for {
@@ -216,6 +217,15 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); recoveryErr != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
 			}
+			continue
+		}
+		retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody)
+		if retryErr != nil {
+			return nil, retryErr
+		}
+		if changed && rejectedFieldRetryState.Allow(retryBody) {
+			body = retryBody
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI 透传] 上游拒绝字段后降级重试: account=%d reason=%s", account.ID, reason)
 			continue
 		}
 

@@ -27,6 +27,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	startTime := time.Now()
 	// 固定渠道映射后的请求级 canonical body；账号 normalize/strip 不得改写跨 failover hint。
 	canonicalImageIntentBody := body
+	var apiKeyStripFields []string
+	if account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey {
+		apiKeyStripFields = resolveOpenAIPassthroughStripFields(account, apiKeyGroup(getAPIKeyFromContext(c)))
+		strippedBody, changed, stripErr := stripOpenAIPassthroughRequestFields(body, apiKeyStripFields)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip OpenAI API-key request fields: %w", stripErr)
+		}
+		if changed {
+			body = strippedBody
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI API-key] 首包剥离兼容字段: account=%d fields=%s", account.ID, strings.Join(apiKeyStripFields, ","))
+		}
+	}
 
 	tlsRouterMatch := s.matchTLSFingerprintRouter(c, account)
 	restrictionResult := s.detectCodexClientRestriction(c, account, tlsRouterMatch)
@@ -519,6 +531,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
 			}
 			requestView = newOpenAIRequestView(body)
+		}
+	}
+	if len(apiKeyStripFields) > 0 {
+		strippedBody, changed, stripErr := stripOpenAIPassthroughRequestFields(body, apiKeyStripFields)
+		if stripErr != nil {
+			return nil, fmt.Errorf("strip normalized OpenAI API-key request fields: %w", stripErr)
+		}
+		if changed {
+			body = strippedBody
+			requestView = newOpenAIRequestView(body)
+			reqBody = nil
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI API-key] 归一化后剥离兼容字段: account=%d fields=%s", account.ID, strings.Join(apiKeyStripFields, ","))
 		}
 	}
 	imageBillingModel := ""

@@ -1521,6 +1521,19 @@
         </div>
       </div>
 
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <OpenAIPassthroughStripFieldsEditor
+          id-prefix="edit-account-openai-passthrough-strip"
+          context="account"
+          allow-inherit
+          v-model="openaiPassthroughStripFields"
+          v-model:inherit="openaiPassthroughStripFieldsInherited"
+        />
+      </div>
+
       <!-- OpenAI Codex hosted image_generation 桥接策略 -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'apikey')"
@@ -2638,6 +2651,7 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import OpenAIPassthroughStripFieldsEditor from '@/components/admin/OpenAIPassthroughStripFieldsEditor.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import {
   ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY,
@@ -2894,6 +2908,8 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+const openaiPassthroughStripFieldsInherited = ref(true)
+const openaiPassthroughStripFields = ref<string[]>(['max_output_tokens'])
 const openAILongContextBillingEnabled = ref(false)
 // OpenAI 订阅档位（Plus/Pro/Free）手动覆盖值,存于 credentials.plan_type;'' 表示清空/自动识别
 const editPlanType = ref<string>('')
@@ -3373,6 +3389,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // 加载 OpenAI OAuth、SetupToken 和 API Key 账号的透传与计费设置。
   openaiPassthroughEnabled.value = false
+  openaiPassthroughStripFieldsInherited.value = true
+  openaiPassthroughStripFields.value = ['max_output_tokens']
   openAILongContextBillingEnabled.value = false
   editPlanType.value = ''
   openAICompactMode.value = 'auto'
@@ -3389,6 +3407,14 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
+    if (
+      newAccount.type === 'apikey' &&
+      Array.isArray(extra?.openai_passthrough_strip_fields) &&
+      extra.openai_passthrough_strip_fields.every((field) => typeof field === 'string')
+    ) {
+      openaiPassthroughStripFieldsInherited.value = false
+      openaiPassthroughStripFields.value = [...extra.openai_passthrough_strip_fields] as string[]
+    }
     const longContextBillingValue = extra?.openai_long_context_billing_enabled
     openAILongContextBillingEnabled.value = longContextBillingValue === true
     // plan_type 手动覆盖仅 OAuth 有实际调度语义(IsOpenAIChatGPTSubscription 要求 oauth),故只对 oauth 回填
@@ -4717,6 +4743,13 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_passthrough
         delete newExtra.openai_oauth_passthrough
+      }
+      if (props.account.type === 'apikey') {
+        if (openaiPassthroughStripFieldsInherited.value) {
+          delete newExtra.openai_passthrough_strip_fields
+        } else {
+          newExtra.openai_passthrough_strip_fields = [...openaiPassthroughStripFields.value]
+        }
       }
       if (isSparkShadow.value) {
         delete newExtra.openai_long_context_billing_enabled

@@ -2,6 +2,7 @@
 package dto
 
 import (
+	"slices"
 	"strconv"
 	"time"
 
@@ -226,18 +227,19 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 		BackupPoolRefillThresholdPoints: service.NormalizeBackupPoolRefillThresholdPoints(
 			g.BackupPoolRefillThresholdPoints,
 		),
-		ModelRouting:                g.ModelRouting,
-		ModelRoutingEnabled:         g.ModelRoutingEnabled,
-		MCPXMLInject:                g.MCPXMLInject,
-		DefaultMappedModel:          g.DefaultMappedModel,
-		MessagesDispatchModelConfig: g.MessagesDispatchModelConfig,
-		ModelsListConfig:            g.ModelsListConfig,
-		AvailabilityProbeConfig:     g.AvailabilityProbeConfig,
-		SupportedModelScopes:        g.SupportedModelScopes,
-		AccountCount:                g.AccountCount,
-		ActiveAccountCount:          g.ActiveAccountCount,
-		RateLimitedAccountCount:     g.RateLimitedAccountCount,
-		SortOrder:                   g.SortOrder,
+		ModelRouting:                 g.ModelRouting,
+		ModelRoutingEnabled:          g.ModelRoutingEnabled,
+		MCPXMLInject:                 g.MCPXMLInject,
+		DefaultMappedModel:           g.DefaultMappedModel,
+		MessagesDispatchModelConfig:  g.MessagesDispatchModelConfig,
+		ModelsListConfig:             g.ModelsListConfig,
+		AvailabilityProbeConfig:      g.AvailabilityProbeConfig,
+		OpenAIPassthroughStripFields: slices.Clone(g.OpenAIPassthroughStripFields),
+		SupportedModelScopes:         g.SupportedModelScopes,
+		AccountCount:                 g.AccountCount,
+		ActiveAccountCount:           g.ActiveAccountCount,
+		RateLimitedAccountCount:      g.RateLimitedAccountCount,
+		SortOrder:                    g.SortOrder,
 	}
 	if len(g.AccountGroups) > 0 {
 		out.AccountGroups = make([]AccountGroup, 0, len(g.AccountGroups))

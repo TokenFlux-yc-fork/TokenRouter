@@ -1166,6 +1166,21 @@ affiliates: {
         unsupportedMessage: '当前 TokenRouter 服务端无法生成 Live 所需的设备证明，即使开启也不能使用。是否仍然开启？',
         enableAnyway: '仍然开启'
       },
+      openaiPassthroughStripFields: {
+        title: 'API Key 透传首包剥离字段',
+        description: '请求发往上游前删除指定可选字段。默认剥离 max_output_tokens；可添加上游明确拒绝的字段路径。',
+        inherit: '继承分组策略',
+        inheritHint: '关闭后，账号列表整体覆盖所属分组策略；空列表表示不主动剥离字段。',
+        fieldLabel: '字段路径',
+        placeholder: '例如 input[].status 或 reasoning.mode',
+        add: '添加字段',
+        remove: '移除字段 {field}',
+        empty: '当前没有配置首包剥离字段。',
+        syntaxHint: '支持点路径、input[] 通配数组和 input[0] 精确数组下标；model、input、stream 不允许剥离。',
+        invalidPath: '字段路径格式无效，或尝试剥离请求核心字段。',
+        duplicatePath: '该字段已添加。',
+        limitReached: '最多配置 {count} 个字段。'
+      },
       invalidRequestFallback: {
         title: '无效请求兜底分组',
         hint: '仅当上游明确返回 prompt too long 时才会触发，留空表示不兜底',

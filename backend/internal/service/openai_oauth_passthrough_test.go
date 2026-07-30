@@ -2171,13 +2171,16 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEnd
 	}
 
 	account := &Account{
-		ID:             456,
-		Name:           "apikey-acc",
-		Platform:       PlatformOpenAI,
-		Type:           AccountTypeAPIKey,
-		Concurrency:    1,
-		Credentials:    map[string]any{"api_key": "sk-api-key", "base_url": "https://api.openai.com"},
-		Extra:          map[string]any{"openai_passthrough": true},
+		ID:          456,
+		Name:        "apikey-acc",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "sk-api-key", "base_url": "https://api.openai.com"},
+		Extra: map[string]any{
+			"openai_passthrough":                 true,
+			openAIPassthroughStripFieldsExtraKey: []any{},
+		},
 		Status:         StatusActive,
 		Schedulable:    true,
 		RateMultiplier: f64p(1),

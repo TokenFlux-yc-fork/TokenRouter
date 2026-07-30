@@ -111,6 +111,8 @@ type CreateGroupRequest struct {
 	MaxReasoningEffort string `json:"max_reasoning_effort"`
 	// OpenAI/Codex 推理强度精确映射。
 	ReasoningEffortMappings []service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
+	// OpenAI API-key Responses 透传首包字段剥离策略；nil 使用默认值。
+	OpenAIPassthroughStripFields *[]string `json:"openai_passthrough_strip_fields"`
 	// 从指定分组复制账号（创建后自动绑定）
 	CopyAccountsFromGroupIDs []int64 `json:"copy_accounts_from_group_ids"`
 }
@@ -185,6 +187,8 @@ type UpdateGroupRequest struct {
 	MaxReasoningEffort *string `json:"max_reasoning_effort"`
 	// nil 不修改，空数组清空，非空数组替换。
 	ReasoningEffortMappings *[]service.ReasoningEffortMapping `json:"reasoning_effort_mappings"`
+	// nil 不修改，空数组显式关闭首包剥离。
+	OpenAIPassthroughStripFields *[]string `json:"openai_passthrough_strip_fields"`
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
 	CopyAccountsFromGroupIDs []int64 `json:"copy_accounts_from_group_ids"`
 }
@@ -365,6 +369,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		RPMLimit:                        req.RPMLimit,
 		MaxReasoningEffort:              req.MaxReasoningEffort,
 		ReasoningEffortMappings:         req.ReasoningEffortMappings,
+		OpenAIPassthroughStripFields:    req.OpenAIPassthroughStripFields,
 		CopyAccountsFromGroupIDs:        req.CopyAccountsFromGroupIDs,
 	})
 	if err != nil {
@@ -494,6 +499,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		RPMLimit:                        req.RPMLimit,
 		MaxReasoningEffort:              req.MaxReasoningEffort,
 		ReasoningEffortMappings:         req.ReasoningEffortMappings,
+		OpenAIPassthroughStripFields:    req.OpenAIPassthroughStripFields,
 		CopyAccountsFromGroupIDs:        req.CopyAccountsFromGroupIDs,
 	})
 	if err != nil {
