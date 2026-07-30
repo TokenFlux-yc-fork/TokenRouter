@@ -122,7 +122,7 @@ upstream merge.
 | `group-backup-pool-refill` | Refill the Codex backup pool from configured group mappings. | `c4f42b433` | group schema/service, admin groups UI | `local` | Backup-pool service, mapper, repository and Groups UI tests. |
 | `openai-oauth-schedulability` | Keep externally managed OpenAI OAuth accounts schedulable without allowing runtime failures to corrupt their ownership state. | `055ec2369`, `55015979b` | account scheduler, token refresh, runtime block and rate-limit services | `local` | Scheduler, token refresh, runtime block and rate-limit tests. |
 | `scheduled-test-circuit-breaker` | Apply passive account circuit breaking only after bounded retries and keep request-level OpenAI blocked responses out of account health state. | `ef26ee67e`, `d30849206` | scheduled-test handler/repository/service, OpenAI upstream error classification, gateway failover | `local` | Scheduled-test, request-blocked classification, passive-breaker and failover tests. |
-| `scheduled-test-runner-isolation` | Keep the scheduled-test runner enabled by default while allowing temporary blue-green instances to disable it without mutating shared plan schedules. | `d01eb92f4` | config loading and scheduled-test runner startup | `local` | Config default/environment tests, environment reachability guard, runner startup test and blue-green release rehearsal. |
+| `scheduled-test-runner-isolation` | Keep the scheduled-test runner enabled by default, allow temporary blue-green instances to disable it without mutating shared schedules, and require enabled instances to hold a renewable fail-closed Redis lease with a handoff fencing token. | `d01eb92f4`, task `scheduled-runner-fenced-lease` | config loading, scheduled-test runner, leader-lease cache and startup wiring | `local` | Config switch tests; lease acquire/renew/expiry/release, stale-token, Redis-failure and two-instance handoff tests; blue-green release rehearsal. |
 | `openai-capacity-failure-semantics` | Keep capacity, retry and terminal stream failures inside the gateway until failover is exhausted. | `93980cc41`, `863a94711`, `317678716` | OpenAI gateway HTTP/SSE/WebSocket paths | `local` | Gateway failure, SSE, WebSocket, retry and terminal-status tests. |
 | `openai-http2-body-fallback` | Retry eligible HTTP/2 internal stream/body failures through the bounded upstream fallback path. | `87a2387ec` | `backend/internal/repository/http_upstream*` | `local` | HTTP upstream repository tests. |
 | `openai-native-compact-liveness` | Preserve native compact stream liveness, writer state and completion semantics, and keep native v2 on Responses-capable accounts. | `ac83503f1`, `a41329a2a` | compact bridge, native compact liveness, SSE writer, account capability routing | `local` | Native compact, Responses capability/fallback, scheduler, stream bridge, SSE writer and ops logger tests. |
@@ -136,6 +136,17 @@ upstream merge.
 | `grok-responses-transient-404` | Retry the exact xAI Responses `bad_response_status_code` 404 once on the same account, then fail over without entering another same-account pool retry; unrelated 404 responses keep their existing behavior. | `5f7439b85` | `grok_upstream_errors*`, `openai_gateway_grok*` | `local` | Exact classifier, API-key same-account recovery, retry exhaustion/failover and non-overmatch Grok tests. |
 | `openai-remote-compaction-v2-contract` | Require native Remote Compaction v2 to use an exact, current capability domain and to validate and stage the complete upstream attempt before committing exactly one valid result to the customer; final candidate qualification remains release-gated. | task `#102` (pending commit) | OpenAI HTTP/SSE/WebSocket gateway, capability/probe/attribution repositories, migrations `227`-`231` | `local` | Strict classifier and validator fixtures; bounded staging, disconnect and failover tests; capability, probe-fencing, migration, attribution, settlement and HTTP/WebSocket parity gates below. |
 | `frontend-build-heap` | Give the containerized frontend build enough heap for the fork UI. | `fe599ead3` | `deploy/Dockerfile` | `local` | Container image build. |
+
+## Scheduled Test Runner Lease
+
+Enabled scheduled-test runners compete for the Redis lease
+`leader:fenced:{scheduled-test-runner}:lease`. The lease has a 45-second TTL,
+renews every 10 seconds, and allocates a monotonically increasing token from
+`leader:fenced:{scheduled-test-runner}:token` on each acquisition. Renew and
+release compare both the process owner ID and fencing token. Lease acquisition,
+renewal, or a pre-side-effect fence check failing cancels in-flight work and
+prevents result, circuit-breaker, and schedule updates. A missing lease backend
+keeps the runner stopped rather than reverting to multi-instance execution.
 
 ## Remote Compaction v2 Contract
 
