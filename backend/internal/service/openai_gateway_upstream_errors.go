@@ -254,12 +254,39 @@ func isOpenAIClientInvalidRequestError(upstreamStatusCode int, upstreamMsg strin
 	return errType == "invalid_request_error" && errCode == OpenAIPropertyNameAboveMaxLengthCode
 }
 
-// isOpenAIOpaqueUpstreamBadRequest identifies a provider-side wrapper that
-// reports an upstream failure with HTTP 400 but exposes no client-fixable
-// detail. Another account can use a different upstream path, so this narrow
-// shape should retain the handler's account failover opportunity.
+// isOpenAIOpaqueUpstreamBadRequest 识别 provider 返回的窄型通用 400 包装。
+// 该形状没有可由调用方修正的细节；另一账号可能走不同上游路径，因此仅保留
+// 本请求内切换账号的机会，但不能据此判定当前账号不健康。
 func isOpenAIOpaqueUpstreamBadRequest(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	if upstreamStatusCode != http.StatusBadRequest || !gjson.ValidBytes(upstreamBody) {
+		return false
+	}
+	rootShapeAllowed := true
+	gjson.ParseBytes(upstreamBody).ForEach(func(key, value gjson.Result) bool {
+		if key.String() != "error" {
+			rootShapeAllowed = false
+			return false
+		}
+		return true
+	})
+	if !rootShapeAllowed {
+		return false
+	}
+	errorValue := gjson.GetBytes(upstreamBody, "error")
+	if !errorValue.IsObject() {
+		return false
+	}
+	allowedShape := true
+	errorValue.ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "message", "type", "code", "param":
+		default:
+			allowedShape = false
+			return false
+		}
+		return true
+	})
+	if !allowedShape {
 		return false
 	}
 	errType := strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.type").String())
@@ -273,11 +300,12 @@ func isOpenAIOpaqueUpstreamBadRequest(upstreamStatusCode int, upstreamMsg string
 	if strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.param").String()) != "" {
 		return false
 	}
-	message := strings.TrimSpace(upstreamMsg)
-	if message == "" {
-		message = strings.TrimSpace(extractUpstreamErrorMessage(upstreamBody))
+	bodyMessage := strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.message").String())
+	if !strings.EqualFold(bodyMessage, "Upstream request failed") {
+		return false
 	}
-	return strings.EqualFold(message, "Upstream request failed")
+	message := strings.TrimSpace(upstreamMsg)
+	return message == "" || strings.EqualFold(message, bodyMessage)
 }
 
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
@@ -387,6 +415,8 @@ const openAIRequestBodyTooLargeReason = GatewayFailureReason("openai_request_bod
 
 const openAIRequestBlockedReason = GatewayFailureReason("openai_request_blocked")
 
+const openAIOpaqueUpstreamBadRequestReason = GatewayFailureReason("openai_opaque_upstream_bad_request")
+
 func isOpenAIRequestBlockedError(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	if statusCode != http.StatusForbidden {
 		return false
@@ -431,6 +461,14 @@ func newOpenAIUpstreamFailoverError(
 		failoverErr.Scope = GatewayFailureScopeRequest
 		failoverErr.Reason = openAIRequestBlockedReason
 		failoverErr.NextAccountAction = NextAccountRetry
+		return failoverErr
+	}
+	if isOpenAIOpaqueUpstreamBadRequest(statusCode, upstreamMsg, responseBody) {
+		failoverErr.RetryableOnSameAccount = false
+		failoverErr.Scope = GatewayFailureScopeProvider
+		failoverErr.Reason = openAIOpaqueUpstreamBadRequestReason
+		failoverErr.NextAccountAction = NextAccountRetry
+		failoverErr.SuppressAccountScheduleFailure = true
 		return failoverErr
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, responseBody) {
@@ -484,6 +522,15 @@ func (s *OpenAIGatewayService) readUpstreamErrorBody(resp *http.Response) []byte
 }
 
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, responseBody []byte, canonicalModel ...string) bool {
+	if resp != nil && isOpenAIOpaqueUpstreamBadRequest(
+		resp.StatusCode,
+		sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(responseBody))),
+		responseBody,
+	) {
+		// opaque provider wrapper 只支持本请求内切换账号，不能据此更新限流、
+		// runtime block 或其他账号健康状态。
+		return false
+	}
 	if len(canonicalModel) > 0 {
 		return s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, responseBody, canonicalModel[0])
 	}

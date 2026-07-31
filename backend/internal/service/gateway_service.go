@@ -627,18 +627,19 @@ type GatewayFailureReason string
 // UpstreamFailoverError 表示可能触发账号切换的上游或凭据错误。
 // 新增元数据保持现有复合字面量源码兼容，并保留旧版切换账号行为。
 type UpstreamFailoverError struct {
-	StatusCode               int
-	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
-	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
-	Stage                    GatewayFailureStage
-	Scope                    GatewayFailureScope
-	Reason                   GatewayFailureReason
-	NextAccountAction        NextAccountAction
-	ClientStatusCode         int
-	ClientMessage            string
+	StatusCode                     int
+	ResponseBody                   []byte      // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders                http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling              bool        // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount         bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	SafeToFailoverAfterWrite       bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
+	Stage                          GatewayFailureStage
+	Scope                          GatewayFailureScope
+	Reason                         GatewayFailureReason
+	NextAccountAction              NextAccountAction
+	SuppressAccountScheduleFailure bool // 允许本请求切换账号，但没有证据表明当前账号不健康
+	ClientStatusCode               int
+	ClientMessage                  string
 }
 
 func (e *UpstreamFailoverError) Error() string {
@@ -659,7 +660,7 @@ func (e *UpstreamFailoverError) IsCredentialFailure() bool {
 // ShouldReportAccountScheduleFailure 防止把提供方级或请求级凭据失败误归因到当前账号。
 // 旧版错误和推理错误继续保持原有的调度健康上报行为。
 func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
-	if e == nil {
+	if e == nil || e.SuppressAccountScheduleFailure {
 		return false
 	}
 	if e.Scope == GatewayFailureScopeRequest {

@@ -288,7 +288,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				var failoverErr *service.UpstreamFailoverError
 				if errors.As(err, &failoverErr) {
 					h.recordOpenAICyberWarning(c, reqLog, apiKey, account, parsed.Model, failoverErr.StatusCode, failoverErr.ResponseBody, err.Error())
-					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(routingModel), false, nil)
+					if failoverErr.ShouldReportAccountScheduleFailure() {
+						h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(routingModel), false, nil)
+					}
 					if service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
 						reqLog.Warn("openai.images.upstream_failover_skipped_after_flush",
 							zap.Int64("account_id", account.ID),
@@ -322,7 +324,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 							continue
 						}
 					}
-					tempUnscheduleRetryableFailoverExhausted(requestCtx, h.gatewayService, account.ID, failoverErr)
+					if failoverErr.ShouldReportAccountScheduleFailure() {
+						tempUnscheduleRetryableFailoverExhausted(requestCtx, h.gatewayService, account.ID, failoverErr)
+					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr

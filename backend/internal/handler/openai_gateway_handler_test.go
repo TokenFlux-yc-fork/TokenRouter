@@ -2502,6 +2502,100 @@ func TestOpenAIResponses_CanceledContextDoesNotSwitchAccount(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponses_OpaqueBadRequestSwitchesAccountWithoutHealthPenalty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := newOpenAIHTTPFailoverTestConfig()
+	groupID := int64(4207)
+	repo := &openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{
+		{
+			ID: 9916, Name: "opaque-first", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+			Concurrency: 1, Priority: 1, Credentials: map[string]any{"api_key": "sk-first"},
+		},
+		{
+			ID: 9917, Name: "opaque-second", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+			Concurrency: 1, Priority: 2, Credentials: map[string]any{"api_key": "sk-second"},
+		},
+	}}
+	upstream := &openAIHandlerHTTPUpstreamStub{do: func(_ *http.Request, accountID int64) (*http.Response, error) {
+		if accountID == 9916 {
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-opaque-first"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`)),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid-opaque-success"}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`data: {"type":"response.created","response":{"id":"resp_opaque_success","status":"in_progress","output":[]}}`,
+				"",
+				`data: {"type":"response.output_text.delta","delta":"ok"}`,
+				"",
+				`data: {"type":"response.completed","response":{"id":"resp_opaque_success","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+				"",
+			}, "\n"))),
+		}, nil
+	}}
+	h := newOpenAIHTTPFailoverTestHandler(cfg, repo, upstream)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.1","stream":true,"input":"hello"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	bindOpenAIHTTPFailoverTestAuth(c, groupID)
+
+	h.Responses(c)
+
+	require.Equal(t, []int64{9916, 9917}, upstream.AccountIDs())
+	require.Contains(t, rec.Body.String(), "ok")
+	require.NotContains(t, rec.Body.String(), "Upstream request failed")
+	require.Empty(t, repo.rateLimitedIDs)
+}
+
+func TestOpenAIResponses_OpaqueBadRequestExhaustsAccountsWithoutSameAccountRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := newOpenAIHTTPFailoverTestConfig()
+	groupID := int64(4208)
+	repo := &openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{
+		{
+			ID: 9918, Name: "opaque-exhausted-first", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+			Concurrency: 1, Priority: 1,
+			Credentials: map[string]any{"api_key": "sk-first", "pool_mode": true, "pool_mode_retry_count": 3},
+		},
+		{
+			ID: 9919, Name: "opaque-exhausted-second", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
+			Concurrency: 1, Priority: 2,
+			Credentials: map[string]any{"api_key": "sk-second", "pool_mode": true, "pool_mode_retry_count": 3},
+		},
+	}}
+	upstream := &openAIHandlerHTTPUpstreamStub{do: func(_ *http.Request, accountID int64) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{fmt.Sprintf("rid-opaque-%d", accountID)}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`)),
+		}, nil
+	}}
+	h := newOpenAIHTTPFailoverTestHandler(cfg, repo, upstream)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.1","stream":false,"input":"hello"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	bindOpenAIHTTPFailoverTestAuth(c, groupID)
+
+	h.Responses(c)
+
+	require.Equal(t, []int64{9918, 9919}, upstream.AccountIDs())
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Equal(t, "upstream_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+	require.Equal(t, "Upstream request failed", gjson.GetBytes(rec.Body.Bytes(), "error.message").String())
+	require.NotContains(t, rec.Body.String(), "rid-opaque")
+	require.Empty(t, repo.rateLimitedIDs)
+}
+
 func TestOpenAIResponses_PoolRetriesStructuralCapacityThenSwitchesAccount(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIHTTPFailoverTestConfig()
