@@ -308,6 +308,158 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonFailover400UsesSharedErrorHan
 	require.Equal(t, "invalid roles", events[0].Message)
 }
 
+// provider 返回的 opaque 400 没有暴露可由调用方修正的细节。保持下游未提交，
+// 允许 handler 尝试另一账号，但不要据此惩罚当前账号的调度健康。
+func TestForwardAsAnthropic_ResponsesOpaqueUpstream400TriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","max_tokens":8,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	const upstreamBody = `{"error":{"message":"Upstream request failed","type":"upstream_error"}}`
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"rid_msg_opaque_400"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+	account := rawChatCompletionsTestAccount()
+	account.Extra = map[string]any{
+		openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+		openai_compat.ExtraKeyResponsesSupported: true,
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.JSONEq(t, upstreamBody, string(failoverErr.ResponseBody))
+	require.Equal(t, "rid_msg_opaque_400", failoverErr.ResponseHeaders.Get("x-request-id"))
+	require.Equal(t, GatewayFailureScopeProvider, failoverErr.Scope)
+	require.Equal(t, openAIOpaqueUpstreamBadRequestReason, failoverErr.Reason)
+	require.Equal(t, NextAccountRetry, failoverErr.NextAccountAction)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, failoverErr.ShouldReportAccountScheduleFailure())
+	require.False(t, c.Writer.Written(), "failover must happen before downstream output is committed")
+
+	eventsVal, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, castOK := eventsVal.([]*OpsUpstreamErrorEvent)
+	require.True(t, castOK)
+	require.Len(t, events, 1)
+	require.Equal(t, "failover", events[0].Kind)
+}
+
+func TestIsOpenAIOpaqueUpstreamBadRequestRequiresNoClientDetail(t *testing.T) {
+	const message = "Upstream request failed"
+	require.True(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusBadRequest,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`),
+	))
+	require.False(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusBadRequest,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"invalid_request_error"}}`),
+	))
+	require.False(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusBadRequest,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"upstream_error","code":"invalid_parameter"}}`),
+	))
+	require.False(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusBadRequest,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"upstream_error","param":"input"}}`),
+	))
+	for _, body := range []string{
+		`{"error":{"message":"Upstream request failed","type":"upstream_error","details":{"reason":"schema"}}}`,
+		`{"error":{"message":"Upstream request failed","type":"upstream_error","reason":"invalid_input"}}`,
+		`{"error":{"message":"different","type":"upstream_error"}}`,
+		`{"error":{"message":"Upstream request failed","type":"upstream_error"},"details":{"reason":"schema"}}`,
+	} {
+		require.False(t, isOpenAIOpaqueUpstreamBadRequest(http.StatusBadRequest, message, []byte(body)), body)
+	}
+	require.False(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusInternalServerError,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`),
+	))
+}
+
+func TestForwardAsAnthropic_ResponsesStreamReadErrorBeforeOutputFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","max_tokens":8,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_pre_read_error"}},
+		Body:       &errTailReader{err: errors.New("simulated upstream read failure")},
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, rawChatCompletionsTestAccount(), body, "", "")
+
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.NotNil(t, result)
+	require.Empty(t, rec.Body.String())
+	require.False(t, c.Writer.Written())
+}
+
+func TestForwardAsAnthropic_ResponsesStreamReadErrorAfterOutputWritesSingleError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","max_tokens":8,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	partial := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_read_error","model":"gpt-5.4","status":"in_progress","output":[]}}`,
+		"",
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		"",
+		"",
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_post_read_error"}},
+		Body:       &errTailReader{data: []byte(partial), err: errors.New("simulated upstream read failure")},
+	}}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, rawChatCompletionsTestAccount(), body, "", "")
+
+	require.Error(t, err)
+	require.True(t, IsOpenAIForwardErrorCommunicated(err))
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.NotNil(t, result)
+	out := rec.Body.String()
+	require.Contains(t, out, `"text":"partial"`)
+	require.Equal(t, 1, strings.Count(out, "event: error"))
+	require.NotContains(t, out, "event: message_stop")
+	streamErr, ok := GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, "stream_read_error", streamErr.Code)
+	require.True(t, streamErr.CountTowardsSLA)
+}
+
 // 上游读取在流中断开时必须返回错误，且不得合成 message_stop 掩盖截断。
 func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *testing.T) {
 	gin.SetMode(gin.TestMode)

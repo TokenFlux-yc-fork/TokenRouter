@@ -1034,14 +1034,10 @@ func TestStreamingFailed(t *testing.T) {
 		},
 	}, state)
 
-	// Should close text block + message_delta + message_stop
-	require.Len(t, events, 3)
-	assert.Equal(t, "content_block_stop", events[0].Type)
-	assert.Equal(t, "message_delta", events[1].Type)
-	assert.Equal(t, "end_turn", events[1].Delta.StopReason)
-	assert.Equal(t, 50, events[1].Usage.InputTokens)
-	assert.Equal(t, 10, events[1].Usage.OutputTokens)
-	assert.Equal(t, "message_stop", events[2].Type)
+	// Pure protocol conversion must not turn a failed terminal into a successful
+	// Anthropic message_stop. The transport layer owns error/failover delivery.
+	require.Empty(t, events)
+	require.False(t, state.MessageStopSent)
 }
 
 func TestStreamingFailedNoOutput(t *testing.T) {
@@ -1063,11 +1059,10 @@ func TestStreamingFailedNoOutput(t *testing.T) {
 		},
 	}, state)
 
-	// Should emit message_delta + message_stop (no block to close)
-	require.Len(t, events, 2)
-	assert.Equal(t, "message_delta", events[0].Type)
-	assert.Equal(t, "end_turn", events[0].Delta.StopReason)
-	assert.Equal(t, "message_stop", events[1].Type)
+	// A failed response with no output is still unsuccessful and must not be
+	// finalized as end_turn/message_stop by the conversion layer.
+	require.Empty(t, events)
+	require.False(t, state.MessageStopSent)
 }
 
 func TestResponsesToAnthropic_Failed(t *testing.T) {

@@ -3082,6 +3082,9 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 		service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
 		return false
 	}
+	if service.IsOpenAIForwardErrorCommunicated(err) {
+		return true
+	}
 	if service.GetOpsCyberPolicy(c) != nil {
 		return true
 	}

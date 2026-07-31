@@ -412,12 +412,19 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai chat_completions buffered", requestID)
 	if err != nil {
-		return nil, err
+		if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+			return nil, c.Request.Context().Err()
+		}
+		var terminalErr *openAICompatBufferedTerminalError
+		if errors.As(err, &terminalErr) && terminalErr.EventType == "response.incomplete" && strings.Contains(terminalErr.Message, "content filtering") {
+			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", terminalErr.Message)
+			return nil, terminalErr
+		}
+		return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, nil, "OpenAI chat completions buffered stream read failed")
 	}
 
 	if finalResponse == nil {
-		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
-		return nil, fmt.Errorf("upstream stream ended without terminal event")
+		return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, nil, "OpenAI chat completions buffered stream ended without a terminal response event")
 	}
 	if strings.TrimSpace(finalResponse.Status) == "failed" {
 		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
@@ -653,6 +660,41 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				c.Writer.Flush()
 			}
 			streamNonFailoverErr = fmt.Errorf("upstream response failed: %s", defaultMsg)
+			return true
+		}
+
+		if terminalErr := openAICompatUnsuccessfulTerminal(&event, payload); terminalErr != nil {
+			message := sanitizeUpstreamErrorMessage(terminalErr.Error())
+			if message == "" {
+				message = "OpenAI response ended unsuccessfully"
+			}
+			contentFiltered := strings.TrimSpace(event.Type) == "response.incomplete" && event.Response != nil &&
+				event.Response.IncompleteDetails != nil &&
+				strings.TrimSpace(event.Response.IncompleteDetails.Reason) == "content_filter"
+			if !contentFiltered && !clientDisconnected && !clientOutputStarted {
+				streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, []byte(payload), message)
+				return true
+			}
+
+			errStatus, errType, kind := http.StatusBadGateway, "upstream_error", "stream_unsuccessful_terminal"
+			if contentFiltered {
+				errStatus, errType, kind = http.StatusBadRequest, "invalid_request_error", "content_filter"
+			}
+			s.recordOpenAIMessagesStreamUpstreamError(c, account, requestID, kind, message)
+			MarkOpsStreamFailure(c, errType, kind, message, errStatus)
+			errorPayload, _ := json.Marshal(gin.H{"error": gin.H{"type": errType, "message": message}})
+			if !clientDisconnected {
+				if !c.Writer.Written() {
+					writeChatCompletionsError(c, errStatus, errType, message)
+					clientOutputStarted = true
+				} else if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", errorPayload); err != nil {
+					clientDisconnected = true
+				}
+				if !clientDisconnected {
+					c.Writer.Flush()
+				}
+			}
+			streamNonFailoverErr = fmt.Errorf("upstream response failed: %s", message)
 			return true
 		}
 

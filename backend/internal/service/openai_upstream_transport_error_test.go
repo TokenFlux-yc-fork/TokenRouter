@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,6 +245,87 @@ func TestOpenAIGatewayService_ForwardImagesOAuthTransportErrorFailsOver(t *testi
 
 	require.Nil(t, result)
 	requireOpenAITransportForwardFailover(t, err, rec)
+}
+
+func requireOpenAIOpaqueBadRequestFailover(t *testing.T, err error, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.Equal(t, GatewayFailureScopeProvider, failoverErr.Scope)
+	require.Equal(t, openAIOpaqueUpstreamBadRequestReason, failoverErr.Reason)
+	require.Equal(t, NextAccountRetry, failoverErr.NextAccountAction)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, failoverErr.ShouldReportAccountScheduleFailure())
+	require.Empty(t, rec.Body.String(), "opaque 400 must remain buffered for next-account failover")
+}
+
+func opaqueBadRequestResponse() *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+			"X-Request-Id": []string{"req_opaque_test"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`)),
+	}
+}
+
+func TestOpenAIGatewayService_ForwardEmbeddingsOpaqueBadRequestIsNeutralFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"text-embedding-3-small","input":"hello"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/embeddings", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: opaqueBadRequestResponse()}
+	result, err := newOpenAITransportForwardTestService(upstream).ForwardEmbeddings(
+		context.Background(), c, newOpenAITransportForwardTestAccount(nil), body, "text-embedding-3-small",
+	)
+
+	require.Nil(t, result)
+	requireOpenAIOpaqueBadRequestFailover(t, err, rec)
+}
+
+func TestOpenAIGatewayService_ForwardImagesAPIKeyOpaqueBadRequestIsNeutralFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-image-1","prompt":"draw a cat"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	parsed := &OpenAIImagesRequest{Endpoint: openAIImagesGenerationsEndpoint, Model: "gpt-image-1", Prompt: "draw a cat", N: 1}
+
+	upstream := &httpUpstreamRecorder{resp: opaqueBadRequestResponse()}
+	result, err := newOpenAITransportForwardTestService(upstream).ForwardImages(
+		context.Background(), c, newOpenAITransportForwardTestAccount(nil), body, parsed, "",
+	)
+
+	require.Nil(t, result)
+	requireOpenAIOpaqueBadRequestFailover(t, err, rec)
+}
+
+func TestOpenAIGatewayService_ForwardImagesOAuthOpaqueBadRequestIsNeutralFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	account := &Account{
+		ID: 92, Name: "opaque-test-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+	}
+	parsed := &OpenAIImagesRequest{Endpoint: openAIImagesGenerationsEndpoint, Model: "gpt-image-2", Prompt: "draw a cat", N: 1}
+
+	upstream := &httpUpstreamRecorder{resp: opaqueBadRequestResponse()}
+	result, err := newOpenAITransportForwardTestService(upstream).ForwardImages(
+		context.Background(), c, account, body, parsed, "",
+	)
+
+	require.Nil(t, result)
+	requireOpenAIOpaqueBadRequestFailover(t, err, rec)
 }
 
 // TestHandleOpenAIUpstreamTransportError_RecordsOllamaActivityOnly 验证传输错误只记录 Ollama Cloud 账号活动。

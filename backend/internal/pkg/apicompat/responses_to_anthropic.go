@@ -241,8 +241,17 @@ func ResponsesEventToAnthropicEvents(
 		return nil
 	// response.done 是 Realtime/WS 与项目透传路径使用的终止别名；
 	// 普通 Responses HTTP SSE 的公开终止事件仍以 response.completed 为主。
-	case "response.completed", "response.done", "response.incomplete", "response.failed":
+	case "response.completed", "response.done":
 		return resToAnthHandleCompleted(evt, state)
+	case "response.incomplete":
+		// 只有 token 上限导致的 incomplete 能安全映射为 Anthropic max_tokens。
+		// 其他 incomplete 以及 failed/cancelled 必须由 transport 层按输出边界处理，
+		// 不能在纯转换层合成成功的 message_stop。
+		if evt.Response != nil && evt.Response.IncompleteDetails != nil &&
+			strings.TrimSpace(evt.Response.IncompleteDetails.Reason) == "max_output_tokens" {
+			return resToAnthHandleCompleted(evt, state)
+		}
+		return nil
 	default:
 		return nil
 	}
