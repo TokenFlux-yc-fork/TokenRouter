@@ -113,6 +113,23 @@ upstream merge.
   combined tree; the complete baseline gates below remain required before the
   merge is finalized.
 
+## Upstream Review: v0.1.242
+
+- Upstream target: `fa7ed9c5fabef508f3c8cae9e4d1a413ddba34b7` (the
+  post-tag `VERSION=0.1.242` sync commit for `v0.1.242`).
+- Reviewed range: `23ca2fff357e35b9fe2e10b129160f92a0030e1c..fa7ed9c5fabef508f3c8cae9e4d1a413ddba34b7`.
+- No active customization is fully upstreamed in this range; all rows remain
+  `local`.
+- Upstream unified pool-mode error-policy decisions and mapped-model media
+  handling are combined with the fork's request-scoped Grok classifications,
+  opaque-provider neutral failover, canonical stream-terminal handling, and
+  pre-semantic versus delivery-committed replay boundary.
+- OpenAI HTTP, SSE, WebSocket, and HTTP-bridge paths retain response headers in
+  typed failover errors and preserve continuation/native-compaction staging
+  while using the upstream `UpstreamErrorDecision` policy contract.
+- Focused Grok, pool-policy, OpenAI terminal, and WebSocket tests plus the
+  complete baseline gates remain required before this merge is finalized.
+
 ## Active Customizations
 
 | ID | Behavior | Source commits | Main paths | Status | Verification |

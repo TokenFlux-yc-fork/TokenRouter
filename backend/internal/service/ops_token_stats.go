@@ -6,7 +6,7 @@ import (
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/errors"
 )
 
-func (s *OpsService) GetOpenAITokenStats(ctx context.Context, filter *OpsOpenAITokenStatsFilter) (*OpsOpenAITokenStatsResponse, error) {
+func (s *OpsService) GetTokenStats(ctx context.Context, filter *OpsTokenStatsFilter) (*OpsTokenStatsResponse, error) {
 	if err := s.RequireMonitoringEnabled(ctx); err != nil {
 		return nil, err
 	}
@@ -27,7 +27,7 @@ func (s *OpsService) GetOpenAITokenStats(ctx context.Context, filter *OpsOpenAIT
 		return nil, infraerrors.BadRequest("OPS_GROUP_ID_INVALID", "group_id must be > 0")
 	}
 
-	// top_n cannot be mixed with page/page_size params.
+	// top_n 与 page/page_size 互斥，避免两种截断语义同时生效。
 	if filter.TopN > 0 && (filter.Page > 0 || filter.PageSize > 0) {
 		return nil, infraerrors.BadRequest("OPS_PAGINATION_CONFLICT", "top_n cannot be used with page/page_size")
 	}
@@ -51,5 +51,5 @@ func (s *OpsService) GetOpenAITokenStats(ctx context.Context, filter *OpsOpenAIT
 		}
 	}
 
-	return s.opsRepo.GetOpenAITokenStats(ctx, filter)
+	return s.opsRepo.GetTokenStats(ctx, filter)
 }

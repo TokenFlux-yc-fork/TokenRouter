@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
@@ -13,6 +13,7 @@ function getTooltipElement(): HTMLDivElement {
 
 describe('HelpTooltip', () => {
   afterEach(() => {
+    vi.restoreAllMocks()
     document.body.innerHTML = ''
   })
 
@@ -74,6 +75,58 @@ describe('HelpTooltip', () => {
     document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await nextTick()
     expect(tooltip.style.display).toBe('none')
+
+    wrapper.unmount()
+  })
+
+  it('uses viewport coordinates and follows the trigger after scrolling', async () => {
+    vi.spyOn(window, 'scrollX', 'get').mockReturnValue(240)
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(600)
+
+    const wrapper = mount(HelpTooltip, {
+      attachTo: document.body,
+      props: {
+        content: 'scroll details',
+      },
+    })
+
+    const trigger = wrapper.get('.group')
+    const getBoundingClientRect = vi.fn(() => ({
+      top: 180,
+      left: 120,
+      width: 60,
+      height: 20,
+      right: 180,
+      bottom: 200,
+      x: 120,
+      y: 180,
+      toJSON: () => ({}),
+    }))
+    trigger.element.getBoundingClientRect = getBoundingClientRect
+
+    await trigger.trigger('mouseenter')
+    await nextTick()
+
+    const tooltip = getTooltipElement()
+    expect(tooltip.style.top).toBe('calc(172px)')
+    expect(tooltip.style.left).toBe('150px')
+
+    getBoundingClientRect.mockReturnValue({
+      top: 80,
+      left: 40,
+      width: 60,
+      height: 20,
+      right: 100,
+      bottom: 100,
+      x: 40,
+      y: 80,
+      toJSON: () => ({}),
+    })
+    window.dispatchEvent(new Event('scroll'))
+    await nextTick()
+
+    expect(tooltip.style.top).toBe('calc(72px)')
+    expect(tooltip.style.left).toBe('70px')
 
     wrapper.unmount()
   })

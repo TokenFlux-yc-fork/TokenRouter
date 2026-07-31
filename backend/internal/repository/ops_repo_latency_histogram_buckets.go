@@ -5,60 +5,28 @@ import (
 	"strings"
 )
 
-type latencyHistogramBucket struct {
-	upperMs int
-	label   string
-}
-
-var latencyHistogramBuckets = []latencyHistogramBucket{
-	{upperMs: 100, label: "0-100ms"},
-	{upperMs: 200, label: "100-200ms"},
-	{upperMs: 500, label: "200-500ms"},
-	{upperMs: 1000, label: "500-1000ms"},
-	{upperMs: 2000, label: "1000-2000ms"},
-	{upperMs: 0, label: "2000ms+"}, // default bucket
-}
-
-var latencyHistogramOrderedRanges = func() []string {
-	out := make([]string, 0, len(latencyHistogramBuckets))
-	for _, b := range latencyHistogramBuckets {
-		out = append(out, b.label)
-	}
-	return out
-}()
-
-func latencyHistogramRangeCaseExpr(column string) string {
+// latencyHistogramBucketIndexCaseExpr 使用参数占位符生成桶索引，避免将用户输入拼入 SQL。
+func latencyHistogramBucketIndexCaseExpr(column string, firstPlaceholder, boundaryCount int) string {
 	var sb strings.Builder
 	_, _ = sb.WriteString("CASE\n")
 
-	for _, b := range latencyHistogramBuckets {
-		if b.upperMs <= 0 {
-			continue
-		}
-		fmt.Fprintf(&sb, "\tWHEN %s < %d THEN '%s'\n", column, b.upperMs, b.label)
+	for index := 0; index < boundaryCount; index++ {
+		fmt.Fprintf(&sb, "\tWHEN %s < $%d THEN %d\n", column, firstPlaceholder+index, index)
 	}
 
-	// Default bucket.
-	last := latencyHistogramBuckets[len(latencyHistogramBuckets)-1]
-	fmt.Fprintf(&sb, "\tELSE '%s'\n", last.label)
+	fmt.Fprintf(&sb, "\tELSE %d\n", boundaryCount)
 	_, _ = sb.WriteString("END")
 	return sb.String()
 }
 
-func latencyHistogramRangeOrderCaseExpr(column string) string {
-	var sb strings.Builder
-	_, _ = sb.WriteString("CASE\n")
-
-	order := 1
-	for _, b := range latencyHistogramBuckets {
-		if b.upperMs <= 0 {
-			continue
-		}
-		fmt.Fprintf(&sb, "\tWHEN %s < %d THEN %d\n", column, b.upperMs, order)
-		order++
+// latencyHistogramBucketLabels 按边界生成六个稳定有序的展示标签。
+func latencyHistogramBucketLabels(boundaries []int64) []string {
+	labels := make([]string, 0, len(boundaries)+1)
+	lower := int64(0)
+	for _, upper := range boundaries {
+		labels = append(labels, fmt.Sprintf("%d-%dms", lower, upper))
+		lower = upper
 	}
-
-	fmt.Fprintf(&sb, "\tELSE %d\n", order)
-	_, _ = sb.WriteString("END")
-	return sb.String()
+	labels = append(labels, fmt.Sprintf("%dms+", lower))
+	return labels
 }

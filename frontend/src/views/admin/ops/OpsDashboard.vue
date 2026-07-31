@@ -27,6 +27,7 @@
         :fullscreen="isFullscreen"
         :custom-start-time="customStartTime"
         :custom-end-time="customEndTime"
+        :groups="groups"
         @update:time-range="onTimeRangeChange"
         @update:platform="onPlatformChange"
         @update:group="onGroupChange"
@@ -43,7 +44,7 @@
 
       <!-- Row: Concurrency + Throughput -->
       <div v-if="opsEnabled && !(loading && !hasLoadedOnce)" class="grid grid-cols-1 gap-6 lg:grid-cols-4">
-        <div class="lg:col-span-1 min-h-[360px]">
+        <div class="h-[360px] lg:col-span-1">
           <OpsConcurrencyCard :platform-filter="platform" :group-id-filter="groupId" :refresh-token="dashboardRefreshToken" />
         </div>
         <div class="lg:col-span-1 h-[360px]">
@@ -71,7 +72,12 @@
 
       <!-- Row: Visual Analysis (baseline 3-up grid) -->
       <div v-if="opsEnabled && !(loading && !hasLoadedOnce)" class="grid grid-cols-1 gap-6 md:grid-cols-3">
-        <OpsLatencyChart :latency-data="latencyHistogram" :loading="loadingLatency" />
+        <OpsLatencyChart
+          :latency-data="latencyHistogram"
+          :loading="loadingLatency"
+          :bucket-boundaries="latencyBucketBoundaries"
+          @update:bucket-boundaries="onLatencyBucketBoundariesChange"
+        />
         <OpsErrorDistributionChart
           :data="errorDistribution"
           :loading="loadingErrorDistribution"
@@ -86,12 +92,13 @@
         />
       </div>
 
-      <!-- Row: OpenAI Token Stats -->
-      <div v-if="opsEnabled && showOpenAITokenStats && !(loading && !hasLoadedOnce)" class="grid grid-cols-1 gap-6">
-        <OpsOpenAITokenStatsCard
+      <!-- Token 请求统计始终展示，并与顶部筛选器共享分组状态。 -->
+      <div v-if="opsEnabled && !(loading && !hasLoadedOnce)" class="grid grid-cols-1 gap-6">
+        <OpsTokenStatsCard
           :platform-filter="platform"
           :group-id-filter="groupId"
-          :refresh-token="dashboardRefreshToken"
+          :groups="groups"
+          @update:group="onGroupChange"
         />
       </div>
 
@@ -145,6 +152,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import { adminAPI } from '@/api'
 import {
   opsAPI,
   type OpsDashboardOverview,
@@ -166,11 +174,19 @@ import OpsLatencyChart from './components/OpsLatencyChart.vue'
 import OpsThroughputTrendChart from './components/OpsThroughputTrendChart.vue'
 import OpsSwitchRateTrendChart from './components/OpsSwitchRateTrendChart.vue'
 import OpsAlertEventsCard from './components/OpsAlertEventsCard.vue'
-import OpsOpenAITokenStatsCard from './components/OpsOpenAITokenStatsCard.vue'
+import OpsTokenStatsCard from './components/OpsTokenStatsCard.vue'
 import OpsSystemLogTable from './components/OpsSystemLogTable.vue'
 import OpsRequestDetailsModal, { type OpsRequestDetailsPreset } from './components/OpsRequestDetailsModal.vue'
 import OpsSettingsDialog from './components/OpsSettingsDialog.vue'
 import OpsAlertRulesCard from './components/OpsAlertRulesCard.vue'
+import {
+  areDefaultLatencyBucketBoundaries,
+  areLatencyBucketBoundariesEqual,
+  defaultLatencyBucketBoundaries,
+  normalizeLatencyBucketBoundaries,
+  parseLatencyBucketBoundaries,
+  serializeLatencyBucketBoundaries
+} from './latencyBuckets'
 
 const route = useRoute()
 const router = useRouter()
@@ -194,7 +210,10 @@ const lastUpdated = ref<Date | null>(new Date())
 const timeRange = ref<TimeRange>('1h')
 const platform = ref<string>('')
 const groupId = ref<number | null>(null)
+const groups = ref<Array<{ id: number; name: string; platform: string }>>([])
 const queryMode = ref<QueryMode>('auto')
+const latencyBucketBoundaries = ref<number[]>(defaultLatencyBucketBoundaries())
+const invalidLatencyBoundsQuery = ref(false)
 const customStartTime = ref<string | null>(null)
 const customEndTime = ref<string | null>(null)
 const switchTrendWindowHours = 5
@@ -206,6 +225,7 @@ const QUERY_KEYS = {
   platform: 'platform',
   groupId: 'group_id',
   queryMode: 'mode',
+  latencyBounds: 'latency_bounds',
   fullscreen: 'fullscreen',
 
   // Deep links
@@ -243,6 +263,8 @@ function handleKeydown(e: KeyboardEvent) {
 
 let dashboardFetchController: AbortController | null = null
 let dashboardFetchSeq = 0
+let latencyFetchController: AbortController | null = null
+let latencyFetchSeq = 0
 
 function isCanceledRequest(err: unknown): boolean {
   return (
@@ -257,6 +279,13 @@ function abortDashboardFetch() {
   if (dashboardFetchController) {
     dashboardFetchController.abort()
     dashboardFetchController = null
+  }
+}
+
+function abortLatencyFetch() {
+  if (latencyFetchController) {
+    latencyFetchController.abort()
+    latencyFetchController = null
   }
 }
 
@@ -293,6 +322,11 @@ const applyRouteQueryToState = () => {
     queryMode.value = allowedQueryModes.has(fallback as QueryMode) ? (fallback as QueryMode) : 'auto'
   }
 
+  const rawLatencyBounds = readQueryString(QUERY_KEYS.latencyBounds)
+  const parsedLatencyBounds = parseLatencyBucketBoundaries(rawLatencyBounds)
+  invalidLatencyBoundsQuery.value = rawLatencyBounds !== '' && parsedLatencyBounds === null
+  latencyBucketBoundaries.value = parsedLatencyBounds ?? defaultLatencyBucketBoundaries()
+
   // Deep links
   const openRules = readQueryString(QUERY_KEYS.openAlertRules)
   if (openRules === '1' || openRules === 'true') {
@@ -323,6 +357,11 @@ const buildQueryFromState = () => {
   if (platform.value) next[QUERY_KEYS.platform] = platform.value
   if (typeof groupId.value === 'number' && groupId.value > 0) next[QUERY_KEYS.groupId] = String(groupId.value)
   if (queryMode.value !== 'auto') next[QUERY_KEYS.queryMode] = queryMode.value
+  if (!areDefaultLatencyBucketBoundaries(latencyBucketBoundaries.value)) {
+    next[QUERY_KEYS.latencyBounds] = serializeLatencyBucketBoundaries(latencyBucketBoundaries.value)
+  }
+  // 更新筛选参数时保持全屏状态。
+  if (isFullscreen.value) next[QUERY_KEYS.fullscreen] = '1'
 
   return next
 }
@@ -381,10 +420,12 @@ const showSettingsDialog = ref(false)
 const showAlertRulesCard = ref(false)
 
 applyRouteQueryToState()
+if (invalidLatencyBoundsQuery.value) {
+  syncQueryToRoute()
+}
 
 // Auto refresh settings
 const showAlertEvents = ref(true)
-const showOpenAITokenStats = ref(false)
 const autoRefreshEnabled = ref(false)
 const autoRefreshIntervalMs = ref(30000) // default 30 seconds
 const autoRefreshCountdown = ref(0)
@@ -417,17 +458,25 @@ async function loadDashboardAdvancedSettings() {
   try {
     const settings = await opsAPI.getAdvancedSettings()
     showAlertEvents.value = settings.display_alert_events
-    showOpenAITokenStats.value = settings.display_openai_token_stats
     autoRefreshEnabled.value = settings.auto_refresh_enabled
     autoRefreshIntervalMs.value = settings.auto_refresh_interval_seconds * 1000
     autoRefreshCountdown.value = settings.auto_refresh_interval_seconds
   } catch (err) {
     console.error('[OpsDashboard] Failed to load dashboard advanced settings', err)
     showAlertEvents.value = true
-    showOpenAITokenStats.value = false
     autoRefreshEnabled.value = false
     autoRefreshIntervalMs.value = 30000
     autoRefreshCountdown.value = 0
+  }
+}
+
+async function loadGroups() {
+  try {
+    const list = await adminAPI.groups.getAll()
+    groups.value = list.map((group) => ({ id: group.id, name: group.name, platform: group.platform }))
+  } catch (err) {
+    console.error('[OpsDashboard] Failed to load groups', err)
+    groups.value = []
   }
 }
 
@@ -482,7 +531,13 @@ async function onSettingsSaved() {
 }
 
 function onPlatformChange(v: string | number | boolean | null) {
-  platform.value = typeof v === 'string' ? v : ''
+  const nextPlatform = typeof v === 'string' ? v : ''
+  platform.value = nextPlatform
+
+  const selectedGroup = groups.value.find((group) => group.id === groupId.value)
+  if (nextPlatform && selectedGroup && selectedGroup.platform !== nextPlatform) {
+    groupId.value = null
+  }
 }
 
 function onGroupChange(v: string | number | boolean | null) {
@@ -497,6 +552,17 @@ function onGroupChange(v: string | number | boolean | null) {
   if (typeof v === 'string') {
     const n = Number.parseInt(v, 10)
     groupId.value = Number.isFinite(n) && n > 0 ? n : null
+  }
+}
+
+function onLatencyBucketBoundariesChange(values: number[]) {
+  const normalized = normalizeLatencyBucketBoundaries(values)
+  if (!normalized || areLatencyBucketBoundariesEqual(normalized, latencyBucketBoundaries.value)) return
+
+  latencyBucketBoundaries.value = normalized
+  syncQueryToRoute()
+  if (opsEnabled.value) {
+    void refreshLatencyHistogram()
   }
 }
 
@@ -624,20 +690,29 @@ async function refreshCoreSnapshotWithCancel(fetchSeq: number, signal: AbortSign
   }
 }
 
-async function refreshLatencyHistogramWithCancel(fetchSeq: number, signal: AbortSignal) {
+async function refreshLatencyHistogram() {
   if (!opsEnabled.value) return
+
+  abortLatencyFetch()
+  latencyFetchSeq += 1
+  const fetchSeq = latencyFetchSeq
+  latencyFetchController = new AbortController()
   loadingLatency.value = true
   try {
-    const data = await opsAPI.getLatencyHistogram(buildApiParams(), { signal })
-    if (fetchSeq !== dashboardFetchSeq) return
+    const data = await opsAPI.getLatencyHistogram({
+      ...buildApiParams(),
+      bucket_boundaries_ms: [...latencyBucketBoundaries.value]
+    }, { signal: latencyFetchController.signal })
+    if (fetchSeq !== latencyFetchSeq) return
     latencyHistogram.value = data
   } catch (err: any) {
-    if (fetchSeq !== dashboardFetchSeq || isCanceledRequest(err)) return
+    if (fetchSeq !== latencyFetchSeq || isCanceledRequest(err)) return
     latencyHistogram.value = null
     appStore.showError(err?.message || t('admin.ops.failedToLoadLatencyHistogram'))
   } finally {
-    if (fetchSeq === dashboardFetchSeq) {
+    if (fetchSeq === latencyFetchSeq) {
       loadingLatency.value = false
+      latencyFetchController = null
     }
   }
 }
@@ -681,7 +756,7 @@ async function refreshErrorDistributionWithCancel(fetchSeq: number, signal: Abor
 async function refreshDeferredPanels(fetchSeq: number, signal: AbortSignal) {
   if (!opsEnabled.value) return
   await Promise.all([
-    refreshLatencyHistogramWithCancel(fetchSeq, signal),
+    refreshLatencyHistogram(),
     refreshErrorDistributionWithCancel(fetchSeq, signal)
   ])
 }
@@ -757,17 +832,28 @@ watch(
     const prevTimeRange = timeRange.value
     const prevPlatform = platform.value
     const prevGroupId = groupId.value
+    const prevQueryMode = queryMode.value
+    const prevLatencyBounds = [...latencyBucketBoundaries.value]
 
     isApplyingRouteQuery.value = true
     applyRouteQueryToState()
     isApplyingRouteQuery.value = false
 
-    const changed =
-      prevTimeRange !== timeRange.value || prevPlatform !== platform.value || prevGroupId !== groupId.value
-    if (changed) {
+    const dashboardFiltersChanged =
+      prevTimeRange !== timeRange.value ||
+      prevPlatform !== platform.value ||
+      prevGroupId !== groupId.value ||
+      prevQueryMode !== queryMode.value
+    const latencyBoundsChanged = !areLatencyBucketBoundariesEqual(prevLatencyBounds, latencyBucketBoundaries.value)
+    if (dashboardFiltersChanged) {
       if (opsEnabled.value) {
         fetchData()
       }
+    } else if (latencyBoundsChanged && opsEnabled.value) {
+      void refreshLatencyHistogram()
+    }
+    if (invalidLatencyBoundsQuery.value) {
+      syncQueryToRoute()
     }
   }
 )
@@ -785,8 +871,8 @@ onMounted(async () => {
   // Load thresholds configuration
   loadThresholds()
 
-  // Load auto refresh settings
-  await loadDashboardAdvancedSettings()
+  // 分组列表与展示设置互不依赖，可以并行加载。
+  await Promise.all([loadDashboardAdvancedSettings(), loadGroups()])
 
   if (opsEnabled.value) {
     await fetchData()
@@ -811,6 +897,7 @@ async function loadThresholds() {
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
   abortDashboardFetch()
+  abortLatencyFetch()
   pauseCountdown()
 })
 

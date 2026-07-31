@@ -1598,7 +1598,7 @@ func TestOpenAIStreamingResponseFailedCapacityBeforeOutputReturnsFailover(t *tes
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "selected model is at capacity")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -1897,7 +1897,7 @@ func TestOpenAIStreamingCapacityUsesSSEEventNameWhenDataTypeIsMissing(t *testing
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
 			require.ErrorAs(t, err, &failoverErr)
-			require.True(t, failoverErr.RetryableOnSameAccount)
+			require.False(t, failoverErr.RetryableOnSameAccount)
 			require.False(t, c.Writer.Written())
 			require.Empty(t, rec.Body.String())
 		})
@@ -1947,7 +1947,7 @@ func TestOpenAIStreamingFailedCompletedCapacityDoesNotReleaseTool(t *testing.T) 
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
 			require.ErrorAs(t, err, &failoverErr)
-			require.True(t, failoverErr.RetryableOnSameAccount)
+			require.False(t, failoverErr.RetryableOnSameAccount)
 			require.False(t, c.Writer.Written())
 			require.Empty(t, rec.Body.String())
 		})
@@ -2024,7 +2024,7 @@ func TestOpenAIStreamingCapacityUsesCurrentAttemptOutputBaseline(t *testing.T) {
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
 			require.ErrorAs(t, err, &failoverErr)
-			require.True(t, failoverErr.RetryableOnSameAccount)
+			require.False(t, failoverErr.RetryableOnSameAccount)
 			require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 			require.Equal(t, bodyBeforeAttempt, rec.Body.String(), "failed attempt must not add downstream output")
 			require.False(t, IsResponseCommitted(c), "capacity must bypass configured passthrough rules")
@@ -2064,7 +2064,7 @@ func TestOpenAIStreamingResponseFailedBeforeOutputServerOverloadedCodeReturnsFai
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "Please retry later")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -2112,7 +2112,7 @@ func TestOpenAIStreamingLargePreambleBeforeCapacityDoesNotCommitClientResponse(t
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -2430,7 +2430,7 @@ func TestOpenAIStreamingPreambleKeepaliveBeforeCapacityDoesNotCommitSemanticResp
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.True(t, c.Writer.Written())
 	require.Equal(t, ":\n\n", rec.Body.String())
@@ -3978,7 +3978,7 @@ func TestHandleSSEToJSON_CompletedEventReturnsJSON(t *testing.T) {
 		`data: [DONE]`,
 	}, "\n"))
 
-	usage, err := svc.handleSSEToJSON(resp, c, body, &Account{ID: 1, Platform: PlatformOpenAI}, "gpt-4o", "gpt-4o")
+	usage, err := svc.handleSSEToJSON(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, body, "gpt-4o", "gpt-4o")
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	require.Equal(t, 7, usage.InputTokens)
@@ -4080,7 +4080,7 @@ func TestOpenAINonStreamingCapacityBodiesReturnFailover(t *testing.T) {
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
 			require.ErrorAs(t, err, &failoverErr)
-			require.True(t, failoverErr.RetryableOnSameAccount)
+			require.False(t, failoverErr.RetryableOnSameAccount)
 			require.False(t, c.Writer.Written())
 			require.Empty(t, rec.Body.String())
 		})
@@ -4157,7 +4157,7 @@ func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T)
 		`data: [DONE]`,
 	}, "\n"))
 
-	usage, err := svc.handleSSEToJSON(resp, c, body, &Account{ID: 1, Platform: PlatformOpenAI}, "gpt-5.4", "gpt-5.4")
+	usage, err := svc.handleSSEToJSON(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, body, "gpt-5.4", "gpt-5.4")
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	require.Equal(t, 4, usage.ImageOutputTokens)
@@ -4192,11 +4192,11 @@ func TestHandleSSEToJSON_DoneMarkerWithoutTerminalReturnsFailover(t *testing.T) 
 
 			var err error
 			if passthrough {
-				result, callErr := svc.handlePassthroughSSEToJSON(resp, c, body, &Account{ID: 1, Platform: PlatformOpenAI}, "gpt-4o", "gpt-4o")
+				result, callErr := svc.handlePassthroughSSEToJSON(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, body, "gpt-4o", "gpt-4o")
 				require.Nil(t, result)
 				err = callErr
 			} else {
-				result, callErr := svc.handleSSEToJSON(resp, c, body, &Account{ID: 1, Platform: PlatformOpenAI}, "gpt-4o", "gpt-4o")
+				result, callErr := svc.handleSSEToJSON(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI}, body, "gpt-4o", "gpt-4o")
 				require.Nil(t, result)
 				err = callErr
 			}
@@ -4226,12 +4226,13 @@ func TestHandleSSEToJSON_InvalidRequestResponseFailedReturnsProtocolError(t *tes
 		`data: [DONE]`,
 	}, "\n"))
 
-	usage, err := svc.handleSSEToJSON(resp, c, body, &Account{ID: 1, Platform: PlatformOpenAI}, "gpt-4o", "gpt-4o")
+	account := &Account{ID: 1, Type: AccountTypeAPIKey, Platform: PlatformOpenAI}
+	usage, err := svc.handleSSEToJSON(context.Background(), resp, c, account, body, "gpt-4o", "gpt-4o")
+
 	require.Nil(t, usage)
-	require.Error(t, err)
-	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.EqualError(t, err, "non-streaming openai protocol error: upstream rejected request")
+	require.True(t, c.Writer.Written())
 	require.Contains(t, rec.Body.String(), "upstream rejected request")
-	require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
 }
 
 func TestHandleSSEToJSON_CapacityResponseFailedReturnsFailover(t *testing.T) {
@@ -4250,19 +4251,19 @@ func TestHandleSSEToJSON_CapacityResponseFailedReturnsFailover(t *testing.T) {
 		`data: [DONE]`,
 	}, "\n"))
 
-	result, err := svc.handleSSEToJSON(resp, c, body, &Account{
+	result, err := svc.handleSSEToJSON(context.Background(), resp, c, &Account{
 		ID:          1,
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeAPIKey,
 		Name:        "acc",
 		Credentials: map[string]any{"pool_mode": true},
-	}, "gpt-4o", "gpt-4o")
+	}, body, "gpt-4o", "gpt-4o")
 	require.Nil(t, result)
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
-	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
 	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -4285,12 +4286,12 @@ func TestHandleSSEToJSON_TopLevelCapacityErrorReturnsFailover(t *testing.T) {
 		`data: [DONE]`,
 	}, "\n"))
 
-	result, err := svc.handleSSEToJSON(resp, c, body, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, "gpt-4o", "gpt-4o")
+	result, err := svc.handleSSEToJSON(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, body, "gpt-4o", "gpt-4o")
 	require.Nil(t, result)
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -4312,12 +4313,12 @@ func TestHandlePassthroughSSEToJSON_CapacityResponseFailedReturnsFailover(t *tes
 		`data: [DONE]`,
 	}, "\n"))
 
-	result, err := svc.handlePassthroughSSEToJSON(resp, c, body, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, "gpt-4o", "gpt-4o")
+	result, err := svc.handlePassthroughSSEToJSON(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, body, "gpt-4o", "gpt-4o")
 	require.Nil(t, result)
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "currently experiencing high demand")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
@@ -4340,12 +4341,12 @@ func TestHandlePassthroughSSEToJSON_TopLevelCapacityErrorReturnsFailover(t *test
 		`data: [DONE]`,
 	}, "\n"))
 
-	result, err := svc.handlePassthroughSSEToJSON(resp, c, body, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, "gpt-4o", "gpt-4o")
+	result, err := svc.handlePassthroughSSEToJSON(context.Background(), resp, c, &Account{ID: 1, Platform: PlatformOpenAI, Name: "acc"}, body, "gpt-4o", "gpt-4o")
 	require.Nil(t, result)
 	require.Error(t, err)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "currently experiencing high demand")
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())

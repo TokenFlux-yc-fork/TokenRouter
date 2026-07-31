@@ -244,7 +244,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			return nil, &agentIdentityTaskRecoveredError{}
 		}
-		s.handleOpenAIWSDialTransientFailure(ctx, account, mappedModel, err)
+		errorDecision := s.handleOpenAIWSDialTransientFailure(ctx, account, mappedModel, err)
 		dialStatus, dialClass, dialCloseStatus, dialCloseReason, dialRespServer, dialRespVia, dialRespCFRay, dialRespReqID := summarizeOpenAIWSDialError(err)
 		logOpenAIWSModeInfo(
 			"acquire_fail account_id=%d account_type=%s transport=%s reason=%s dial_status=%d dial_class=%s dial_close_status=%s dial_close_reason=%s dial_resp_server=%s dial_resp_via=%s dial_resp_cf_ray=%s dial_resp_x_request_id=%s cause=%s preferred_conn_id=%s force_new_conn=%v ws_host=%s ws_path=%s proxy_enabled=%v",
@@ -267,13 +267,24 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			wsPath,
 			account.ProxyID != nil && account.Proxy != nil,
 		)
-		var dialErr *openAIWSDialError
-		if errors.As(err, &dialErr) && dialErr != nil {
-			switch dialErr.StatusCode {
-			case http.StatusTooManyRequests:
-				s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()))
-			case http.StatusForbidden:
-				s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(err.Error())))
+		var policyDialErr *openAIWSDialError
+		if errors.As(err, &policyDialErr) && policyDialErr != nil && policyDialErr.StatusCode != 0 {
+			if errorDecision.ShouldReturnGenericError() {
+				return nil, &openAIWSGenericPolicyError{upstreamStatus: policyDialErr.StatusCode}
+			}
+			if errorDecision.ShouldFailoverWithDefaults(
+				account,
+				policyDialErr.StatusCode,
+				false,
+				s.shouldFailoverOpenAIWSError(account, policyDialErr.StatusCode, policyDialErr.ResponseBody),
+			) {
+				return nil, newOpenAIUpstreamFailoverError(
+					policyDialErr.StatusCode,
+					policyDialErr.ResponseHeaders,
+					policyDialErr.ResponseBody,
+					extractUpstreamErrorMessage(policyDialErr.ResponseBody),
+					errorDecision.RetryableOnSameAccount(account, policyDialErr.StatusCode),
+				)
 			}
 		}
 		s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, err)
@@ -359,6 +370,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			payload,
 			previousResponseID,
 			reqBody,
+			mappedModel,
 			account,
 			stateStore,
 			groupID,
@@ -671,14 +683,20 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if eventType != "error" && eventType != "response.failed" {
 			capacityMessage := extractOpenAISSEErrorMessage(message)
 			if isOpenAITransientProcessingError(http.StatusBadRequest, capacityMessage, message) {
+				policyStatus := openAIStreamFailedEventSemanticStatus(message, capacityMessage)
+				decision := s.applyOpenAIWSEventErrorPolicy(ctx, account, mappedModel, policyStatus, lease.HandshakeHeaders(), message)
 				lease.MarkBroken()
-				if !wroteDownstream {
-					failoverErr := &UpstreamFailoverError{
-						StatusCode:             http.StatusBadGateway,
-						ResponseBody:           append([]byte(nil), message...),
-						ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
-						RetryableOnSameAccount: account.IsPoolMode(),
-					}
+				if !wroteDownstream && decision.ShouldReturnGenericError() {
+					return nil, &openAIWSGenericPolicyError{upstreamStatus: policyStatus}
+				}
+				if !wroteDownstream && decision.ShouldFailoverWithDefaults(account, policyStatus, true, true) {
+					failoverErr := newOpenAIUpstreamFailoverError(
+						policyStatus,
+						lease.HandshakeHeaders(),
+						message,
+						capacityMessage,
+						decision.RetryableOnSameAccount(account, policyStatus),
+					)
 					return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", capacityMessage, failoverErr))
 				}
 				if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(message, eventType, true); changed {
@@ -693,45 +711,53 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 		}
 
-		if eventType == "response.failed" && !wroteDownstream {
-			failedMessage := extractOpenAISSEErrorMessage(message)
-			if openAIStreamEventShouldFailover(message, eventType, failedMessage) {
-				if strings.TrimSpace(failedMessage) == "" {
-					failedMessage = "upstream response failed"
-				}
-				lease.MarkBroken()
-				failoverErr := &UpstreamFailoverError{
-					StatusCode:             http.StatusBadGateway,
-					ResponseBody:           append([]byte(nil), message...),
-					ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
-					RetryableOnSameAccount: account.IsPoolMode() && isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, message),
-				}
-				return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", failedMessage, failoverErr))
-			}
-		}
 		if eventType == "response.failed" && wroteDownstream {
 			if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(message, eventType, true); changed {
 				message = sanitized
 			}
 		}
+		terminalPolicy := openAIWSTerminalPolicyDecision{
+			TerminalEvent: normalizeOpenAIWSTerminalEvent(eventType),
+			Decision:      UpstreamErrorDecision{Policy: ErrorPolicyNone},
+		}
+		if isTerminalEvent {
+			terminalPolicy = s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
+		}
+		if eventType == "response.failed" {
+			failedMessage := extractOpenAISSEErrorMessage(message)
+			defaultFailover := openAIStreamFailedEventShouldFailover(message, failedMessage)
+			if terminalPolicy.Decision.ShouldReturnGenericError() {
+				if !wroteDownstream {
+					lease.MarkBroken()
+					return nil, &openAIWSGenericPolicyError{upstreamStatus: terminalPolicy.StatusCode}
+				}
+				// 流已提交时无法改写 HTTP 状态，只下发净化后的通用终止事件。
+				message = openAIStreamGenericFailedEventPayload()
+			}
+			if !wroteDownstream && terminalPolicy.Decision.ShouldFailoverWithDefaults(
+				account,
+				terminalPolicy.StatusCode,
+				defaultFailover,
+				defaultFailover,
+			) {
+				lease.MarkBroken()
+				return nil, newOpenAIUpstreamFailoverError(
+					terminalPolicy.StatusCode,
+					lease.HandshakeHeaders(),
+					message,
+					failedMessage,
+					terminalPolicy.Decision.RetryableOnSameAccount(account, terminalPolicy.StatusCode),
+				)
+			}
+		}
 
 		if eventType == "error" {
-			s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
-			s.persistOpenAIWSErrorSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
+			statusCode := openAIWSErrorPolicyStatus(message)
+			errorDecision := s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
 			errMsg := strings.TrimSpace(errMsgRaw)
 			if errMsg == "" {
 				errMsg = "Upstream websocket error"
-			}
-			if openAIStreamEventShouldFailover(message, eventType, errMsgRaw) && !wroteDownstream {
-				lease.MarkBroken()
-				failoverErr := &UpstreamFailoverError{
-					StatusCode:             http.StatusBadGateway,
-					ResponseBody:           append([]byte(nil), message...),
-					ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
-					RetryableOnSameAccount: account.IsPoolMode() && isOpenAITransientProcessingError(http.StatusBadRequest, errMsgRaw, message),
-				}
-				return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", errMsg, failoverErr))
 			}
 			clientErrMsg := errMsg
 			if sanitized, changed := sanitizeOpenAIStreamErrorEventForClient(message, eventType, wroteDownstream); changed {
@@ -779,9 +805,35 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			// error 事件后连接不再可复用，避免回池后污染下一请求。
 			lease.MarkBroken()
-			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			if upstreamWarning != nil {
 				upstreamWarning.StatusCode = statusCode
+			}
+			if !wroteDownstream && errorDecision.ShouldReturnGenericError() {
+				return nil, &openAIWSGenericPolicyError{upstreamStatus: statusCode}
+			}
+			if !wroteDownstream && errorDecision.RetryableOnSameAccount(account, statusCode) {
+				failoverErr := newOpenAIUpstreamFailoverError(
+					statusCode,
+					lease.HandshakeHeaders(),
+					message,
+					errMsg,
+					true,
+				)
+				return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", errMsg, failoverErr))
+			}
+			if !wroteDownstream && errorDecision.ShouldFailoverWithDefaults(
+				account,
+				statusCode,
+				false,
+				s.shouldFailoverOpenAIWSError(account, statusCode, message),
+			) {
+				return nil, newOpenAIUpstreamFailoverError(
+					statusCode,
+					lease.HandshakeHeaders(),
+					message,
+					errMsg,
+					errorDecision.RetryableOnSameAccount(account, statusCode),
+				)
 			}
 			if !wroteDownstream && canFallback {
 				if openAIUpstreamWarningIsCyber(upstreamWarning) {
@@ -884,7 +936,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 
 		if isTerminalEvent {
-			upstreamTerminalEvent = s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
+			upstreamTerminalEvent = terminalPolicy.TerminalEvent
 			// 终止事件必须是当前 WS 消息中的最后一个 JSON 文档；尾随文档不再写给已完成的
 			// 客户端请求，同时禁止复用语义不明确的上游连接。
 			cleanExit = len(pendingJSONDocuments) == 0

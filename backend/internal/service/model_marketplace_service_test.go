@@ -246,6 +246,16 @@ func TestModelDisplayPricingImageInputFastRates(t *testing.T) {
 			wantImage:     0.06,
 			wantFastImage: 0.06,
 		},
+		{
+			name: "渠道 Fast 倍率同步应用到显式图片输入价",
+			pricing: ModelPricing{
+				InputPricePerToken:      0.01,
+				ImageInputPricePerToken: 0.03,
+				FastModeMultiplier:      func(v float64) *float64 { return &v }(3),
+			},
+			wantImage:     0.06,
+			wantFastImage: 0.18,
+		},
 	}
 
 	for _, tt := range tests {

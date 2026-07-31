@@ -39,8 +39,9 @@ func (s *GatewayService) shouldRetryUpstreamError(account *Account, statusCode i
 		return statusCode == 403
 	}
 
-	// API Key 账号：未配置的错误码重试
-	return !account.ShouldHandleErrorCode(statusCode)
+	// API Key/Bedrock 的 HTTP 错误交给统一策略和 handler 层重试预算处理。
+	// 尤其是自定义错误码未命中时必须立即返回通用 500，不能先做内部重试。
+	return false
 }
 
 // shouldFailoverUpstreamError determines whether an upstream error should trigger account failover.
@@ -599,7 +600,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-			s.handleRetryExhaustedSideEffects(ctx, resp, account)
+			decision := s.handleRetryExhaustedSideEffects(ctx, resp, account, reqModel)
+			if decision.ShouldReturnGenericError() {
+				return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
@@ -618,10 +622,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 			}
 		}
-		return s.handleRetryExhaustedError(ctx, resp, c, account)
+		return s.handleRetryExhaustedError(ctx, resp, c, account, reqModel)
 	}
 
 	if resp.StatusCode >= 400 && s.shouldFailoverUpstreamError(resp.StatusCode) {
@@ -632,7 +636,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		logger.LegacyPrintf("service.gateway", "[Forward] Upstream error (failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-		s.handleFailoverSideEffects(ctx, resp, account, reqModel)
+		decision := s.handleFailoverSideEffects(ctx, resp, account, reqModel)
+		if decision.ShouldReturnGenericError() {
+			return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -650,7 +657,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 		}
 	}
 	if resp.StatusCode >= 400 {
@@ -695,8 +702,15 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				} else {
 					logger.LegacyPrintf("service.gateway", "Account %d: 400 error, attempting failover", account.ID)
 				}
-				s.handleFailoverSideEffects(ctx, resp, account, reqModel)
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody}
+				decision := s.handleFailoverSideEffects(ctx, resp, account, reqModel)
+				if decision.ShouldReturnGenericError() {
+					return s.handleErrorResponse(ctx, resp, c, account, reqModel)
+				}
+				return nil, &UpstreamFailoverError{
+					StatusCode:             resp.StatusCode,
+					ResponseBody:           respBody,
+					RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+				}
 			}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, reqModel)
@@ -752,10 +766,29 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					truncateString(sseErr.RawData, 1000),
 				)
 
-				return nil, &UpstreamFailoverError{
-					StatusCode:   403,
-					ResponseBody: body,
+				decision := upstreamErrorDecisionWithoutPersistence(account, http.StatusForbidden)
+				if s.rateLimitService != nil {
+					decision = s.rateLimitService.ApplyUpstreamError(ctx, account, http.StatusForbidden, resp.Header, body, reqModel)
 				}
+				if decision.ShouldReturnGenericError() && !c.Writer.Written() {
+					MarkResponseCommitted(c)
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"type": "error",
+						"error": gin.H{
+							"type":    "upstream_error",
+							"message": "Upstream gateway error",
+						},
+					})
+					return nil, fmt.Errorf("upstream SSE error not in custom error codes")
+				}
+				if !c.Writer.Written() && decision.ShouldFailover(account, http.StatusForbidden, true) {
+					return nil, &UpstreamFailoverError{
+						StatusCode:             http.StatusForbidden,
+						ResponseBody:           body,
+						RetryableOnSameAccount: decision.RetryableOnSameAccount(account, http.StatusForbidden),
+					}
+				}
+				return nil, err
 			}
 			return nil, err
 		}

@@ -77,14 +77,14 @@ type OpsLatencyHistogramBucket struct {
 	Count int64  `json:"count"`
 }
 
-// OpsLatencyHistogramResponse is a coarse latency distribution histogram (success requests only).
-// It is used by the Ops dashboard to quickly identify tail latency regressions.
+// OpsLatencyHistogramResponse 是成功请求的时长分布，用于快速识别长尾延迟。
 type OpsLatencyHistogramResponse struct {
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `json:"end_time"`
 	Platform  string    `json:"platform"`
 	GroupID   *int64    `json:"group_id"`
 
-	TotalRequests int64                        `json:"total_requests"`
-	Buckets       []*OpsLatencyHistogramBucket `json:"buckets"`
+	BucketBoundariesMS []int64                      `json:"bucket_boundaries_ms"`
+	TotalRequests      int64                        `json:"total_requests"`
+	Buckets            []*OpsLatencyHistogramBucket `json:"buckets"`
 }

@@ -180,8 +180,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		if upstreamMsg == "" {
 			upstreamMsg = fmt.Sprintf("xAI upstream returned status %d", resp.StatusCode)
 		}
+		decision := s.applyGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
 		kind := "http_error"
-		if shouldFailover {
+		if decision.ShouldFailover(account, resp.StatusCode, shouldFailover) {
 			kind = "failover"
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -193,13 +194,15 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			Kind:               kind,
 			Message:            upstreamMsg,
 		})
-		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		if shouldFailover {
+		if decision.ShouldReturnGenericError() {
+			return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
+		}
+		if kind == "failover" {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
 				ResponseHeaders:        resp.Header.Clone(),
-				RetryableOnSameAccount: !transientNotFound && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: !transientNotFound && decision.RetryableOnSameAccount(account, resp.StatusCode),
 			}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
@@ -946,8 +949,9 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 		if upstreamMsg == "" {
 			upstreamMsg = fmt.Sprintf("xAI image bridge upstream returned status %d", resp.StatusCode)
 		}
+		decision := s.applyGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, grokComposerImageBridgeVisionModel)
 		kind := "http_error"
-		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
+		if decision.ShouldFailover(account, resp.StatusCode, s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)) {
 			kind = "failover"
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -959,13 +963,15 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 			Kind:               kind,
 			Message:            upstreamMsg,
 		})
-		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		if s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody) {
+		if decision.ShouldReturnGenericError() {
+			return "", OpenAIUsage{}, fmt.Errorf("grok composer image bridge upstream gateway error")
+		}
+		if kind == "failover" {
 			return "", OpenAIUsage{}, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
 				ResponseHeaders:        resp.Header.Clone(),
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 			}
 		}
 		return "", OpenAIUsage{}, fmt.Errorf("grok composer image bridge upstream error: %s", upstreamMsg)
@@ -1162,10 +1168,9 @@ func (s *OpenAIGatewayService) updateGrokUsageSnapshot(ctx context.Context, acco
 			grokQuotaSnapshotExtraKey: snapshot,
 		})
 	}
-	// 错误响应由 handleGrokAccountUpstreamError 同步，并立即写入内存调度阻断。
-	// 成功响应也可能耗尽最后一次请求或令牌，因此要在此将耗尽窗口持久化为真实限流，
-	// 不能只依赖调度器被动检查快照。
-	if hasActiveLimit {
+	// 池模式上游本身负责在真实账号池中切换，额度头只作为观测数据保留，不能反向
+	// 冷却本地这个聚合账号。非池模式仍将错误响应或成功后耗尽的窗口写成真实限流。
+	if hasActiveLimit && !account.IsPoolMode() {
 		s.rateLimitGrok(stateCtx, account, resetAt)
 	} else if recovery {
 		clearGrokRateLimitAfterRecovery(stateCtx, s.accountRepo, account)
@@ -1376,13 +1381,72 @@ func (s *OpenAIGatewayService) rateLimitGrok(ctx context.Context, account *Accou
 	persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
 }
 
-func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, _ []byte) {
-	if s == nil || account == nil || statusCode != http.StatusTooManyRequests {
-		return
+// applyGrokAccountUpstreamError 先执行显式策略，再处理非池模式的 Grok 默认状态。
+// 返回完整决策，供媒体、HTTP 和 WebSocket 路径统一判断故障转移与同账号重试。
+func (s *OpenAIGatewayService) applyGrokAccountUpstreamError(
+	ctx context.Context,
+	account *Account,
+	statusCode int,
+	headers http.Header,
+	responseBody []byte,
+	requestedModel ...string,
+) UpstreamErrorDecision {
+	if s == nil || account == nil {
+		return UpstreamErrorDecision{Policy: ErrorPolicyNone}
 	}
+	if isOpenAIAccountPolicyRequestScopedError(account, statusCode, responseBody) {
+		return UpstreamErrorDecision{Policy: ErrorPolicyNone}
+	}
+	if statusCode == http.StatusPaymentRequired {
+		// 402 只能证明本次请求的计费上下文不可用；在 usage snapshot、显式策略和
+		// 调度状态更新前返回，确保该信号只影响当前请求的故障转移。
+		return upstreamErrorDecisionWithoutPersistence(account, statusCode)
+	}
+
 	// Inference 401/403/5xx responses do not prove that an account is unhealthy.
 	// OAuth credential state is maintained by the refresh/reconciliation path,
 	// while 429 carries an account-specific retry boundary that is safe to persist.
-	now := time.Now()
-	s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
+	decision := upstreamErrorDecisionWithoutPersistence(account, statusCode)
+	if statusCode == http.StatusTooManyRequests {
+		now := time.Now()
+		s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
+	}
+	if s.rateLimitService != nil {
+		decision.Policy = s.rateLimitService.ApplyExplicitErrorPolicy(ctx, account, statusCode, responseBody, requestedModel...)
+		decision.StopScheduling = decision.Policy == ErrorPolicyCustomMatched || decision.Policy == ErrorPolicyTempUnscheduled
+	}
+	switch decision.Policy {
+	case ErrorPolicyCustomMatched:
+		decision.StopScheduling = true
+		s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
+		return decision
+	case ErrorPolicyTempUnscheduled:
+		decision.StopScheduling = true
+		return decision
+	case ErrorPolicyCustomSkipped, ErrorPolicyPoolBypassed:
+		return decision
+	}
+
+	if statusCode == http.StatusTooManyRequests {
+		// updateGrokUsageSnapshot 已同时写入运行时和持久化限流状态。
+		decision.StopScheduling = true
+	}
+	return decision
+}
+
+func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {
+	if s == nil || account == nil {
+		return
+	}
+	until := time.Now().Add(cooldown)
+	if account.TempUnschedulableUntil != nil && account.TempUnschedulableUntil.After(until) {
+		until = *account.TempUnschedulableUntil
+	}
+	s.BlockAccountScheduling(account, until, reason)
+	if s.accountRepo != nil {
+		stateCtx, cancel := openAIAccountStateContext(ctx)
+		defer cancel()
+		_ = s.accountRepo.SetTempUnschedulable(stateCtx, account.ID, until, reason)
+	}
+
 }

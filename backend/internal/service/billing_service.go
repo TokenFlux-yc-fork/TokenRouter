@@ -84,25 +84,26 @@ type BillingCache interface {
 
 // ModelPricing 模型价格配置（per-token价格，与LiteLLM格式一致）
 type ModelPricing struct {
-	InputPricePerToken                 float64 // 每token输入价格 (USD)
-	InputPricePerTokenPriority         float64 // priority service tier 下每token输入价格 (USD)
-	ImageInputPricePerToken            float64 // 图片输入 token 价格 (USD)，为 0 时回退到普通输入价格
-	OutputPricePerToken                float64 // 每token输出价格 (USD)
-	OutputPricePerTokenPriority        float64 // priority service tier 下每token输出价格 (USD)
-	CacheCreationPricePerToken         float64 // 缓存创建每token价格 (USD)
-	CacheCreationPricePerTokenPriority float64 // priority service tier 下缓存创建每token价格 (USD)
-	CacheCreationPriceExplicit         bool    // 是否由渠道/区间定价显式设定（为 true 时即使 == 0 也不回退）
-	CacheReadPricePerToken             float64 // 缓存读取每token价格 (USD)
-	CacheReadPricePerTokenPriority     float64 // priority service tier 下缓存读取每token价格 (USD)
-	CacheCreation5mPrice               float64 // 5分钟缓存创建每token价格 (USD)
-	CacheCreation1hPrice               float64 // 1小时缓存创建每token价格 (USD)
-	SupportsCacheBreakdown             bool    // 是否支持详细的缓存分类
-	SupportsServiceTier                bool    // 是否支持 service_tier（Fast/Flex）
-	LongContextInputThreshold          int     // 超过阈值后按整次会话提升输入价格
-	LongContextInputMultiplier         float64 // 长上下文整次会话输入倍率
-	LongContextOutputMultiplier        float64 // 长上下文整次会话输出倍率
-	ImageOutputPricePerToken           float64 // 图片输出 token 价格 (USD)
-	ImageOutputPriceExplicit           bool    // 是否由渠道定价显式设定，显式设定后不再回退
+	InputPricePerToken                 float64  // 每token输入价格 (USD)
+	InputPricePerTokenPriority         float64  // priority service tier 下每token输入价格 (USD)
+	ImageInputPricePerToken            float64  // 图片输入 token 价格 (USD)，为 0 时回退到普通输入价格
+	OutputPricePerToken                float64  // 每token输出价格 (USD)
+	OutputPricePerTokenPriority        float64  // priority service tier 下每token输出价格 (USD)
+	CacheCreationPricePerToken         float64  // 缓存创建每token价格 (USD)
+	CacheCreationPricePerTokenPriority float64  // priority service tier 下缓存创建每token价格 (USD)
+	CacheCreationPriceExplicit         bool     // 是否由渠道/区间定价显式设定（为 true 时即使 == 0 也不回退）
+	CacheReadPricePerToken             float64  // 缓存读取每token价格 (USD)
+	CacheReadPricePerTokenPriority     float64  // priority service tier 下缓存读取每token价格 (USD)
+	CacheCreation5mPrice               float64  // 5分钟缓存创建每token价格 (USD)
+	CacheCreation1hPrice               float64  // 1小时缓存创建每token价格 (USD)
+	SupportsCacheBreakdown             bool     // 是否支持详细的缓存分类
+	SupportsServiceTier                bool     // 是否支持 service_tier（Fast/Flex）
+	FastModeMultiplier                 *float64 // 渠道配置的 Fast 模式收费倍率；nil 表示沿用模型默认 Fast 定价
+	LongContextInputThreshold          int      // 超过阈值后按整次会话提升输入价格
+	LongContextInputMultiplier         float64  // 长上下文整次会话输入倍率
+	LongContextOutputMultiplier        float64  // 长上下文整次会话输出倍率
+	ImageOutputPricePerToken           float64  // 图片输出 token 价格 (USD)
+	ImageOutputPriceExplicit           bool     // 是否由渠道定价显式设定，显式设定后不再回退
 }
 
 const (
@@ -132,6 +133,29 @@ func serviceTierCostMultiplier(serviceTier string) float64 {
 	default:
 		return 1.0
 	}
+}
+
+// normalizedFastModeMultiplier 返回渠道 Fast 倍率；负值按 0 防御处理。
+func normalizedFastModeMultiplier(pricing *ModelPricing) (float64, bool) {
+	if pricing == nil || pricing.FastModeMultiplier == nil {
+		return 1, false
+	}
+	if *pricing.FastModeMultiplier < 0 {
+		return 0, true
+	}
+	return *pricing.FastModeMultiplier, true
+}
+
+// applyChannelFastModeMultiplier 将渠道 Fast 倍率写入最终定价元数据。
+func applyChannelFastModeMultiplier(pricing *ModelPricing, channelPricing *ChannelModelPricing) {
+	if pricing == nil || channelPricing == nil || channelPricing.FastModeMultiplier == nil {
+		return
+	}
+	multiplier := *channelPricing.FastModeMultiplier
+	if multiplier < 0 {
+		multiplier = 0
+	}
+	pricing.FastModeMultiplier = &multiplier
 }
 
 // UsageTokens 使用的token数量
@@ -879,6 +903,7 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 	if configured {
 		pricing = multiplyModelPricing(pricing, multiplier)
 	}
+	applyChannelFastModeMultiplier(pricing, channelPricing)
 	return pricing, nil
 }
 
@@ -988,18 +1013,25 @@ func (s *BillingService) computeTokenBreakdown(
 	cacheCreationMultiplier := 1.0
 	tierMultiplier := 1.0
 
-	if usePriorityServiceTierPricing(serviceTier, pricing) {
-		if pricing.InputPricePerTokenPriority > 0 {
-			inputPrice = pricing.InputPricePerTokenPriority
-		}
-		if pricing.OutputPricePerTokenPriority > 0 {
-			outputPrice = pricing.OutputPricePerTokenPriority
-		}
-		if pricing.CacheReadPricePerTokenPriority > 0 {
-			cacheReadPrice = pricing.CacheReadPricePerTokenPriority
-		}
-		if pricing.CacheCreationPricePerTokenPriority > 0 {
-			cacheCreationPrice = pricing.CacheCreationPricePerTokenPriority
+	if normalizeBillingServiceTier(serviceTier) == "priority" {
+		if fastMultiplier, configured := normalizedFastModeMultiplier(pricing); configured {
+			// 渠道显式倍率以普通模式最终价为基准，避免和模型内置 priority 价重复叠乘。
+			tierMultiplier = fastMultiplier
+		} else if usePriorityServiceTierPricing(serviceTier, pricing) {
+			if pricing.InputPricePerTokenPriority > 0 {
+				inputPrice = pricing.InputPricePerTokenPriority
+			}
+			if pricing.OutputPricePerTokenPriority > 0 {
+				outputPrice = pricing.OutputPricePerTokenPriority
+			}
+			if pricing.CacheReadPricePerTokenPriority > 0 {
+				cacheReadPrice = pricing.CacheReadPricePerTokenPriority
+			}
+			if pricing.CacheCreationPricePerTokenPriority > 0 {
+				cacheCreationPrice = pricing.CacheCreationPricePerTokenPriority
+			}
+		} else {
+			tierMultiplier = serviceTierCostMultiplier(serviceTier)
 		}
 	} else {
 		tierMultiplier = serviceTierCostMultiplier(serviceTier)
@@ -1663,6 +1695,11 @@ func fastModeDisplayPricing(pricing *ModelPricing) (*ModelPricing, bool) {
 	if !hasFastModeDisplayPricing(pricing) {
 		return nil, false
 	}
+	if multiplier, configured := normalizedFastModeMultiplier(pricing); configured {
+		fastPricing := multiplyModelPricing(pricing, multiplier)
+		fastPricing.FastModeMultiplier = nil
+		return fastPricing, true
+	}
 
 	fastPricing := *pricing
 	if usePriorityServiceTierPricing(OpenAIFastTierPriority, pricing) {
@@ -1690,7 +1727,8 @@ func fastModeDisplayPricing(pricing *ModelPricing) (*ModelPricing, bool) {
 
 func hasFastModeDisplayPricing(pricing *ModelPricing) bool {
 	return hasAnyDisplayTokenPricing(pricing) &&
-		(pricing.SupportsServiceTier ||
+		(pricing.FastModeMultiplier != nil ||
+			pricing.SupportsServiceTier ||
 			pricing.InputPricePerTokenPriority > 0 ||
 			pricing.OutputPricePerTokenPriority > 0 ||
 			pricing.CacheReadPricePerTokenPriority > 0)

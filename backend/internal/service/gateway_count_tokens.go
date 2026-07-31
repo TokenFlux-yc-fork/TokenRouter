@@ -24,13 +24,17 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
+		mappedModel := parsed.Model
 		if reqModel := parsed.Model; reqModel != "" {
-			if mappedModel := resolveAccountUpstreamModel(ctx, account, reqModel); mappedModel != reqModel {
+			if resolvedModel := resolveAccountUpstreamModel(ctx, account, reqModel); resolvedModel != "" {
+				mappedModel = resolvedModel
+			}
+			if mappedModel != reqModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
 				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s)", reqModel, mappedModel, account.Name)
 			}
 		}
-		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
+		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody, mappedModel)
 	}
 
 	// Bedrock 不支持 count_tokens 端点
@@ -183,11 +187,28 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 	// 处理错误响应
 	if resp.StatusCode >= 400 {
-		// 标记账号状态（429/529等）
-		s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+		if isCountTokensUnsupported404(resp.StatusCode, respBody) {
+			s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported by upstream")
+			return nil
+		}
+		decision := upstreamErrorDecisionWithoutPersistence(account, resp.StatusCode)
+		if s.rateLimitService != nil {
+			decision = s.rateLimitService.ApplyUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, reqModel)
+		}
+		if decision.ShouldReturnGenericError() {
+			s.countTokensError(c, http.StatusInternalServerError, "upstream_error", "Upstream gateway error")
+			return fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
+		}
+		if decision.ShouldFailover(account, resp.StatusCode, s.shouldFailoverUpstreamError(resp.StatusCode)) {
+			return &UpstreamFailoverError{
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+			}
+		}
 		upstreamDetail := ""
 		if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 			maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
@@ -230,7 +251,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	return nil
 }
 
-func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx context.Context, c *gin.Context, account *Account, body []byte) error {
+func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx context.Context, c *gin.Context, account *Account, body []byte, mappedModel string) error {
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")
@@ -285,10 +306,6 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 	}
 
 	if resp.StatusCode >= 400 {
-		if s.rateLimitService != nil {
-			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		}
-
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 
@@ -301,6 +318,22 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 				account.ID, account.Name, truncateString(upstreamMsg, 512))
 			s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported by upstream")
 			return nil
+		}
+		decision := upstreamErrorDecisionWithoutPersistence(account, resp.StatusCode)
+		if s.rateLimitService != nil {
+			decision = s.rateLimitService.ApplyUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+		}
+		if decision.ShouldReturnGenericError() {
+			s.countTokensError(c, http.StatusInternalServerError, "upstream_error", "Upstream gateway error")
+			return fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
+		}
+		if decision.ShouldFailover(account, resp.StatusCode, s.shouldFailoverUpstreamError(resp.StatusCode)) {
+			return &UpstreamFailoverError{
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+			}
 		}
 
 		upstreamDetail := ""

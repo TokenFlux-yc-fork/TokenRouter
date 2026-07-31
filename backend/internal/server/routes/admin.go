@@ -304,7 +304,9 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		ops.GET("/dashboard/latency-histogram", h.Admin.Ops.GetDashboardLatencyHistogram)
 		ops.GET("/dashboard/error-trend", h.Admin.Ops.GetDashboardErrorTrend)
 		ops.GET("/dashboard/error-distribution", h.Admin.Ops.GetDashboardErrorDistribution)
-		ops.GET("/dashboard/openai-token-stats", h.Admin.Ops.GetDashboardOpenAITokenStats)
+		ops.GET("/dashboard/token-stats", h.Admin.Ops.GetDashboardTokenStats)
+		// 旧路由作为兼容别名保留，响应结构与新路由一致。
+		ops.GET("/dashboard/openai-token-stats", h.Admin.Ops.GetDashboardTokenStats)
 	}
 }
 

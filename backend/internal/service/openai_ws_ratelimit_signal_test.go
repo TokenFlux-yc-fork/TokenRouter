@@ -278,9 +278,10 @@ func TestOpenAIGatewayService_Forward_WSv2ServerErrorRetrySuccessDoesNotRecordPa
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"api_key":   "sk-test",
-			"base_url":  wsServer.URL,
-			"pool_mode": true,
+			"api_key":                      "sk-test",
+			"base_url":                     wsServer.URL,
+			"pool_mode":                    true,
+			"pool_mode_retry_status_codes": []any{float64(http.StatusBadGateway)},
 		},
 		Extra: map[string]any{"responses_websockets_v2_enabled": true},
 	}

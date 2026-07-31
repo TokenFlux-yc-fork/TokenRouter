@@ -120,6 +120,7 @@ func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) 
 		resolved.channelPricing = chPricing
 		r.applyTokenOverrides(chPricing, resolved)
 		applyResolvedPriceMultiplier(resolved, chPricing)
+		applyResolvedFastModeMultiplier(resolved, chPricing)
 	} else if input.GroupID != nil {
 		r.applyChannelOverrides(ctx, *input.GroupID, input.Model, resolved)
 	}
@@ -202,6 +203,7 @@ func (r *ModelPricingResolver) applyChannelOverrides(ctx context.Context, groupI
 		r.applyRequestTierOverrides(chPricing, resolved)
 	}
 	applyResolvedPriceMultiplier(resolved, chPricing)
+	applyResolvedFastModeMultiplier(resolved, chPricing)
 }
 
 // applyTokenOverrides 应用 token 模式的渠道覆盖
@@ -309,6 +311,14 @@ func applyResolvedPriceMultiplier(resolved *ResolvedPricing, chPricing *ChannelM
 	scaledChannelPricing.PriceMultiplier = nil
 	multiplyChannelPricingFields(&scaledChannelPricing, multiplier)
 	resolved.channelPricing = &scaledChannelPricing
+}
+
+// applyResolvedFastModeMultiplier 在普通渠道价完成覆盖和缩放后附加 Fast 计费倍率。
+func applyResolvedFastModeMultiplier(resolved *ResolvedPricing, chPricing *ChannelModelPricing) {
+	if resolved == nil || resolved.Mode != BillingModeToken {
+		return
+	}
+	applyChannelFastModeMultiplier(resolved.BasePricing, chPricing)
 }
 
 // normalizedPriceMultiplier 返回可安全用于计费的倍率；未配置时不触发任何缩放。

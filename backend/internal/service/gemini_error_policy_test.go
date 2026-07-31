@@ -73,7 +73,7 @@ func TestCheckErrorPolicy_GeminiAccounts(t *testing.T) {
 			},
 			statusCode: 429,
 			body:       []byte(`{"error":"rate limited"}`),
-			expected:   ErrorPolicyMatched,
+			expected:   ErrorPolicyCustomMatched,
 		},
 		{
 			name: "gemini_apikey_custom_codes_miss",
@@ -88,7 +88,7 @@ func TestCheckErrorPolicy_GeminiAccounts(t *testing.T) {
 			},
 			statusCode: 500,
 			body:       []byte(`{"error":"internal"}`),
-			expected:   ErrorPolicySkipped,
+			expected:   ErrorPolicyCustomSkipped,
 		},
 		{
 			name: "gemini_apikey_no_custom_codes_returns_none",
@@ -165,7 +165,7 @@ func TestCheckErrorPolicy_GeminiAccounts(t *testing.T) {
 			},
 			statusCode: 503,
 			body:       []byte(`overloaded`),
-			expected:   ErrorPolicyMatched, // custom codes take precedence
+			expected:   ErrorPolicyCustomMatched, // custom codes take precedence
 		},
 	}
 
@@ -310,12 +310,12 @@ func TestGeminiErrorPolicyIntegration(t *testing.T) {
 			if svc.rateLimitService != nil {
 				policy := svc.rateLimitService.CheckErrorPolicy(ctx, account, statusCode, respBody, "gemini-2.5-pro")
 				switch policy {
-				case ErrorPolicySkipped:
+				case ErrorPolicyCustomSkipped:
 					// Skipped → return error directly (no handleGeminiUpstreamError, no failover)
 					gotFailover = false
 					handleErrorCalled = false
 					goto verify
-				case ErrorPolicyMatched:
+				case ErrorPolicyCustomMatched:
 					svc.handleGeminiUpstreamError(ctx, account, statusCode, headers, respBody)
 					handleErrorCalled = true
 					gotFailover = true
@@ -425,6 +425,60 @@ func TestHandleGeminiUpstreamError_GoogleOneCapacityExhaustedUsesTierCooldown(t 
 	require.WithinDuration(t, before.Add(5*time.Minute), repo.lastRateLimitReset, 2*time.Second)
 	require.True(t, repo.lastRateLimitReset.After(before))
 	require.True(t, repo.lastRateLimitReset.Before(after.Add(5*time.Minute).Add(2*time.Second)))
+}
+
+// TestGeminiPoolMode429BypassesLocalRateLimit 验证池模式不再被当作自定义未命中，
+// 也不会继续执行 Gemini 默认 429 限流写入。
+func TestGeminiPoolMode429BypassesLocalRateLimit(t *testing.T) {
+	repo := &geminiErrorPolicyRepo{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &GeminiMessagesCompatService{accountRepo: repo, rateLimitService: rateLimitService}
+	account := &Account{
+		ID:       520,
+		Type:     AccountTypeAPIKey,
+		Platform: PlatformGemini,
+		Credentials: map[string]any{
+			"pool_mode": true,
+		},
+	}
+
+	decision := svc.applyGeminiUpstreamErrorPolicy(
+		context.Background(), account, http.StatusTooManyRequests, http.Header{}, []byte(`{"error":{"message":"rate limited"}}`), "gemini-2.5-pro",
+	)
+
+	require.Equal(t, ErrorPolicyPoolBypassed, decision.Policy)
+	require.True(t, decision.RetryableOnSameAccount(account, http.StatusTooManyRequests))
+	require.Zero(t, repo.setRateLimitedCalls)
+	require.Zero(t, repo.setTempCalls)
+	require.Zero(t, repo.setErrorCalls)
+}
+
+// TestGeminiCustomNonFailoverStatusStopsScheduling 验证非默认故障转移状态也会执行
+// 管理员显式策略并写入账号错误。
+func TestGeminiCustomNonFailoverStatusStopsScheduling(t *testing.T) {
+	repo := &geminiErrorPolicyRepo{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &GeminiMessagesCompatService{accountRepo: repo, rateLimitService: rateLimitService}
+	account := &Account{
+		ID:       521,
+		Type:     AccountTypeAPIKey,
+		Platform: PlatformGemini,
+		Credentials: map[string]any{
+			"pool_mode":                  true,
+			"custom_error_codes_enabled": true,
+			"custom_error_codes":         []any{float64(http.StatusUnprocessableEntity)},
+		},
+	}
+
+	decision := svc.applyGeminiUpstreamErrorPolicy(
+		context.Background(), account, http.StatusUnprocessableEntity, http.Header{}, []byte(`{"error":{"message":"configured"}}`), "gemini-2.5-pro",
+	)
+
+	require.Equal(t, ErrorPolicyCustomMatched, decision.Policy)
+	require.True(t, decision.StopScheduling)
+	require.False(t, decision.RetryableOnSameAccount(account, http.StatusUnprocessableEntity))
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Zero(t, repo.setRateLimitedCalls)
 }
 
 type geminiErrorPolicyRepo struct {

@@ -601,7 +601,7 @@ func TestOpenAIHandleFailoverExhausted_CapacityReturnsGenericUpstreamError(t *te
 		ResponseBody: []byte(`{"error":{"code":"server_is_overloaded","message":"Selected model is at capacity. Please try a different model."}}`),
 	}, false)
 
-	require.Equal(t, http.StatusBadGateway, w.Code)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 	require.Contains(t, w.Body.String(), "Upstream service temporarily unavailable")
 	require.NotContains(t, w.Body.String(), "server_is_overloaded")
 	require.NotContains(t, w.Body.String(), "Selected model is at capacity")
@@ -2605,7 +2605,12 @@ func TestOpenAIResponses_PoolRetriesStructuralCapacityThenSwitchesAccount(t *tes
 			ID: 9914, Name: "capacity-after-structure", Platform: service.PlatformOpenAI,
 			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true,
 			Concurrency: 1, Priority: 1,
-			Credentials: map[string]any{"api_key": "sk-first", "pool_mode": true, "pool_mode_retry_count": 3},
+			Credentials: map[string]any{
+				"api_key":                      "sk-first",
+				"pool_mode":                    true,
+				"pool_mode_retry_count":        3,
+				"pool_mode_retry_status_codes": []any{http.StatusServiceUnavailable},
+			},
 		},
 		{
 			ID: 9915, Name: "healthy-after-structure", Platform: service.PlatformOpenAI,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Chart as ChartJS, BarElement, CategoryScale, Legend, LinearScale, Tooltip } from 'chart.js'
 import { Bar } from 'vue-chartjs'
@@ -7,16 +7,56 @@ import type { OpsLatencyHistogramResponse } from '@/api/admin/ops'
 import type { ChartState } from '../types'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
+import Icon from '@/components/icons/Icon.vue'
+import {
+  DEFAULT_LATENCY_BUCKET_BOUNDARIES,
+  MAX_LATENCY_BUCKET_BOUNDARY_MS,
+  defaultLatencyBucketBoundaries,
+  normalizeLatencyBucketBoundaries
+} from '../latencyBuckets'
 
 ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend)
 
 interface Props {
   latencyData: OpsLatencyHistogramResponse | null
   loading: boolean
+  bucketBoundaries?: number[]
 }
 
-const props = defineProps<Props>()
+interface Emits {
+  (e: 'update:bucketBoundaries', value: number[]): void
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  bucketBoundaries: () => defaultLatencyBucketBoundaries()
+})
+const emit = defineEmits<Emits>()
 const { t } = useI18n()
+
+const showSettings = ref(false)
+const draftBoundaries = ref<string[]>(defaultLatencyBucketBoundaries().map(String))
+const normalizedDraftBoundaries = computed(() => normalizeLatencyBucketBoundaries(draftBoundaries.value))
+
+watch(showSettings, (show) => {
+  if (show) {
+    draftBoundaries.value = props.bucketBoundaries.map(String)
+  }
+})
+
+function openSettings() {
+  showSettings.value = true
+}
+
+function resetDraftBoundaries() {
+  draftBoundaries.value = defaultLatencyBucketBoundaries().map(String)
+}
+
+function applyBucketBoundaries() {
+  if (!normalizedDraftBoundaries.value) return
+  emit('update:bucketBoundaries', [...normalizedDraftBoundaries.value])
+  showSettings.value = false
+}
 
 const isDarkMode = computed(() => document.documentElement.classList.contains('dark'))
 const colors = computed(() => ({
@@ -75,7 +115,7 @@ const options = computed(() => {
 
 <template>
   <div class="flex h-full flex-col rounded-3xl bg-white p-6 shadow-sm ring-1 ring-gray-900/5 dark:bg-dark-900 dark:ring-dark-700">
-    <div class="mb-4 flex items-center justify-between">
+    <div class="mb-4 flex items-center justify-between gap-3">
       <h3 class="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
         <svg class="h-4 w-4 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path
@@ -88,6 +128,16 @@ const options = computed(() => {
         {{ t('admin.ops.latencyHistogram') }}
         <HelpTooltip :content="t('admin.ops.tooltips.latencyHistogram')" />
       </h3>
+      <button
+        type="button"
+        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-dark-800 dark:hover:text-gray-100"
+        :title="t('admin.ops.latencyBuckets.settings')"
+        :aria-label="t('admin.ops.latencyBuckets.settings')"
+        data-test="latency-bucket-settings"
+        @click="openSettings"
+      >
+        <Icon name="cog" size="sm" :stroke-width="2" />
+      </button>
     </div>
 
     <div class="min-h-0 flex-1">
@@ -97,5 +147,61 @@ const options = computed(() => {
         <EmptyState v-else :title="t('common.noData')" :description="t('admin.ops.charts.emptyRequest')" />
       </div>
     </div>
+
+    <BaseDialog
+      :show="showSettings"
+      :title="t('admin.ops.latencyBuckets.title')"
+      width="narrow"
+      @close="showSettings = false"
+    >
+      <div class="space-y-4">
+        <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+          {{ t('admin.ops.latencyBuckets.hint', { max: MAX_LATENCY_BUCKET_BOUNDARY_MS }) }}
+        </p>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label
+            v-for="(_, index) in DEFAULT_LATENCY_BUCKET_BOUNDARIES"
+            :key="index"
+            class="block"
+          >
+            <span class="input-label">{{ t('admin.ops.latencyBuckets.boundary', { index: index + 1 }) }}</span>
+            <input
+              v-model="draftBoundaries[index]"
+              type="number"
+              min="1"
+              :max="MAX_LATENCY_BUCKET_BOUNDARY_MS"
+              step="1"
+              class="input w-full"
+              :data-test="`latency-boundary-${index}`"
+            />
+          </label>
+        </div>
+        <p v-if="!normalizedDraftBoundaries" class="text-xs text-red-600 dark:text-red-400" role="alert">
+          {{ t('admin.ops.latencyBuckets.invalid') }}
+        </p>
+      </div>
+
+      <template #footer>
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <button type="button" class="btn btn-secondary" data-test="latency-boundary-reset" @click="resetDraftBoundaries">
+            {{ t('admin.ops.latencyBuckets.restoreDefaults') }}
+          </button>
+          <div class="flex items-center gap-2">
+            <button type="button" class="btn btn-secondary" @click="showSettings = false">
+              {{ t('common.cancel') }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="!normalizedDraftBoundaries"
+              data-test="latency-boundary-apply"
+              @click="applyBucketBoundaries"
+            >
+              {{ t('admin.ops.latencyBuckets.apply') }}
+            </button>
+          </div>
+        </div>
+      </template>
+    </BaseDialog>
   </div>
 </template>

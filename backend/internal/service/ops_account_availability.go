@@ -25,19 +25,6 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 		return nil, nil, nil, nil, err
 	}
 
-	if groupIDFilter != nil && *groupIDFilter > 0 {
-		filtered := make([]Account, 0, len(accounts))
-		for _, acc := range accounts {
-			for _, grp := range acc.Groups {
-				if grp != nil && grp.ID == *groupIDFilter {
-					filtered = append(filtered, acc)
-					break
-				}
-			}
-		}
-		accounts = filtered
-	}
-
 	now := time.Now()
 	collectedAt := now
 
@@ -48,6 +35,25 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 	for _, acc := range accounts {
 		if acc.ID <= 0 {
 			continue
+		}
+
+		groupsForAggregation := acc.Groups
+		var displayGroup *Group
+		if groupIDFilter != nil && *groupIDFilter > 0 {
+			groupsForAggregation = nil
+			for _, grp := range acc.Groups {
+				if grp != nil && grp.ID == *groupIDFilter {
+					groupsForAggregation = []*Group{grp}
+					displayGroup = grp
+					break
+				}
+			}
+			// 仓储层通常已完成分组过滤，这里继续防御，避免兼容回退返回越界账号。
+			if displayGroup == nil {
+				continue
+			}
+		} else if len(acc.Groups) > 0 {
+			displayGroup = acc.Groups[0]
 		}
 
 		isTempUnsched := false
@@ -86,7 +92,7 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 			}
 		}
 
-		for _, grp := range acc.Groups {
+		for _, grp := range groupsForAggregation {
 			if grp == nil || grp.ID <= 0 {
 				continue
 			}
@@ -112,9 +118,9 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 
 		displayGroupID := int64(0)
 		displayGroupName := ""
-		if len(acc.Groups) > 0 && acc.Groups[0] != nil {
-			displayGroupID = acc.Groups[0].ID
-			displayGroupName = acc.Groups[0].Name
+		if displayGroup != nil {
+			displayGroupID = displayGroup.ID
+			displayGroupName = displayGroup.Name
 		}
 
 		item := &AccountAvailability{

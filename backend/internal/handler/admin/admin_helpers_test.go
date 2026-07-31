@@ -59,7 +59,7 @@ func TestParseOpsDuration(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestParseOpsOpenAITokenStatsDuration(t *testing.T) {
+func TestParseOpsTokenStatsDuration(t *testing.T) {
 	tests := []struct {
 		input string
 		want  time.Duration
@@ -74,20 +74,20 @@ func TestParseOpsOpenAITokenStatsDuration(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got, ok := parseOpsOpenAITokenStatsDuration(tt.input)
+		got, ok := parseOpsTokenStatsDuration(tt.input)
 		require.Equal(t, tt.ok, ok, "input=%s", tt.input)
 		require.Equal(t, tt.want, got, "input=%s", tt.input)
 	}
 }
 
-func TestParseOpsOpenAITokenStatsFilter_Defaults(t *testing.T) {
+func TestParseOpsTokenStatsFilter_Defaults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 
 	before := time.Now().UTC()
-	filter, err := parseOpsOpenAITokenStatsFilter(c)
+	filter, err := parseOpsTokenStatsFilter(c)
 	after := time.Now().UTC()
 
 	require.NoError(t, err)
@@ -103,20 +103,20 @@ func TestParseOpsOpenAITokenStatsFilter_Defaults(t *testing.T) {
 	require.WithinDuration(t, after, filter.EndTime, 2*time.Second)
 }
 
-func TestParseOpsOpenAITokenStatsFilter_WithTopN(t *testing.T) {
+func TestParseOpsTokenStatsFilter_WithTopN(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(
 		http.MethodGet,
-		"/?time_range=1h&platform=openai&group_id=12&top_n=50",
+		"/?time_range=1h&platform=anthropic&group_id=12&top_n=50",
 		nil,
 	)
 
-	filter, err := parseOpsOpenAITokenStatsFilter(c)
+	filter, err := parseOpsTokenStatsFilter(c)
 	require.NoError(t, err)
 	require.Equal(t, "1h", filter.TimeRange)
-	require.Equal(t, "openai", filter.Platform)
+	require.Equal(t, "anthropic", filter.Platform)
 	require.NotNil(t, filter.GroupID)
 	require.Equal(t, int64(12), *filter.GroupID)
 	require.Equal(t, 50, filter.TopN)
@@ -124,7 +124,7 @@ func TestParseOpsOpenAITokenStatsFilter_WithTopN(t *testing.T) {
 	require.Equal(t, 0, filter.PageSize)
 }
 
-func TestParseOpsOpenAITokenStatsFilter_InvalidParams(t *testing.T) {
+func TestParseOpsTokenStatsFilter_InvalidParams(t *testing.T) {
 	tests := []string{
 		"/?time_range=7d",
 		"/?group_id=0",
@@ -144,7 +144,7 @@ func TestParseOpsOpenAITokenStatsFilter_InvalidParams(t *testing.T) {
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequest(http.MethodGet, rawURL, nil)
 
-		_, err := parseOpsOpenAITokenStatsFilter(c)
+		_, err := parseOpsTokenStatsFilter(c)
 		require.Error(t, err, "url=%s", rawURL)
 	}
 }
@@ -165,6 +165,28 @@ func TestParseOpsTimeRange(t *testing.T) {
 	c2.Request = httptest.NewRequest(http.MethodGet, "/?start_time=bad", nil)
 	_, _, err = parseOpsTimeRange(c2, "1h")
 	require.Error(t, err)
+}
+
+func TestParseOpsLatencyBucketBoundaries(t *testing.T) {
+	defaults, err := parseOpsLatencyBucketBoundaries("")
+	require.NoError(t, err)
+	require.Equal(t, []int64{100, 200, 500, 1000, 2000}, defaults)
+
+	custom, err := parseOpsLatencyBucketBoundaries("1000, 2000,5000,10000,20000")
+	require.NoError(t, err)
+	require.Equal(t, []int64{1000, 2000, 5000, 10000, 20000}, custom)
+
+	invalid := []string{
+		"100,200",
+		"0,200,500,1000,2000",
+		"100,200,200,1000,2000",
+		"100,200,500,1000,86400001",
+		"100,abc,500,1000,2000",
+	}
+	for _, raw := range invalid {
+		_, err := parseOpsLatencyBucketBoundaries(raw)
+		require.Error(t, err, "raw=%s", raw)
+	}
 }
 
 func TestParseOpsRealtimeWindow(t *testing.T) {

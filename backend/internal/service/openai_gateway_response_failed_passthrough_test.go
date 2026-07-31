@@ -5,12 +5,14 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/model"
 	"github.com/gin-gonic/gin"
@@ -196,6 +198,113 @@ func TestForwardAsChatCompletions_ResponseFailed_NoRule_Still502(t *testing.T) {
 
 	require.Error(t, err)
 	require.Equal(t, http.StatusBadGateway, rec.Code, "without passthrough rule should still be 502")
+}
+
+// TestForwardAsChatCompletions_ResponseFailedCustomErrorMissReturnsGeneric500
+// 验证 HTTP 200 流内失败也遵守自定义错误码未命中的通用错误契约。
+func TestForwardAsChatCompletions_ResponseFailedCustomErrorMissReturnsGeneric500(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	failed := `{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"temporary failure"},"output":[]}}`
+	repo := &openAIWSPolicyRepo{}
+	svc := &OpenAIGatewayService{
+		cfg: rawChatCompletionsTestConfig(),
+		httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: " + failed + "\n\n")),
+		}},
+	}
+	svc.rateLimitService = NewRateLimitService(repo, nil, svc.cfg, nil, nil)
+	account := rawChatCompletionsTestAccount()
+	account.Credentials["custom_error_codes_enabled"] = true
+	account.Credentials["custom_error_codes"] = []any{float64(http.StatusUnprocessableEntity)}
+
+	_, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.False(t, errors.As(err, &failoverErr))
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Equal(t, "Upstream gateway error", gjson.GetBytes(rec.Body.Bytes(), "error.message").String())
+	require.Zero(t, repo.setErrorCalls)
+}
+
+// TestForwardAsChatCompletions_ResponseFailedCustomNonDefaultStatusFailsOver
+// 验证 response.failed 显式携带的非默认状态码可以命中账号策略并切号。
+func TestForwardAsChatCompletions_ResponseFailedCustomNonDefaultStatusFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	failed := `{"type":"response.failed","response":{"status":"failed","error":{"status_code":422,"code":"configured","type":"upstream_error","message":"configured failure"},"output":[]}}`
+	repo := &openAIWSPolicyRepo{}
+	svc := &OpenAIGatewayService{
+		cfg: rawChatCompletionsTestConfig(),
+		httpUpstream: &httpUpstreamRecorder{resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("data: " + failed + "\n\n")),
+		}},
+	}
+	svc.rateLimitService = NewRateLimitService(repo, nil, svc.cfg, nil, nil)
+	account := rawChatCompletionsTestAccount()
+	account.Credentials["custom_error_codes_enabled"] = true
+	account.Credentials["custom_error_codes"] = []any{float64(http.StatusUnprocessableEntity)}
+
+	_, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusUnprocessableEntity, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, c.Writer.Written())
+	require.Equal(t, 1, repo.setErrorCalls)
+}
+
+// TestOpenAIResponsesStreaming_ResponseFailedCustomStatusFailsOver 验证原生
+// Responses 流处理不会绕过 HTTP 200 终止失败事件中的账号显式策略。
+func TestOpenAIResponsesStreaming_ResponseFailedCustomStatusFailsOver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	failed := `{"type":"response.failed","response":{"status":"failed","error":{"status_code":422,"code":"configured","message":"configured failure"}}}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("data: " + failed + "\n\n")),
+	}
+	repo := &openAIWSPolicyRepo{}
+	cfg := rawChatCompletionsTestConfig()
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		rateLimitService: NewRateLimitService(repo, nil, cfg, nil, nil),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := rawChatCompletionsTestAccount()
+	account.Credentials["custom_error_codes_enabled"] = true
+	account.Credentials["custom_error_codes"] = []any{float64(http.StatusUnprocessableEntity)}
+
+	_, err := svc.handleStreamingResponse(
+		context.Background(), resp, c, account, time.Now(), "gpt-5.4", "gpt-5.4",
+	)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusUnprocessableEntity, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, c.Writer.Written())
+	require.Equal(t, 1, repo.setErrorCalls)
 }
 
 // bindStatusCodePassthroughRule 绑定一条按错误码+关键词双条件(MatchModeAll)匹配的规则。

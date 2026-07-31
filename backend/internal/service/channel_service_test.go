@@ -2430,6 +2430,58 @@ func TestValidatePricingBillingMode(t *testing.T) {
 			}},
 		},
 		{
+			name: "OpenAI token fast_mode_multiplier with explicit price - valid",
+			pricing: []ChannelModelPricing{{
+				Platform:           PlatformOpenAI,
+				BillingMode:        BillingModeToken,
+				FastModeMultiplier: testPtrFloat64(2),
+				InputPrice:         testPtrFloat64(0.01),
+			}},
+		},
+		{
+			name: "fast_mode_multiplier on non-OpenAI platform - invalid",
+			pricing: []ChannelModelPricing{{
+				Platform:           PlatformAnthropic,
+				BillingMode:        BillingModeToken,
+				FastModeMultiplier: testPtrFloat64(2),
+				InputPrice:         testPtrFloat64(0.01),
+			}},
+			wantErr: true,
+			errMsg:  "fast_mode_multiplier is only supported for OpenAI pricing",
+		},
+		{
+			name: "fast_mode_multiplier on per-request pricing - invalid",
+			pricing: []ChannelModelPricing{{
+				Platform:           PlatformOpenAI,
+				BillingMode:        BillingModePerRequest,
+				FastModeMultiplier: testPtrFloat64(2),
+				PerRequestPrice:    testPtrFloat64(0.01),
+			}},
+			wantErr: true,
+			errMsg:  "fast_mode_multiplier is only supported for token billing mode",
+		},
+		{
+			name: "fast_mode_multiplier without explicit price - invalid",
+			pricing: []ChannelModelPricing{{
+				Platform:           PlatformOpenAI,
+				BillingMode:        BillingModeToken,
+				FastModeMultiplier: testPtrFloat64(2),
+			}},
+			wantErr: true,
+			errMsg:  "fast_mode_multiplier requires at least one explicit price",
+		},
+		{
+			name: "negative fast_mode_multiplier - invalid",
+			pricing: []ChannelModelPricing{{
+				Platform:           PlatformOpenAI,
+				BillingMode:        BillingModeToken,
+				FastModeMultiplier: testPtrFloat64(-1),
+				InputPrice:         testPtrFloat64(0.01),
+			}},
+			wantErr: true,
+			errMsg:  "fast_mode_multiplier must be >= 0",
+		},
+		{
 			name: "interval with no price fields - invalid",
 			pricing: []ChannelModelPricing{{
 				BillingMode:     BillingModePerRequest,
@@ -2452,6 +2504,17 @@ func TestValidatePricingBillingMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateAccountStatsPricingEntries_RejectsFastModeMultiplier(t *testing.T) {
+	err := validateAccountStatsPricingEntries([]ChannelModelPricing{{
+		Platform:           PlatformOpenAI,
+		BillingMode:        BillingModeToken,
+		FastModeMultiplier: testPtrFloat64(2),
+		InputPrice:         testPtrFloat64(0.01),
+	}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "fast_mode_multiplier is not supported for account stats pricing")
 }
 
 // ---------------------------------------------------------------------------

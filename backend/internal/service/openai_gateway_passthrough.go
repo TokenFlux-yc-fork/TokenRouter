@@ -611,7 +611,12 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 	reqModel, _, _ := extractOpenAIRequestMetaFromBody(requestBody)
 	canonicalModel := canonicalOpenAIAccountSchedulingModel(account, reqModel)
-	shouldDisable := s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, canonicalModel)
+	decision := s.applyOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, canonicalModel)
+	if decision.ShouldReturnGenericError() {
+		MarkResponseCommitted(c)
+		writeOpenAIPassthroughErrorEnvelope(c, http.StatusInternalServerError, resp.Header, "Upstream gateway error")
+		return fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
+	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform:             account.Platform,
 		AccountID:            account.ID,
@@ -629,7 +634,7 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
 		resp.Header,
 		body,
 		upstreamMsg,
-		!shouldDisable && account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, body)),
+		decision.RetryableOnSameAccount(account, resp.StatusCode),
 	)
 }
 
@@ -641,7 +646,6 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	requestBody []byte,
 	responseBody []byte,
 ) error {
-	MarkResponseCommitted(c)
 	body := s.redactAgentIdentitySensitiveBody(ctx, account, responseBody)
 
 	// cyber_policy 仍按原始 body 打内部标记，供 handler 事后写风控/邮件；面向客户端的
@@ -670,13 +674,30 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 	clientInvalidRequest := isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, body)
+	requestScopedError := cyberHit || clientInvalidRequest || isOpenAIContextWindowError(upstreamMsg, body) ||
+		isOpenAIRequestBodyTooLargeError(resp.StatusCode, upstreamMsg, body)
 	// 错误体虽不会原样透传，运行态账号状态仍需更新，避免粘性路由继续复用
-	// 刚被限流的账号。cyber 例外：不冷却账号。
-	if !cyberHit && !clientInvalidRequest {
+	// 刚被限流的账号。请求级错误例外：不冷却账号，也不触发池模式重试。
+	if !requestScopedError {
 		reqModel, _, _ := extractOpenAIRequestMetaFromBody(requestBody)
 		canonicalModel := canonicalOpenAIAccountSchedulingModel(account, reqModel)
-		_ = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, canonicalModel)
+		decision := s.applyOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, canonicalModel)
+		if decision.ShouldReturnGenericError() {
+			MarkResponseCommitted(c)
+			writeOpenAIPassthroughErrorEnvelope(c, http.StatusInternalServerError, resp.Header, "Upstream gateway error")
+			return fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
+		}
+		if decision.ShouldFailoverWithDefaults(account, resp.StatusCode, false, false) {
+			return newOpenAIUpstreamFailoverError(
+				resp.StatusCode,
+				resp.Header,
+				body,
+				upstreamMsg,
+				decision.RetryableOnSameAccount(account, resp.StatusCode),
+			)
+		}
 	}
+	MarkResponseCommitted(c)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 		Platform:             account.Platform,
 		AccountID:            account.ID,
@@ -904,6 +925,19 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 	if isOpenAIContextWindowError(message, payload) {
 		return http.StatusBadRequest
 	}
+	// 聚合上游可能在 HTTP 200 的 response.failed 中携带真实状态码；
+	// 必须优先保留，才能让任意自定义错误码命中统一账号策略。
+	for _, path := range []string{
+		"response.error.status_code",
+		"response.error.status",
+		"error.status_code",
+		"error.status",
+	} {
+		status := int(gjson.GetBytes(payload, path).Int())
+		if status >= http.StatusBadRequest && status <= 599 {
+			return status
+		}
+	}
 
 	code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(payload)))
 	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String()))
@@ -925,9 +959,33 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 		return http.StatusForbidden
 	case code == "server_is_overloaded" || code == "slow_down":
 		return http.StatusServiceUnavailable
+	case isOpenAITransientProcessingError(http.StatusBadRequest, message, payload):
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusBadGateway
 	}
+}
+
+// openAIStreamGenericFailedEventPayload 构造流已经提交后使用的通用失败终止事件。
+func openAIStreamGenericFailedEventPayload() []byte {
+	return []byte(`{"type":"response.failed","response":{"status":"failed","error":{"type":"upstream_error","message":"Upstream gateway error"}}}`)
+}
+
+// applyOpenAIStreamFailedAccountPolicy 将 HTTP 200 流内失败接入统一账号策略。
+// status 是事件推断出的语义状态码，仅用于策略、故障转移和最终错误分类。
+func (s *OpenAIGatewayService) applyOpenAIStreamFailedAccountPolicy(
+	ctx context.Context,
+	account *Account,
+	canonicalModel string,
+	headers http.Header,
+	payload []byte,
+	message string,
+) (int, UpstreamErrorDecision) {
+	status := openAIStreamFailedEventSemanticStatus(payload, message)
+	if account != nil && account.Platform == PlatformGrok {
+		return status, s.applyGrokAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
+	}
+	return status, s.applyOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
 }
 
 func openAIStreamFailedEventPassthroughBody(payload []byte, failedMessage string) []byte {
@@ -1093,6 +1151,28 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 	payload []byte,
 	message string,
 ) *UpstreamFailoverError {
+	statusCode := http.StatusBadGateway
+	if openAIStreamEventShouldFailover(payload, "response.failed", message) {
+		statusCode = openAIStreamFailedEventSemanticStatus(payload, message)
+	}
+	return s.newOpenAIStreamPolicyFailoverError(
+		c, account, passthrough, upstreamRequestID, nil, statusCode, payload, message, false,
+	)
+}
+
+// newOpenAIStreamPolicyFailoverError 构造应用账号策略后的流内故障转移错误。
+// 下游错误体保持统一封装，同时保留语义状态和上游响应头供 handler 最终处理。
+func (s *OpenAIGatewayService) newOpenAIStreamPolicyFailoverError(
+	c *gin.Context,
+	account *Account,
+	passthrough bool,
+	upstreamRequestID string,
+	responseHeaders http.Header,
+	statusCode int,
+	payload []byte,
+	message string,
+	retryableOnSameAccount bool,
+) *UpstreamFailoverError {
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
 		message = "OpenAI stream disconnected before completion"
@@ -1104,11 +1184,7 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 			"message": message,
 		},
 	})
-	return &UpstreamFailoverError{
-		StatusCode:             http.StatusBadGateway,
-		ResponseBody:           body,
-		RetryableOnSameAccount: account != nil && account.IsPoolMode() && isOpenAITransientProcessingError(http.StatusBadRequest, message, payload),
-	}
+	return newOpenAIUpstreamFailoverError(statusCode, responseHeaders, body, message, retryableOnSameAccount)
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
@@ -1403,11 +1479,30 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 						UpstreamOutTok: usage.OutputTokens,
 					})
 				}
-				if !streamOutputStarted() {
-					if isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, dataBytes) {
-						return resultWithUsage(),
-							s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, dataBytes, failedMessage)
-					}
+				policyStatus, decision := s.applyOpenAIStreamFailedAccountPolicy(
+					ctx, account, mappedModel, resp.Header, dataBytes, failedMessage,
+				)
+				outputStarted := streamOutputStarted()
+				if !outputStarted && decision.ShouldReturnGenericError() {
+					MarkResponseCommitted(c)
+					writeOpenAIPassthroughErrorEnvelope(c, http.StatusInternalServerError, resp.Header, "Upstream gateway error")
+					return resultWithUsage(), fmt.Errorf("upstream response failed: status=%d (not in custom error codes)", policyStatus)
+				}
+				if !outputStarted && decision.ShouldFailover(
+					account, policyStatus, openAIStreamFailedEventShouldFailover(dataBytes, failedMessage),
+				) {
+					return resultWithUsage(), s.newOpenAIStreamPolicyFailoverError(
+						c, account, true, upstreamRequestID, resp.Header, policyStatus, dataBytes, failedMessage,
+						decision.RetryableOnSameAccount(account, policyStatus),
+					)
+				}
+				if outputStarted && decision.ShouldReturnGenericError() {
+					dataBytes = openAIStreamGenericFailedEventPayload()
+					trimmedData = string(dataBytes)
+					line = "data: " + string(dataBytes)
+					failedMessage = "Upstream gateway error"
+				}
+				if !outputStarted && !decision.ShouldReturnGenericError() {
 					if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, dataBytes, failedMessage); matched {
 						// 命中透传规则也要记录 ops 上游错误事件（对齐 CC/Messages 与
 						// antigravity 先例），否则透传命中的 failed 在监控中不可见。
@@ -1430,10 +1525,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 							return resultWithUsage(), fmt.Errorf("write committed Responses failure: %w", writeErr)
 						}
 						return resultWithUsage(), fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
-					}
-					if openAIStreamEventShouldFailover(dataBytes, eventType, failedMessage) {
-						return resultWithUsage(),
-							s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, dataBytes, failedMessage)
 					}
 				}
 				forceFlushFailedEvent = true
@@ -1678,7 +1769,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 
 	bodyLooksLikeSSE := bodyHasSSEFraming(body)
 	if isEventStreamResponse(resp.Header) || bodyLooksLikeSSE {
-		return s.handlePassthroughSSEToJSON(resp, c, body, account, originalModel, mappedModel)
+		return s.handlePassthroughSSEToJSON(ctx, resp, c, account, body, originalModel, mappedModel)
 	}
 	if IsOpenAITransientCapacityErrorBody(body) {
 		return nil, s.newOpenAIStreamFailoverError(c, account, true, resp.Header.Get("x-request-id"), body, extractUpstreamErrorMessage(body))
@@ -1729,7 +1820,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 // response for the passthrough path. It mirrors handleSSEToJSON while
 // preserving passthrough payloads, except compact-only model remapping may
 // rewrite model fields back to the original requested model.
-func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, body []byte, account *Account, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
+func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 	if terminalOK {
@@ -1776,6 +1867,20 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		if terminalType == "response.failed" {
 			if msg == "" {
 				msg = "Upstream compact response failed"
+			}
+			policyStatus, decision := s.applyOpenAIStreamFailedAccountPolicy(
+				ctx, account, mappedModel, resp.Header, terminalPayload, msg,
+			)
+			if decision.ShouldReturnGenericError() {
+				MarkResponseCommitted(c)
+				writeOpenAIPassthroughErrorEnvelope(c, http.StatusInternalServerError, resp.Header, "Upstream gateway error")
+				return nil, fmt.Errorf("upstream compact response failed: status=%d (not in custom error codes)", policyStatus)
+			}
+			if decision.ShouldFailover(account, policyStatus, openAIStreamFailedEventShouldFailover(terminalPayload, msg)) {
+				return nil, s.newOpenAIStreamPolicyFailoverError(
+					c, account, true, strings.TrimSpace(resp.Header.Get("x-request-id")), resp.Header,
+					policyStatus, terminalPayload, msg, decision.RetryableOnSameAccount(account, policyStatus),
+				)
 			}
 			err := s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 			return nil, wrapOpenAIUpstreamWarningIfCyber(resp.StatusCode, terminalPayload, msg, err)

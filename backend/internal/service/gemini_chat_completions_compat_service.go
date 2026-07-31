@@ -210,16 +210,16 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
-		policy := ErrorPolicyNone
-		if s.rateLimitService != nil {
-			policy = s.rateLimitService.CheckErrorPolicy(ctx, account, resp.StatusCode, respBody, mappedModel)
-		}
-		if policy != ErrorPolicyTempUnscheduled {
-			s.handleGeminiUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		}
+		decision := s.applyGeminiUpstreamErrorPolicy(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
 		evBody := unwrapIfNeeded(account.Type == AccountTypeOAuth, respBody)
+		if decision.ShouldReturnGenericError() {
+			genericBody := []byte(`{"error":{"message":"Upstream gateway error"}}`)
+			return nil, s.writeGeminiChatCompletionsMappedError(c, account, http.StatusInternalServerError, requestID, genericBody)
+		}
 
-		if s.shouldFailoverGeminiUpstreamError(resp.StatusCode) {
+		msg400 := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
+		googleConfigError := resp.StatusCode == http.StatusBadRequest && isGoogleProjectConfigError(msg400)
+		if decision.ShouldFailover(account, resp.StatusCode, googleConfigError || s.shouldFailoverGeminiUpstreamError(resp.StatusCode)) {
 			upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(evBody)))
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
@@ -230,7 +230,11 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: evBody}
+			return nil, &UpstreamFailoverError{
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           evBody,
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+			}
 		}
 
 		return nil, s.writeGeminiChatCompletionsMappedError(c, account, resp.StatusCode, requestID, evBody)

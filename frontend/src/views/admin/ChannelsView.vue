@@ -450,6 +450,7 @@
                   :key="idx"
                   :entry="entry"
                   :platform="section.platform"
+                  :show-fast-mode-multiplier="section.platform === 'openai'"
                   @update="updatePricingEntry(sIdx, idx, $event)"
                   @remove="removePricingEntry(sIdx, idx)"
                 />
@@ -867,6 +868,7 @@ function addPricingEntry(sectionIdx: number) {
     models: [],
     billing_mode: 'token',
     price_multiplier: null,
+    fast_mode_multiplier: null,
     input_price: null,
     output_price: null,
     cache_write_price: null,
@@ -926,6 +928,7 @@ async function syncLatestModels(sectionIdx: number) {
       models: newModels,
       billing_mode: 'token',
       price_multiplier: null,
+      fast_mode_multiplier: null,
       input_price: defaultPricing.input_price,
       output_price: defaultPricing.output_price,
       cache_write_price: defaultPricing.cache_write_price,
@@ -992,6 +995,7 @@ function addRulePricingEntry(sectionIdx: number, ruleIndex: number) {
     models: [],
     billing_mode: 'token',
     price_multiplier: null,
+    fast_mode_multiplier: null,
     input_price: null,
     output_price: null,
     cache_write_price: null,
@@ -1151,6 +1155,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
         models: entry.models,
         billing_mode: entry.billing_mode,
         price_multiplier: toNullableNumber(entry.price_multiplier),
+        fast_mode_multiplier: toNullableNumber(entry.fast_mode_multiplier),
         input_price: mTokToPerToken(entry.input_price),
         output_price: mTokToPerToken(entry.output_price),
         cache_write_price: mTokToPerToken(entry.cache_write_price),
@@ -1242,6 +1247,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
         models: p.models || [],
         billing_mode: p.billing_mode,
         price_multiplier: p.price_multiplier ?? null,
+        fast_mode_multiplier: p.fast_mode_multiplier ?? null,
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),
         cache_write_price: perTokenToMTok(p.cache_write_price),
@@ -1432,6 +1438,7 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
         models: [...(p.models || [])],
         billing_mode: p.billing_mode,
         price_multiplier: p.price_multiplier ?? null,
+        fast_mode_multiplier: null,
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),
         cache_write_price: perTokenToMTok(p.cache_write_price),
@@ -1563,6 +1570,23 @@ async function handleSubmit() {
           'admin.channels.form.priceMultiplierRequiresPrice',
           { models },
           `模型 ${models} 配置定价倍率时，必须至少填写一项价格`,
+        ))
+        activeTab.value = section.platform
+        return
+      }
+    }
+  }
+
+  // Fast 倍率同样必须建立在明确的渠道价格上，避免空定价行改变默认计费语义。
+  for (const section of form.platforms.filter(s => s.enabled && s.platform === 'openai')) {
+    for (const entry of section.model_pricing) {
+      if (entry.models.length === 0 || toNullableNumber(entry.fast_mode_multiplier) === null) continue
+      if (!hasExplicitPricing(entry)) {
+        const models = entry.models.join(', ')
+        appStore.showError(t(
+          'admin.channels.form.fastModeMultiplierRequiresPrice',
+          { models },
+          `模型 ${models} 配置 Fast 模式倍率时，必须至少填写一项价格`,
         ))
         activeTab.value = section.platform
         return

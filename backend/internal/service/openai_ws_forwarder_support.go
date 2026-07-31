@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -27,6 +28,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	payload map[string]any,
 	previousResponseID string,
 	reqBody map[string]any,
+	canonicalModel string,
 	account *Account,
 	stateStore OpenAIWSStateStore,
 	groupID int64,
@@ -131,7 +133,6 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
-			s.persistOpenAIWSErrorSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
 			errMsg := strings.TrimSpace(errMsgRaw)
 			if errMsg == "" {
 				errMsg = "OpenAI websocket prewarm error"
@@ -150,6 +151,22 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 				errMessage,
 			)
 			lease.MarkBroken()
+			statusCode := openAIWSErrorPolicyStatus(message)
+			errorDecision := s.handleOpenAIWSErrorEventTransientFailure(
+				ctx, account, canonicalModel, lease.HandshakeHeaders(), message,
+			)
+			if errorDecision.ShouldReturnGenericError() {
+				return &openAIWSGenericPolicyError{upstreamStatus: statusCode}
+			}
+			if errorDecision.ShouldFailoverWithDefaults(account, statusCode, false, s.shouldFailoverOpenAIWSError(account, statusCode, message)) {
+				return newOpenAIUpstreamFailoverError(
+					statusCode,
+					lease.HandshakeHeaders(),
+					message,
+					errMsg,
+					errorDecision.RetryableOnSameAccount(account, statusCode),
+				)
+			}
 			if canFallback {
 				return wrapOpenAIWSFallback("prewarm_"+fallbackReason, errors.New(errMsg))
 			}
@@ -264,40 +281,112 @@ func openAIWSPayloadTransientStatus(payload []byte) int {
 	}
 }
 
-func (s *OpenAIGatewayService) handleOpenAIWSTerminalTransientFailure(ctx context.Context, account *Account, canonicalModel string, headers http.Header, payload []byte) string {
-	eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
-	terminalEvent := normalizeOpenAIWSTerminalEvent(eventType)
-	if terminalEvent != "response.failed" {
-		return terminalEvent
+// openAIWSErrorPolicyStatus 解析 WS 错误事件用于账号策略的状态码。
+// 事件显式携带状态码时必须原样保留，否则按既有 WS 错误类型映射，避免瞬态推断改变自定义规则的匹配值。
+func openAIWSErrorPolicyStatus(payload []byte) int {
+	if len(payload) == 0 {
+		return 0
 	}
-	status := openAIWSPayloadTransientStatus(payload)
-	if status != 0 {
-		if account != nil && account.Platform == PlatformGrok {
-			s.handleGrokAccountUpstreamError(ctx, account, status, headers, payload)
-		} else {
-			s.handleOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
+	for _, path := range []string{
+		"error.status_code",
+		"error.status",
+		"response.error.status_code",
+		"response.error.status",
+	} {
+		status := int(gjson.GetBytes(payload, path).Int())
+		if status >= http.StatusBadRequest && status <= 599 {
+			return status
 		}
 	}
-	return terminalEvent
+	codeRaw, errTypeRaw, _ := parseOpenAIWSErrorEventFields(payload)
+	if codeRaw == "" {
+		codeRaw = strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String())
+	}
+	if errTypeRaw == "" {
+		errTypeRaw = strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String())
+	}
+	return openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw)
 }
 
-func (s *OpenAIGatewayService) handleOpenAIWSErrorEventTransientFailure(ctx context.Context, account *Account, canonicalModel string, headers http.Header, payload []byte) {
+// openAIWSTerminalPolicyDecision 保留终止事件类型及其账号策略结果，
+// 调用方必须在写给客户端前判断通用错误和故障转移。
+type openAIWSTerminalPolicyDecision struct {
+	TerminalEvent string
+	StatusCode    int
+	Decision      UpstreamErrorDecision
+}
+
+func (s *OpenAIGatewayService) handleOpenAIWSTerminalTransientFailure(ctx context.Context, account *Account, canonicalModel string, headers http.Header, payload []byte) openAIWSTerminalPolicyDecision {
+	eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+	result := openAIWSTerminalPolicyDecision{
+		TerminalEvent: normalizeOpenAIWSTerminalEvent(eventType),
+		Decision:      UpstreamErrorDecision{Policy: ErrorPolicyNone},
+	}
+	if result.TerminalEvent != "response.failed" {
+		return result
+	}
+	result.StatusCode = openAIWSErrorPolicyStatus(payload)
+	if result.StatusCode != 0 {
+		result.Decision = s.applyOpenAIWSEventErrorPolicy(ctx, account, canonicalModel, result.StatusCode, headers, payload)
+	}
+	return result
+}
+
+func (s *OpenAIGatewayService) handleOpenAIWSErrorEventTransientFailure(ctx context.Context, account *Account, canonicalModel string, headers http.Header, payload []byte) UpstreamErrorDecision {
 	eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 	if eventType != "error" {
-		return
+		return UpstreamErrorDecision{Policy: ErrorPolicyNone}
 	}
-	status := openAIWSPayloadTransientStatus(payload)
-	if status != 0 {
-		s.handleOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
-	}
+	status := openAIWSErrorPolicyStatus(payload)
+	return s.applyOpenAIWSEventErrorPolicy(ctx, account, canonicalModel, status, headers, payload)
 }
 
-func (s *OpenAIGatewayService) handleOpenAIWSDialTransientFailure(ctx context.Context, account *Account, canonicalModel string, err error) {
+func (s *OpenAIGatewayService) handleOpenAIWSDialTransientFailure(ctx context.Context, account *Account, canonicalModel string, err error) UpstreamErrorDecision {
 	var dialErr *openAIWSDialError
-	if !errors.As(err, &dialErr) || dialErr == nil || !shouldCooldownOpenAITransientUpstreamError(dialErr.StatusCode, dialErr.ResponseBody) {
-		return
+	if !errors.As(err, &dialErr) || dialErr == nil {
+		return UpstreamErrorDecision{Policy: ErrorPolicyNone}
 	}
-	s.handleOpenAIAccountUpstreamError(ctx, account, dialErr.StatusCode, dialErr.ResponseHeaders, dialErr.ResponseBody, canonicalModel)
+	return s.applyOpenAIWSEventErrorPolicy(ctx, account, canonicalModel, dialErr.StatusCode, dialErr.ResponseHeaders, dialErr.ResponseBody)
+}
+
+// applyOpenAIWSEventErrorPolicy 将握手和事件错误接入统一账号策略。
+// 请求级错误保持原样，响应尚未输出时由调用方依据返回决策决定是否故障转移。
+func (s *OpenAIGatewayService) applyOpenAIWSEventErrorPolicy(
+	ctx context.Context,
+	account *Account,
+	canonicalModel string,
+	statusCode int,
+	headers http.Header,
+	payload []byte,
+) UpstreamErrorDecision {
+	if statusCode == 0 || detectOpenAIWSHTTPBridgeRequestScopedError(account, statusCode, extractUpstreamErrorMessage(payload), payload) {
+		return UpstreamErrorDecision{Policy: ErrorPolicyNone}
+	}
+	if account != nil && account.Platform == PlatformGrok {
+		return s.applyGrokAccountUpstreamError(ctx, account, statusCode, headers, payload, canonicalModel)
+	}
+	return s.applyOpenAIAccountUpstreamError(ctx, account, statusCode, headers, payload, canonicalModel)
+}
+
+// shouldFailoverOpenAIWSError 使用对应平台的 HTTP 错误分类作为 WS 握手和事件错误的默认切号规则。
+func (s *OpenAIGatewayService) shouldFailoverOpenAIWSError(account *Account, statusCode int, payload []byte) bool {
+	if statusCode == 0 {
+		return false
+	}
+	if account != nil && account.Platform == PlatformGrok {
+		return s.shouldFailoverGrokUpstreamError(statusCode, payload)
+	}
+	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(payload)))
+	return s.shouldFailoverOpenAIUpstreamResponse(statusCode, upstreamMsg, payload)
+}
+
+// openAIWSGenericPolicyCloseError 在 WS 入站尚未输出时用统一文案终止连接。
+func openAIWSGenericPolicyCloseError(statusCode int) error {
+	return NewOpenAIWSClientCloseError(
+		coderws.StatusInternalError,
+		"Upstream gateway error",
+		&openAIWSGenericPolicyError{upstreamStatus: statusCode},
+	)
 }
 
 func isOpenAIWSTokenEvent(eventType string) bool {
@@ -630,16 +719,6 @@ func isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw string) bool {
 		return true
 	}
 	return false
-}
-
-func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string) {
-	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI {
-		return
-	}
-	if !isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
-		return
-	}
-	s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody)
 }
 
 func classifyOpenAIWSErrorEventFromRaw(codeRaw, errTypeRaw, msgRaw string) (string, bool) {

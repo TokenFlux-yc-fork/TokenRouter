@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIngressRejectAdminRoutesRequireAdminAuthentication(t *testing.T) {
+func TestOpsAdminRoutesRequireAdminAuthentication(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{Ops: adminhandler.NewOpsHandler(nil)}}
@@ -30,6 +30,8 @@ func TestIngressRejectAdminRoutesRequireAdminAuthentication(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/admin/ops/ingress-rejections",
 		"/api/v1/admin/ops/ingress-rejections/health",
+		"/api/v1/admin/ops/dashboard/token-stats",
+		"/api/v1/admin/ops/dashboard/openai-token-stats",
 	} {
 		for _, tc := range []struct {
 			name       string

@@ -157,29 +157,107 @@ type ErrorPolicyResult int
 
 const (
 	ErrorPolicyNone            ErrorPolicyResult = iota // 未命中任何策略，继续默认逻辑
-	ErrorPolicySkipped                                  // 自定义错误码开启但未命中，跳过处理
-	ErrorPolicyMatched                                  // 自定义错误码命中，应停止调度
+	ErrorPolicyCustomSkipped                            // 自定义错误码开启但未命中，返回通用错误
+	ErrorPolicyCustomMatched                            // 自定义错误码命中，停止调度
 	ErrorPolicyTempUnscheduled                          // 临时不可调度规则命中
+	ErrorPolicyPoolBypassed                             // 池模式跳过默认本地状态，继续响应分类
 )
+
+// UpstreamErrorDecision 汇总显式策略和默认账号状态处理结果。
+// 网关必须使用 Policy 区分池模式绕过与自定义错误码未命中，不能只依赖 StopScheduling。
+type UpstreamErrorDecision struct {
+	Policy         ErrorPolicyResult
+	StopScheduling bool
+}
+
+// ShouldReturnGenericError 表示应按自定义错误码约定返回通用 500，且不切换账号。
+func (d UpstreamErrorDecision) ShouldReturnGenericError() bool {
+	return d.Policy == ErrorPolicyCustomSkipped
+}
+
+// ShouldFailover 表示当前请求应切换账号。池模式配置的重试状态码可以把原本的
+// 非故障转移状态提升为故障转移；显式策略命中则始终切换账号。
+func (d UpstreamErrorDecision) ShouldFailover(account *Account, statusCode int, defaultFailover bool) bool {
+	if d.Policy == ErrorPolicyCustomSkipped {
+		return false
+	}
+	if d.Policy == ErrorPolicyCustomMatched || d.Policy == ErrorPolicyTempUnscheduled {
+		return true
+	}
+	if d.Policy == ErrorPolicyPoolBypassed {
+		return defaultFailover || (account != nil && account.IsPoolModeRetryableStatus(statusCode))
+	}
+	return defaultFailover || d.StopScheduling
+}
+
+// ShouldFailoverWithDefaults 分别保留普通账号的入口既有切号规则和池模式的上游错误分类。
+// 这样显式策略可以跨入口统一，又不会把某个入口原本只回写客户端的状态扩大成普通账号切号。
+func (d UpstreamErrorDecision) ShouldFailoverWithDefaults(
+	account *Account,
+	statusCode int,
+	nonPoolDefault bool,
+	poolDefault bool,
+) bool {
+	switch d.Policy {
+	case ErrorPolicyCustomSkipped:
+		return false
+	case ErrorPolicyCustomMatched, ErrorPolicyTempUnscheduled:
+		return true
+	case ErrorPolicyPoolBypassed:
+		return poolDefault || (account != nil && account.IsPoolModeRetryableStatus(statusCode))
+	default:
+		return nonPoolDefault
+	}
+}
+
+// RetryableOnSameAccount 仅允许未命中显式策略的池模式错误在当前账号上重试。
+func (d UpstreamErrorDecision) RetryableOnSameAccount(account *Account, statusCode int) bool {
+	return d.Policy == ErrorPolicyPoolBypassed && account != nil && account.IsPoolModeRetryableStatus(statusCode)
+}
+
+// upstreamErrorDecisionWithoutPersistence 在错误状态服务未注入时保留纯配置决策。
+// 该路径不能写数据库，但仍必须识别自定义错误码和池模式，否则会丢失通用错误或同账号重试语义。
+func upstreamErrorDecisionWithoutPersistence(account *Account, statusCode int) UpstreamErrorDecision {
+	decision := UpstreamErrorDecision{Policy: ErrorPolicyNone}
+	if account == nil {
+		return decision
+	}
+	if account.IsCustomErrorCodesEnabled() {
+		if account.ShouldHandleErrorCode(statusCode) {
+			decision.Policy = ErrorPolicyCustomMatched
+			decision.StopScheduling = true
+		} else {
+			decision.Policy = ErrorPolicyCustomSkipped
+		}
+		return decision
+	}
+	if account.IsPoolMode() {
+		decision.Policy = ErrorPolicyPoolBypassed
+	}
+	return decision
+}
 
 // CheckErrorPolicy 检查自定义错误码和临时不可调度规则。
 // 自定义错误码开启时覆盖后续所有逻辑（包括临时不可调度）。
 func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Account, statusCode int, responseBody []byte, requestedModel ...string) ErrorPolicyResult {
+	if account == nil {
+		return ErrorPolicyNone
+	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
 	if account.IsCustomErrorCodesEnabled() {
 		if account.ShouldHandleErrorCode(statusCode) {
-			return ErrorPolicyMatched
+			return ErrorPolicyCustomMatched
 		}
 		slog.Info("account_error_code_skipped", "account_id", account.ID, "status_code", statusCode)
-		return ErrorPolicySkipped
+		return ErrorPolicyCustomSkipped
 	}
 	if account.IsPoolMode() {
-		// 池模式只跳过默认账号状态处理；管理员显式配置的临时不可调度规则仍应生效。
-		// 401 保留现有认证错误语义，避免改变重复 401 的升级行为。
-		if statusCode != http.StatusUnauthorized && s.tryTempUnschedulable(ctx, account, statusCode, responseBody) {
+		// 池模式下管理员显式配置的临时不可调度规则仍优先；401 不执行默认的
+		// 二次认证错误升级，否则会违背池模式不写默认账号错误状态的约定。
+		if s.tryTempUnschedulableWith401Escalation(ctx, account, statusCode, responseBody, false, firstRequestedModel(requestedModel)) {
 			return ErrorPolicyTempUnscheduled
 		}
-		return ErrorPolicySkipped
+		return ErrorPolicyPoolBypassed
 	}
 	if s.tryTempUnschedulable(ctx, account, statusCode, responseBody, firstRequestedModel(requestedModel)) {
 		return ErrorPolicyTempUnscheduled
@@ -187,35 +265,60 @@ func (s *RateLimitService) CheckErrorPolicy(ctx context.Context, account *Accoun
 	return ErrorPolicyNone
 }
 
+// ApplyExplicitErrorPolicy 检查并应用管理员显式配置的错误策略。
+// 自定义错误码命中时在这里统一写入账号错误，避免 400、429、529 被内置分支覆盖。
+func (s *RateLimitService) ApplyExplicitErrorPolicy(ctx context.Context, account *Account, statusCode int, responseBody []byte, requestedModel ...string) ErrorPolicyResult {
+	result := s.CheckErrorPolicy(ctx, account, statusCode, responseBody, requestedModel...)
+	if result != ErrorPolicyCustomMatched || account == nil {
+		return result
+	}
+	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
+	if message == "" {
+		message = "Custom error code triggered"
+	}
+	s.handleCustomErrorCode(ctx, account, statusCode, message)
+	return result
+}
+
 // HandleUpstreamError 处理上游错误响应，标记账号状态
 // 返回是否应该停止该账号的调度
 func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	return s.ApplyUpstreamError(ctx, account, statusCode, headers, responseBody, requestedModel...).StopScheduling
+}
+
+// ApplyUpstreamError 先执行显式策略，再在非池模式下执行平台默认账号状态处理。
+func (s *RateLimitService) ApplyUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) UpstreamErrorDecision {
+	policy := ErrorPolicyNone
+	// 非池账号未启用自定义错误码时，模型不存在和官方硬窗口等精确状态必须
+	// 先于宽泛的临时不可调度规则；池模式和自定义错误码仍作为前置显式策略。
+	if account != nil && (account.IsPoolMode() || account.IsCustomErrorCodesEnabled()) {
+		policy = s.ApplyExplicitErrorPolicy(ctx, account, statusCode, responseBody, requestedModel...)
+	}
+	decision := UpstreamErrorDecision{Policy: policy}
+	switch policy {
+	case ErrorPolicyCustomMatched, ErrorPolicyTempUnscheduled:
+		decision.StopScheduling = true
+		return decision
+	case ErrorPolicyCustomSkipped, ErrorPolicyPoolBypassed:
+		return decision
+	}
+	decision.StopScheduling = s.handleDefaultUpstreamError(ctx, account, statusCode, headers, responseBody, requestedModel...)
+	return decision
+}
+
+// handleDefaultUpstreamError 只处理非池模式、未命中显式策略时的平台默认账号状态。
+func (s *RateLimitService) handleDefaultUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	if account == nil {
+		return false
+	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
 	if account.Platform == PlatformOpenAI &&
 		isOpenAIRequestBlockedError(statusCode, extractUpstreamErrorMessage(responseBody), responseBody) {
 		slog.Info("openai_request_blocked_account_state_skipped", "account_id", account.ID)
 		return false
 	}
-	customErrorCodesEnabled := account.IsCustomErrorCodesEnabled()
-
-	// 池模式默认不标记本地账号状态；但管理员显式配置的临时不可调度规则优先。
-	// 401 保留现有认证错误语义，不在这里改变池模式的认证处理。
-	if account.IsPoolMode() && !customErrorCodesEnabled {
-		if statusCode != http.StatusUnauthorized && s.tryTempUnschedulable(ctx, account, statusCode, responseBody) {
-			return true
-		}
-		slog.Info("pool_mode_error_skipped", "account_id", account.ID, "status_code", statusCode)
-		return false
-	}
 	if !account.IsPoolMode() {
 		s.recordPassiveAccountFailure(ctx, account, statusCode, responseBody)
-	}
-
-	// apikey 类型账号：检查自定义错误码配置
-	// 如果启用且错误码不在列表中，则不处理（不停止调度、不标记限流/过载）
-	if !account.ShouldHandleErrorCode(statusCode) {
-		slog.Info("account_error_code_skipped", "account_id", account.ID, "status_code", statusCode)
-		return false
 	}
 
 	if len(requestedModel) > 0 && s.HandleUpstreamModelNotFound(ctx, account, requestedModel[0], statusCode, responseBody) {
@@ -235,12 +338,12 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		}
 	}
 
-	// 先尝试临时不可调度规则（401除外）
-	// 如果匹配成功，直接返回，不执行后续禁用逻辑
-	if statusCode != 401 && (statusCode != http.StatusForbidden || !account.IsOpenAIOAuth() || !isOpenAIHTMLResponseBody(responseBody)) {
-		if s.tryTempUnschedulable(ctx, account, statusCode, responseBody, firstRequestedModel(requestedModel)) {
-			return true
-		}
+	// 非池账号保留既有精确状态优先级；401 和 OpenAI OAuth HTML 403
+	// 继续进入认证刷新与默认冷却逻辑。
+	if statusCode != http.StatusUnauthorized &&
+		(statusCode != http.StatusForbidden || !account.IsOpenAIOAuth() || !isOpenAIHTMLResponseBody(responseBody)) &&
+		s.tryTempUnschedulable(ctx, account, statusCode, responseBody, firstRequestedModel(requestedModel)) {
+		return true
 	}
 
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(responseBody))
@@ -425,15 +528,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		s.handle529(ctx, account)
 		shouldDisable = false
 	default:
-		// 自定义错误码启用时：在列表中的错误码都应该停止调度
-		if customErrorCodesEnabled {
-			msg := "Custom error code triggered"
-			if upstreamMsg != "" {
-				msg = upstreamMsg
-			}
-			s.handleCustomErrorCode(ctx, account, statusCode, msg)
-			shouldDisable = true
-		} else if statusCode >= 500 {
+		if statusCode >= 500 {
 			// 未启用自定义错误码时：仅记录5xx错误
 			slog.Warn("account_upstream_error", "account_id", account.ID, "status_code", statusCode)
 			shouldDisable = false
@@ -2241,14 +2336,11 @@ func (s *RateLimitService) HandleTempUnschedulable(ctx context.Context, account 
 	if account == nil {
 		return false
 	}
-	if account.IsPoolMode() && !account.IsCustomErrorCodesEnabled() {
-		return false
-	}
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return false
 	}
 	ctx = withTempUnschedulableModel(ctx, requestedModel)
-	return s.tryTempUnschedulable(ctx, account, statusCode, responseBody, firstRequestedModel(requestedModel))
+	return s.tryTempUnschedulableWith401Escalation(ctx, account, statusCode, responseBody, !account.IsPoolMode(), firstRequestedModel(requestedModel))
 }
 
 // HandleOpenAIImageRateLimit 将 OpenAI 生图限流写入能力维度限流，而不是封禁整个账号。
@@ -2257,6 +2349,10 @@ func (s *RateLimitService) HandleOpenAIImageRateLimit(ctx context.Context, accou
 		return false
 	}
 	if account.Platform != PlatformOpenAI {
+		return false
+	}
+	// 池模式由上游账号池负责能力切换，不能写入本地生图能力限流。
+	if account.IsPoolMode() {
 		return false
 	}
 	if !account.ShouldHandleErrorCode(statusCode) {
@@ -2369,6 +2465,10 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	if s == nil || account == nil || s.accountRepo == nil {
 		return false
 	}
+	// 池模式不根据聚合上游的一次 404 暂停本地账号与模型组合。
+	if account.IsPoolMode() {
+		return false
+	}
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return false
 	}
@@ -2477,6 +2577,12 @@ func matchTempUnschedulableRules(account *Account, statusCode int, responseBody 
 }
 
 func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Account, statusCode int, responseBody []byte, requestedModel ...string) bool {
+	return s.tryTempUnschedulableWith401Escalation(ctx, account, statusCode, responseBody, true, requestedModel...)
+}
+
+// tryTempUnschedulableWith401Escalation 允许调用方关闭重复 401 的默认升级。
+// 池模式显式配置的 401 规则每次都应按规则暂停，而不是写入默认账号错误。
+func (s *RateLimitService) tryTempUnschedulableWith401Escalation(ctx context.Context, account *Account, statusCode int, responseBody []byte, escalateRepeated401 bool, requestedModel ...string) bool {
 	if account == nil {
 		return false
 	}
@@ -2486,7 +2592,7 @@ func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Ac
 	// 401 首次命中可临时不可调度（给 token 刷新窗口）；
 	// 若历史上已因 401 进入过临时不可调度，则本次应升级为 error（返回 false 交由默认错误逻辑处理）。
 	// Antigravity 跳过：其 401 由 applyErrorPolicy 的 temp_unschedulable_rules 自行控制，无需升级逻辑。
-	if statusCode == http.StatusUnauthorized && account.Platform != PlatformAntigravity {
+	if escalateRepeated401 && statusCode == http.StatusUnauthorized && account.Platform != PlatformAntigravity {
 		reason := account.TempUnschedulableReason
 		// 缓存可能没有 reason，从 DB 回退读取
 		if reason == "" {

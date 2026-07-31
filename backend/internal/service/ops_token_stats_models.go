@@ -2,7 +2,7 @@ package service
 
 import "time"
 
-type OpsOpenAITokenStatsFilter struct {
+type OpsTokenStatsFilter struct {
 	TimeRange string
 	StartTime time.Time
 	EndTime   time.Time
@@ -10,19 +10,19 @@ type OpsOpenAITokenStatsFilter struct {
 	Platform string
 	GroupID  *int64
 
-	// Pagination mode (default): page/page_size
+	// 分页模式（默认）：page/page_size。
 	Page     int
 	PageSize int
 
-	// TopN mode: top_n
+	// TopN 模式：top_n。
 	TopN int
 }
 
-func (f *OpsOpenAITokenStatsFilter) IsTopNMode() bool {
+func (f *OpsTokenStatsFilter) IsTopNMode() bool {
 	return f != nil && f.TopN > 0
 }
 
-type OpsOpenAITokenStatsItem struct {
+type OpsTokenStatsItem struct {
 	Model                  string   `json:"model"`
 	RequestCount           int64    `json:"request_count"`
 	AvgTokensPerSec        *float64 `json:"avg_tokens_per_sec"`
@@ -32,7 +32,7 @@ type OpsOpenAITokenStatsItem struct {
 	RequestsWithFirstToken int64    `json:"requests_with_first_token"`
 }
 
-type OpsOpenAITokenStatsResponse struct {
+type OpsTokenStatsResponse struct {
 	TimeRange string    `json:"time_range"`
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `json:"end_time"`
@@ -40,15 +40,15 @@ type OpsOpenAITokenStatsResponse struct {
 	Platform string `json:"platform,omitempty"`
 	GroupID  *int64 `json:"group_id,omitempty"`
 
-	Items []*OpsOpenAITokenStatsItem `json:"items"`
+	Items []*OpsTokenStatsItem `json:"items"`
 
-	// Total model rows before pagination/topN trimming.
+	// 分页或 TopN 截断前的模型总数。
 	Total int64 `json:"total"`
 
-	// Pagination mode metadata.
+	// 分页模式元数据。
 	Page     int `json:"page,omitempty"`
 	PageSize int `json:"page_size,omitempty"`
 
-	// TopN mode metadata.
+	// TopN 模式元数据。
 	TopN *int `json:"top_n,omitempty"`
 }

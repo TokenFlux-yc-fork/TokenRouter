@@ -50,6 +50,12 @@
         >
           {{ entry.price_multiplier }}x
         </span>
+        <span
+          v-if="props.showFastModeMultiplier && entry.billing_mode === 'token' && entry.fast_mode_multiplier !== null && entry.fast_mode_multiplier !== undefined && entry.fast_mode_multiplier !== ''"
+          class="flex-shrink-0 rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+        >
+          Fast {{ entry.fast_mode_multiplier }}x
+        </span>
       </div>
 
       <!-- Expanded: show the label "Pricing Entry" or similar -->
@@ -74,7 +80,12 @@
     >
       <div class="collapsible-inner">
         <!-- Header: Models + Billing Mode -->
-        <div class="mt-3 grid grid-cols-1 items-start gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_8rem]">
+        <div
+          class="mt-3 grid grid-cols-1 items-start gap-2"
+          :class="props.showFastModeMultiplier && entry.billing_mode === 'token'
+            ? 'sm:grid-cols-[minmax(0,1fr)_10rem_8rem_8rem]'
+            : 'sm:grid-cols-[minmax(0,1fr)_10rem_8rem]'"
+        >
           <div>
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
               {{ t('admin.channels.form.models', '模型列表') }} <span class="text-red-500">*</span>
@@ -93,7 +104,7 @@
             </label>
             <Select
               :modelValue="entry.billing_mode"
-              @update:modelValue="emit('update', { ...entry, billing_mode: $event as BillingMode, intervals: [] })"
+              @update:modelValue="onBillingModeUpdate($event as BillingMode)"
               :options="billingModeOptions"
               class="mt-1"
             />
@@ -110,6 +121,21 @@
               min="0"
               class="input mt-1 text-sm"
               :placeholder="t('admin.channels.form.priceMultiplierPlaceholder', '不调整')"
+            />
+          </div>
+          <div v-if="props.showFastModeMultiplier && entry.billing_mode === 'token'">
+            <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
+              {{ t('admin.channels.form.fastModeMultiplier', 'Fast 模式倍率') }}
+            </label>
+            <input
+              :value="entry.fast_mode_multiplier"
+              @input="emitField('fast_mode_multiplier', ($event.target as HTMLInputElement).value)"
+              type="number"
+              step="any"
+              min="0"
+              class="input mt-1 text-sm"
+              data-testid="fast-mode-multiplier"
+              :placeholder="t('admin.channels.form.fastModeMultiplierPlaceholder', '例如 2')"
             />
           </div>
         </div>
@@ -268,6 +294,7 @@ const { t } = useI18n()
 const props = defineProps<{
   entry: PricingFormEntry
   platform?: string
+  showFastModeMultiplier?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -291,6 +318,16 @@ const billingModeLabel = computed(() => {
 
 function emitField(field: keyof PricingFormEntry, value: string) {
   emit('update', { ...props.entry, [field]: value === '' ? null : value })
+}
+
+// Fast 倍率只适用于 token 计费，切换模式时清除隐藏字段，避免提交无效配置。
+function onBillingModeUpdate(billingMode: BillingMode) {
+  emit('update', {
+    ...props.entry,
+    billing_mode: billingMode,
+    fast_mode_multiplier: billingMode === 'token' ? props.entry.fast_mode_multiplier : null,
+    intervals: [],
+  })
 }
 
 function addInterval() {

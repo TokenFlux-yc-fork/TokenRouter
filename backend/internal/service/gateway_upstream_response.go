@@ -547,17 +547,32 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		Detail:             upstreamDetail,
 	})
 
-	// 处理上游错误，标记账号状态
-	shouldDisable := false
+	// 处理上游错误，并区分显式策略、自定义未命中和池模式默认绕过。
+	decision := upstreamErrorDecisionWithoutPersistence(account, resp.StatusCode)
 	if s.rateLimitService != nil {
 		if len(requestedModel) > 0 {
-			shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel[0])
+			decision = s.rateLimitService.ApplyUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel[0])
 		} else {
-			shouldDisable = s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
+			decision = s.rateLimitService.ApplyUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
 		}
 	}
-	if shouldDisable {
-		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: body}
+	if decision.ShouldReturnGenericError() {
+		MarkResponseCommitted(c)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    "upstream_error",
+				"message": "Upstream gateway error",
+			},
+		})
+		return nil, fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
+	}
+	if decision.ShouldFailover(account, resp.StatusCode, false) {
+		return nil, &UpstreamFailoverError{
+			StatusCode:             resp.StatusCode,
+			ResponseBody:           body,
+			RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+		}
 	}
 
 	MarkResponseCommitted(c)
@@ -658,47 +673,65 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 	return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 }
 
-func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, resp *http.Response, account *Account) {
+func (s *GatewayService) handleRetryExhaustedSideEffects(ctx context.Context, resp *http.Response, account *Account, requestedModel ...string) UpstreamErrorDecision {
 	body, _ := s.readUpstreamErrorBody(resp)
 	statusCode := resp.StatusCode
 	if s.rateLimitService == nil {
-		return
+		return upstreamErrorDecisionWithoutPersistence(account, statusCode)
 	}
-	if account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
-		logger.LegacyPrintf("service.gateway", "Account %d: deferring passive account circuit breaker until same-account retries are exhausted for status %d", account.ID, statusCode)
-		return
+	policy := s.rateLimitService.ApplyExplicitErrorPolicy(ctx, account, statusCode, body, requestedModel...)
+	decision := UpstreamErrorDecision{Policy: policy}
+	switch policy {
+	case ErrorPolicyCustomMatched, ErrorPolicyTempUnscheduled:
+		decision.StopScheduling = true
+		return decision
+	case ErrorPolicyCustomSkipped, ErrorPolicyPoolBypassed:
+		return decision
 	}
 
 	// OAuth/Setup Token 账号的 403：按上游错误策略处理账号状态。
 	if account.IsOAuth() && statusCode == 403 {
-		s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
+		decision = s.rateLimitService.ApplyUpstreamError(ctx, account, statusCode, resp.Header, body, requestedModel...)
 		logger.LegacyPrintf("service.gateway", "Account %d: applied upstream error policy after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
 	} else {
 		s.rateLimitService.recordPassiveAccountFailure(ctx, account, statusCode, body)
 		logger.LegacyPrintf("service.gateway", "Account %d: evaluated passive account circuit breaker after %d retries for status %d", account.ID, maxRetryAttempts, statusCode)
 	}
+	return decision
 }
 
-func (s *GatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, requestedModel ...string) {
+func (s *GatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, requestedModel ...string) UpstreamErrorDecision {
 	body, _ := s.readUpstreamErrorBody(resp)
-	if len(requestedModel) > 0 {
-		s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel[0])
-		return
+	if s.rateLimitService == nil {
+		return upstreamErrorDecisionWithoutPersistence(account, resp.StatusCode)
 	}
-	s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
+	if len(requestedModel) > 0 {
+		return s.rateLimitService.ApplyUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, requestedModel[0])
+	}
+	return s.rateLimitService.ApplyUpstreamError(ctx, account, resp.StatusCode, resp.Header, body)
 }
 
 // handleRetryExhaustedError 处理重试耗尽后的错误
 // OAuth 403：按错误策略处理账号状态
 // API Key 未配置错误码：仅返回错误，不标记账号
-func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *http.Response, c *gin.Context, account *Account) (*ForwardResult, error) {
-	MarkResponseCommitted(c)
+func (s *GatewayService) handleRetryExhaustedError(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, requestedModel ...string) (*ForwardResult, error) {
 	// Capture upstream error body before side-effects consume the stream.
 	respBody, _ := s.readUpstreamErrorBody(resp)
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
-	s.handleRetryExhaustedSideEffects(ctx, resp, account)
+	decision := s.handleRetryExhaustedSideEffects(ctx, resp, account, requestedModel...)
+	if decision.ShouldReturnGenericError() {
+		return s.handleErrorResponse(ctx, resp, c, account, requestedModel...)
+	}
+	if decision.ShouldFailover(account, resp.StatusCode, false) {
+		return nil, &UpstreamFailoverError{
+			StatusCode:             resp.StatusCode,
+			ResponseBody:           respBody,
+			RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+		}
+	}
+	MarkResponseCommitted(c)
 
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)

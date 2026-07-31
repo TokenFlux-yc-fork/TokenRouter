@@ -27,6 +27,8 @@ export interface ChannelModelPricing {
   billing_mode: BillingMode
   // 可空表示完全沿用现有定价，不隐式写入 1 倍。
   price_multiplier?: number | null
+  // 仅用于 OpenAI token 定价；可空表示沿用模型默认 Fast 定价。
+  fast_mode_multiplier?: number | null
   input_price: number | null
   output_price: number | null
   cache_write_price: number | null

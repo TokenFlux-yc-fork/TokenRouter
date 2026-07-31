@@ -164,6 +164,13 @@ func requireOpenAIExitBreakerCall(t *testing.T, repo *openAIExitBreakerAccountRe
 	require.Equal(t, calls[0].reason, account.TempUnschedulableReason)
 }
 
+func requireNoOpenAIExitBreakerCall(t *testing.T, repo *openAIExitBreakerAccountRepo, account *Account) {
+	t.Helper()
+	require.Empty(t, repo.snapshotCalls())
+	require.Nil(t, account.TempUnschedulableUntil)
+	require.Empty(t, account.TempUnschedulableReason)
+}
+
 func TestOpenAIPassthroughTransportErrorRecordsPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := newOpenAIExitBreakerAccount(1201)
@@ -227,7 +234,7 @@ func TestOpenAI503ErrorPassthroughRuleRecordsPassiveAccountCircuitBreaker(t *tes
 	requireOpenAIExitBreakerCall(t, repo, account, http.StatusServiceUnavailable)
 }
 
-func TestOpenAI503CustomErrorCodeSkipRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+func TestOpenAI503CustomErrorCodeSkipDoesNotRecordPassiveAccountCircuitBreaker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := newOpenAIExitBreakerAccount(1203)
 	account.Credentials["custom_error_codes_enabled"] = true
@@ -248,10 +255,10 @@ func TestOpenAI503CustomErrorCodeSkipRecordsPassiveAccountCircuitBreaker(t *test
 	require.Nil(t, result)
 	require.Error(t, err)
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	requireOpenAIExitBreakerCall(t, repo, account, http.StatusServiceUnavailable)
+	requireNoOpenAIExitBreakerCall(t, repo, account)
 }
 
-func TestOpenAIWSV2PassthroughDialErrorRecordsPassiveAccountCircuitBreaker(t *testing.T) {
+func TestOpenAIWSV2PassthroughDialFailoverDoesNotRecordPassiveAccountCircuitBreaker(t *testing.T) {
 	account := newOpenAIExitBreakerAccount(1204)
 	rateLimitService, repo := newOpenAIExitBreakerService()
 	cfg := &config.Config{}
@@ -266,8 +273,12 @@ func TestOpenAIWSV2PassthroughDialErrorRecordsPassiveAccountCircuitBreaker(t *te
 		rateLimitService: rateLimitService,
 	}
 
-	runOpenAIExitBreakerWSPassthrough(t, svc, account)
-	requireOpenAIExitBreakerCall(t, repo, account, http.StatusServiceUnavailable)
+	proxyErr := runOpenAIExitBreakerWSPassthrough(t, svc, account)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, proxyErr, &failoverErr)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	requireNoOpenAIExitBreakerCall(t, repo, account)
 }
 
 func TestOpenAIWSV2PassthroughReadErrorRecordsPassiveAccountCircuitBreaker(t *testing.T) {
@@ -286,11 +297,12 @@ func TestOpenAIWSV2PassthroughReadErrorRecordsPassiveAccountCircuitBreaker(t *te
 		rateLimitService: rateLimitService,
 	}
 
-	runOpenAIExitBreakerWSPassthrough(t, svc, account)
+	proxyErr := runOpenAIExitBreakerWSPassthrough(t, svc, account)
+	require.Error(t, proxyErr)
 	requireOpenAIExitBreakerCall(t, repo, account, 0)
 }
 
-func runOpenAIExitBreakerWSPassthrough(t *testing.T, svc *OpenAIGatewayService, account *Account) {
+func runOpenAIExitBreakerWSPassthrough(t *testing.T, svc *OpenAIGatewayService, account *Account) error {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	errCh := make(chan error, 1)
@@ -335,8 +347,9 @@ func runOpenAIExitBreakerWSPassthrough(t *testing.T, svc *OpenAIGatewayService, 
 
 	select {
 	case proxyErr := <-errCh:
-		require.Error(t, proxyErr)
+		return proxyErr
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for passthrough proxy")
+		return nil
 	}
 }

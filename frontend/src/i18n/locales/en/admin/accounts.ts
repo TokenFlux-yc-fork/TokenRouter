@@ -685,9 +685,9 @@ export default {
       modelExists: 'Model already exists',
       modelCount: '{count} models',
       poolMode: 'Pool Mode',
-      poolModeHint: 'Enable when upstream is an account pool; errors won\'t mark local account status',
+      poolModeHint: 'Enable when upstream is an account pool; default errors will not mark local scheduling state',
       poolModeInfo:
-        'When enabled, upstream 429/403/401 errors will auto-retry without marking the account as rate-limited or errored. Suitable for upstream pointing to another sub2api instance.',
+        'Configured retry statuses are retried on the same account without writing default account or model state. Custom error codes and temporary unschedulable rules still take precedence and switch accounts immediately.',
       poolModeRetryCount: 'Same-Account Retries',
       poolModeRetryCountHint:
         'Only applies in pool mode. Use 0 to disable in-place retry. Default {default}, maximum {max}.',

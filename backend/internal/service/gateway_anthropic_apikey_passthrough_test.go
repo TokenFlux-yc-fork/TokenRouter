@@ -714,6 +714,12 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_CountTokens404PassthroughNotE
 				errObj, ok := errResp["error"].(map[string]any)
 				require.True(t, ok)
 				require.Equal(t, "not_found_error", errObj["type"])
+			} else if tt.statusCode >= http.StatusInternalServerError {
+				// 首次输出前的上游服务错误交给 handler 切换账号，不在 service 层提前写响应。
+				var failoverErr *UpstreamFailoverError
+				require.ErrorAs(t, err, &failoverErr)
+				require.Equal(t, tt.statusCode, failoverErr.StatusCode)
+				require.False(t, c.Writer.Written())
 			} else {
 				require.Error(t, err)
 				require.Equal(t, tt.statusCode, rec.Code)

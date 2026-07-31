@@ -677,10 +677,20 @@ type sseStreamErrorEventError struct {
 
 func (e *sseStreamErrorEventError) Error() string { return "have error in stream" }
 
-// TempUnscheduleRetryableError 对 RetryableOnSameAccount 类型的 failover 错误触发临时封禁。
-// 由 handler 层在同账号重试全部用尽、切换账号时调用。
+// TempUnscheduleRetryableError 对非池账号的旧版特殊重试错误触发临时封禁。
+// 由 handler 层在同账号重试全部用尽、切换账号时调用；池模式只切号不写状态。
 func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
 	if s == nil || s.accountRepo == nil || failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+		return
+	}
+	// 池模式重试只控制当前请求的原地重试预算，耗尽后必须直接切号，
+	// 不能复用旧版 400/502 特殊错误的一分钟本地冷却。
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		logger.LegacyPrintf("service.gateway", "查询重试耗尽账号失败: account=%d error=%v", accountID, err)
+		return
+	}
+	if account != nil && account.IsPoolMode() {
 		return
 	}
 	// 根据状态码选择封禁策略
@@ -695,7 +705,7 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 	if s.rateLimitService == nil {
 		return
 	}
-	account, err := s.accountRepo.GetByID(ctx, accountID)
+	account, err = s.accountRepo.GetByID(ctx, accountID)
 	if err != nil {
 		slog.Warn("retryable_error_passive_account_lookup_failed", "account_id", accountID, "status_code", failoverErr.StatusCode, "error", err)
 		return

@@ -92,10 +92,21 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	if account != nil && account.Platform == PlatformGrok {
 		shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
 	}
-	if account != nil && account.Platform == PlatformGrok {
-		s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+	// 请求级拒绝不能触发账号策略或池模式重试。
+	if detectHit, _, _ := detectOpenAICyberPolicy(respBody); detectHit ||
+		IsOpenAICyberWarningPayload(respBody, upstreamMsg) ||
+		isOpenAIClientInvalidRequestError(resp.StatusCode, upstreamMsg, respBody) ||
+		isOpenAIContextWindowError(upstreamMsg, respBody) ||
+		(account != nil && account.Platform == PlatformGrok && isGrokContentPolicyRejection(resp.StatusCode, respBody)) {
+		return nil
 	}
-	if !shouldFailover {
+	var decision UpstreamErrorDecision
+	if account != nil && account.Platform == PlatformGrok {
+		decision = s.applyGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
+	} else {
+		decision = s.applyOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
+	}
+	if decision.ShouldReturnGenericError() || !decision.ShouldFailover(account, resp.StatusCode, shouldFailover) {
 		return nil
 	}
 	upstreamDetail := ""
@@ -116,16 +127,12 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
 	})
-	shouldDisable := false
-	if account.Platform != PlatformGrok {
-		shouldDisable = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
-	}
 	return newOpenAIUpstreamFailoverError(
 		resp.StatusCode,
 		resp.Header,
 		respBody,
 		upstreamMsg,
-		!shouldDisable && account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+		decision.RetryableOnSameAccount(account, resp.StatusCode),
 	)
 }
 

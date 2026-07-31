@@ -587,8 +587,18 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
 		}
 		message := openAICompatFailedResponseMessage(finalResponse)
-		if openAIStreamFailedEventShouldFailover(payload, message) {
-			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message)
+		policyStatus, decision := s.applyOpenAIStreamFailedAccountPolicy(
+			c.Request.Context(), account, upstreamModel, resp.Header, payload, message,
+		)
+		if decision.ShouldReturnGenericError() {
+			writeAnthropicError(c, http.StatusInternalServerError, "api_error", "Upstream gateway error")
+			return nil, fmt.Errorf("upstream response failed: status=%d (not in custom error codes)", policyStatus)
+		}
+		if decision.ShouldFailover(account, policyStatus, openAIStreamFailedEventShouldFailover(payload, message)) {
+			return nil, s.newOpenAIStreamPolicyFailoverError(
+				c, account, false, requestID, resp.Header, policyStatus, payload, message,
+				decision.RetryableOnSameAccount(account, policyStatus),
+			)
 		}
 		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
 		// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
@@ -1002,19 +1012,29 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				return true
 			}
 			message := extractOpenAISSEErrorMessage(payloadBytes)
+			policyStatus, decision := s.applyOpenAIStreamFailedAccountPolicy(
+				c.Request.Context(), account, upstreamModel, resp.Header, payloadBytes, message,
+			)
+			policyGeneric := decision.ShouldReturnGenericError()
 			// 客户端已有输出时切换账号会拼接两段模型流，此时必须回写 Anthropic error 事件，
 			// 不能返回 handler 已无法安全重试的 failover 错误。
-			if !clientDisconnected && !clientOutputStarted && openAIStreamFailedEventShouldFailover(payloadBytes, message) {
-				streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
+			if !clientDisconnected && !clientOutputStarted && decision.ShouldFailover(account, policyStatus, openAIStreamFailedEventShouldFailover(payloadBytes, message)) {
+				streamFailoverErr = s.newOpenAIStreamPolicyFailoverError(
+					c, account, false, requestID, resp.Header, policyStatus, payloadBytes, message,
+					decision.RetryableOnSameAccount(account, policyStatus),
+				)
 				return true
 			}
 			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 			errStatus, errType, errMsg := http.StatusBadGateway, "api_error", message
+			if policyGeneric {
+				errStatus, errType, errMsg = http.StatusInternalServerError, "api_error", "Upstream gateway error"
+			}
 			// 统一走语义状态推断 + body 归一化（与 /v1/responses 路径一致），
 			// 使按错误码配置的透传规则可命中。
 			if status, passthroughType, passthroughMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(
 				c, account.Platform, payloadBytes, message,
-			); matched {
+			); matched && !policyGeneric {
 				if passthroughMsg == "" {
 					passthroughMsg = errMsg
 				}

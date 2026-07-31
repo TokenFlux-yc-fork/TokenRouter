@@ -2827,7 +2827,7 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	}
 	if service.IsOpenAITransientCapacityErrorBody(responseBody) {
 		service.SetOpsUpstreamError(c, statusCode, service.ExtractUpstreamErrorMessage(responseBody), "")
-		h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream service temporarily unavailable", streamStarted)
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Upstream service temporarily unavailable", streamStarted)
 		return
 	}
 

@@ -781,7 +781,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		if acquireErr != nil {
 			canonicalModel := canonicalOpenAIAccountSchedulingModel(account, ingressSessionOriginalModel)
-			s.handleOpenAIWSDialTransientFailure(ctx, account, canonicalModel, acquireErr)
+			errorDecision := s.handleOpenAIWSDialTransientFailure(ctx, account, canonicalModel, acquireErr)
 			dialStatus, dialClass, dialCloseStatus, dialCloseReason, dialRespServer, dialRespVia, dialRespCFRay, dialRespReqID := summarizeOpenAIWSDialError(acquireErr)
 			logOpenAIWSModeInfo(
 				"ingress_ws_upstream_acquire_fail account_id=%d turn=%d reason=%s dial_status=%d dial_class=%s dial_close_status=%s dial_close_reason=%s dial_resp_server=%s dial_resp_via=%s dial_resp_cf_ray=%s dial_resp_x_request_id=%s cause=%s preferred_conn_id=%s force_preferred_conn=%v ws_host=%s ws_path=%s proxy_enabled=%v",
@@ -804,16 +804,23 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				account.ProxyID != nil && account.Proxy != nil,
 			)
 			var dialErr *openAIWSDialError
-			if errors.As(acquireErr, &dialErr) && dialErr != nil {
-				switch dialErr.StatusCode {
-				case http.StatusTooManyRequests:
-					s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(acquireErr.Error()))
-					return nil, &UpstreamFailoverError{
-						StatusCode:      http.StatusTooManyRequests,
-						ResponseHeaders: cloneHeader(dialErr.ResponseHeaders),
-					}
-				case http.StatusForbidden:
-					s.persistOpenAIWSForbiddenSignal(ctx, account, dialErr.ResponseHeaders, []byte(strings.TrimSpace(acquireErr.Error())))
+			if errors.As(acquireErr, &dialErr) && dialErr != nil && dialErr.StatusCode != 0 {
+				if turn == 1 && errorDecision.ShouldReturnGenericError() {
+					return nil, openAIWSGenericPolicyCloseError(dialErr.StatusCode)
+				}
+				if turn == 1 && errorDecision.ShouldFailoverWithDefaults(
+					account,
+					dialErr.StatusCode,
+					dialErr.StatusCode == http.StatusTooManyRequests,
+					s.shouldFailoverOpenAIWSError(account, dialErr.StatusCode, dialErr.ResponseBody),
+				) {
+					return nil, newOpenAIUpstreamFailoverError(
+						dialErr.StatusCode,
+						dialErr.ResponseHeaders,
+						dialErr.ResponseBody,
+						extractUpstreamErrorMessage(dialErr.ResponseBody),
+						errorDecision.RetryableOnSameAccount(account, dialErr.StatusCode),
+					)
 				}
 			}
 			s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, acquireErr)
@@ -1068,9 +1075,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if eventType == "error" {
 				canonicalModel := canonicalOpenAIAccountSchedulingModel(account, routingModel)
-				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, canonicalModel, lease.HandshakeHeaders(), upstreamMessage)
+				errorDecision := s.handleOpenAIWSErrorEventTransientFailure(ctx, account, canonicalModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
-				s.persistOpenAIWSErrorSignal(ctx, account, lease.HandshakeHeaders(), upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
+				errorStatus := openAIWSErrorPolicyStatus(upstreamMessage)
 				fallbackReason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 				recoverablePrevNotFound := fallbackReason == openAIWSIngressStagePreviousResponseNotFound &&
@@ -1129,23 +1136,35 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						false,
 					)
 				}
-				if !wroteDownstream && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
+				defaultFailover := s.shouldFailoverOpenAIWSError(account, errorStatus, upstreamMessage)
+				if turn == 1 && !wroteDownstream && errorDecision.ShouldReturnGenericError() {
+					lease.MarkBroken()
+					return nil, openAIWSGenericPolicyCloseError(errorStatus)
+				}
+				if turn == 1 && !wroteDownstream && errorStatus != 0 && errorDecision.ShouldFailoverWithDefaults(
+					account,
+					errorStatus,
+					errorStatus == http.StatusTooManyRequests,
+					defaultFailover,
+				) {
 					lease.MarkBroken()
 					return nil, &UpstreamFailoverError{
-						StatusCode:      http.StatusTooManyRequests,
-						ResponseBody:    append([]byte(nil), upstreamMessage...),
-						ResponseHeaders: cloneHeader(lease.HandshakeHeaders()),
+						StatusCode:             errorStatus,
+						ResponseBody:           append([]byte(nil), upstreamMessage...),
+						ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
+						RetryableOnSameAccount: errorDecision.RetryableOnSameAccount(account, errorStatus),
 					}
 				}
 				if openAIStreamEventShouldFailover(upstreamMessage, eventType, errMsgRaw) {
 					lease.MarkBroken()
 					if !wroteDownstream && !clientDisconnected {
-						failoverErr := &UpstreamFailoverError{
-							StatusCode:             http.StatusBadGateway,
-							ResponseBody:           append([]byte(nil), upstreamMessage...),
-							ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
-							RetryableOnSameAccount: account.IsPoolMode(),
-						}
+						failoverErr := newOpenAIUpstreamFailoverError(
+							errorStatus,
+							lease.HandshakeHeaders(),
+							upstreamMessage,
+							errMsgRaw,
+							errorDecision.RetryableOnSameAccount(account, errorStatus),
+						)
 						return nil, wrapOpenAIWSIngressTurnError(
 							openAIWSIngressStageResponseFailedRetryable,
 							failoverErr,
@@ -1193,14 +1212,24 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				failedMessage := extractOpenAISSEErrorMessage(upstreamMessage)
 				if openAIStreamEventShouldFailover(upstreamMessage, eventType, failedMessage) {
-					failoverErr := &UpstreamFailoverError{
-						StatusCode:             http.StatusBadGateway,
-						ResponseBody:           append([]byte(nil), upstreamMessage...),
-						ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
-						RetryableOnSameAccount: account.IsPoolMode(),
-					}
+					canonicalModel := canonicalOpenAIAccountSchedulingModel(account, routingModel)
+					policyStatus, decision := s.applyOpenAIStreamFailedAccountPolicy(
+						ctx, account, canonicalModel, lease.HandshakeHeaders(), upstreamMessage, failedMessage,
+					)
 					lease.MarkBroken()
-					if !wroteDownstream && !clientDisconnected {
+					if !wroteDownstream && !clientDisconnected && decision.ShouldReturnGenericError() {
+						return nil, openAIWSGenericPolicyCloseError(policyStatus)
+					}
+					if !wroteDownstream && !clientDisconnected && decision.ShouldFailoverWithDefaults(
+						account, policyStatus, true, true,
+					) {
+						failoverErr := newOpenAIUpstreamFailoverError(
+							policyStatus,
+							lease.HandshakeHeaders(),
+							upstreamMessage,
+							failedMessage,
+							decision.RetryableOnSameAccount(account, policyStatus),
+						)
 						return nil, wrapOpenAIWSIngressTurnError(
 							openAIWSIngressStageResponseFailedRetryable,
 							failoverErr,
@@ -1213,16 +1242,27 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if eventType != "error" && eventType != "response.failed" {
 				capacityMessage := extractOpenAISSEErrorMessage(upstreamMessage)
 				if isOpenAITransientProcessingError(http.StatusBadRequest, capacityMessage, upstreamMessage) {
+					canonicalModel := canonicalOpenAIAccountSchedulingModel(account, routingModel)
+					policyStatus := openAIStreamFailedEventSemanticStatus(upstreamMessage, capacityMessage)
+					decision := s.applyOpenAIWSEventErrorPolicy(
+						ctx, account, canonicalModel, policyStatus, lease.HandshakeHeaders(), upstreamMessage,
+					)
 					lease.MarkBroken()
-					if !wroteDownstream && !clientDisconnected {
+					if !wroteDownstream && !clientDisconnected && decision.ShouldReturnGenericError() {
+						return nil, openAIWSGenericPolicyCloseError(policyStatus)
+					}
+					if !wroteDownstream && !clientDisconnected && decision.ShouldFailoverWithDefaults(
+						account, policyStatus, true, true,
+					) {
 						return nil, wrapOpenAIWSIngressTurnError(
 							openAIWSIngressStageResponseFailedRetryable,
-							&UpstreamFailoverError{
-								StatusCode:             http.StatusBadGateway,
-								ResponseBody:           append([]byte(nil), upstreamMessage...),
-								ResponseHeaders:        cloneHeader(lease.HandshakeHeaders()),
-								RetryableOnSameAccount: account.IsPoolMode(),
-							},
+							newOpenAIUpstreamFailoverError(
+								policyStatus,
+								lease.HandshakeHeaders(),
+								upstreamMessage,
+								capacityMessage,
+								decision.RetryableOnSameAccount(account, policyStatus),
+							),
 							false,
 						)
 					}
@@ -1230,6 +1270,40 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			imageCounter.AddSSEData(upstreamMessage)
+			terminalPolicy := openAIWSTerminalPolicyDecision{
+				TerminalEvent: normalizeOpenAIWSTerminalEvent(eventType),
+				Decision:      UpstreamErrorDecision{Policy: ErrorPolicyNone},
+			}
+			if isTerminalEvent {
+				canonicalModel := canonicalOpenAIAccountSchedulingModel(account, routingModel)
+				terminalPolicy = s.handleOpenAIWSTerminalTransientFailure(ctx, account, canonicalModel, lease.HandshakeHeaders(), upstreamMessage)
+			}
+			if eventType == "response.failed" {
+				if turn == 1 && !wroteDownstream && terminalPolicy.Decision.ShouldReturnGenericError() {
+					lease.MarkBroken()
+					return nil, openAIWSGenericPolicyCloseError(terminalPolicy.StatusCode)
+				}
+				if turn == 1 && !wroteDownstream && terminalPolicy.Decision.ShouldFailoverWithDefaults(
+					account,
+					terminalPolicy.StatusCode,
+					false,
+					s.shouldFailoverOpenAIWSError(account, terminalPolicy.StatusCode, upstreamMessage),
+				) {
+					lease.MarkBroken()
+					return nil, newOpenAIUpstreamFailoverError(
+						terminalPolicy.StatusCode,
+						lease.HandshakeHeaders(),
+						upstreamMessage,
+						extractOpenAISSEErrorMessage(upstreamMessage),
+						terminalPolicy.Decision.RetryableOnSameAccount(account, terminalPolicy.StatusCode),
+					)
+				}
+				if terminalPolicy.Decision.ShouldReturnGenericError() {
+					// 已发送前导事件时无法切换 HTTP 状态，改用通用 WS 错误结束当前 turn。
+					upstreamMessage = buildOpenAIWSHTTPBridgeErrorEvent(http.StatusInternalServerError, "Upstream gateway error")
+				}
+			}
+
 			if !clientDisconnected && nativeStage == nil {
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
@@ -1329,8 +1403,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 				}
 				terminalResponseBody = openAIWSTerminalEventResponseBody(upstreamMessage)
-				canonicalModel := canonicalOpenAIAccountSchedulingModel(account, routingModel)
-				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, canonicalModel, lease.HandshakeHeaders(), upstreamMessage)
 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
 				if clientDisconnected {
 					lease.MarkBroken()
@@ -1367,7 +1439,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					ReasoningEffort:       ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel), payload, mappedModel),
 					Stream:                reqStream,
 					OpenAIWSMode:          true,
-					UpstreamTerminalEvent: terminalEvent,
+					UpstreamTerminalEvent: terminalPolicy.TerminalEvent,
 					ResponseHeaders:       lease.HandshakeHeaders(),
 					ResponseBody:          cloneDataSharingRequestBody(terminalResponseBody),
 					Duration:              time.Since(turnStart),

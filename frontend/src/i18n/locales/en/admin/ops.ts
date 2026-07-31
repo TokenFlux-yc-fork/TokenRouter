@@ -113,16 +113,17 @@ export default {
         startTime: 'Start Time',
         endTime: 'End Time'
       },
-      openaiTokenStats: {
-        title: 'OpenAI Token Request Stats',
+      tokenStats: {
+        title: 'Token Request Stats',
+        groupFilter: 'Token stats group',
         viewModeTopN: 'TopN',
         viewModePagination: 'Pagination',
         prevPage: 'Previous',
         nextPage: 'Next',
         pageInfo: 'Page {page}/{total}',
         totalModels: 'Total models: {total}',
-        failedToLoad: 'Failed to load OpenAI token stats',
-        empty: 'No OpenAI token stats for the current filters',
+        failedToLoad: 'Failed to load token request stats',
+        empty: 'No token request stats for the current filters',
         table: {
           model: 'Model',
           requestCount: 'Requests',
@@ -132,6 +133,15 @@ export default {
           avgDurationMs: 'Avg Duration (ms)',
           requestsWithFirstToken: 'Requests With First Token'
         }
+      },
+      latencyBuckets: {
+        settings: 'Configure latency buckets',
+        title: 'Request Latency Buckets',
+        hint: '5 millisecond boundaries; positive integers, strictly increasing, maximum {max}ms.',
+        boundary: 'Boundary {index} (ms)',
+        invalid: 'Enter 5 valid, strictly increasing positive integers.',
+        restoreDefaults: 'Restore defaults',
+        apply: 'Apply'
       },
       fullscreen: {
         enter: 'Enter Fullscreen'
@@ -697,8 +707,6 @@ export default {
         dashboardCards: 'Dashboard Cards',
         displayAlertEvents: 'Display alert events',
         displayAlertEventsHint: 'Show or hide the recent alert events card on the ops dashboard. Enabled by default.',
-        displayOpenAITokenStats: 'Display OpenAI token request stats',
-        displayOpenAITokenStatsHint: 'Show or hide the OpenAI token request stats card on the ops dashboard. Hidden by default.',
         autoRefreshCountdown: 'Auto refresh: {seconds}s',
         validation: {
           title: 'Please fix the following issues',
@@ -720,8 +728,6 @@ export default {
         byAccount: 'By Account',
         byUser: 'By User',
         showByUserTooltip: 'Switch to user view to see concurrency usage per user',
-        switchToUser: 'Switch to user view',
-        switchToPlatform: 'Switch to platform view',
         totalRows: '{count} rows',
         disabledHint: 'Realtime monitoring is disabled in settings.',
         empty: 'No data',

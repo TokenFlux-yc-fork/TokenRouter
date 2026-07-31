@@ -1491,6 +1491,7 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableErrorsTriggerFailover(t
 			body:        `{"error":{"message":"Selected model is at capacity. Please try a different model.","code":"server_is_overloaded"}}`,
 			mutateAccount: func(account *Account) {
 				account.Credentials["pool_mode"] = true
+				account.Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusBadRequest)}
 			},
 			wantSameAcctRetry: true,
 			assertRepo: func(t *testing.T, repo *openAIPassthroughFailoverRepo, _ time.Time) {

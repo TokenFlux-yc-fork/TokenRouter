@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { opsAPI, type OpsAccountAvailabilityStatsResponse, type OpsConcurrencyStatsResponse, type OpsUserConcurrencyStatsResponse } from '@/api/admin/ops'
+import Icon from '@/components/icons/Icon.vue'
 
 interface Props {
   platformFilter?: string
@@ -22,30 +23,34 @@ const concurrency = ref<OpsConcurrencyStatsResponse | null>(null)
 const availability = ref<OpsAccountAvailabilityStatsResponse | null>(null)
 const userConcurrency = ref<OpsUserConcurrencyStatsResponse | null>(null)
 
-// 用户视图开关
-const showByUser = ref(false)
+type ConcurrencyDimension = 'platform' | 'group' | 'account' | 'user'
+
+// 首次打开时沿用筛选条件对应的明细层级，之后允许用户自由切换维度。
+const displayDimension = ref<ConcurrencyDimension>(
+  typeof props.groupIdFilter === 'number' && props.groupIdFilter > 0
+    ? 'account'
+    : props.platformFilter
+      ? 'group'
+      : 'platform'
+)
+
+const dimensionOptions = computed(() => [
+  { value: 'platform' as const, icon: 'globe' as const, label: t('admin.ops.concurrency.byPlatform') },
+  { value: 'group' as const, icon: 'users' as const, label: t('admin.ops.concurrency.byGroup') },
+  { value: 'account' as const, icon: 'server' as const, label: t('admin.ops.concurrency.byAccount') },
+  { value: 'user' as const, icon: 'user' as const, label: t('admin.ops.concurrency.byUser') }
+])
 
 const realtimeEnabled = computed(() => {
+  if (displayDimension.value === 'user') {
+    return userConcurrency.value?.enabled ?? true
+  }
   return (concurrency.value?.enabled ?? true) && (availability.value?.enabled ?? true)
 })
 
 function safeNumber(n: unknown): number {
   return typeof n === 'number' && Number.isFinite(n) ? n : 0
 }
-
-// 计算显示维度
-const displayDimension = computed<'platform' | 'group' | 'account' | 'user'>(() => {
-  if (showByUser.value) {
-    return 'user'
-  }
-  if (typeof props.groupIdFilter === 'number' && props.groupIdFilter > 0) {
-    return 'account'
-  }
-  if (props.platformFilter) {
-    return 'group'
-  }
-  return 'platform'
-})
 
 // 平台/分组汇总行数据
 interface SummaryRow {
@@ -143,6 +148,11 @@ const groupRows = computed((): SummaryRow[] => {
     .map(gid => {
       const conc = concStats[gid] || {}
       const avail = availStats[gid] || {}
+
+      // 后端会按分组过滤；这里额外约束，兼容尚未升级的服务端响应。
+      if (typeof props.groupIdFilter === 'number' && props.groupIdFilter > 0 && Number(gid) !== props.groupIdFilter) {
+        return null
+      }
 
       // 只显示匹配的平台
       if (props.platformFilter && conc.platform !== props.platformFilter && avail.platform !== props.platformFilter) {
@@ -263,7 +273,7 @@ async function loadData() {
   loading.value = true
   errorMessage.value = ''
   try {
-    if (showByUser.value) {
+    if (displayDimension.value === 'user') {
       // 用户视图模式只加载用户并发数据
       const userData = await opsAPI.getUserConcurrencyStats()
       userConcurrency.value = userData
@@ -293,11 +303,21 @@ watch(
   }
 )
 
-// 切换用户视图时重新加载数据
+// 切换维度时加载对应的数据源。
 watch(
-  () => showByUser.value,
+  () => displayDimension.value,
   () => {
     loadData()
+  }
+)
+
+// 平台或分组变化后，常规维度需要重新获取匹配的数据。
+watch(
+  () => [props.platformFilter, props.groupIdFilter] as const,
+  () => {
+    if (displayDimension.value !== 'user') {
+      loadData()
+    }
   }
 )
 
@@ -343,27 +363,14 @@ watch(
 <template>
   <div class="flex h-full flex-col rounded-3xl bg-white p-6 shadow-sm ring-1 ring-gray-900/5 dark:bg-dark-900 dark:ring-dark-700">
     <!-- 头部 -->
-    <div class="mb-4 flex shrink-0 items-center justify-between gap-3">
-      <h3 class="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
-        <svg class="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
-        {{ t('admin.ops.concurrency.title') }}
-      </h3>
-      <div class="flex items-center gap-2">
-        <!-- 用户视图切换按钮 -->
-        <button
-          class="flex items-center justify-center rounded-lg px-2 py-1 transition-colors"
-          :class="showByUser
-            ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
-            : 'bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700 dark:bg-dark-950 dark:text-gray-400 dark:hover:bg-dark-800 dark:hover:text-gray-300'"
-          :title="showByUser ? t('admin.ops.concurrency.switchToPlatform') : t('admin.ops.concurrency.switchToUser')"
-          @click="showByUser = !showByUser"
-        >
-          <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+    <div class="mb-3 flex shrink-0 flex-col gap-2">
+      <div class="flex items-center justify-between gap-3">
+        <h3 class="flex items-center gap-2 whitespace-nowrap text-sm font-bold text-gray-900 dark:text-white">
+          <svg class="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-        </button>
+          {{ t('admin.ops.concurrency.title') }}
+        </h3>
         <!-- 刷新按钮 -->
         <button
           class="flex items-center gap-1 rounded-lg bg-gray-100 px-2 py-1 text-[11px] font-semibold text-gray-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-950 dark:text-gray-300 dark:hover:bg-dark-800"
@@ -374,6 +381,29 @@ watch(
           <svg class="h-3 w-3" :class="{ 'animate-spin': loading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
+        </button>
+      </div>
+      <!-- 四种统计维度独占一行，窄列下标题也不会被挤压换行。 -->
+      <div
+        class="grid grid-cols-4 items-center rounded-lg bg-gray-100 p-0.5 dark:bg-dark-950"
+        role="group"
+        :aria-label="t('admin.ops.concurrency.title')"
+      >
+        <button
+          v-for="option in dimensionOptions"
+          :key="option.value"
+          type="button"
+          class="flex h-7 w-full items-center justify-center rounded-md transition-colors"
+          :class="displayDimension === option.value
+            ? 'bg-white text-blue-600 shadow-sm dark:bg-dark-800 dark:text-blue-400'
+            : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+          :title="option.label"
+          :aria-label="option.label"
+          :aria-pressed="displayDimension === option.value"
+          :data-test="`concurrency-dimension-${option.value}`"
+          @click="displayDimension = option.value"
+        >
+          <Icon :name="option.icon" size="xs" :stroke-width="2" />
         </button>
       </div>
     </div>
@@ -409,7 +439,7 @@ watch(
       </div>
 
       <!-- 用户视图 -->
-      <div v-else-if="displayDimension === 'user'" class="custom-scrollbar max-h-[360px] flex-1 space-y-2 overflow-y-auto p-3">
+      <div v-else-if="displayDimension === 'user'" class="custom-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         <div v-for="row in (displayRows as UserRow[])" :key="row.key" class="rounded-lg bg-gray-50 p-2.5 dark:bg-dark-950">
           <!-- 用户信息和并发 -->
           <div class="mb-1.5 flex items-center justify-between gap-2">
@@ -442,7 +472,7 @@ watch(
       </div>
 
       <!-- 汇总视图（平台/分组） -->
-      <div v-else-if="displayDimension === 'platform' || displayDimension === 'group'" class="custom-scrollbar max-h-[360px] flex-1 space-y-2 overflow-y-auto p-3">
+      <div v-else-if="displayDimension === 'platform' || displayDimension === 'group'" class="custom-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         <div v-for="row in (displayRows as SummaryRow[])" :key="row.key" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-950">
           <!-- 标题行 -->
           <div class="mb-2 flex items-center justify-between gap-2">
@@ -516,7 +546,7 @@ watch(
       </div>
 
       <!-- 账号详细视图 -->
-      <div v-else class="custom-scrollbar max-h-[360px] flex-1 space-y-2 overflow-y-auto p-3">
+      <div v-else class="custom-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         <div v-for="row in (displayRows as AccountRow[])" :key="row.key" class="rounded-lg bg-gray-50 p-2.5 dark:bg-dark-950">
           <!-- 账号名称和并发 -->
           <div class="mb-1.5 flex items-center justify-between gap-2">

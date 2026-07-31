@@ -736,9 +736,9 @@ export default {
       modelExists: '该模型已存在',
       modelCount: '{count} 个模型',
       poolMode: '池模式',
-      poolModeHint: '上游为账号池时启用，错误不标记本地账号状态',
+      poolModeHint: '上游为账号池时启用，默认错误不标记本地调度状态',
       poolModeInfo:
-        '启用后，上游 429/403/401 错误将自动重试而不标记账号限流或错误，适用于上游指向另一个 sub2api 实例的场景。',
+        '启用后，命中重试状态码的错误会按配置同账号重试，且不写入默认账号或模型状态；自定义错误码和临时不可调度规则仍优先，命中后会立即切换账号。',
       poolModeRetryCount: '同账号重试次数',
       poolModeRetryCountHint: '仅在池模式下生效。0 表示不原地重试；默认 {default}，最大 {max}。',
       poolModeRetryStatusCodes: '同账号重试状态码',

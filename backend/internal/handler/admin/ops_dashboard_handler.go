@@ -95,7 +95,7 @@ func (h *OpsHandler) GetDashboardThroughputTrend(c *gin.Context) {
 	response.Success(c, data)
 }
 
-// GetDashboardLatencyHistogram returns the latency distribution histogram (success requests).
+// GetDashboardLatencyHistogram 返回成功请求的时长分布。
 // GET /api/v1/admin/ops/dashboard/latency-histogram
 func (h *OpsHandler) GetDashboardLatencyHistogram(c *gin.Context) {
 	if h.opsService == nil {
@@ -128,12 +128,41 @@ func (h *OpsHandler) GetDashboardLatencyHistogram(c *gin.Context) {
 		filter.GroupID = &id
 	}
 
-	data, err := h.opsService.GetLatencyHistogram(c.Request.Context(), filter)
+	bucketBoundariesMS, err := parseOpsLatencyBucketBoundaries(c.Query("bucket_boundaries_ms"))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	data, err := h.opsService.GetLatencyHistogram(c.Request.Context(), filter, bucketBoundariesMS)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, data)
+}
+
+func parseOpsLatencyBucketBoundaries(raw string) ([]int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return service.DefaultOpsLatencyBucketBoundariesMS(), nil
+	}
+
+	parts := strings.Split(raw, ",")
+	boundaries := make([]int64, 0, len(parts))
+	for _, part := range parts {
+		value, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid bucket_boundaries_ms")
+		}
+		boundaries = append(boundaries, value)
+	}
+
+	normalized, err := service.NormalizeOpsLatencyBucketBoundariesMS(boundaries)
+	if err != nil {
+		return nil, fmt.Errorf("invalid bucket_boundaries_ms: %w", err)
+	}
+	return normalized, nil
 }
 
 // GetDashboardErrorTrend returns error counts time series (raw path).
@@ -219,9 +248,9 @@ func (h *OpsHandler) GetDashboardErrorDistribution(c *gin.Context) {
 	response.Success(c, data)
 }
 
-// GetDashboardOpenAITokenStats returns OpenAI token efficiency stats grouped by model.
-// GET /api/v1/admin/ops/dashboard/openai-token-stats
-func (h *OpsHandler) GetDashboardOpenAITokenStats(c *gin.Context) {
+// GetDashboardTokenStats 返回按模型聚合的通用 Token 请求统计。
+// GET /api/v1/admin/ops/dashboard/token-stats
+func (h *OpsHandler) GetDashboardTokenStats(c *gin.Context) {
 	if h.opsService == nil {
 		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
 		return
@@ -231,13 +260,13 @@ func (h *OpsHandler) GetDashboardOpenAITokenStats(c *gin.Context) {
 		return
 	}
 
-	filter, err := parseOpsOpenAITokenStatsFilter(c)
+	filter, err := parseOpsTokenStatsFilter(c)
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 
-	data, err := h.opsService.GetOpenAITokenStats(c.Request.Context(), filter)
+	data, err := h.opsService.GetTokenStats(c.Request.Context(), filter)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -245,7 +274,7 @@ func (h *OpsHandler) GetDashboardOpenAITokenStats(c *gin.Context) {
 	response.Success(c, data)
 }
 
-func parseOpsOpenAITokenStatsFilter(c *gin.Context) (*service.OpsOpenAITokenStatsFilter, error) {
+func parseOpsTokenStatsFilter(c *gin.Context) (*service.OpsTokenStatsFilter, error) {
 	if c == nil {
 		return nil, fmt.Errorf("invalid request")
 	}
@@ -254,14 +283,14 @@ func parseOpsOpenAITokenStatsFilter(c *gin.Context) (*service.OpsOpenAITokenStat
 	if timeRange == "" {
 		timeRange = "30d"
 	}
-	dur, ok := parseOpsOpenAITokenStatsDuration(timeRange)
+	dur, ok := parseOpsTokenStatsDuration(timeRange)
 	if !ok {
 		return nil, fmt.Errorf("invalid time_range")
 	}
 	end := time.Now().UTC()
 	start := end.Add(-dur)
 
-	filter := &service.OpsOpenAITokenStatsFilter{
+	filter := &service.OpsTokenStatsFilter{
 		TimeRange: timeRange,
 		StartTime: start,
 		EndTime:   end,
@@ -311,7 +340,7 @@ func parseOpsOpenAITokenStatsFilter(c *gin.Context) (*service.OpsOpenAITokenStat
 	return filter, nil
 }
 
-func parseOpsOpenAITokenStatsDuration(v string) (time.Duration, bool) {
+func parseOpsTokenStatsDuration(v string) (time.Duration, bool) {
 	switch strings.TrimSpace(v) {
 	case "30m":
 		return 30 * time.Minute, true

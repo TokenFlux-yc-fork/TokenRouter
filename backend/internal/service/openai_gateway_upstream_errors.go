@@ -390,6 +390,9 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
 		return false
 	}
+	if isOpenAIContentPolicyRejection(upstreamBody) {
+		return false
+	}
 	if IsOpenAICyberWarningPayload(upstreamBody, upstreamMsg) {
 		return false
 	}
@@ -522,6 +525,11 @@ func (s *OpenAIGatewayService) readUpstreamErrorBody(resp *http.Response) []byte
 }
 
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, responseBody []byte, canonicalModel ...string) bool {
+	return s.applyFailoverSideEffects(ctx, resp, account, responseBody, canonicalModel...).StopScheduling
+}
+
+// applyFailoverSideEffects 返回完整策略决策，避免自定义未命中被误当作池模式可重试。
+func (s *OpenAIGatewayService) applyFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, responseBody []byte, canonicalModel ...string) UpstreamErrorDecision {
 	if resp != nil && isOpenAIOpaqueUpstreamBadRequest(
 		resp.StatusCode,
 		sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(responseBody))),
@@ -529,12 +537,12 @@ func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, re
 	) {
 		// opaque provider wrapper 只支持本请求内切换账号，不能据此更新限流、
 		// runtime block 或其他账号健康状态。
-		return false
+		return UpstreamErrorDecision{Policy: ErrorPolicyNone}
 	}
 	if len(canonicalModel) > 0 {
-		return s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, responseBody, canonicalModel[0])
+		return s.applyOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, responseBody, canonicalModel[0])
 	}
-	return s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, responseBody)
+	return s.applyOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, responseBody)
 }
 
 func (s *OpenAIGatewayService) recordOpenAIPassiveAccountFailure(ctx context.Context, account *Account, statusCode int, responseBody []byte) {
@@ -667,7 +675,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			AccountName:        account.Name,
 			UpstreamStatusCode: resp.StatusCode,
 			UpstreamRequestID:  resp.Header.Get("x-request-id"),
-			Kind:               "failover",
+			Kind:               "http_error",
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
 		})
@@ -738,9 +746,22 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		return nil, fmt.Errorf("upstream invalid request: %d message=%s", resp.StatusCode, upstreamMsg)
 	}
 
-	// Check custom error codes
-	if !account.ShouldHandleErrorCode(resp.StatusCode) {
-		s.recordOpenAIPassiveAccountFailure(ctx, account, resp.StatusCode, body)
+	// 请求级排除完成后再执行账号策略，避免非故障转移状态漏掉显式配置。
+	var reqModel string
+	if len(requestedModel) > 0 {
+		reqModel = strings.TrimSpace(requestedModel[0])
+	}
+	if reqModel == "" {
+		reqModel, _, _ = extractOpenAIRequestMetaFromBody(requestBody)
+		reqModel = canonicalOpenAIAccountSchedulingModel(account, reqModel)
+	}
+	var decision UpstreamErrorDecision
+	if account != nil && account.Platform == PlatformGrok {
+		decision = s.applyGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, reqModel)
+	} else {
+		decision = s.applyOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, reqModel)
+	}
+	if decision.ShouldReturnGenericError() {
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -770,18 +791,12 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		return nil, fmt.Errorf("upstream error: %d (not in custom error codes) message=%s", resp.StatusCode, upstreamMsg)
 	}
 
-	// Handle upstream error (mark account status)
-	var reqModel string
-	if len(requestedModel) > 0 {
-		reqModel = strings.TrimSpace(requestedModel[0])
-	}
-	if reqModel == "" {
-		reqModel, _, _ = extractOpenAIRequestMetaFromBody(requestBody)
-		reqModel = canonicalOpenAIAccountSchedulingModel(account, reqModel)
-	}
-	shouldDisable := s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, reqModel)
 	kind := "http_error"
-	if shouldDisable {
+	defaultFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, body)
+	if account != nil && account.Platform == PlatformGrok {
+		defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, body)
+	}
+	if decision.ShouldFailoverWithDefaults(account, resp.StatusCode, decision.StopScheduling, defaultFailover) {
 		kind = "failover"
 	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -794,13 +809,43 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
 	})
-	if shouldDisable {
-		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           body,
-			RetryableOnSameAccount: false,
-		}
+	if kind == "failover" {
+		return nil, newOpenAIUpstreamFailoverError(
+			resp.StatusCode,
+			resp.Header,
+			body,
+			upstreamMsg,
+			decision.RetryableOnSameAccount(account, resp.StatusCode),
+		)
 	}
+
+	// 透传规则只改变最终客户端响应，不得绕过已经执行的账号策略。
+	if status, errType, errMsg, matched := applyErrorPassthroughRule(
+		c,
+		account.Platform,
+		resp.StatusCode,
+		body,
+		http.StatusBadGateway,
+		"upstream_error",
+		"Upstream request failed",
+	); matched {
+		MarkResponseCommitted(c)
+		c.JSON(status, gin.H{
+			"error": gin.H{
+				"type":    errType,
+				"message": errMsg,
+			},
+		})
+		if upstreamMsg == "" {
+			upstreamMsg = errMsg
+		}
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d (passthrough rule matched)", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, upstreamMsg)
+	}
+
+	MarkResponseCommitted(c)
 
 	// Return appropriate error response
 	var errType, errMsg string
@@ -946,11 +991,23 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		writeErrorBody(c, http.StatusBadRequest, body)
 		return nil, fmt.Errorf("upstream invalid request: %d message=%s", resp.StatusCode, upstreamMsg)
 	}
+	if isOpenAIRequestBodyTooLargeError(resp.StatusCode, upstreamMsg, body) {
+		MarkResponseCommitted(c)
+		writeErrorBody(c, resp.StatusCode, body)
+		return nil, fmt.Errorf("upstream request body too large: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
 
-	// Check custom error codes — if the account does not handle this status,
-	// return a generic error without exposing upstream details.
-	if !account.ShouldHandleErrorCode(resp.StatusCode) {
-		s.recordOpenAIPassiveAccountFailure(openAIRequestContextOrBackground(c), account, resp.StatusCode, body)
+	var modelForCooldown string
+	if len(requestedModel) > 0 {
+		modelForCooldown = requestedModel[0]
+	}
+	var decision UpstreamErrorDecision
+	if account.Platform == PlatformGrok {
+		decision = s.applyGrokAccountUpstreamError(c.Request.Context(), account, resp.StatusCode, resp.Header, body, modelForCooldown)
+	} else {
+		decision = s.applyOpenAIAccountUpstreamError(c.Request.Context(), account, resp.StatusCode, resp.Header, body, modelForCooldown)
+	}
+	if decision.ShouldReturnGenericError() {
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -969,16 +1026,12 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		return nil, fmt.Errorf("upstream error: %d (not in custom error codes) message=%s", resp.StatusCode, upstreamMsg)
 	}
 
-	// Track rate limits and decide whether to trigger secondary failover.
-	var modelForCooldown string
-	if len(requestedModel) > 0 {
-		modelForCooldown = requestedModel[0]
-	}
-	shouldDisable := s.handleOpenAIAccountUpstreamError(
-		c.Request.Context(), account, resp.StatusCode, resp.Header, body, modelForCooldown,
-	)
 	kind := "http_error"
-	if shouldDisable {
+	defaultFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, body)
+	if account.Platform == PlatformGrok {
+		defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, body)
+	}
+	if decision.ShouldFailoverWithDefaults(account, resp.StatusCode, decision.StopScheduling, defaultFailover) {
 		kind = "failover"
 	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -991,12 +1044,30 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
 	})
-	if shouldDisable {
-		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           body,
-			RetryableOnSameAccount: false,
+	if kind == "failover" {
+		return nil, newOpenAIUpstreamFailoverError(
+			resp.StatusCode,
+			resp.Header,
+			body,
+			upstreamMsg,
+			decision.RetryableOnSameAccount(account, resp.StatusCode),
+		)
+	}
+
+	// 透传规则只负责最终响应格式，不能绕过账号策略。
+	if status, errType, errMsg, matched := applyErrorPassthroughRule(
+		c, account.Platform, resp.StatusCode, body,
+		http.StatusBadGateway, "api_error", "Upstream request failed",
+	); matched {
+		MarkResponseCommitted(c)
+		writeError(c, status, errType, errMsg)
+		if upstreamMsg == "" {
+			upstreamMsg = errMsg
 		}
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d (passthrough rule matched)", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d (passthrough rule matched) message=%s", resp.StatusCode, upstreamMsg)
 	}
 
 	MarkResponseCommitted(c)

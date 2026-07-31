@@ -977,13 +977,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					Detail:             upstreamDetail,
 				})
 
-				shouldDisable := s.handleFailoverSideEffects(ctx, resp, account, respBody, upstreamModel)
+				decision := s.applyFailoverSideEffects(ctx, resp, account, respBody, upstreamModel)
+				if decision.ShouldReturnGenericError() {
+					return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)
+				}
 				return nil, newOpenAIUpstreamFailoverError(
 					resp.StatusCode,
 					resp.Header,
 					respBody,
 					upstreamMsg,
-					!shouldDisable && account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
+					decision.RetryableOnSameAccount(account, resp.StatusCode),
 				)
 			}
 			return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)

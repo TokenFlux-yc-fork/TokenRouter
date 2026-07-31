@@ -4,7 +4,9 @@ package service
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +51,7 @@ func TestCheckErrorPolicy(t *testing.T) {
 			},
 			statusCode: 500,
 			body:       []byte(`"error"`),
-			expected:   ErrorPolicyMatched,
+			expected:   ErrorPolicyCustomMatched,
 		},
 		{
 			name: "custom_error_codes_miss_returns_skipped",
@@ -64,7 +66,7 @@ func TestCheckErrorPolicy(t *testing.T) {
 			},
 			statusCode: 503,
 			body:       []byte(`"error"`),
-			expected:   ErrorPolicySkipped,
+			expected:   ErrorPolicyCustomSkipped,
 		},
 		{
 			name: "temp_unschedulable_hit_returns_temp_unscheduled",
@@ -177,7 +179,7 @@ func TestCheckErrorPolicy(t *testing.T) {
 			},
 			statusCode: 503,
 			body:       []byte(`overloaded`),
-			expected:   ErrorPolicyMatched, // custom codes take precedence
+			expected:   ErrorPolicyCustomMatched, // custom codes take precedence
 		},
 		{
 			name: "pool_mode_custom_error_codes_hit_returns_matched",
@@ -193,10 +195,10 @@ func TestCheckErrorPolicy(t *testing.T) {
 			},
 			statusCode: 401,
 			body:       []byte(`unauthorized`),
-			expected:   ErrorPolicyMatched,
+			expected:   ErrorPolicyCustomMatched,
 		},
 		{
-			name: "pool_mode_without_custom_error_codes_returns_skipped",
+			name: "pool_mode_without_custom_error_codes_returns_bypassed",
 			account: &Account{
 				ID:       8,
 				Type:     AccountTypeAPIKey,
@@ -207,7 +209,7 @@ func TestCheckErrorPolicy(t *testing.T) {
 			},
 			statusCode: 401,
 			body:       []byte(`unauthorized`),
-			expected:   ErrorPolicySkipped,
+			expected:   ErrorPolicyPoolBypassed,
 		},
 		{
 			name: "pool_mode_temp_unschedulable_hit_returns_temp_unscheduled",
@@ -232,7 +234,30 @@ func TestCheckErrorPolicy(t *testing.T) {
 			expected:   ErrorPolicyTempUnscheduled,
 		},
 		{
-			name: "pool_mode_temp_unschedulable_miss_returns_skipped",
+			name: "pool_mode_repeated_401_explicit_rule_stays_temp_unscheduled",
+			account: &Account{
+				ID:                      11,
+				Type:                    AccountTypeAPIKey,
+				Platform:                PlatformOpenAI,
+				TempUnschedulableReason: `{"status_code":401,"until_unix":1735689600}`,
+				Credentials: map[string]any{
+					"pool_mode":                  true,
+					"temp_unschedulable_enabled": true,
+					"temp_unschedulable_rules": []any{
+						map[string]any{
+							"error_code":       float64(http.StatusUnauthorized),
+							"keywords":         []any{"unauthorized"},
+							"duration_minutes": float64(30),
+						},
+					},
+				},
+			},
+			statusCode: http.StatusUnauthorized,
+			body:       []byte(`unauthorized`),
+			expected:   ErrorPolicyTempUnscheduled,
+		},
+		{
+			name: "pool_mode_temp_unschedulable_miss_returns_bypassed",
 			account: &Account{
 				ID:       10,
 				Type:     AccountTypeAPIKey,
@@ -251,7 +276,7 @@ func TestCheckErrorPolicy(t *testing.T) {
 			},
 			statusCode: http.StatusServiceUnavailable,
 			body:       []byte(`Service temporarily unavailable`),
-			expected:   ErrorPolicySkipped,
+			expected:   ErrorPolicyPoolBypassed,
 		},
 	}
 
@@ -372,6 +397,125 @@ func TestHandleUpstreamError_PoolModePolicies(t *testing.T) {
 		require.Equal(t, 0, repo.setErrCalls)
 		require.Equal(t, 0, repo.tempCalls)
 	})
+}
+
+// TestHandleUpstreamError_CustomCodesAlwaysStopScheduling 验证自定义错误码不会再被
+// 400、429、529 的内置分支覆盖。
+func TestHandleUpstreamError_CustomCodesAlwaysStopScheduling(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{name: "bad_request", statusCode: http.StatusBadRequest},
+		{name: "rate_limit", statusCode: http.StatusTooManyRequests},
+		{name: "overloaded", statusCode: 529},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &errorPolicyRepoStub{}
+			svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			account := &Account{
+				ID:       int64(1000 + tt.statusCode),
+				Type:     AccountTypeAPIKey,
+				Platform: PlatformOpenAI,
+				Credentials: map[string]any{
+					"pool_mode":                  true,
+					"custom_error_codes_enabled": true,
+					"custom_error_codes":         []any{float64(tt.statusCode)},
+				},
+			}
+
+			decision := svc.ApplyUpstreamError(
+				context.Background(), account, tt.statusCode, http.Header{}, []byte(`{"error":{"message":"configured failure"}}`),
+			)
+
+			require.Equal(t, ErrorPolicyCustomMatched, decision.Policy)
+			require.True(t, decision.StopScheduling)
+			require.False(t, decision.RetryableOnSameAccount(account, tt.statusCode))
+			require.Equal(t, 1, repo.setErrCalls)
+			require.Equal(t, 0, repo.tempCalls)
+		})
+	}
+}
+
+// TestUpstreamErrorDecision_PoolRetryStatusPromotesFailover 验证管理员配置的池模式
+// 重试状态码可以提升非默认故障转移错误，同时不会写入本地状态。
+func TestUpstreamErrorDecision_PoolRetryStatusPromotesFailover(t *testing.T) {
+	repo := &errorPolicyRepoStub{}
+	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       20422,
+		Type:     AccountTypeAPIKey,
+		Platform: PlatformOpenAI,
+		Credentials: map[string]any{
+			"pool_mode":                    true,
+			"pool_mode_retry_status_codes": []any{float64(http.StatusUnprocessableEntity)},
+		},
+	}
+
+	decision := svc.ApplyUpstreamError(
+		context.Background(), account, http.StatusUnprocessableEntity, http.Header{}, []byte(`{"error":{"message":"unprocessable"}}`),
+	)
+
+	require.Equal(t, ErrorPolicyPoolBypassed, decision.Policy)
+	require.True(t, decision.ShouldFailover(account, http.StatusUnprocessableEntity, false))
+	require.True(t, decision.RetryableOnSameAccount(account, http.StatusUnprocessableEntity))
+	require.Zero(t, repo.setErrCalls)
+	require.Zero(t, repo.tempCalls)
+	require.Empty(t, repo.modelRateLimitCalls)
+}
+
+// TestUpstreamErrorDecision_UsesSeparateEntryDefaults 验证普通账号保持入口旧行为，
+// 池模式则使用平台错误分类，并且显式策略始终覆盖两者。
+func TestUpstreamErrorDecision_UsesSeparateEntryDefaults(t *testing.T) {
+	account := &Account{
+		ID:          20423,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"pool_mode": true},
+	}
+
+	require.False(t, (UpstreamErrorDecision{Policy: ErrorPolicyNone}).ShouldFailoverWithDefaults(account, http.StatusBadGateway, false, true))
+	require.True(t, (UpstreamErrorDecision{Policy: ErrorPolicyPoolBypassed}).ShouldFailoverWithDefaults(account, http.StatusBadGateway, false, true))
+	require.True(t, (UpstreamErrorDecision{Policy: ErrorPolicyCustomMatched}).ShouldFailoverWithDefaults(account, http.StatusUnprocessableEntity, false, false))
+	require.False(t, (UpstreamErrorDecision{Policy: ErrorPolicyCustomSkipped}).ShouldFailoverWithDefaults(account, http.StatusBadGateway, true, true))
+}
+
+// TestGatewayFailoverSideEffects_BedrockUsesMappedModel 验证 Bedrock 显式临时规则
+// 使用实际上游模型，并禁止池模式同账号重试。
+func TestGatewayFailoverSideEffects_BedrockUsesMappedModel(t *testing.T) {
+	repo := &errorPolicyRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := &GatewayService{rateLimitService: rateLimitService}
+	account := &Account{
+		ID:       20503,
+		Type:     AccountTypeBedrock,
+		Platform: PlatformAnthropic,
+		Credentials: map[string]any{
+			"pool_mode":                  true,
+			"temp_unschedulable_enabled": true,
+			"temp_unschedulable_rules": []any{
+				map[string]any{
+					"error_code":       float64(http.StatusServiceUnavailable),
+					"keywords":         []any{"maintenance"},
+					"duration_minutes": float64(30),
+				},
+			},
+		},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"maintenance"}}`)),
+	}
+
+	decision := svc.handleFailoverSideEffects(context.Background(), resp, account, "anthropic.claude-mapped")
+
+	require.Equal(t, ErrorPolicyTempUnscheduled, decision.Policy)
+	require.True(t, decision.StopScheduling)
+	require.False(t, decision.RetryableOnSameAccount(account, http.StatusServiceUnavailable))
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.Equal(t, "anthropic.claude-mapped", repo.modelRateLimitCalls[0].scope)
+	require.Zero(t, repo.tempCalls)
 }
 
 // ---------------------------------------------------------------------------
@@ -570,6 +714,52 @@ type errorPolicyRepoStub struct {
 	setErrCalls         int
 	lastErrorMsg        string
 	modelRateLimitCalls []modelNotFoundRateLimitCall
+}
+
+// retryExhaustedCooldownRepoStub 记录同账号重试耗尽后的本地冷却写入。
+type retryExhaustedCooldownRepoStub struct {
+	AccountRepository
+	account   *Account
+	tempCalls int
+}
+
+func (r *retryExhaustedCooldownRepoStub) GetByID(context.Context, int64) (*Account, error) {
+	return r.account, nil
+}
+
+func (r *retryExhaustedCooldownRepoStub) SetTempUnschedulable(context.Context, int64, time.Time, string) error {
+	r.tempCalls++
+	return nil
+}
+
+// TestTempUnscheduleRetryableError_PoolModeSkipsLegacyCooldown 验证池模式的
+// 同账号重试耗尽后只切号，不复用旧版 400/502 一分钟冷却。
+func TestTempUnscheduleRetryableError_PoolModeSkipsLegacyCooldown(t *testing.T) {
+	poolAccount := &Account{
+		ID:       81,
+		Type:     AccountTypeAPIKey,
+		Platform: PlatformAnthropic,
+		Credentials: map[string]any{
+			"pool_mode": true,
+		},
+	}
+	repo := &retryExhaustedCooldownRepoStub{account: poolAccount}
+	svc := &GatewayService{accountRepo: repo}
+
+	svc.TempUnscheduleRetryableError(context.Background(), poolAccount.ID, &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		RetryableOnSameAccount: true,
+	})
+
+	require.Zero(t, repo.tempCalls)
+
+	// 非池账号继续保留旧版特殊错误的冷却行为。
+	repo.account = &Account{ID: 82, Type: AccountTypeOAuth, Platform: PlatformAntigravity}
+	svc.TempUnscheduleRetryableError(context.Background(), repo.account.ID, &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		RetryableOnSameAccount: true,
+	})
+	require.Equal(t, 1, repo.tempCalls)
 }
 
 func (r *errorPolicyRepoStub) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {

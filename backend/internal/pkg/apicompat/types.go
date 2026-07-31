@@ -327,8 +327,10 @@ type ResponsesResponse struct {
 
 // ResponsesError describes an error in a failed response.
 type ResponsesError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string `json:"code"`
+	Type       string `json:"type,omitempty"`
+	Message    string `json:"message"`
+	StatusCode int    `json:"status_code,omitempty"` // 保留聚合上游附带的语义状态码，供账号错误策略判断。
 }
 
 // ResponsesIncompleteDetails explains why a response is incomplete.

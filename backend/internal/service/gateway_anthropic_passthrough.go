@@ -207,7 +207,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			logger.LegacyPrintf("service.gateway", "[Anthropic Passthrough] Upstream error (retry exhausted, failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 				account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-			s.handleRetryExhaustedSideEffects(ctx, resp, account)
+			decision := s.handleRetryExhaustedSideEffects(ctx, resp, account, input.RequestModel)
+			if decision.ShouldReturnGenericError() {
+				return s.handleErrorResponse(ctx, resp, c, account, input.RequestModel)
+			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
@@ -227,10 +230,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
-				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 			}
 		}
-		return s.handleRetryExhaustedError(ctx, resp, c, account)
+		return s.handleRetryExhaustedError(ctx, resp, c, account, input.RequestModel)
 	}
 
 	if resp.StatusCode >= 400 && s.shouldFailoverUpstreamError(resp.StatusCode) {
@@ -241,7 +244,10 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		logger.LegacyPrintf("service.gateway", "[Anthropic Passthrough] Upstream error (failover): Account=%d(%s) Status=%d RequestID=%s Body=%s",
 			account.ID, account.Name, resp.StatusCode, resp.Header.Get("x-request-id"), truncateString(string(respBody), 1000))
 
-		s.handleFailoverSideEffects(ctx, resp, account, input.RequestModel)
+		decision := s.handleFailoverSideEffects(ctx, resp, account, input.RequestModel)
+		if decision.ShouldReturnGenericError() {
+			return s.handleErrorResponse(ctx, resp, c, account, input.RequestModel)
+		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -261,7 +267,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           respBody,
-			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+			RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 		}
 	}
 
@@ -787,11 +793,9 @@ func (s *GatewayService) invalidNonStreamingJSONFailoverError(
 
 	accountID := int64(0)
 	accountName := ""
-	retryableOnSameAccount := false
 	if account != nil {
 		accountID = account.ID
 		accountName = account.Name
-		retryableOnSameAccount = account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode)
 	}
 
 	logger.LegacyPrintf(
@@ -804,19 +808,23 @@ func (s *GatewayService) invalidNonStreamingJSONFailoverError(
 		parseErr,
 	)
 
+	decision := upstreamErrorDecisionWithoutPersistence(account, statusCode)
 	if s.rateLimitService != nil && account != nil {
 		if len(requestedModel) > 0 {
-			s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body, requestedModel[0])
+			decision = s.rateLimitService.ApplyUpstreamError(ctx, account, statusCode, resp.Header, body, requestedModel[0])
 		} else {
-			s.rateLimitService.HandleUpstreamError(ctx, account, statusCode, resp.Header, body)
+			decision = s.rateLimitService.ApplyUpstreamError(ctx, account, statusCode, resp.Header, body)
 		}
+	}
+	if decision.ShouldReturnGenericError() {
+		return fmt.Errorf("upstream returned invalid JSON (not in custom error codes): %w", parseErr)
 	}
 
 	return &UpstreamFailoverError{
 		StatusCode:             statusCode,
 		ResponseBody:           body,
 		ResponseHeaders:        resp.Header,
-		RetryableOnSameAccount: retryableOnSameAccount,
+		RetryableOnSameAccount: decision.RetryableOnSameAccount(account, statusCode),
 	}
 }
 

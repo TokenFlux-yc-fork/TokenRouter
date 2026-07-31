@@ -109,16 +109,17 @@ export default {
         '30d': '近30天',
         custom: '自定义'
       },
-      openaiTokenStats: {
-        title: 'OpenAI Token 请求统计',
+      tokenStats: {
+        title: 'Token 请求统计',
+        groupFilter: 'Token 统计分组',
         viewModeTopN: 'TopN',
         viewModePagination: '分页',
         prevPage: '上一页',
         nextPage: '下一页',
         pageInfo: '第 {page}/{total} 页',
         totalModels: '模型总数：{total}',
-        failedToLoad: '加载 OpenAI Token 统计失败',
-        empty: '当前筛选条件下暂无 OpenAI Token 请求统计数据',
+        failedToLoad: '加载 Token 请求统计失败',
+        empty: '当前筛选条件下暂无 Token 请求统计数据',
         table: {
           model: '模型',
           requestCount: '请求数',
@@ -128,6 +129,15 @@ export default {
           avgDurationMs: '平均时长(ms)',
           requestsWithFirstToken: '首 Token 样本数'
         }
+      },
+      latencyBuckets: {
+        settings: '设置时长分桶',
+        title: '请求时长分桶设置',
+        hint: '5 个毫秒分界点；正整数、严格递增，最大 {max}ms。',
+        boundary: '分界点 {index}（ms）',
+        invalid: '请输入 5 个严格递增、范围合法的正整数。',
+        restoreDefaults: '恢复默认值',
+        apply: '应用'
       },
       customTimeRange: {
         startTime: '开始时间',
@@ -698,8 +708,6 @@ export default {
         dashboardCards: '仪表盘卡片',
         displayAlertEvents: '展示告警事件',
         displayAlertEventsHint: '控制运维监控仪表盘中告警事件卡片是否显示，默认开启。',
-        displayOpenAITokenStats: '展示 OpenAI Token 请求统计',
-        displayOpenAITokenStatsHint: '控制运维监控仪表盘中 OpenAI Token 请求统计卡片是否显示，默认关闭。',
         autoRefreshCountdown: '自动刷新：{seconds}s',
         validation: {
           title: '请先修正以下问题',
@@ -721,8 +729,6 @@ export default {
         byAccount: '按账号',
         byUser: '按用户',
         showByUserTooltip: '切换用户视图，显示每个用户的并发使用情况',
-        switchToUser: '切换到用户视图',
-        switchToPlatform: '切换回平台视图',
         totalRows: '共 {count} 项',
         disabledHint: '已在设置中关闭实时监控。',
         empty: '暂无数据',

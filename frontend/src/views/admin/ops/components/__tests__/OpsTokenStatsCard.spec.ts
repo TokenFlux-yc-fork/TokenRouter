@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
-import OpsOpenAITokenStatsCard from '../OpsOpenAITokenStatsCard.vue'
+import OpsTokenStatsCard from '../OpsTokenStatsCard.vue'
 
-const mockGetOpenAITokenStats = vi.fn()
+const mockGetTokenStats = vi.fn()
 
 vi.mock('@/api/admin/ops', () => ({
   opsAPI: {
-    getOpenAITokenStats: (...args: any[]) => mockGetOpenAITokenStats(...args),
+    getTokenStats: (...args: any[]) => mockGetTokenStats(...args),
   },
 }))
 
@@ -17,7 +17,7 @@ vi.mock('vue-i18n', async (importOriginal) => {
     ...actual,
     useI18n: () => ({
       t: (key: string, params?: Record<string, any>) => {
-        if (key === 'admin.ops.openaiTokenStats.pageInfo' && params) {
+        if (key === 'admin.ops.tokenStats.pageInfo' && params) {
           return `第 ${params.page}/${params.total} 页`
         }
         return key
@@ -32,6 +32,10 @@ const SelectStub = defineComponent({
     modelValue: {
       type: [String, Number],
       default: '',
+    },
+    options: {
+      type: Array,
+      default: () => [],
     },
   },
   emits: ['update:modelValue'],
@@ -51,11 +55,11 @@ const sampleResponse = {
   time_range: '30d' as const,
   start_time: '2026-01-01T00:00:00Z',
   end_time: '2026-01-31T00:00:00Z',
-  platform: 'openai',
+  platform: 'anthropic',
   group_id: 7,
   items: [
     {
-      model: 'gpt-4o-mini',
+      model: 'claude-sonnet-4',
       request_count: 12,
       avg_tokens_per_sec: 22.5,
       avg_first_token_ms: 123.45,
@@ -70,19 +74,19 @@ const sampleResponse = {
   top_n: null,
 }
 
-describe('OpsOpenAITokenStatsCard', () => {
+describe('OpsTokenStatsCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('默认加载并透传 platform/group 过滤，支持时间窗口切换', async () => {
-    mockGetOpenAITokenStats.mockResolvedValue(sampleResponse)
+    mockGetTokenStats.mockResolvedValue(sampleResponse)
 
-    const wrapper = mount(OpsOpenAITokenStatsCard, {
+    const wrapper = mount(OpsTokenStatsCard, {
       props: {
-        platformFilter: 'openai',
+        platformFilter: 'anthropic',
         groupIdFilter: 7,
-        refreshToken: 0,
+        groups: [{ id: 7, name: 'Anthropic 主分组', platform: 'anthropic' }],
       },
       global: {
         stubs: {
@@ -93,30 +97,30 @@ describe('OpsOpenAITokenStatsCard', () => {
     })
 
     await flushPromises()
-    expect(mockGetOpenAITokenStats).toHaveBeenCalledWith(
+    expect(mockGetTokenStats).toHaveBeenCalledWith(
       expect.objectContaining({
         time_range: '30d',
-        platform: 'openai',
+        platform: 'anthropic',
         group_id: 7,
         top_n: 20,
       })
     )
 
     const selects = wrapper.findAllComponents(SelectStub)
-    await selects[0].vm.$emit('update:modelValue', '1h')
+    await selects[1].vm.$emit('update:modelValue', '1h')
     await flushPromises()
 
-    expect(mockGetOpenAITokenStats).toHaveBeenCalledWith(
+    expect(mockGetTokenStats).toHaveBeenCalledWith(
       expect.objectContaining({
         time_range: '1h',
-        platform: 'openai',
+        platform: 'anthropic',
         group_id: 7,
       })
     )
   })
 
   it('支持分页与 TopN 模式切换并按参数请求', async () => {
-    mockGetOpenAITokenStats.mockImplementation(async (params: Record<string, any>) => ({
+    mockGetTokenStats.mockImplementation(async (params: Record<string, any>) => ({
       ...sampleResponse,
       time_range: params.time_range ?? '30d',
       page: params.page ?? 1,
@@ -125,10 +129,7 @@ describe('OpsOpenAITokenStatsCard', () => {
       total: 40,
     }))
 
-    const wrapper = mount(OpsOpenAITokenStatsCard, {
-      props: {
-        refreshToken: 0,
-      },
+    const wrapper = mount(OpsTokenStatsCard, {
       global: {
         stubs: {
           Select: SelectStub,
@@ -139,10 +140,10 @@ describe('OpsOpenAITokenStatsCard', () => {
     await flushPromises()
 
     let selects = wrapper.findAllComponents(SelectStub)
-    await selects[1].vm.$emit('update:modelValue', 'pagination')
+    await selects[2].vm.$emit('update:modelValue', 'pagination')
     await flushPromises()
 
-    expect(mockGetOpenAITokenStats).toHaveBeenCalledWith(
+    expect(mockGetTokenStats).toHaveBeenCalledWith(
       expect.objectContaining({
         page: 1,
         page_size: 20,
@@ -154,7 +155,7 @@ describe('OpsOpenAITokenStatsCard', () => {
     await buttons[1].trigger('click')
     await flushPromises()
 
-    expect(mockGetOpenAITokenStats).toHaveBeenCalledWith(
+    expect(mockGetTokenStats).toHaveBeenCalledWith(
       expect.objectContaining({
         page: 2,
         page_size: 20,
@@ -162,28 +163,65 @@ describe('OpsOpenAITokenStatsCard', () => {
     )
 
     selects = wrapper.findAllComponents(SelectStub)
-    await selects[1].vm.$emit('update:modelValue', 'topn')
+    await selects[2].vm.$emit('update:modelValue', 'topn')
     await flushPromises()
     selects = wrapper.findAllComponents(SelectStub)
-    await selects[2].vm.$emit('update:modelValue', 50)
+    await selects[3].vm.$emit('update:modelValue', 50)
     await flushPromises()
 
-    expect(mockGetOpenAITokenStats).toHaveBeenCalledWith(
+    expect(mockGetTokenStats).toHaveBeenCalledWith(
       expect.objectContaining({
         top_n: 50,
       })
     )
   })
 
+  it('分组选择器与父级 groupId 双向同步', async () => {
+    mockGetTokenStats.mockResolvedValue(sampleResponse)
+
+    const wrapper = mount(OpsTokenStatsCard, {
+      props: {
+        platformFilter: 'anthropic',
+        groupIdFilter: 7,
+        groups: [
+          { id: 7, name: 'Anthropic 主分组', platform: 'anthropic' },
+          { id: 8, name: 'Anthropic 备用分组', platform: 'anthropic' },
+          { id: 9, name: '其他平台', platform: 'gemini' },
+        ],
+      },
+      global: {
+        stubs: {
+          Select: SelectStub,
+          EmptyState: EmptyStateStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    const groupSelect = wrapper.findAllComponents(SelectStub)[0]
+    expect(groupSelect.props('modelValue')).toBe(7)
+    expect(groupSelect.props('options')).toEqual([
+      { value: null, label: 'common.all' },
+      { value: 7, label: 'Anthropic 主分组' },
+      { value: 8, label: 'Anthropic 备用分组' },
+    ])
+
+    await groupSelect.vm.$emit('update:modelValue', 8)
+    expect(wrapper.emitted('update:group')).toEqual([[8]])
+
+    await wrapper.setProps({ groupIdFilter: 8 })
+    await flushPromises()
+    expect(mockGetTokenStats).toHaveBeenLastCalledWith(expect.objectContaining({ group_id: 8 }))
+  })
+
   it('接口返回空数据时显示空态', async () => {
-    mockGetOpenAITokenStats.mockResolvedValue({
+    mockGetTokenStats.mockResolvedValue({
       ...sampleResponse,
       items: [],
       total: 0,
     })
 
-    const wrapper = mount(OpsOpenAITokenStatsCard, {
-      props: { refreshToken: 0 },
+    const wrapper = mount(OpsTokenStatsCard, {
       global: {
         stubs: {
           Select: SelectStub,
@@ -197,10 +235,9 @@ describe('OpsOpenAITokenStatsCard', () => {
   })
 
   it('数据表使用固定高度滚动容器，避免纵向无限增长', async () => {
-    mockGetOpenAITokenStats.mockResolvedValue(sampleResponse)
+    mockGetTokenStats.mockResolvedValue(sampleResponse)
 
-    const wrapper = mount(OpsOpenAITokenStatsCard, {
-      props: { refreshToken: 0 },
+    const wrapper = mount(OpsTokenStatsCard, {
       global: {
         stubs: {
           Select: SelectStub,
@@ -214,10 +251,9 @@ describe('OpsOpenAITokenStatsCard', () => {
   })
 
   it('接口异常时显示错误提示', async () => {
-    mockGetOpenAITokenStats.mockRejectedValue(new Error('加载失败'))
+    mockGetTokenStats.mockRejectedValue(new Error('加载失败'))
 
-    const wrapper = mount(OpsOpenAITokenStatsCard, {
-      props: { refreshToken: 0 },
+    const wrapper = mount(OpsTokenStatsCard, {
       global: {
         stubs: {
           Select: SelectStub,
@@ -228,5 +264,25 @@ describe('OpsOpenAITokenStatsCard', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('加载失败')
+  })
+
+  it('只在用户点击刷新按钮时重新请求统计数据', async () => {
+    mockGetTokenStats.mockResolvedValue(sampleResponse)
+
+    const wrapper = mount(OpsTokenStatsCard, {
+      global: {
+        stubs: {
+          Select: SelectStub,
+          EmptyState: EmptyStateStub,
+        },
+      },
+    })
+    await flushPromises()
+    expect(mockGetTokenStats).toHaveBeenCalledTimes(1)
+
+    await wrapper.get('[data-test="token-stats-refresh"]').trigger('click')
+    await flushPromises()
+
+    expect(mockGetTokenStats).toHaveBeenCalledTimes(2)
   })
 })

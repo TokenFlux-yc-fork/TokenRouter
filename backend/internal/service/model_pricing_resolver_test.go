@@ -232,11 +232,14 @@ func TestGetRequestTierPrice_NilPerRequestPrice(t *testing.T) {
 // Channel override tests — exercises applyChannelOverrides via Resolve
 // ===========================================================================
 
-// helper: creates a resolver wired to a ChannelService that returns the given
-// channel (active, groupID=100, platform=anthropic) with the specified pricing.
+// newResolverWithChannel 创建带指定渠道定价的解析器，分组平台跟随首条定价配置。
 func newResolverWithChannel(t *testing.T, pricing []ChannelModelPricing) *ModelPricingResolver {
 	t.Helper()
 	const groupID = 100
+	platform := PlatformAnthropic
+	if len(pricing) > 0 && pricing[0].Platform != "" {
+		platform = pricing[0].Platform
+	}
 	repo := &mockChannelRepository{
 		listAllFn: func(_ context.Context) ([]Channel, error) {
 			return []Channel{{
@@ -248,7 +251,7 @@ func newResolverWithChannel(t *testing.T, pricing []ChannelModelPricing) *ModelP
 			}}, nil
 		},
 		getGroupPlatformsFn: func(_ context.Context, _ []int64) (map[int64]string, error) {
-			return map[int64]string{groupID: "anthropic"}, nil
+			return map[int64]string{groupID: platform}, nil
 		},
 	}
 	cs := NewChannelService(repo, nil)
@@ -712,6 +715,54 @@ func TestResolve_WithChannelOverride_PriceMultiplierScalesIntervalsAndFallbackFi
 	require.InDelta(t, 4e-6, pricing.InputPricePerToken, 1e-12)
 	// 区间未配置输出价时继承模型默认价，再统一乘以倍率。
 	require.InDelta(t, 30e-6, pricing.OutputPricePerToken, 1e-12)
+}
+
+func TestResolve_WithChannelOverride_FastModeMultiplierAppliesToIntervals(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:           PlatformOpenAI,
+		Models:             []string{"claude-sonnet-4"},
+		BillingMode:        BillingModeToken,
+		PriceMultiplier:    testPtrFloat64(1.25),
+		FastModeMultiplier: testPtrFloat64(2),
+		Intervals: []PricingInterval{{
+			MinTokens:   0,
+			MaxTokens:   testPtrInt(128000),
+			InputPrice:  testPtrFloat64(2e-6),
+			OutputPrice: testPtrFloat64(8e-6),
+		}},
+	}})
+
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+	})
+	pricing := r.GetIntervalPricing(resolved, 50000)
+	require.NotNil(t, pricing)
+	require.Equal(t, testPtrFloat64(2), pricing.FastModeMultiplier)
+
+	tokens := UsageTokens{InputTokens: 100, OutputTokens: 10}
+	standard, err := r.billingService.CalculateCostUnified(CostInput{
+		Ctx:         context.Background(),
+		Model:       "claude-sonnet-4",
+		GroupID:     groupIDPtr(),
+		Tokens:      tokens,
+		ServiceTier: "",
+		Resolver:    r,
+		Resolved:    resolved,
+	})
+	require.NoError(t, err)
+	fast, err := r.billingService.CalculateCostUnified(CostInput{
+		Ctx:         context.Background(),
+		Model:       "claude-sonnet-4",
+		GroupID:     groupIDPtr(),
+		Tokens:      tokens,
+		ServiceTier: "priority",
+		Resolver:    r,
+		Resolved:    resolved,
+	})
+	require.NoError(t, err)
+	// 区间价先应用普通定价倍率，再以最终普通价格为基准应用 Fast 倍率。
+	require.InDelta(t, standard.TotalCost*2, fast.TotalCost, 1e-12)
 }
 
 func TestResolve_WithChannelOverride_TokenNilBasePricing(t *testing.T) {

@@ -887,6 +887,10 @@ func resolveOpenAIWSFallbackErrorResponse(err error) (statusCode int, errType st
 	if err == nil {
 		return 0, "", "", "", false
 	}
+	var policyErr *openAIWSGenericPolicyError
+	if errors.As(err, &policyErr) && policyErr != nil {
+		return http.StatusInternalServerError, "upstream_error", "Upstream gateway error", policyErr.Error(), true
+	}
 	var fallbackErr *openAIWSFallbackError
 	if !errors.As(err, &fallbackErr) || fallbackErr == nil {
 		return 0, "", "", "", false

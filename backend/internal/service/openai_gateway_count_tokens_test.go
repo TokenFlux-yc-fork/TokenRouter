@@ -255,8 +255,10 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_NoRefresh401KeepsSch
 
 	err := svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5.4")
 
-	require.Error(t, err)
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusUnauthorized, failoverErr.StatusCode)
+	require.Zero(t, rec.Body.Len(), "pre-semantic OAuth 401 must remain uncommitted for account failover")
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, "Bearer cached-access-token", upstream.lastReq.Header.Get("authorization"))
 	require.Equal(t, 1, repo.getByIDCalls)

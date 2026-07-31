@@ -2104,38 +2104,64 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	}
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
-	// 选择支持该模型的账号
-	account, err := h.gatewayService.SelectAccountForModel(c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model)
-	if err != nil {
-		reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(err))
-		if handleGroupSelectionBusinessError(c, err, false, func(status int, errType string, message string, streamStarted bool) {
-			h.errorResponse(c, status, errType, message)
-		}) {
+	// count_tokens 不计费也不占并发，但仍复用统一故障转移状态，保证池模式
+	// 的同账号重试次数和失败账号排除规则与 messages 主路径一致。
+	fs := NewFailoverState(h.maxAccountSwitches, false)
+	for {
+		account, selectErr := h.gatewayService.SelectAccountForModelWithExclusions(
+			c.Request.Context(), apiKey.GroupID, sessionHash, parsedReq.Model, fs.FailedAccountIDs,
+		)
+		if selectErr != nil {
+			reqLog.Warn("gateway.count_tokens_select_account_failed", zap.Error(selectErr))
+			if fs.LastFailoverErr != nil {
+				h.handleFailoverExhausted(c, fs.LastFailoverErr, service.PlatformAnthropic, false)
+				return
+			}
+			if handleGroupSelectionBusinessError(c, selectErr, false, func(status int, errType string, message string, streamStarted bool) {
+				h.errorResponse(c, status, errType, message)
+			}) {
+				return
+			}
+			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimitedIfNoAvailable(c, selectErr)
+			}
+			h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
 			return
 		}
-		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, parsedReq.Model, parsedReq.Model, service.PlatformAnthropic)
-		if !cls.ModelNotFound {
-			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+		setOpsSelectedAccount(c, account.ID, account.Platform)
+
+		// 渠道映射只写入本次转发副本，避免重试时重复改写原始请求。
+		attemptParsedReq, _, prepareErr := h.prepareGatewayAttemptRequest(
+			c.Request.Context(), parsedReq, parsedReq.Body.Bytes(), apiKey, parsedReq.Model,
+		)
+		if prepareErr != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+			return
 		}
-		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
-		return
-	}
-	setOpsSelectedAccount(c, account.ID, account.Platform)
 
-	// 渠道映射只写入本次转发副本，原始模型继续用于错误、日志和会话语义。
-	attemptParsedReq, _, err := h.prepareGatewayAttemptRequest(
-		c.Request.Context(), parsedReq, parsedReq.Body.Bytes(), apiKey, parsedReq.Model,
-	)
-	if err != nil {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
-		return
-	}
-
-	// 转发请求（不记录使用量）
-	if err := h.gatewayService.ForwardCountTokens(c.Request.Context(), c, account, attemptParsedReq); err != nil {
-		reqLog.Error("gateway.count_tokens_forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-		// 错误响应已在 ForwardCountTokens 中处理
-		return
+		forwardErr := h.gatewayService.ForwardCountTokens(c.Request.Context(), c, account, attemptParsedReq)
+		if forwardErr == nil {
+			return
+		}
+		var failoverErr *service.UpstreamFailoverError
+		if !errors.As(forwardErr, &failoverErr) {
+			reqLog.Error("gateway.count_tokens_forward_failed", zap.Int64("account_id", account.ID), zap.Error(forwardErr))
+			return
+		}
+		action := fs.HandleFailoverError(
+			c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr,
+		)
+		switch action {
+		case FailoverContinue:
+			continue
+		case FailoverCanceled:
+			failoverClientGone(c)
+			return
+		default:
+			h.handleFailoverExhausted(c, fs.LastFailoverErr, account.Platform, false)
+			return
+		}
 	}
 }
 

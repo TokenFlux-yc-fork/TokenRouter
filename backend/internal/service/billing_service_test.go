@@ -1282,6 +1282,43 @@ func TestGetModelPricingWithChannel_PriceMultiplierAppliesAfterOverrides(t *test
 	require.InDelta(t, 30e-6, pricing.OutputPricePerToken, 1e-12)
 }
 
+func TestCalculateCostWithChannelFastModeMultiplierUsesFinalStandardPrice(t *testing.T) {
+	svc := newTestBillingService()
+	channelPricing := &ChannelModelPricing{
+		Platform:           PlatformOpenAI,
+		PriceMultiplier:    testPtrFloat64(1.25),
+		FastModeMultiplier: testPtrFloat64(1.5),
+		InputPrice:         testPtrFloat64(10e-6),
+		ImageInputPrice:    testPtrFloat64(12e-6),
+		OutputPrice:        testPtrFloat64(20e-6),
+		CacheWritePrice:    testPtrFloat64(4e-6),
+		CacheReadPrice:     testPtrFloat64(2e-6),
+		ImageOutputPrice:   testPtrFloat64(30e-6),
+	}
+	tokens := UsageTokens{
+		InputTokens:         100,
+		ImageInputTokens:    20,
+		OutputTokens:        50,
+		ImageOutputTokens:   10,
+		CacheCreationTokens: 30,
+		CacheReadTokens:     40,
+	}
+
+	standard, err := svc.calculateCostInternal("gpt-5.4", tokens, 1, "", channelPricing)
+	require.NoError(t, err)
+	fast, err := svc.calculateCostInternal("gpt-5.4", tokens, 1, "priority", channelPricing)
+	require.NoError(t, err)
+
+	// 显式渠道倍率覆盖模型内置 priority 单价，并统一作用于文本、图片和缓存费用。
+	require.InDelta(t, standard.InputCost*1.5, fast.InputCost, 1e-12)
+	require.InDelta(t, standard.ImageInputCost*1.5, fast.ImageInputCost, 1e-12)
+	require.InDelta(t, standard.OutputCost*1.5, fast.OutputCost, 1e-12)
+	require.InDelta(t, standard.ImageOutputCost*1.5, fast.ImageOutputCost, 1e-12)
+	require.InDelta(t, standard.CacheCreationCost*1.5, fast.CacheCreationCost, 1e-12)
+	require.InDelta(t, standard.CacheReadCost*1.5, fast.CacheReadCost, 1e-12)
+	require.InDelta(t, standard.TotalCost*1.5, fast.TotalCost, 1e-12)
+}
+
 func TestGetModelPricingWithChannel_DoesNotMutateFallbackPricing(t *testing.T) {
 	svc := newTestBillingService()
 

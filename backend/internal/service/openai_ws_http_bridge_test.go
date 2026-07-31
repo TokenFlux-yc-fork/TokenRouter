@@ -975,7 +975,7 @@ func TestOpenAIWSHTTPBridgeCapacityBeforeOutputReturnsFailover(t *testing.T) {
 			require.Error(t, err)
 			var failoverErr *UpstreamFailoverError
 			require.ErrorAs(t, err, &failoverErr)
-			require.True(t, failoverErr.RetryableOnSameAccount)
+			require.False(t, failoverErr.RetryableOnSameAccount)
 			require.Empty(t, messages)
 		})
 	}

@@ -43,16 +43,17 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 		GroupIDs:           []int64{1, 2, 3},
 		ModelPricing: []service.ChannelModelPricing{
 			{
-				ID:              10,
-				Platform:        "openai",
-				Models:          []string{"gpt-4"},
-				BillingMode:     service.BillingModeToken,
-				PriceMultiplier: float64Ptr(1.5),
-				InputPrice:      float64Ptr(0.01),
-				OutputPrice:     float64Ptr(0.03),
-				CacheWritePrice: float64Ptr(0.005),
-				CacheReadPrice:  float64Ptr(0.002),
-				PerRequestPrice: float64Ptr(0.5),
+				ID:                 10,
+				Platform:           "openai",
+				Models:             []string{"gpt-4"},
+				BillingMode:        service.BillingModeToken,
+				PriceMultiplier:    float64Ptr(1.5),
+				FastModeMultiplier: float64Ptr(2),
+				InputPrice:         float64Ptr(0.01),
+				OutputPrice:        float64Ptr(0.03),
+				CacheWritePrice:    float64Ptr(0.005),
+				CacheReadPrice:     float64Ptr(0.002),
+				PerRequestPrice:    float64Ptr(0.5),
 			},
 		},
 		ModelMapping: map[string]map[string]string{
@@ -84,6 +85,7 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 	require.Equal(t, []string{"gpt-4"}, p.Models)
 	require.Equal(t, "token", p.BillingMode)
 	require.Equal(t, float64Ptr(1.5), p.PriceMultiplier)
+	require.Equal(t, float64Ptr(2), p.FastModeMultiplier)
 	require.Equal(t, float64Ptr(0.01), p.InputPrice)
 	require.Equal(t, float64Ptr(0.03), p.OutputPrice)
 	require.Equal(t, float64Ptr(0.005), p.CacheWritePrice)
@@ -334,6 +336,20 @@ func TestPricingRequestToService_WithAllFields(t *testing.T) {
 	require.Equal(t, float64Ptr(0.5), r.PerRequestPrice)
 }
 
+func TestPricingRequestToService_WithFastModeMultiplier(t *testing.T) {
+	reqs := []channelModelPricingRequest{{
+		Platform:           service.PlatformOpenAI,
+		Models:             []string{"gpt-5.4"},
+		BillingMode:        string(service.BillingModeToken),
+		FastModeMultiplier: float64Ptr(2),
+		InputPrice:         float64Ptr(0.01),
+	}}
+
+	result := pricingRequestToService(reqs)
+	require.Len(t, result, 1)
+	require.Equal(t, float64Ptr(2), result[0].FastModeMultiplier)
+}
+
 func TestPricingRequestToService_WithIntervals(t *testing.T) {
 	reqs := []channelModelPricingRequest{
 		{
@@ -403,6 +419,7 @@ func TestPricingRequestToService_NilPriceFields(t *testing.T) {
 	r := result[0]
 	require.Nil(t, r.InputPrice)
 	require.Nil(t, r.PriceMultiplier)
+	require.Nil(t, r.FastModeMultiplier)
 	require.Nil(t, r.OutputPrice)
 	require.Nil(t, r.CacheWritePrice)
 	require.Nil(t, r.CacheReadPrice)

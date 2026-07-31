@@ -15,6 +15,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// handleGrokAccountUpstreamError 保留测试中的布尔断言写法；生产代码统一使用完整决策。
+func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(
+	ctx context.Context,
+	account *Account,
+	statusCode int,
+	headers http.Header,
+	responseBody []byte,
+	requestedModel ...string,
+) bool {
+	return s.applyGrokAccountUpstreamError(ctx, account, statusCode, headers, responseBody, requestedModel...).StopScheduling
+}
+
 func TestIsGrokContentPolicyRejection(t *testing.T) {
 	tests := []struct {
 		name   string

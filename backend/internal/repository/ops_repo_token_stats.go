@@ -9,7 +9,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
-func (r *opsRepository) GetOpenAITokenStats(ctx context.Context, filter *service.OpsOpenAITokenStatsFilter) (*service.OpsOpenAITokenStatsResponse, error) {
+func (r *opsRepository) GetTokenStats(ctx context.Context, filter *service.OpsTokenStatsFilter) (*service.OpsTokenStatsResponse, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("nil ops repository")
 	}
@@ -32,7 +32,6 @@ func (r *opsRepository) GetOpenAITokenStats(ctx context.Context, filter *service
 	}
 
 	join, where, baseArgs, next := buildUsageWhere(dashboardFilter, dashboardFilter.StartTime, dashboardFilter.EndTime, 1)
-	where += " AND ul.model LIKE 'gpt%'"
 
 	baseCTE := `
 WITH stats AS (
@@ -59,13 +58,8 @@ WITH stats AS (
 )
 `
 
-	countSQL := baseCTE + `SELECT COUNT(*) FROM stats`
-	var total int64
-	if err := r.db.QueryRowContext(ctx, countSQL, baseArgs...).Scan(&total); err != nil {
-		return nil, err
-	}
-
 	querySQL := baseCTE + `
+, paged AS (
 SELECT
   model,
   request_count,
@@ -89,27 +83,65 @@ ORDER BY request_count DESC, model ASC`
 		args = append(args, filter.PageSize, offset)
 	}
 
+	// 聚合结果只计算一次；LEFT JOIN 保证空页仍能回传模型总数。
+	querySQL += `
+)
+SELECT
+  p.model,
+  p.request_count,
+  p.avg_tokens_per_sec,
+  p.avg_first_token_ms,
+  p.total_output_tokens,
+  p.avg_duration_ms,
+  p.requests_with_first_token,
+  (p.request_count IS NOT NULL) AS has_item,
+  totals.total
+FROM (SELECT COUNT(*)::bigint AS total FROM stats) totals
+LEFT JOIN paged p ON TRUE
+ORDER BY p.request_count DESC NULLS LAST, p.model ASC`
+
 	rows, err := r.db.QueryContext(ctx, querySQL, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	items := make([]*service.OpsOpenAITokenStatsItem, 0, 32)
+	items := make([]*service.OpsTokenStatsItem, 0, 32)
+	var total int64
 	for rows.Next() {
-		item := &service.OpsOpenAITokenStatsItem{}
+		var model sql.NullString
+		var requestCount sql.NullInt64
 		var avgTPS sql.NullFloat64
 		var avgFirstToken sql.NullFloat64
+		var totalOutputTokens sql.NullInt64
+		var avgDurationMs sql.NullInt64
+		var requestsWithFirstToken sql.NullInt64
+		var hasItem bool
+		var rowTotal int64
 		if err := rows.Scan(
-			&item.Model,
-			&item.RequestCount,
+			&model,
+			&requestCount,
 			&avgTPS,
 			&avgFirstToken,
-			&item.TotalOutputTokens,
-			&item.AvgDurationMs,
-			&item.RequestsWithFirstToken,
+			&totalOutputTokens,
+			&avgDurationMs,
+			&requestsWithFirstToken,
+			&hasItem,
+			&rowTotal,
 		); err != nil {
 			return nil, err
+		}
+		total = rowTotal
+		if !hasItem {
+			continue
+		}
+
+		item := &service.OpsTokenStatsItem{
+			Model:                  model.String,
+			RequestCount:           requestCount.Int64,
+			TotalOutputTokens:      totalOutputTokens.Int64,
+			AvgDurationMs:          avgDurationMs.Int64,
+			RequestsWithFirstToken: requestsWithFirstToken.Int64,
 		}
 		if avgTPS.Valid {
 			v := avgTPS.Float64
@@ -125,7 +157,7 @@ ORDER BY request_count DESC, model ASC`
 		return nil, err
 	}
 
-	resp := &service.OpsOpenAITokenStatsResponse{
+	resp := &service.OpsTokenStatsResponse{
 		TimeRange: strings.TrimSpace(filter.TimeRange),
 		StartTime: dashboardFilter.StartTime,
 		EndTime:   dashboardFilter.EndTime,

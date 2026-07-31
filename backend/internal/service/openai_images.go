@@ -670,13 +670,16 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			shouldDisable := s.handleFailoverSideEffects(upstreamCtx, resp, account, respBody, upstreamModel)
+			decision := s.applyFailoverSideEffects(upstreamCtx, resp, account, respBody, upstreamModel)
+			if decision.ShouldReturnGenericError() {
+				return s.handleOpenAIImagesErrorResponse(upstreamCtx, resp, c, account, forwardBody, upstreamModel)
+			}
 			return nil, newOpenAIUpstreamFailoverError(
 				resp.StatusCode,
 				resp.Header,
 				respBody,
 				upstreamMsg,
-				!shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				decision.RetryableOnSameAccount(account, resp.StatusCode),
 			)
 		}
 		return s.handleOpenAIImagesErrorResponse(upstreamCtx, resp, c, account, forwardBody, upstreamModel)

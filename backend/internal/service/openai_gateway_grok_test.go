@@ -2749,7 +2749,334 @@ func grokMessagesSSECompletedResponse(responseID string, cachedTokens int) *http
 	}
 }
 
-func TestHandleGrokAccountUpstreamErrorDoesNotPersistInferenceFailures(t *testing.T) {
+// grokPoolPolicyAccountRepo 记录 Grok 池模式错误策略产生的账号状态写入。
+type grokPoolPolicyAccountRepo struct {
+	*grokQuotaAccountRepo
+	setErrorCalls            int
+	overloadedCalls          int
+	modelRateLimitCalls      int
+	lastModelRateLimitScope  string
+	lastModelRateLimitReason string
+}
+
+func (r *grokPoolPolicyAccountRepo) SetError(_ context.Context, _ int64, _ string) error {
+	r.setErrorCalls++
+	return nil
+}
+
+func (r *grokPoolPolicyAccountRepo) SetOverloaded(_ context.Context, _ int64, _ time.Time) error {
+	r.overloadedCalls++
+	return nil
+}
+
+func (r *grokPoolPolicyAccountRepo) SetModelRateLimit(_ context.Context, _ int64, scope string, _ time.Time, reason ...string) error {
+	r.modelRateLimitCalls++
+	r.lastModelRateLimitScope = scope
+	if len(reason) > 0 {
+		r.lastModelRateLimitReason = reason[0]
+	}
+	return nil
+}
+
+// newGrokPoolPolicyGateway 构造接入真实通用错误策略的 Grok 网关测试实例。
+func newGrokPoolPolicyGateway(account *Account) (*OpenAIGatewayService, *grokPoolPolicyAccountRepo) {
+	baseRepo := &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}
+	repo := &grokPoolPolicyAccountRepo{
+		grokQuotaAccountRepo: &grokQuotaAccountRepo{mockAccountRepoForPlatform: baseRepo},
+	}
+	cfg := &config.Config{}
+	rateLimitService := NewRateLimitService(repo, nil, cfg, nil, nil)
+	svc := &OpenAIGatewayService{
+		accountRepo:      repo,
+		rateLimitService: rateLimitService,
+		cfg:              cfg,
+	}
+	rateLimitService.SetAccountRuntimeBlocker(svc)
+	return svc, repo
+}
+
+// newGrokPoolAccount 返回开启池模式的 Grok API Key 账号。
+func newGrokPoolAccount(id int64) *Account {
+	return &Account{
+		ID:          id,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"pool_mode": true},
+	}
+}
+
+func TestHandleGrokAccountUpstreamErrorPoolModeSkipsDefaultLocalState(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		headers    http.Header
+		body       []byte
+	}{
+		{name: "unauthorized", statusCode: http.StatusUnauthorized},
+		{name: "payment required", statusCode: http.StatusPaymentRequired},
+		{name: "forbidden", statusCode: http.StatusForbidden, body: []byte(`{"error":{"message":"access denied"}}`)},
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, headers: http.Header{"Retry-After": []string{"60"}}},
+		{name: "server error", statusCode: http.StatusInternalServerError},
+		{name: "overloaded", statusCode: 529},
+	}
+
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := newGrokPoolAccount(int64(620 + index))
+			svc, repo := newGrokPoolPolicyGateway(account)
+
+			shouldDisable := svc.handleGrokAccountUpstreamError(
+				context.Background(),
+				account,
+				tt.statusCode,
+				tt.headers,
+				tt.body,
+				"grok-4.5",
+			)
+
+			require.False(t, shouldDisable)
+			require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+			require.Zero(t, repo.rateLimitedCalls)
+			require.Zero(t, repo.tempUnschedCalls)
+			require.Zero(t, repo.setErrorCalls)
+			require.Zero(t, repo.overloadedCalls)
+			require.Zero(t, repo.modelRateLimitCalls)
+			require.Nil(t, account.RateLimitResetAt)
+			require.Nil(t, account.TempUnschedulableUntil)
+
+			if tt.statusCode == http.StatusTooManyRequests {
+				require.Equal(t, 1, repo.updateCalls)
+				stored, ok := account.Extra[grokQuotaSnapshotExtraKey].(*xai.QuotaSnapshot)
+				require.True(t, ok)
+				require.NotNil(t, stored.RetryAfterSeconds)
+				require.Equal(t, 60, *stored.RetryAfterSeconds)
+			}
+		})
+	}
+}
+
+func TestUpdateGrokUsageSnapshotPoolModeExhaustedSuccessIsObservationOnly(t *testing.T) {
+	account := newGrokPoolAccount(626)
+	svc, repo := newGrokPoolPolicyGateway(account)
+	resetAt := time.Now().Add(10 * time.Minute).UTC().Truncate(time.Second)
+	headers := http.Header{
+		"X-Ratelimit-Limit-Requests":     []string{"10"},
+		"X-Ratelimit-Remaining-Requests": []string{"0"},
+		"X-Ratelimit-Reset-Requests":     []string{fmt.Sprintf("%d", resetAt.Unix())},
+	}
+
+	svc.updateGrokUsageFromResponse(context.Background(), account, headers, http.StatusOK)
+
+	require.Equal(t, 1, repo.updateCalls)
+	require.Zero(t, repo.rateLimitedCalls)
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	stored, ok := account.Extra[grokQuotaSnapshotExtraKey].(*xai.QuotaSnapshot)
+	require.True(t, ok)
+	require.NotNil(t, stored.Requests)
+	require.NotNil(t, stored.Requests.Remaining)
+	require.Zero(t, *stored.Requests.Remaining)
+}
+
+func TestHandleGrokAccountUpstreamErrorPoolModeKeepsExplicitPolicies(t *testing.T) {
+	t.Run("custom error code still disables account", func(t *testing.T) {
+		account := newGrokPoolAccount(627)
+		account.Credentials["custom_error_codes_enabled"] = true
+		account.Credentials["custom_error_codes"] = []any{float64(http.StatusUnauthorized)}
+		svc, repo := newGrokPoolPolicyGateway(account)
+
+		shouldDisable := svc.handleGrokAccountUpstreamError(
+			context.Background(),
+			account,
+			http.StatusUnauthorized,
+			nil,
+			[]byte(`{"error":{"message":"invalid api key"}}`),
+			"grok-4.5",
+		)
+
+		require.True(t, shouldDisable)
+		require.Equal(t, 1, repo.setErrorCalls)
+		require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+
+	t.Run("custom non-failover code still disables account", func(t *testing.T) {
+		account := newGrokPoolAccount(633)
+		account.Credentials["custom_error_codes_enabled"] = true
+		account.Credentials["custom_error_codes"] = []any{float64(http.StatusUnprocessableEntity)}
+		svc, repo := newGrokPoolPolicyGateway(account)
+
+		decision := svc.applyGrokAccountUpstreamError(
+			context.Background(),
+			account,
+			http.StatusUnprocessableEntity,
+			nil,
+			[]byte(`{"error":{"message":"configured"}}`),
+			"grok-4.5",
+		)
+
+		require.Equal(t, ErrorPolicyCustomMatched, decision.Policy)
+		require.True(t, decision.ShouldFailover(account, http.StatusUnprocessableEntity, false))
+		require.False(t, decision.RetryableOnSameAccount(account, http.StatusUnprocessableEntity))
+		require.Equal(t, 1, repo.setErrorCalls)
+		require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+
+	t.Run("matching temporary rule only pauses requested model", func(t *testing.T) {
+		account := newGrokPoolAccount(628)
+		account.Credentials["temp_unschedulable_enabled"] = true
+		account.Credentials["temp_unschedulable_rules"] = []any{
+			map[string]any{
+				"error_code":       float64(http.StatusServiceUnavailable),
+				"keywords":         []any{"maintenance"},
+				"duration_minutes": float64(30),
+			},
+		}
+		svc, repo := newGrokPoolPolicyGateway(account)
+
+		shouldDisable := svc.handleGrokAccountUpstreamError(
+			context.Background(),
+			account,
+			http.StatusServiceUnavailable,
+			nil,
+			[]byte(`{"error":{"message":"maintenance in progress"}}`),
+			"grok-4.5",
+		)
+
+		require.True(t, shouldDisable)
+		require.Equal(t, 1, repo.modelRateLimitCalls)
+		require.Equal(t, "grok-4.5", repo.lastModelRateLimitScope)
+		require.Zero(t, repo.tempUnschedCalls)
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+
+	t.Run("unmatched temporary rule keeps default pool behavior", func(t *testing.T) {
+		account := newGrokPoolAccount(629)
+		account.Credentials["temp_unschedulable_enabled"] = true
+		account.Credentials["temp_unschedulable_rules"] = []any{
+			map[string]any{
+				"error_code":       float64(http.StatusServiceUnavailable),
+				"keywords":         []any{"maintenance"},
+				"duration_minutes": float64(30),
+			},
+		}
+		svc, repo := newGrokPoolPolicyGateway(account)
+
+		shouldDisable := svc.handleGrokAccountUpstreamError(
+			context.Background(),
+			account,
+			http.StatusServiceUnavailable,
+			nil,
+			[]byte(`{"error":{"message":"temporary outage"}}`),
+			"grok-4.5",
+		)
+
+		require.False(t, shouldDisable)
+		require.Zero(t, repo.modelRateLimitCalls)
+		require.Zero(t, repo.tempUnschedCalls)
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+}
+
+func TestGrokMediaPoolModeRetryFlagFollowsExplicitPolicies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("default 429 remains retryable without local cooldown", func(t *testing.T) {
+		account := newGrokPoolAccount(630)
+		svc, repo := newGrokPoolPolicyGateway(account)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+		resp := &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": []string{"60"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited"}}`)),
+		}
+
+		result, err := svc.handleGrokMediaErrorResponse(context.Background(), resp, c, account, "request-id", "grok-imagine")
+
+		require.Nil(t, result)
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, err, &failoverErr)
+		require.True(t, failoverErr.RetryableOnSameAccount)
+		require.Zero(t, repo.rateLimitedCalls)
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+
+	t.Run("explicit 401 policy stops same account retry", func(t *testing.T) {
+		account := newGrokPoolAccount(631)
+		account.Credentials["custom_error_codes_enabled"] = true
+		account.Credentials["custom_error_codes"] = []any{float64(http.StatusUnauthorized)}
+		svc, repo := newGrokPoolPolicyGateway(account)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+		resp := &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"invalid api key"}}`)),
+		}
+
+		result, err := svc.handleGrokMediaErrorResponse(context.Background(), resp, c, account, "request-id", "grok-imagine")
+
+		require.Nil(t, result)
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, err, &failoverErr)
+		require.False(t, failoverErr.RetryableOnSameAccount)
+		require.Equal(t, 1, repo.setErrorCalls)
+		require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+
+	t.Run("mapped model is used by temporary policy", func(t *testing.T) {
+		t.Setenv(xai.EnvAllowUnsafeURLOverrides, "true")
+		account := newGrokPoolAccount(632)
+		account.Credentials["api_key"] = "api-key"
+		account.Credentials["base_url"] = "https://xai.test/v1"
+		account.Credentials["model_mapping"] = map[string]any{"image-alias": "vendor-image-model"}
+		account.Credentials["temp_unschedulable_enabled"] = true
+		account.Credentials["temp_unschedulable_rules"] = []any{
+			map[string]any{
+				"error_code":       float64(http.StatusServiceUnavailable),
+				"keywords":         []any{"maintenance"},
+				"duration_minutes": float64(30),
+			},
+		}
+		svc, repo := newGrokPoolPolicyGateway(account)
+		upstream := &httpUpstreamRecorder{resp: &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"maintenance in progress"}}`)),
+		}}
+		svc.httpUpstream = upstream
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		body := []byte(`{"model":"image-alias","prompt":"draw a cat"}`)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+
+		result, err := svc.ForwardGrokMedia(
+			context.Background(),
+			c,
+			account,
+			GrokMediaEndpointImagesGenerations,
+			"",
+			body,
+			"application/json",
+		)
+
+		require.Nil(t, result)
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, err, &failoverErr)
+		require.Equal(t, 1, repo.modelRateLimitCalls)
+		require.Equal(t, "vendor-image-model", repo.lastModelRateLimitScope)
+		require.Equal(t, "vendor-image-model", gjson.GetBytes(upstream.lastBody, "model").String())
+	})
+}
+
+func TestHandleGrokAccountUpstreamErrorTempUnschedulesNonRateLimitStates(t *testing.T) {
+
 	tests := []struct {
 		name        string
 		accountType string

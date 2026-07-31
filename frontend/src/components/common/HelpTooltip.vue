@@ -69,8 +69,8 @@ function updatePosition() {
   if (!el) return
   const rect = el.getBoundingClientRect()
   tooltipStyle.value = {
-    top: `${rect.top + window.scrollY}px`,
-    left: `${rect.left + rect.width / 2 + window.scrollX}px`,
+    top: `${rect.top}px`,
+    left: `${rect.left + rect.width / 2}px`,
   }
 }
 
@@ -97,7 +97,7 @@ onBeforeUnmount(() => {
     @mouseleave="onLeave"
     @click="onClick"
   >
-    <!-- Trigger Icon -->
+    <!-- 触发图标 -->
     <slot name="trigger">
       <svg
         class="h-4 w-4 cursor-help text-gray-400 transition-colors hover:text-primary-600 dark:text-gray-500 dark:hover:text-primary-400"
@@ -114,7 +114,7 @@ onBeforeUnmount(() => {
       </svg>
     </slot>
 
-    <!-- Teleport to body to escape modal overflow clipping -->
+    <!-- 挂载到 body，避免被弹窗的 overflow 裁剪 -->
     <Teleport to="body">
       <div
         ref="tooltip"

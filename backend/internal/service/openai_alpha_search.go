@@ -91,22 +91,23 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody) ||
-			isOpenAIAlphaSearchEndpointUnsupported(account, resp.StatusCode) {
+		if isOpenAIAlphaSearchEndpointUnsupported(account, resp.StatusCode) {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
-			// alpha/search 是独立的工具端点，单次 401 不能证明账号的模型调用
-			// 凭据全局失效。若沿用通用 401 逻辑，PAT 会因没有 refresh_token
-			// 被永久标记为 error；历史导入且缺少 auth_mode 标记的 at- token 也会
-			// 漏过 PAT 类型判断。这里仍允许本次请求换号，但不修改任何账号状态；
-			// 真正的凭据失效由普通 Responses 请求或 whoami 校验判定。
-			shouldDisable := false
-			if shouldApplyOpenAIAlphaSearchAccountErrorSideEffects(resp.StatusCode) {
-				shouldDisable = s.handleFailoverSideEffects(ctx, resp, account, respBody, upstreamModel)
+			return nil, &UpstreamFailoverError{
+				StatusCode:   resp.StatusCode,
+				ResponseBody: respBody,
 			}
+		}
+		decision := s.applyOpenAIAlphaSearchErrorPolicy(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
+		if decision.ShouldReturnGenericError() {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "upstream_error", "message": "Upstream gateway error"}})
+			return nil, fmt.Errorf("alpha search upstream error: %d (not in custom error codes)", resp.StatusCode)
+		}
+		if decision.ShouldFailover(account, resp.StatusCode, s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody)) {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
-				RetryableOnSameAccount: !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 			}
 		}
 	}
@@ -172,17 +173,16 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody) {
-			resp.Body = io.NopCloser(bytes.NewReader(respBody))
-			// 仍按 alpha/search 工具请求处理：PAT 的工具链路失败不能直接永久置错。
-			shouldDisable := false
-			if shouldApplyOpenAIAlphaSearchAccountErrorSideEffects(resp.StatusCode) {
-				shouldDisable = s.handleFailoverSideEffects(ctx, resp, account, respBody, upstreamModel)
-			}
+		decision := s.applyOpenAIAlphaSearchErrorPolicy(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
+		if decision.ShouldReturnGenericError() {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"type": "upstream_error", "message": "Upstream gateway error"}})
+			return nil, fmt.Errorf("alpha search upstream error: %d (not in custom error codes)", resp.StatusCode)
+		}
+		if decision.ShouldFailover(account, resp.StatusCode, s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody)) {
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
-				RetryableOnSameAccount: !shouldDisable && account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 			}
 		}
 	}
@@ -524,6 +524,41 @@ func shouldApplyOpenAIAlphaSearchAccountErrorSideEffects(statusCode int) bool {
 	default:
 		return true
 	}
+}
+
+// applyOpenAIAlphaSearchErrorPolicy 保留工具端点 401 不执行默认账号状态的既有语义，
+// 并让其余非“端点不支持”错误执行显式配置；404/405 已由调用方按请求级能力缺失提前切号。
+func (s *OpenAIGatewayService) applyOpenAIAlphaSearchErrorPolicy(
+	ctx context.Context,
+	account *Account,
+	statusCode int,
+	headers http.Header,
+	body []byte,
+	canonicalModel string,
+) UpstreamErrorDecision {
+	if s == nil || account == nil {
+		return UpstreamErrorDecision{Policy: ErrorPolicyNone}
+	}
+	if s.rateLimitService == nil {
+		return upstreamErrorDecisionWithoutPersistence(account, statusCode)
+	}
+	policy := s.rateLimitService.ApplyExplicitErrorPolicy(ctx, account, statusCode, body, canonicalModel)
+	decision := UpstreamErrorDecision{Policy: policy}
+	switch policy {
+	case ErrorPolicyCustomMatched:
+		decision.StopScheduling = true
+		s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
+		return decision
+	case ErrorPolicyTempUnscheduled:
+		decision.StopScheduling = true
+		return decision
+	case ErrorPolicyCustomSkipped, ErrorPolicyPoolBypassed:
+		return decision
+	}
+	if !shouldApplyOpenAIAlphaSearchAccountErrorSideEffects(statusCode) {
+		return decision
+	}
+	return s.applyOpenAIAccountUpstreamError(ctx, account, statusCode, headers, body, canonicalModel)
 }
 
 func openAIAlphaSearchResponseFromResponsesSSE(body []byte) ([]byte, error) {

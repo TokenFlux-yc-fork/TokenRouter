@@ -19,6 +19,8 @@ export interface PricingFormEntry {
   billing_mode: BillingMode
   // 空值保留“未配置”语义，0 表示显式免费。
   price_multiplier: number | string | null
+  // OpenAI Fast 模式按最终普通价格收取的倍率。
+  fast_mode_multiplier: number | string | null
   input_price: number | string | null
   output_price: number | string | null
   cache_write_price: number | string | null

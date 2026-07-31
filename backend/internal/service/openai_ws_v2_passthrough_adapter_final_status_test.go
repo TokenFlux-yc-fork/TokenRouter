@@ -77,7 +77,7 @@ func TestOpenAIWSV2PassthroughResponseFailedRateLimitReturns429Failover(t *testi
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, proxyErr, &failoverErr)
 	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
-	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.RetryableOnSameAccount)
 }
 
 func TestOpenAIWSV2PassthroughContextWindowWithoutTypeDoesNotFailover(t *testing.T) {
@@ -100,6 +100,7 @@ func TestOpenAIWSV2PassthroughPoolCapacityRetriesSameAccount(t *testing.T) {
 	}, nil)
 	svc := newOpenAIWSV2FinalStatusService(&openAIWSV2FinalStatusDialer{conn: upstream}, nil)
 	account := newOpenAIWSV2FinalStatusAccount(1303, true)
+	account.Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusServiceUnavailable)}
 
 	proxyErr := runOpenAIWSV2FinalStatusProxy(t, svc, account)
 
@@ -116,12 +117,13 @@ func TestOpenAIWSV2PassthroughFailedCompletedCapacityRetriesSameAccount(t *testi
 	}, nil)
 	svc := newOpenAIWSV2FinalStatusService(&openAIWSV2FinalStatusDialer{conn: upstream}, nil)
 	account := newOpenAIWSV2FinalStatusAccount(1313, true)
+	account.Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusServiceUnavailable)}
 
 	proxyErr := runOpenAIWSV2FinalStatusProxy(t, svc, account)
 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, proxyErr, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	require.True(t, failoverErr.RetryableOnSameAccount)
 }
 

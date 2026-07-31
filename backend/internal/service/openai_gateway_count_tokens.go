@@ -150,14 +150,31 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 			writeOpenAIOAuthInputTokensFallback(c, account, prepared, resp.StatusCode)
 			return nil
 		}
-
-		if s.rateLimitService != nil {
-			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
-		}
-
 		if isOpenAIInputTokensUnsupported(resp.StatusCode, respBody) {
 			writeAnthropicCountTokensError(c, http.StatusNotFound, "not_found_error", "Token counting is not supported by upstream")
 			return nil
+		}
+		var decision UpstreamErrorDecision
+		if account.Platform == PlatformGrok {
+			decision = s.applyGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, prepared.UpstreamModel)
+		} else {
+			decision = s.applyOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, prepared.UpstreamModel)
+		}
+		if decision.ShouldReturnGenericError() {
+			writeAnthropicCountTokensError(c, http.StatusInternalServerError, "upstream_error", "Upstream gateway error")
+			return fmt.Errorf("input_tokens upstream error: %d (not in custom error codes)", resp.StatusCode)
+		}
+		defaultFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+		if account.Platform == PlatformGrok {
+			defaultFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
+		}
+		if decision.ShouldFailover(account, resp.StatusCode, defaultFailover) {
+			return &UpstreamFailoverError{
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
+			}
 		}
 
 		upstreamDetail := ""

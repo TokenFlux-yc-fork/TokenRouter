@@ -941,13 +941,23 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			statusCode,
 			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
 		)
-		s.handleOpenAIWSDialTransientFailure(ctx, account, loadCapturedModel(&capturedSessionRoutingModel), dialErr)
-		if statusCode == http.StatusTooManyRequests {
-			s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()))
-			return &UpstreamFailoverError{
-				StatusCode:      http.StatusTooManyRequests,
-				ResponseHeaders: cloneHeader(handshakeHeaders),
-			}
+		errorDecision := s.handleOpenAIWSDialTransientFailure(ctx, account, loadCapturedModel(&capturedSessionRoutingModel), dialErr)
+		if statusCode != 0 && errorDecision.ShouldReturnGenericError() {
+			return openAIWSGenericPolicyCloseError(statusCode)
+		}
+		if statusCode != 0 && errorDecision.ShouldFailoverWithDefaults(
+			account,
+			statusCode,
+			statusCode == http.StatusTooManyRequests,
+			s.shouldFailoverOpenAIWSError(account, statusCode, responseBody),
+		) {
+			return newOpenAIUpstreamFailoverError(
+				statusCode,
+				handshakeHeaders,
+				responseBody,
+				extractUpstreamErrorMessage(responseBody),
+				errorDecision.RetryableOnSameAccount(account, statusCode),
+			)
 		}
 		s.recordOpenAIWSDialPassiveAccountFailure(ctx, account, &openAIWSDialError{
 			StatusCode:      statusCode,
@@ -1531,16 +1541,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						return s.newOpenAINativeCompactionWSFailoverError(c, account, true, handshakeHeaders, newOpenAINativeCompactionContinuationError(continuationCode))
 					}
 				}
+				routingModel = canonicalOpenAIAccountSchedulingModel(account, routingModel)
+				terminalPolicy := openAIWSTerminalPolicyDecision{Decision: UpstreamErrorDecision{Policy: ErrorPolicyNone}}
 				if isOpenAIWSTerminalEvent(eventType) {
-					s.handleOpenAIWSTerminalTransientFailure(ctx, account, routingModel, handshakeHeaders, payload)
+					terminalPolicy = s.handleOpenAIWSTerminalTransientFailure(ctx, account, routingModel, handshakeHeaders, payload)
 				}
+				errorDecision := UpstreamErrorDecision{Policy: ErrorPolicyNone}
 				if eventType == "error" {
-					s.handleOpenAIWSErrorEventTransientFailure(ctx, account, routingModel, handshakeHeaders, payload)
+					errorDecision = s.handleOpenAIWSErrorEventTransientFailure(ctx, account, routingModel, handshakeHeaders, payload)
 				}
 				switch eventType {
 				case "error":
 					errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
-					s.persistOpenAIWSErrorSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, errMsgRaw)
 					observedErrorSignal.Lock()
 					observedErrorSignal.body = append(observedErrorSignal.body[:0], payload...)
 					observedErrorSignal.code = errCodeRaw
@@ -1555,7 +1567,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 							truncateOpenAIWSLogValue(errTypeRaw, openAIWSLogValueMaxLen),
 							truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
 						)
-						return retryableFailure(http.StatusTooManyRequests, false)
+						return retryableFailure(http.StatusTooManyRequests, errorDecision.RetryableOnSameAccount(account, http.StatusTooManyRequests))
 					}
 					transientCapacity := isOpenAITransientProcessingError(http.StatusBadRequest, errMsgRaw, payload)
 					if transientCapacity {
@@ -1570,7 +1582,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						if wroteDownstream {
 							s.recordOpenAIWSFinalErrorEventPassiveAccountFailure(ctx, account, payload, errCodeRaw, errTypeRaw, errMsgRaw)
 						}
-						return retryableFailure(http.StatusBadGateway, account.IsPoolMode() && transientCapacity)
+						policyStatus := openAIWSErrorPolicyStatus(payload)
+						if policyStatus == 0 {
+							policyStatus = http.StatusBadGateway
+							errorDecision = s.applyOpenAIWSEventErrorPolicy(ctx, account, routingModel, policyStatus, handshakeHeaders, payload)
+						}
+						if !wroteDownstream && errorDecision.ShouldReturnGenericError() {
+							return openAIWSGenericPolicyCloseError(policyStatus)
+						}
+						return retryableFailure(policyStatus, errorDecision.RetryableOnSameAccount(account, policyStatus))
 					}
 				case "response.failed":
 					failedMessage := extractOpenAISSEErrorMessage(payload)
@@ -1581,8 +1601,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					if !rateLimited {
 						failedStatus = openAIStreamFailedEventSemanticStatus(payload, failedMessage)
 					}
-					transientCapacity := isOpenAITransientProcessingError(http.StatusBadRequest, failedMessage, payload)
-					s.persistOpenAIWSErrorSignal(ctx, account, handshakeHeaders, payload, errCodeRaw, errTypeRaw, failedMessage)
 					observedErrorSignal.Lock()
 					observedErrorSignal.body = append(observedErrorSignal.body[:0], payload...)
 					observedErrorSignal.code = errCodeRaw
@@ -1600,7 +1618,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						if wroteDownstream && !rateLimited && failedStatus != http.StatusForbidden {
 							s.recordOpenAIWSPassiveAccountFailure(ctx, account, failedStatus, payload)
 						}
-						return retryableFailure(failedStatus, account.IsPoolMode() && transientCapacity)
+						if !wroteDownstream && terminalPolicy.Decision.ShouldReturnGenericError() {
+							return openAIWSGenericPolicyCloseError(failedStatus)
+						}
+						return retryableFailure(failedStatus, terminalPolicy.Decision.RetryableOnSameAccount(account, failedStatus))
 					}
 					if !rateLimited && failedStatus != http.StatusForbidden {
 						s.recordOpenAIWSPassiveAccountFailure(ctx, account, failedStatus, payload)
@@ -1613,7 +1634,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 				capacityMessage := extractOpenAISSEErrorMessage(payload)
 				if transientCapacity := isOpenAITransientProcessingError(http.StatusBadRequest, capacityMessage, payload); transientCapacity {
-					return retryableFailure(http.StatusBadGateway, account.IsPoolMode())
+					policyStatus := openAIStreamFailedEventSemanticStatus(payload, capacityMessage)
+					decision := s.applyOpenAIWSEventErrorPolicy(ctx, account, routingModel, policyStatus, handshakeHeaders, payload)
+					if !wroteDownstream && decision.ShouldReturnGenericError() {
+						return openAIWSGenericPolicyCloseError(policyStatus)
+					}
+					return retryableFailure(policyStatus, decision.RetryableOnSameAccount(account, policyStatus))
 				}
 				return nil
 			},

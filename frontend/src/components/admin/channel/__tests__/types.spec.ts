@@ -21,6 +21,7 @@ function makePricingEntry(over: Partial<PricingFormEntry>): PricingFormEntry {
     models: ['test-model'],
     billing_mode: 'token',
     price_multiplier: null,
+    fast_mode_multiplier: null,
     input_price: null,
     output_price: null,
     cache_write_price: null,
@@ -102,6 +103,7 @@ describe('validateIntervals', () => {
 describe('hasExplicitPricing', () => {
   it('拒绝没有任何价格的 token 定价', () => {
     expect(hasExplicitPricing(makePricingEntry({ price_multiplier: 1.5 }))).toBe(false)
+    expect(hasExplicitPricing(makePricingEntry({ fast_mode_multiplier: 2 }))).toBe(false)
   })
 
   it('把显式零价格和图片区间价格视为有效定价', () => {

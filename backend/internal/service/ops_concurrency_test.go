@@ -67,3 +67,33 @@ func TestListAllAccountsForOpsFallbackPassesGroupFilter(t *testing.T) {
 	require.Equal(t, PlatformAnthropic, repo.platformFilter)
 	require.Equal(t, groupID, repo.groupIDFilter)
 }
+
+func TestGetAccountAvailabilityStatsOnlyAggregatesSelectedGroup(t *testing.T) {
+	targetGroupID := int64(7)
+	otherGroup := &Group{ID: 8, Name: "其他分组", Platform: PlatformAnthropic}
+	targetGroup := &Group{ID: targetGroupID, Name: "目标分组", Platform: PlatformAnthropic}
+	repo := &opsAccountStatsRepoStub{accounts: []Account{
+		{
+			ID:          11,
+			Name:        "多分组账号",
+			Platform:    PlatformAnthropic,
+			Status:      StatusActive,
+			Schedulable: true,
+			Groups:      []*Group{otherGroup, targetGroup},
+		},
+	}}
+	service := &OpsService{accountRepo: repo}
+
+	_, groups, accounts, _, err := service.GetAccountAvailabilityStats(
+		context.Background(),
+		PlatformAnthropic,
+		&targetGroupID,
+	)
+
+	require.NoError(t, err)
+	require.Contains(t, groups, targetGroupID)
+	require.NotContains(t, groups, otherGroup.ID)
+	require.Len(t, groups, 1)
+	require.Equal(t, targetGroupID, accounts[11].GroupID)
+	require.Equal(t, targetGroup.Name, accounts[11].GroupName)
+}

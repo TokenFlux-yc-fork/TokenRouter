@@ -1211,7 +1211,8 @@ func (a *Account) IsCustomErrorCodesEnabled() bool {
 }
 
 // IsPoolMode 检查 API Key 账号是否启用池模式。
-// 池模式下，上游错误不标记本地账号状态，而是在同一账号上重试。
+// 池模式默认不根据上游错误写本地调度状态；管理员显式错误策略仍然优先，
+// 只有配置的重试状态码会在同一账号上重试。
 func (a *Account) IsPoolMode() bool {
 	if !a.IsAPIKeyOrBedrock() || a.Credentials == nil {
 		return false

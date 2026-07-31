@@ -144,8 +144,16 @@ func (s *GatewayService) ForwardAsResponses(
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+		decision := upstreamErrorDecisionWithoutPersistence(account, resp.StatusCode)
+		if s.rateLimitService != nil {
+			decision = s.rateLimitService.ApplyUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
+		}
+		if decision.ShouldReturnGenericError() {
+			writeResponsesError(c, http.StatusInternalServerError, "server_error", "Upstream gateway error")
+			return nil, fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
+		}
 
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		if decision.ShouldFailover(account, resp.StatusCode, s.shouldFailoverUpstreamError(resp.StatusCode)) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,
@@ -155,12 +163,10 @@ func (s *GatewayService) ForwardAsResponses(
 				Kind:               "failover",
 				Message:            upstreamMsg,
 			})
-			if s.rateLimitService != nil {
-				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, mappedModel)
-			}
 			return nil, &UpstreamFailoverError{
-				StatusCode:   resp.StatusCode,
-				ResponseBody: respBody,
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				RetryableOnSameAccount: decision.RetryableOnSameAccount(account, resp.StatusCode),
 			}
 		}
 

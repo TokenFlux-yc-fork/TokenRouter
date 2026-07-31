@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { adminAPI } from '@/api'
 import { opsAPI, type OpsDashboardOverview, type OpsMetricThresholds, type OpsRealtimeTrafficSummary } from '@/api/admin/ops'
 import type { OpsRequestDetailsPreset } from './OpsRequestDetailsModal.vue'
 import { useAdminSettingsStore } from '@/stores'
 import { formatBytes, formatNumber } from '@/utils/format'
+import { buildOpsPlatformOptions } from '../platformOptions'
 
 type RealtimeWindow = '1min' | '5min' | '30min' | '1h'
 
@@ -27,6 +27,7 @@ interface Props {
   fullscreen?: boolean
   customStartTime?: string | null
   customEndTime?: string | null
+  groups?: Array<{ id: number; name: string; platform: string }>
 }
 
 interface Emits {
@@ -104,16 +105,7 @@ function formatCustomTimeRangeLabel(startTime: string, endTime: string): string 
   return `${formatDate(start)} ~ ${formatDate(end)}`
 }
 
-const groups = ref<Array<{ id: number; name: string; platform: string }>>([])
-
-const platformOptions = computed(() => [
-  { value: '', label: t('common.all') },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'gemini', label: 'Gemini' },
-  { value: 'antigravity', label: 'Antigravity' },
-  { value: 'grok', label: 'Grok' }
-])
+const platformOptions = computed(() => buildOpsPlatformOptions(props.groups ?? [], t('common.all')))
 
 const timeRangeOptions = computed(() => [
   { value: '5m', label: t('admin.ops.timeRange.5m') },
@@ -136,30 +128,21 @@ const queryModeOptions = computed(() => [
 ])
 
 const groupOptions = computed(() => {
-  const filtered = props.platform ? groups.value.filter((g) => g.platform === props.platform) : groups.value
+  const groups = props.groups ?? []
+  const filtered = props.platform ? groups.filter((g) => g.platform === props.platform) : groups
   return [{ value: null, label: t('common.all') }, ...filtered.map((g) => ({ value: g.id, label: g.name }))]
 })
 
 watch(
-  () => props.platform,
-  (newPlatform) => {
+  () => [props.platform, props.groupId, props.groups] as const,
+  ([newPlatform]) => {
     if (!newPlatform) return
-    const currentGroup = groups.value.find((g) => g.id === props.groupId)
+    const currentGroup = (props.groups ?? []).find((g) => g.id === props.groupId)
     if (currentGroup && currentGroup.platform !== newPlatform) {
       emit('update:group', null)
     }
   }
 )
-
-onMounted(async () => {
-  try {
-    const list = await adminAPI.groups.getAll()
-    groups.value = list.map((g) => ({ id: g.id, name: g.name, platform: g.platform }))
-  } catch (e) {
-    console.error('[OpsDashboardHeader] Failed to load groups', e)
-    groups.value = []
-  }
-})
 
 function handlePlatformChange(val: string | number | boolean | null) {
   emit('update:platform', String(val || ''))

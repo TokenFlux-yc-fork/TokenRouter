@@ -133,3 +133,33 @@ func TestOpenAIRequestBodyLimitFailover_ContextWindow413DoesNotSwitchAccounts(t 
 		})
 	}
 }
+
+// TestOpenAIRequestBodyLimitFailover_CompatAndWSBridgeKeepAccountFailover 验证
+// Chat Completions 共用错误管线和 WS HTTP Bridge 不会把账号代理 413 当成请求级拒绝。
+func TestOpenAIRequestBodyLimitFailover_CompatAndWSBridgeKeepAccountFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(nil))
+
+	const upstreamMessage = "request body exceeds this account's proxy limit"
+	upstreamBody := []byte(`{"error":{"message":"` + upstreamMessage + `"}}`)
+	resp := &http.Response{
+		StatusCode: http.StatusRequestEntityTooLarge,
+		Header:     http.Header{"X-Request-Id": []string{"rid-compat-413"}},
+	}
+	account := &Account{ID: 163, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	svc := &OpenAIGatewayService{}
+
+	failoverErr := svc.failoverOpenAIUpstreamHTTPError(
+		context.Background(), c, account, resp, upstreamBody, upstreamMessage, "gpt-5.2",
+	)
+
+	require.NotNil(t, failoverErr)
+	require.Equal(t, GatewayFailureScopeAccount, failoverErr.Scope)
+	require.Equal(t, NextAccountRetry, failoverErr.NextAccountAction)
+	require.False(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, detectOpenAIWSHTTPBridgeRequestScopedError(
+		account, http.StatusRequestEntityTooLarge, upstreamMessage, upstreamBody,
+	))
+}

@@ -691,6 +691,30 @@ func checkBillingModeRequirements(p ChannelModelPricing) error {
 			"price_multiplier requires at least one explicit price",
 		)
 	}
+	if p.FastModeMultiplier != nil {
+		if !strings.EqualFold(strings.TrimSpace(p.Platform), PlatformOpenAI) {
+			return infraerrors.BadRequest(
+				"FAST_MODE_MULTIPLIER_UNSUPPORTED_PLATFORM",
+				"fast_mode_multiplier is only supported for OpenAI pricing",
+			)
+		}
+		mode := p.BillingMode
+		if mode == "" {
+			mode = BillingModeToken
+		}
+		if mode != BillingModeToken {
+			return infraerrors.BadRequest(
+				"FAST_MODE_MULTIPLIER_UNSUPPORTED_BILLING_MODE",
+				"fast_mode_multiplier is only supported for token billing mode",
+			)
+		}
+		if !p.HasEffectivePricing() {
+			return infraerrors.BadRequest(
+				"FAST_MODE_MULTIPLIER_MISSING_PRICE",
+				"fast_mode_multiplier requires at least one explicit price",
+			)
+		}
+	}
 	return nil
 }
 
@@ -700,6 +724,7 @@ func checkPricesNotNegative(p ChannelModelPricing) error {
 		val   *float64
 	}{
 		{"price_multiplier", p.PriceMultiplier},
+		{"fast_mode_multiplier", p.FastModeMultiplier},
 		{"input_price", p.InputPrice},
 		{"output_price", p.OutputPrice},
 		{"cache_write_price", p.CacheWritePrice},
@@ -714,6 +739,19 @@ func checkPricesNotNegative(p ChannelModelPricing) error {
 		}
 	}
 	return nil
+}
+
+// validateAccountStatsPricingEntries 校验账号统计定价，并拒绝仅用于实际请求计费的 Fast 倍率。
+func validateAccountStatsPricingEntries(pricing []ChannelModelPricing) error {
+	for _, p := range pricing {
+		if p.FastModeMultiplier != nil {
+			return infraerrors.BadRequest(
+				"ACCOUNT_STATS_FAST_MODE_MULTIPLIER_UNSUPPORTED",
+				"fast_mode_multiplier is not supported for account stats pricing",
+			)
+		}
+	}
+	return validatePricingEntries(pricing)
 }
 
 func checkIntervalsHavePrices(p ChannelModelPricing) error {
@@ -776,7 +814,7 @@ func (s *ChannelService) Create(ctx context.Context, input *CreateChannelInput) 
 		return nil, err
 	}
 	for i, rule := range channel.AccountStatsPricingRules {
-		if err := validatePricingEntries(rule.Pricing); err != nil {
+		if err := validateAccountStatsPricingEntries(rule.Pricing); err != nil {
 			return nil, fmt.Errorf("account stats pricing rule #%d: %w", i+1, err)
 		}
 	}
@@ -809,7 +847,7 @@ func (s *ChannelService) Update(ctx context.Context, id int64, input *UpdateChan
 		return nil, err
 	}
 	for i, rule := range channel.AccountStatsPricingRules {
-		if err := validatePricingEntries(rule.Pricing); err != nil {
+		if err := validateAccountStatsPricingEntries(rule.Pricing); err != nil {
 			return nil, fmt.Errorf("account stats pricing rule #%d: %w", i+1, err)
 		}
 	}
