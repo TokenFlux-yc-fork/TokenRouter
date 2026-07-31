@@ -254,6 +254,32 @@ func isOpenAIClientInvalidRequestError(upstreamStatusCode int, upstreamMsg strin
 	return errType == "invalid_request_error" && errCode == OpenAIPropertyNameAboveMaxLengthCode
 }
 
+// isOpenAIOpaqueUpstreamBadRequest identifies a provider-side wrapper that
+// reports an upstream failure with HTTP 400 but exposes no client-fixable
+// detail. Another account can use a different upstream path, so this narrow
+// shape should retain the handler's account failover opportunity.
+func isOpenAIOpaqueUpstreamBadRequest(upstreamStatusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if upstreamStatusCode != http.StatusBadRequest || !gjson.ValidBytes(upstreamBody) {
+		return false
+	}
+	errType := strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.type").String())
+	if !strings.EqualFold(errType, "upstream_error") {
+		return false
+	}
+	errCode := strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.code").String())
+	if errCode != "" && !strings.EqualFold(errCode, "upstream_error") {
+		return false
+	}
+	if strings.TrimSpace(gjson.GetBytes(upstreamBody, "error.param").String()) != "" {
+		return false
+	}
+	message := strings.TrimSpace(upstreamMsg)
+	if message == "" {
+		message = strings.TrimSpace(extractUpstreamErrorMessage(upstreamBody))
+	}
+	return strings.EqualFold(message, "Upstream request failed")
+}
+
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 	match := func(text string) bool {
 		lower := strings.ToLower(strings.TrimSpace(text))
@@ -340,6 +366,9 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 		return false
 	}
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
+	if isOpenAIOpaqueUpstreamBadRequest(statusCode, upstreamMsg, upstreamBody) {
 		return true
 	}
 	if isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody) {

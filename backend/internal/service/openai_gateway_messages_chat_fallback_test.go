@@ -308,6 +308,76 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonFailover400UsesSharedErrorHan
 	require.Equal(t, "invalid roles", events[0].Message)
 }
 
+// A 400 response explicitly classified by the provider as upstream_error is
+// account-scoped, even when the provider hides the underlying reason. Keep the
+// downstream response uncommitted so the handler can retry another account.
+func TestForwardAsAnthropic_ResponsesOpaqueUpstream400TriggersFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"gpt-5.4","max_tokens":8,"messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	const upstreamBody = `{"error":{"message":"Upstream request failed","type":"upstream_error"}}`
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"rid_msg_opaque_400"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+	account := rawChatCompletionsTestAccount()
+	account.Extra = map[string]any{
+		openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+		openai_compat.ExtraKeyResponsesSupported: true,
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.JSONEq(t, upstreamBody, string(failoverErr.ResponseBody))
+	require.Equal(t, "rid_msg_opaque_400", failoverErr.ResponseHeaders.Get("x-request-id"))
+	require.False(t, c.Writer.Written(), "failover must happen before downstream output is committed")
+
+	eventsVal, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, castOK := eventsVal.([]*OpsUpstreamErrorEvent)
+	require.True(t, castOK)
+	require.Len(t, events, 1)
+	require.Equal(t, "failover", events[0].Kind)
+}
+
+func TestIsOpenAIOpaqueUpstreamBadRequestRequiresNoClientDetail(t *testing.T) {
+	const message = "Upstream request failed"
+	require.True(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusBadRequest,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"upstream_error"}}`),
+	))
+	require.False(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusBadRequest,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"invalid_request_error"}}`),
+	))
+	require.False(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusBadRequest,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"upstream_error","code":"invalid_parameter"}}`),
+	))
+	require.False(t, isOpenAIOpaqueUpstreamBadRequest(
+		http.StatusBadRequest,
+		message,
+		[]byte(`{"error":{"message":"Upstream request failed","type":"upstream_error","param":"input"}}`),
+	))
+}
+
 // 上游读取在流中断开时必须返回错误，且不得合成 message_stop 掩盖截断。
 func TestForwardAsAnthropic_ForceChatCompletionsStreamReadErrorSkipsFinalize(t *testing.T) {
 	gin.SetMode(gin.TestMode)
