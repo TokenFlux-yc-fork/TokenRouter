@@ -32,7 +32,10 @@ func ResolveThinkingProtocol(modelID string) ThinkingProtocol {
 	case strings.HasPrefix(id, "deepseek-"),
 		strings.HasPrefix(id, "kimi-"),
 		strings.HasPrefix(id, "moonshot-"),
-		strings.HasPrefix(id, "glm-"):
+		strings.HasPrefix(id, "glm-"),
+		// Kimi Code 的官方 bare ID 必须精确匹配，不能用宽泛的 k3- 前缀。
+		id == "k3",
+		id == "k3-256k":
 		return ThinkingProtocolPassbackRequired
 	}
 	if strings.HasPrefix(id, "minimax-m") {

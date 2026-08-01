@@ -231,7 +231,12 @@ func TestGetUserGroupRateMultiplier_UsesCacheAndSingleflight(t *testing.T) {
 	}
 
 	close(start)
-	time.Sleep(20 * time.Millisecond)
+	// 等所有调用方都记录 cache miss 后再释放 loader，避免固定 sleep 与调度器竞争。
+	// miss 计数正是下方断言的可观察条件，也能保证调用方已经进入 singleflight。
+	require.Eventually(t, func() bool {
+		_, miss, _, _, _ := GatewayUserGroupRateCacheStats()
+		return miss == int64(concurrent)
+	}, 5*time.Second, time.Millisecond, "所有调用方必须在释放 loader 前完成 cache miss")
 	close(unblock)
 	wg.Wait()
 

@@ -437,57 +437,59 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
-	accountRepo                          AccountRepository
-	usageLogRepo                         UsageLogRepository
-	usageBillingRepo                     UsageBillingRepository
-	userRepo                             UserRepository
-	userSubRepo                          UserSubscriptionRepository
-	cache                                GatewayCache
-	cfg                                  *config.Config
-	codexDetector                        CodexClientRestrictionDetector
-	schedulerSnapshot                    *SchedulerSnapshotService
-	concurrencyService                   *ConcurrencyService
-	billingService                       *BillingService
-	rateLimitService                     *RateLimitService
-	billingCacheService                  *BillingCacheService
-	userGroupRateResolver                *userGroupRateResolver
-	httpUpstream                         HTTPUpstream
-	tlsFPProfileService                  *TLSFingerprintProfileService
-	tlsFPRouterService                   *TLSFingerprintRouterService
-	deferredService                      *DeferredService
-	openAITokenProvider                  *OpenAITokenProvider
-	grokTokenProvider                    *GrokTokenProvider
-	toolCorrector                        *CodexToolCorrector
-	openaiWSResolver                     OpenAIWSProtocolResolver
-	resolver                             *ModelPricingResolver
-	channelService                       *ChannelService
-	balanceNotifyService                 *BalanceNotifyService
-	settingService                       *SettingService
-	userPlatformQuotaRepo                UserPlatformQuotaRepository
-	dataSharingService                   *DataSharingService
-	openAIProbePriceLookup               OpenAIProviderPriceLookup
-	openAIProbeBudgetRepo                     OpenAINativeCompactionProbeBudgetRepository
+	accountRepo                              AccountRepository
+	usageLogRepo                             UsageLogRepository
+	usageBillingRepo                         UsageBillingRepository
+	userRepo                                 UserRepository
+	userSubRepo                              UserSubscriptionRepository
+	cache                                    GatewayCache
+	cfg                                      *config.Config
+	codexDetector                            CodexClientRestrictionDetector
+	schedulerSnapshot                        *SchedulerSnapshotService
+	concurrencyService                       *ConcurrencyService
+	billingService                           *BillingService
+	usageBillingNow                          func() time.Time // 用量计费时钟，测试可注入固定时间以覆盖峰值倍率。
+	rateLimitService                         *RateLimitService
+	billingCacheService                      *BillingCacheService
+	userGroupRateResolver                    *userGroupRateResolver
+	httpUpstream                             HTTPUpstream
+	tlsFPProfileService                      *TLSFingerprintProfileService
+	tlsFPRouterService                       *TLSFingerprintRouterService
+	deferredService                          *DeferredService
+	openAITokenProvider                      *OpenAITokenProvider
+	grokTokenProvider                        *GrokTokenProvider
+	toolCorrector                            *CodexToolCorrector
+	openaiWSResolver                         OpenAIWSProtocolResolver
+	resolver                                 *ModelPricingResolver
+	channelService                           *ChannelService
+	balanceNotifyService                     *BalanceNotifyService
+	settingService                           *SettingService
+	userPlatformQuotaRepo                    UserPlatformQuotaRepository
+	dataSharingService                       *DataSharingService
+	openAIProbePriceLookup                   OpenAIProviderPriceLookup
+	openAIProbeBudgetRepo                    OpenAINativeCompactionProbeBudgetRepository
 	openAINativeCompactionCapabilityRepo     OpenAINativeCompactionCapabilityRepository
 	openAIResponsesInputTokensCapabilityRepo OpenAIResponsesInputTokensCapabilityRepository
 	upstreamAttemptAttributionRepo           UpstreamAttemptAttributionRepository
-	openAINativeCompactionStageBudget    *OpenAIStageBudget
-	liveAttestation                      liveattestation.Provider
-	liveAttestationCipher                SecretEncryptor
+	openAINativeCompactionStageBudget        *OpenAIStageBudget
+	liveAttestation                          liveattestation.Provider
+	liveAttestationCipher                    SecretEncryptor
 
-	openaiWSPoolOnce              sync.Once
-	openaiWSStateStoreOnce        sync.Once
-	openaiSchedulerOnce           sync.Once
-	openaiProxyStreamCircuitOnce  sync.Once
-	openaiWSPassthroughDialerOnce sync.Once
-	openaiModelTransientOnce      sync.Once
-	agentIdentityTaskMu           sync.Mutex
-	openaiWSPool                  *openAIWSConnPool
-	openaiWSStateStore            OpenAIWSStateStore
-	openaiScheduler               OpenAIAccountScheduler
-	openaiWSPassthroughDialer     openAIWSClientDialer
-	openaiAccountStats            *openAIAccountRuntimeStats
-	openaiModelTransient          *openAIAccountModelTransientState
-	openaiProxyStreamCircuit      *openAIProxyStreamCircuit
+	openaiWSPoolOnce               sync.Once
+	openaiWSStateStoreOnce         sync.Once
+	openaiSchedulerOnce            sync.Once
+	openaiProxyStreamCircuitOnce   sync.Once
+	openaiWSPassthroughDialerOnce  sync.Once
+	openaiModelTransientOnce       sync.Once
+	agentIdentityTaskMu            sync.Mutex
+	openaiWSPool                   *openAIWSConnPool
+	openaiWSStateStore             OpenAIWSStateStore
+	openaiScheduler                OpenAIAccountScheduler
+	openaiWSPassthroughDialer      openAIWSClientDialer
+	openaiAccountStats             *openAIAccountRuntimeStats
+	openaiModelTransient           *openAIAccountModelTransientState
+	openaiProxyStreamCircuit       *openAIProxyStreamCircuit
+	openaiProxyStreamFailOpenLogAt atomic.Int64
 
 	openaiWSFallbackUntil               sync.Map // key: int64(accountID), value: time.Time
 	openaiAccountRuntimeBlockUntil      sync.Map // key: int64(accountID), value: time.Time

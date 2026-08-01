@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestTrimOpenAIEncryptedReasoningItems_ContentNull(t *testing.T) {
@@ -96,6 +97,52 @@ func TestTrimOpenAIEncryptedReasoningItems_NoReasoningItems(t *testing.T) {
 
 	changed := trimOpenAIEncryptedReasoningItems(reqBody)
 	assert.False(t, changed)
+}
+
+func TestSanitizeOpenAICrossModeFailoverReasoning_DropsWholeEncryptedItem(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.1","input":[` +
+		`{"type":"message","role":"user","content":"hi"},` +
+		`{"type":"reasoning","id":"rs_kiro_1","encrypted_content":"ENC","summary":[{"type":"summary_text","text":"t"}]},` +
+		`{"type":"message","role":"assistant","content":"yo"}` +
+		`]}`)
+
+	sanitized, changed, err := SanitizeOpenAICrossModeFailoverReasoning(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	// 整个 reasoning 项都应移除，不能只保留脱敏后的空骨架。
+	require.NotContains(t, string(sanitized), "reasoning")
+	require.NotContains(t, string(sanitized), "rs_kiro_1")
+	require.NotContains(t, string(sanitized), "summary_text")
+	require.Equal(t, int64(2), gjson.GetBytes(sanitized, "input.#").Int())
+}
+
+func TestSanitizeOpenAICrossModeFailoverReasoning_NoEncryptedIsNoop(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.1","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"t"}]}]}`)
+	sanitized, changed, err := SanitizeOpenAICrossModeFailoverReasoning(body)
+	require.NoError(t, err)
+	require.False(t, changed, "没有 encrypted_content 的 reasoning 必须保留")
+	require.Equal(t, string(body), string(sanitized))
+}
+
+func TestSanitizeOpenAICrossModeFailoverReasoning_NoInputIsNoop(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.1"}`)
+	sanitized, changed, err := SanitizeOpenAICrossModeFailoverReasoning(body)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, string(body), string(sanitized))
+}
+
+func TestSanitizeOpenAICrossModeFailoverReasoning_PreservesLargeIntegers(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.1","input":[` +
+		`{"type":"reasoning","id":"rs_kiro_1","encrypted_content":"ENC"},` +
+		`{"type":"message","role":"user","content":"hi"}` +
+		`],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object","properties":{"id":{"const":9007199254740993}}}}}]}`)
+
+	sanitized, changed, err := SanitizeOpenAICrossModeFailoverReasoning(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Contains(t, string(sanitized), `"const":9007199254740993`,
+		"清理请求体不能将 JSON 大整数转换为 float64")
 }
 
 func TestTrimOpenAIEncryptedReasoningItems_ContentNullDropsBareSkeleton(t *testing.T) {

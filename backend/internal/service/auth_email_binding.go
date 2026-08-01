@@ -80,14 +80,15 @@ func (s *AuthService) BindEmailIdentity(
 
 	currentUser.Email = normalizedEmail
 	currentUser.PasswordHash = hashedPassword
+	fields := UserUpdateFields{Email: true, PasswordHash: true}
 	updateUser := s.userRepo.Update
 	if registrationNormalizedEmail != "" {
 		// 开启邮箱归一化后，绑定/换绑主邮箱也要复用同一套唯一性保护。
-		updateUser = func(updateCtx context.Context, updateUser *User) error {
-			return s.userRepo.UpdateWithNormalizedEmailGuard(updateCtx, updateUser, registrationNormalizedEmail)
+		updateUser = func(updateCtx context.Context, updateUser *User, updateFields UserUpdateFields) error {
+			return s.userRepo.UpdateWithNormalizedEmailGuard(updateCtx, updateUser, registrationNormalizedEmail, updateFields)
 		}
 	}
-	if err := updateUser(ctx, currentUser); err != nil {
+	if err := updateUser(ctx, currentUser, fields); err != nil {
 		if errors.Is(err, ErrEmailExists) {
 			return nil, ErrEmailExists
 		}

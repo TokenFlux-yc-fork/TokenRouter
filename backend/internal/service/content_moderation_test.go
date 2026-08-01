@@ -237,7 +237,7 @@ func (r *contentModerationTestUserRepo) GetFirstAdmin(ctx context.Context) (*Use
 	panic("unexpected GetFirstAdmin call")
 }
 
-func (r *contentModerationTestUserRepo) Update(ctx context.Context, user *User) error {
+func (r *contentModerationTestUserRepo) Update(ctx context.Context, user *User, fields UserUpdateFields) error {
 	if user == nil {
 		return nil
 	}
@@ -247,8 +247,8 @@ func (r *contentModerationTestUserRepo) Update(ctx context.Context, user *User) 
 	return nil
 }
 
-func (r *contentModerationTestUserRepo) UpdateWithNormalizedEmailGuard(ctx context.Context, user *User, normalizedEmail string) error {
-	return r.Update(ctx, user)
+func (r *contentModerationTestUserRepo) UpdateWithNormalizedEmailGuard(ctx context.Context, user *User, normalizedEmail string, fields UserUpdateFields) error {
+	return r.Update(ctx, user, fields)
 }
 
 func (r *contentModerationTestUserRepo) Delete(ctx context.Context, id int64) error {
@@ -297,6 +297,14 @@ func (r *contentModerationTestUserRepo) UpdateBalance(ctx context.Context, id in
 
 func (r *contentModerationTestUserRepo) DeductBalance(ctx context.Context, id int64, amount float64) (float64, error) {
 	panic("unexpected DeductBalance call")
+}
+
+func (r *contentModerationTestUserRepo) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
+	panic("unexpected AdjustBalance call")
+}
+
+func (r *contentModerationTestUserRepo) SetBalance(ctx context.Context, id int64, value float64) (BalanceChange, error) {
+	panic("unexpected SetBalance call")
 }
 
 func (r *contentModerationTestUserRepo) UpdateConcurrency(ctx context.Context, id int64, amount int) error {

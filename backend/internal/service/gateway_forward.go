@@ -179,6 +179,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		clientUserAgent = c.GetHeader("User-Agent")
 	}
 	isClaudeCode := IsClaudeCodeClient(ctx) || isClaudeCodeClient(clientUserAgent, parsed.MetadataUserID)
+	// 中间网关可能覆盖 User-Agent；合法 metadata 与原始 billing block 同时存在时，
+	// 只跳过 body mimicry 以保留客户端的 system/cache_control 前缀。
+	if !isClaudeCode {
+		isClaudeCode = isProxiedClaudeCodeRequest(body, parsed.MetadataUserID)
+	}
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
 
 	if shouldMimicClaudeCode {

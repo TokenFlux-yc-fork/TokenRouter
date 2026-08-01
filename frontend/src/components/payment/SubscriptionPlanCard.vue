@@ -11,12 +11,15 @@
     <div :class="['h-1.5', accentClass]" />
 
     <div class="flex flex-1 flex-col p-4">
-      <!-- Header: name + badge + price -->
+      <!-- 套餐名称与价格 -->
       <div class="mb-3 flex items-start justify-between gap-2">
         <div class="min-w-0 flex-1">
-          <div class="flex items-center gap-2">
-            <h3 class="truncate text-base font-bold text-gray-900 dark:text-white">{{ plan.name }}</h3>
-          </div>
+          <h3
+            :title="plan.name"
+            class="h-12 min-w-0 break-words [overflow-wrap:anywhere] text-base font-bold leading-6 text-gray-900 dark:text-white line-clamp-2"
+          >
+            {{ plan.name }}
+          </h3>
           <p v-if="plan.description" class="mt-0.5 text-xs leading-relaxed text-gray-500 dark:text-dark-400 line-clamp-2">
             {{ plan.description }}
           </p>

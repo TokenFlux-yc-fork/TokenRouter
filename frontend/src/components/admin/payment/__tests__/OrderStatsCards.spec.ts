@@ -35,17 +35,17 @@ describe('OrderStatsCards', () => {
     const wrapper = mount(OrderStatsCards, {
       props: {
         stats: {
-          today_amount: 12,
-          total_amount: 120,
+          today_amount: { CNY: 12 },
+          total_amount: { CNY: 120 },
           today_count: 2,
           total_count: 6,
-          avg_amount: 20,
+          avg_amount: { CNY: 20 },
           avg_reasoning_point_purchase_unit_price: 0.3125,
           reasoning_point_purchase_order_count: 4,
           daily_series: [],
           payment_methods: [],
           purchase_distribution: [],
-          top_users: []
+          top_users: {}
         }
       },
       global: {

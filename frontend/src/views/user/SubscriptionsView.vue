@@ -162,6 +162,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import { formatDateOnly, formatDateTimeToMinute } from '@/utils/format'
 import {
+  getExpirationDateRelation,
   getRemainingDurationParts,
   isOneTimeDailyQuota,
   type RemainingDurationParts
@@ -275,12 +276,13 @@ function getProgressBarClass(used: number, limit: number | null): string {
 function formatExpirationDate(expiresAt: string): string {
   const now = new Date()
   const expires = new Date(expiresAt)
-  if (!Number.isFinite(expires.getTime())) return formatDateTimeToMinute(expires)
-  if (expires.getTime() <= now.getTime()) return t('userSubscriptions.status.expired')
+  const relation = getExpirationDateRelation(expires, now)
+  if (relation === null) return formatDateTimeToMinute(expires)
+  if (relation === 'expired') return t('userSubscriptions.status.expired')
   const date = formatDateTimeToMinute(expires)
   const days = diffLocalCalendarDays(expires, now)
-  if (days === 0) return `${date} (${t('common.today')})`
-  if (days === 1) return `${date} (${t('common.tomorrow')})`
+  if (relation === 'today') return `${date} (${t('common.today')})`
+  if (relation === 'tomorrow') return `${date} (${t('common.tomorrow')})`
   return `${t('userSubscriptions.daysRemaining', { days })} (${date})`
 }
 

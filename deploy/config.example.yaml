@@ -72,6 +72,19 @@ server:
     max_upload_buffer_per_stream: 524288
 
 # =============================================================================
+# WebAuthn / Passkey 配置
+# =============================================================================
+# Passkey 在生产环境要求 HTTPS。RP ID 只填写域名（不含协议和端口），RP origins
+# 填写浏览器访问使用的完整 Origin。
+webauthn:
+  enabled: false
+  rp_display_name: "TokenRouter"
+  # 示例: "tokenrouter.example.com"
+  rp_id: ""
+  # 示例: ["https://tokenrouter.example.com"]
+  rp_origins: []
+
+# =============================================================================
 # Run Mode Configuration
 # 运行模式配置
 # =============================================================================
@@ -126,6 +139,8 @@ security:
       - "api.openai.com"
       - "api.anthropic.com"
       - "api.kimi.com"
+      - "api.moonshot.ai"
+      - "api.moonshot.cn"
       - "open.bigmodel.cn"
       - "api.minimaxi.com"
       - "generativelanguage.googleapis.com"
@@ -394,7 +409,9 @@ gateway:
     fallback_window_seconds: 60
     fallback_ttl_seconds: 600
   # OpenAI Responses SSE 代理断流熔断；按 proxy_id 跨账号隔离，仅影响下一次调度。
+  # 隔离仅作为调度偏好：全部候选代理都被隔离时自动 fail-open；3 秒内并发断流合并为一次故障。
   openai_proxy_stream_circuit:
+    disabled: false
     failure_threshold: 2
     window_seconds: 60
     ttl_seconds: 600

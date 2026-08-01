@@ -298,7 +298,9 @@ type UsageLogFilters struct {
 	IncludeOwnedTeam bool
 	// PersonalOnly 仅查询个人 Key 产生的记录，团队作用域使用独立接口。
 	PersonalOnly bool
-	Model        string
+	// RequestID 对 usage_logs.request_id 执行精确匹配。
+	RequestID string
+	Model     string
 	// ModelFilterSource 控制 Model 的匹配维度；为空时保留 usage_logs.model 原始语义。
 	ModelFilterSource string
 	RequestType       *int16

@@ -220,6 +220,8 @@ func TestModelMarketplaceChannelImageInputPricingIsDisplayed(t *testing.T) {
 }
 
 func TestModelDisplayPricingImageInputFastRates(t *testing.T) {
+	// 此测试不带 unit 构建标签，因此使用局部值，避免依赖标签专用测试 helper。
+	fastModeMultiplier := 3.0
 	tests := []struct {
 		name          string
 		pricing       ModelPricing
@@ -251,7 +253,7 @@ func TestModelDisplayPricingImageInputFastRates(t *testing.T) {
 			pricing: ModelPricing{
 				InputPricePerToken:      0.01,
 				ImageInputPricePerToken: 0.03,
-				FastModeMultiplier:      func(v float64) *float64 { return &v }(3),
+				FastModeMultiplier:      &fastModeMultiplier,
 			},
 			wantImage:     0.06,
 			wantFastImage: 0.18,

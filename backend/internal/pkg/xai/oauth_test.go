@@ -144,6 +144,12 @@ func TestBuildGrokMediaURLs(t *testing.T) {
 
 	_, err = BuildVideoURL(DefaultBaseURL, " ")
 	require.Error(t, err)
+
+	// 纯点片段和控制字符不能进入上游视频路径。
+	for _, requestID := range []string{".", "..", "req\x00id", "req\rid", "req\nid"} {
+		_, err = BuildVideoURL(DefaultBaseURL, requestID)
+		require.Error(t, err, "request_id=%q", requestID)
+	}
 }
 
 func TestValidateXAIURLsRejectUntrustedOAuthAndUnsafeBaseURLsByDefault(t *testing.T) {

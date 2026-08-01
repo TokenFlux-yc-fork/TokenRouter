@@ -187,6 +187,18 @@ func TestBackendModeAuthGuard(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			name:       "enabled_allows_passkey_login_begin",
+			enabled:    "true",
+			path:       "/api/v1/auth/passkey/login/begin",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "enabled_allows_passkey_login_finish",
+			enabled:    "true",
+			path:       "/api/v1/auth/passkey/login/finish",
+			wantStatus: http.StatusOK,
+		},
+		{
 			name:       "enabled_allows_logout",
 			enabled:    "true",
 			path:       "/api/v1/auth/logout",

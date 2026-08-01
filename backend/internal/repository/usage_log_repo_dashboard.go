@@ -379,13 +379,13 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 	stats := &UserDashboardStats{}
 	today := timezone.Today()
 
-	// API Key 统计
+	// API Key 统计；标量团队子查询依赖每个用户至多一个活跃团队的唯一约束。
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		`SELECT COUNT(*) FROM api_keys
 		 WHERE deleted_at IS NULL
-		   AND (user_id = $1 OR team_id IN (
+		   AND (user_id = $1 OR team_id = (
 		       SELECT tm.team_id FROM team_memberships tm
 		       WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
 		   ))`,
@@ -399,7 +399,7 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 		r.sql,
 		`SELECT COUNT(*) FROM api_keys
 		 WHERE status = $2 AND deleted_at IS NULL
-		   AND (user_id = $1 OR team_id IN (
+		   AND (user_id = $1 OR team_id = (
 		       SELECT tm.team_id FROM team_memberships tm
 		       WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
 		   ))`,
@@ -421,7 +421,7 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
 			COALESCE(AVG(duration_ms), 0) as avg_duration_ms
 		FROM usage_logs
-		WHERE user_id = $1 OR team_id IN (
+		WHERE user_id = $1 OR team_id = (
 			SELECT tm.team_id FROM team_memberships tm
 			WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
 		)
@@ -456,7 +456,7 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 			COALESCE(SUM(actual_cost), 0) as today_actual_cost
 		FROM usage_logs
 		WHERE created_at >= $2
-		  AND (user_id = $1 OR team_id IN (
+		  AND (user_id = $1 OR team_id = (
 			SELECT tm.team_id FROM team_memberships tm
 			WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
 		  ))

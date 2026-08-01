@@ -282,16 +282,36 @@ export interface PaymentDocument {
   invoice_status?: string
 }
 
+export type CurrencyAmounts = Record<string, number>
+
+export interface DailyPaymentStats {
+  date: string
+  amount: CurrencyAmounts
+  count: number
+}
+
+export interface PaymentMethodStats {
+  type: string
+  amount: CurrencyAmounts
+  count: number
+}
+
+export interface TopUserPaymentStats {
+  user_id: number
+  email: string
+  amount: number
+}
+
 export interface DashboardStats {
-  today_amount: number
-  total_amount: number
+  today_amount: CurrencyAmounts
+  total_amount: CurrencyAmounts
   today_count: number
   total_count: number
-  avg_amount: number
+  avg_amount: CurrencyAmounts
   avg_reasoning_point_purchase_unit_price: number
   reasoning_point_purchase_order_count: number
-  daily_series: { date: string; amount: number; count: number }[]
-  payment_methods: { type: string; amount: number; count: number }[]
+  daily_series: DailyPaymentStats[]
+  payment_methods: PaymentMethodStats[]
   purchase_distribution: { type: OrderType; label: string; plan_id?: number; amount: number; count: number }[]
-  top_users: { user_id: number; email: string; amount: number }[]
+  top_users: Record<string, TopUserPaymentStats[]>
 }

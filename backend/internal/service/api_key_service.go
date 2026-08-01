@@ -78,6 +78,42 @@ const (
 	apiKeyLastUsedFailBackoff = 5 * time.Second
 )
 
+// APIKeyUpdateFields 声明 APIKeyRepository.Update 允许写回的列。
+//
+// 与 UserUpdateFields 同理：api_keys 的用量列由计费热路径原子递增
+// （IncrementQuotaUsed / IncrementRateLimitUsage 的 quota_used、usage_5h/1d/7d），
+// 若编辑 Key 时无条件整行回写，并发累计的配额与限流计数就会被旧快照覆盖。
+// 因此调用方必须显式声明要改的列。
+type APIKeyUpdateFields struct {
+	Name      bool
+	Status    bool
+	Quota     bool
+	GroupID   bool
+	ExpiresAt bool
+	// CompositeConfiguration 覆盖 is_composite 与复合分组映射表，二者必须同事务更新。
+	CompositeConfiguration bool
+	// FastModePolicy 覆盖 fork 的快速模式策略。
+	FastModePolicy bool
+	// FallbackToDefaultGroupWhenUnavailable 覆盖绑定分组不可用时的回退策略。
+	FallbackToDefaultGroupWhenUnavailable bool
+	// DataSharingConfirmation 覆盖数据共享须知版本、确认分组与确认时间。
+	DataSharingConfirmation bool
+	// QuotaUsed 仅供"重置配额用量"路径声明；常规计费走 IncrementQuotaUsed。
+	QuotaUsed bool
+	// RateLimits 覆盖 rate_limit_5h / _1d / _7d 三个阈值。
+	RateLimits bool
+	// RateLimitUsage 覆盖 usage_5h/_1d/_7d 与三个窗口起点，
+	// 仅供"重置限流用量"路径声明；常规计费走 IncrementRateLimitUsage。
+	RateLimitUsage bool
+	// IPRules 覆盖 ip_whitelist 与 ip_blacklist。
+	IPRules bool
+}
+
+// IsEmpty 报告该次 Update 是否不写任何列。
+func (f APIKeyUpdateFields) IsEmpty() bool {
+	return f == APIKeyUpdateFields{}
+}
+
 type APIKeyRepository interface {
 	Create(ctx context.Context, key *APIKey) error
 	GetByID(ctx context.Context, id int64) (*APIKey, error)
@@ -86,7 +122,8 @@ type APIKeyRepository interface {
 	GetByKey(ctx context.Context, key string) (*APIKey, error)
 	// GetByKeyForAuth 认证专用查询，返回最小字段集
 	GetByKeyForAuth(ctx context.Context, key string) (*APIKey, error)
-	Update(ctx context.Context, key *APIKey) error
+	// Update 只写 fields 中显式声明的列，其余列保持库中当前值。
+	Update(ctx context.Context, key *APIKey, fields APIKeyUpdateFields) error
 	Delete(ctx context.Context, id int64) error
 	// DeleteWithAudit 为兼容滚动升级保留历史接口名。
 	// 实现必须以原子方式写入墓碑并软删除 Key，且不得保留已删除的凭据材料。
@@ -1072,9 +1109,18 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		}
 	}
 
+	// fields 只登记本次请求真正要改的列。quota_used 与 usage_5h/1d/7d 由计费热路径
+	// 原子递增，除非用户显式点了"重置"，否则这里不用快照把它们写回去。
+	var fields APIKeyUpdateFields
+	// 下面若干分支会顺带把 Status 改回 active（配额扩容、清除过期等），
+	// 所以用原始值比对来决定是否写 status，而不是只看 req.Status。
+	originalStatus := apiKey.Status
+	originalIsComposite := apiKey.IsComposite
+
 	// 更新字段
 	if req.Name != nil {
 		apiKey.Name = html.EscapeString(*req.Name)
+		fields.Name = true
 	}
 	if req.FastModePolicy != nil {
 		fastModePolicy, ok := NormalizeAPIKeyFastModePolicy(*req.FastModePolicy)
@@ -1082,6 +1128,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 			return nil, ErrInvalidAPIKeyFastModePolicy
 		}
 		apiKey.FastModePolicy = fastModePolicy
+		fields.FastModePolicy = true
 	}
 
 	targetComposite := apiKey.IsComposite
@@ -1127,6 +1174,8 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 			apiKey.CompositeGroups = bindings
 			apiKey.User = user
 			apiKey.DataSharingNoticeVersion, apiKey.DataSharingConfirmedGroupID, apiKey.DataSharingConfirmedAt = compositeConsentSnapshot(bindings)
+			fields.CompositeConfiguration = true
+			fields.DataSharingConfirmation = true
 		}
 		apiKey.IsComposite = true
 		apiKey.GroupID = nil
@@ -1137,6 +1186,10 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		}
 		apiKey.IsComposite = false
 		apiKey.CompositeGroups = nil
+	}
+	if apiKey.IsComposite != originalIsComposite {
+		fields.CompositeConfiguration = true
+		fields.GroupID = true
 	}
 
 	if !targetComposite && req.GroupID != nil {
@@ -1173,6 +1226,10 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.GroupID = req.GroupID
 		apiKey.Group = group
 		apiKey.User = user
+		fields.GroupID = true
+		if changingGroup && group.DataSharingEnabled {
+			fields.DataSharingConfirmation = true
+		}
 	}
 	if !apiKey.IsComposite && !s.canUserUseBoundGroup(ctx, apiKey) {
 		return nil, ErrGroupDisabledForUser
@@ -1183,6 +1240,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 			return nil, ErrInsufficientPerms
 		}
 		apiKey.Status = *req.Status
+		fields.Status = true
 		// 如果状态改变，清除Redis缓存
 		if s.cache != nil {
 			_ = s.cache.DeleteCreateAttemptCount(ctx, apiKey.UserID)
@@ -1192,6 +1250,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	// Update quota fields
 	if req.Quota != nil {
 		apiKey.Quota = *req.Quota
+		fields.Quota = true
 		// 额度仍有剩余，或改为 0（不限额）时，恢复已因额度耗尽停用的 Key。
 		if apiKey.Status == StatusAPIKeyQuotaExhausted && (*req.Quota <= 0 || *req.Quota > apiKey.QuotaUsed) {
 			apiKey.Status = StatusActive
@@ -1199,6 +1258,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 	if req.ResetQuota != nil && *req.ResetQuota {
 		apiKey.QuotaUsed = 0
+		fields.QuotaUsed = true
 		// If resetting quota and status was quota_exhausted, reactivate
 		if apiKey.Status == StatusAPIKeyQuotaExhausted {
 			apiKey.Status = StatusActive
@@ -1206,12 +1266,14 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 	if req.ClearExpiration {
 		apiKey.ExpiresAt = nil
+		fields.ExpiresAt = true
 		// If clearing expiry and status was expired, reactivate
 		if apiKey.Status == StatusAPIKeyExpired {
 			apiKey.Status = StatusActive
 		}
 	} else if req.ExpiresAt != nil {
 		apiKey.ExpiresAt = req.ExpiresAt
+		fields.ExpiresAt = true
 		// If extending expiry and status was expired, reactivate
 		if apiKey.Status == StatusAPIKeyExpired && time.Now().Before(*req.ExpiresAt) {
 			apiKey.Status = StatusActive
@@ -1221,23 +1283,29 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	// 更新 IP 限制（nil 不修改，空数组清空设置）
 	if req.IPWhitelist != nil {
 		apiKey.IPWhitelist = *req.IPWhitelist
+		fields.IPRules = true
 	}
 	if req.IPBlacklist != nil {
 		apiKey.IPBlacklist = *req.IPBlacklist
+		fields.IPRules = true
 	}
 
 	// Update rate limit configuration
 	if req.RateLimit5h != nil {
 		apiKey.RateLimit5h = *req.RateLimit5h
+		fields.RateLimits = true
 	}
 	if req.RateLimit1d != nil {
 		apiKey.RateLimit1d = *req.RateLimit1d
+		fields.RateLimits = true
 	}
 	if req.RateLimit7d != nil {
 		apiKey.RateLimit7d = *req.RateLimit7d
+		fields.RateLimits = true
 	}
 	if req.FallbackToDefaultGroupWhenUnavailable != nil {
 		apiKey.FallbackToDefaultGroupWhenUnavailable = *req.FallbackToDefaultGroupWhenUnavailable
+		fields.FallbackToDefaultGroupWhenUnavailable = true
 	}
 	resetRateLimit := req.ResetRateLimitUsage != nil && *req.ResetRateLimitUsage
 	if resetRateLimit {
@@ -1247,9 +1315,15 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.Window5hStart = nil
 		apiKey.Window1dStart = nil
 		apiKey.Window7dStart = nil
+		fields.RateLimitUsage = true
 	}
 
-	if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
+	// 上面的自动复活分支可能改了 status，这里统一登记。
+	if apiKey.Status != originalStatus {
+		fields.Status = true
+	}
+
+	if err := s.apiKeyRepo.Update(ctx, apiKey, fields); err != nil {
 		return nil, fmt.Errorf("update api key: %w", err)
 	}
 
@@ -1600,7 +1674,9 @@ func (s *APIKeyService) UpdateQuotaUsed(ctx context.Context, apiKeyID int64, cos
 	// If quota is set and now exhausted, update status
 	if apiKey.Quota > 0 && newQuotaUsed >= apiKey.Quota {
 		apiKey.Status = StatusAPIKeyQuotaExhausted
-		if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
+		// 只写 status：这条位于计费热路径，若整行回写会把刚刚原子递增的
+		// quota_used 与限流用量按快照覆盖掉。
+		if err := s.apiKeyRepo.Update(ctx, apiKey, APIKeyUpdateFields{Status: true}); err != nil {
 			return nil // Don't fail the request
 		}
 		// Invalidate cache so next request sees the new status

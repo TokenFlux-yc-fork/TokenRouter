@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -51,7 +50,9 @@ func TestSendMockInterceptResponse_MaxTokensOneHaiku(t *testing.T) {
 
 	id, ok := response["id"].(string)
 	require.True(t, ok)
-	require.True(t, strings.HasPrefix(id, "msg_bdrk_"))
+	require.Regexp(t, `^msg_01[0-9A-Za-z]{22}$`, id)
+	require.Contains(t, response, "stop_details")
+	require.Nil(t, response["stop_details"])
 
 	content, ok := response["content"].([]any)
 	require.True(t, ok)
@@ -64,4 +65,21 @@ func TestSendMockInterceptResponse_MaxTokensOneHaiku(t *testing.T) {
 	usage, ok := response["usage"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, float64(1), usage["output_tokens"])
+	require.NotContains(t, usage, "total_tokens")
+}
+
+func TestSendMockInterceptStream_UsesAnthropicSchema(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+
+	sendMockInterceptStream(ctx, "claude-sonnet-4-5", InterceptTypeSuggestionMode)
+
+	body := rec.Body.String()
+	require.Regexp(t, `"id":"msg_01[0-9A-Za-z]{22}"`, body)
+	require.Contains(t, body, `"stop_details":null`)
+	require.Contains(t, body, `"cache_creation_input_tokens":0`)
+	require.Contains(t, body, `"cache_read_input_tokens":0`)
+	require.Contains(t, body, `"usage":{"output_tokens":1}`)
+	require.NotContains(t, body, `"usage":{"input_tokens":10,"output_tokens":1}`)
 }

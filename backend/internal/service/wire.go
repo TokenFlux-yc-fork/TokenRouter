@@ -888,8 +888,9 @@ func ProvideOpenAINativeCompactionProbeRunnerService(
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
-	// Core services
+	// 核心服务
 	ProvideAuthService,
+	NewPasskeyService,
 	NewUserService,
 	NewTeamService,
 	ProvideAPIKeyService,

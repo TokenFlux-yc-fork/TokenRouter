@@ -11,8 +11,9 @@ import (
 
 type compositeAPIKeyRepoStub struct {
 	APIKeyRepository
-	key     *APIKey
-	updated *APIKey
+	key           *APIKey
+	updated       *APIKey
+	updatedFields []APIKeyUpdateFields
 }
 
 func (s *compositeAPIKeyRepoStub) GetByID(_ context.Context, _ int64) (*APIKey, error) {
@@ -21,11 +22,12 @@ func (s *compositeAPIKeyRepoStub) GetByID(_ context.Context, _ int64) (*APIKey, 
 	return &copyKey, nil
 }
 
-func (s *compositeAPIKeyRepoStub) Update(_ context.Context, key *APIKey) error {
+func (s *compositeAPIKeyRepoStub) Update(_ context.Context, key *APIKey, fields APIKeyUpdateFields) error {
 	copyKey := *key
 	copyKey.CompositeGroups = cloneCompositeBindings(key.CompositeGroups)
 	s.updated = &copyKey
 	s.key = &copyKey
+	s.updatedFields = append(s.updatedFields, fields)
 	return nil
 }
 
@@ -172,6 +174,11 @@ func TestAPIKeyUpdateConvertsBetweenOrdinaryAndComposite(t *testing.T) {
 	require.True(t, converted.IsComposite)
 	require.Nil(t, converted.GroupID)
 	require.Len(t, converted.CompositeGroups, 2)
+	require.Equal(t, APIKeyUpdateFields{
+		GroupID:                 true,
+		CompositeConfiguration:  true,
+		DataSharingConfirmation: true,
+	}, repo.updatedFields[0])
 
 	// 复合转普通必须显式提供目标分组，不能沿用任意一个复合映射。
 	toOrdinary := false
@@ -185,6 +192,7 @@ func TestAPIKeyUpdateConvertsBetweenOrdinaryAndComposite(t *testing.T) {
 	require.False(t, converted.IsComposite)
 	require.Equal(t, targetGroupID, *converted.GroupID)
 	require.Empty(t, converted.CompositeGroups)
+	require.Equal(t, APIKeyUpdateFields{GroupID: true, CompositeConfiguration: true}, repo.updatedFields[1])
 }
 
 func TestCompositeAPIKeyDataSharingConsentCoversNewMappings(t *testing.T) {
@@ -214,4 +222,9 @@ func TestCompositeAPIKeyDataSharingConsentCoversNewMappings(t *testing.T) {
 		require.Equal(t, 3, binding.DataSharingNoticeVersion)
 		require.NotNil(t, binding.DataSharingConfirmedAt)
 	}
+	require.Equal(t, APIKeyUpdateFields{
+		GroupID:                 true,
+		CompositeConfiguration:  true,
+		DataSharingConfirmation: true,
+	}, repo.updatedFields[0])
 }

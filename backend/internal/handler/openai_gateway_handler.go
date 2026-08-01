@@ -42,6 +42,20 @@ type OpenAIGatewayHandler struct {
 	cfg                        *config.Config
 }
 
+var errOpenAIWSLocalRoutingRejected = errors.New("local websocket routing rejected")
+
+// newOpenAIWSLocalRoutingRejectedError 标记请求在本地路由阶段被拒绝，避免把未发送到上游的错误归咎于账号。
+func newOpenAIWSLocalRoutingRejectedError(model string, err error) error {
+	reason := fmt.Sprintf("model %s is not available for this websocket channel or account", strings.TrimSpace(model))
+	cause := fmt.Errorf("%w: %w", errOpenAIWSLocalRoutingRejected, err)
+	return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, reason, cause)
+}
+
+// shouldReportOpenAIWSProxyAccountFailure 排除明确的本地模型路由拒绝，其余代理错误维持现有上报行为。
+func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
+	return err != nil && !errors.Is(err, errOpenAIWSLocalRoutingRejected)
+}
+
 // grokMediaEligibilityProber 在首次媒体转发前补齐 OAuth 账号的计费观测。
 type grokMediaEligibilityProber interface {
 	ProbeMediaEligibility(ctx context.Context, accountID int64) (bool, string, error)
@@ -494,6 +508,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	sameAccountRetryCount := make(map[int64]int)
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
+	var passthroughFailoverState openAIPassthroughFailoverState
 
 	// 生图意图与 native remote compaction v2 请求必须调度到确实支持 Responses API
 	// 的账号，否则会在 forward 阶段被静默降级为语义不兼容的 Chat Completions 直转。
@@ -701,13 +716,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// 用扣除 compact 心跳字节的口径快照：心跳注释不构成语义响应，
 		// 不能因心跳字节变化而放弃 failover 换号（#3887）。
 		writerSizeBeforeForward := service.OpenAISemanticWrittenSize(c)
+		// 跨透传边界时，从不可变的 canonical 请求体派生当前尝试体，
+		// 避免非透传上游拒绝透传账号产生的私有加密 reasoning 项。
+		attemptBody := h.deriveOpenAIForwardAttemptBody(reqLog, forwardBody, account, &passthroughFailoverState)
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
 				if accountReleaseFunc != nil {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.Forward(c.Request.Context(), c, account, forwardBody)
+			return h.gatewayService.Forward(c.Request.Context(), c, account, attemptBody)
 		}()
 		if compatibilityAttempt != nil {
 			deliveryCommitted := err == nil && result != nil && !result.ClientDisconnect && service.IsResponseCommitted(c)
@@ -2329,8 +2347,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnCapability,
 				)
 				if resolveErr != nil {
-					reason := fmt.Sprintf("model %s is not available for this websocket channel or account", requestedModel)
-					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, reason, resolveErr)
+					return "", newOpenAIWSLocalRoutingRejectedError(requestedModel, resolveErr)
 				}
 				if compatibilityAttempt != nil {
 					if _, domainErr := compatibilityAttempt.CheckCandidate(turnCtx, account, routingModel); domainErr != nil {
@@ -2880,7 +2897,9 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 }
 
 func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
-	_ = failoverErr
+	if failoverErr != nil && failoverErr.Reason == service.AntigravityCredentialRejectedReason {
+		return http.StatusBadGateway, service.AntigravityCredentialRejectedClientMessage
+	}
 	return http.StatusServiceUnavailable, service.GrokCredentialUnavailableClientMessage
 }
 

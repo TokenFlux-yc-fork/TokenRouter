@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
 import ModelWhitelistSelector from '../ModelWhitelistSelector.vue'
 
@@ -8,13 +8,15 @@ const {
   syncUpstreamModelsPreview,
   showError,
   showInfo,
-  showSuccess
+  showSuccess,
+  copyToClipboard
 } = vi.hoisted(() => ({
   syncUpstreamModels: vi.fn(),
   syncUpstreamModelsPreview: vi.fn(),
   showError: vi.fn(),
   showInfo: vi.fn(),
-  showSuccess: vi.fn()
+  showSuccess: vi.fn(),
+  copyToClipboard: vi.fn().mockResolvedValue(true)
 }))
 
 vi.mock('@/api/admin/accounts', () => ({
@@ -30,6 +32,10 @@ vi.mock('@/stores/app', () => ({
     showInfo,
     showSuccess
   })
+}))
+
+vi.mock('@/composables/useClipboard', () => ({
+  useClipboard: () => ({ copyToClipboard })
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -65,6 +71,40 @@ describe('ModelWhitelistSelector', () => {
     showError.mockReset()
     showInfo.mockReset()
     showSuccess.mockReset()
+    copyToClipboard.mockReset()
+    copyToClipboard.mockResolvedValue(true)
+  })
+
+  it('复制模型 ID 时不会选中模型', async () => {
+    const wrapper = mountSelector()
+    await wrapper.get('div.cursor-pointer').trigger('click')
+
+    const row = wrapper
+      .findAll('[data-testid="model-option"]')
+      .find(candidate => candidate.text().includes('gpt-5.6-sol'))
+    expect(row).toBeTruthy()
+
+    const copyButton = row!.get('[data-testid="copy-model-id"]')
+    expect(copyButton.attributes('aria-label')).toBe('common.copy gpt-5.6-sol')
+    await copyButton.trigger('click')
+    await flushPromises()
+
+    expect(copyToClipboard).toHaveBeenCalledWith('gpt-5.6-sol')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
+  it('模型选择行为保持不变', async () => {
+    const wrapper = mountSelector()
+    await wrapper.get('div.cursor-pointer').trigger('click')
+
+    const row = wrapper
+      .findAll('[data-testid="model-option"]')
+      .find(candidate => candidate.text().includes('gpt-5.6-sol'))
+    expect(row).toBeTruthy()
+    await row!.get('[data-testid="select-model"]').trigger('click')
+
+    expect(wrapper.emitted('update:modelValue')).toEqual([[['gpt-5.6-sol']]])
+    expect(copyToClipboard).not.toHaveBeenCalled()
   })
 
   it('创建账号时使用临时凭证同步上游模型', async () => {

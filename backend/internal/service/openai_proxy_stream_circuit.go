@@ -15,20 +15,27 @@ const (
 	defaultOpenAIProxyStreamFailureWindow     = time.Minute
 	defaultOpenAIProxyStreamQuarantineTTL     = 10 * time.Minute
 	defaultOpenAIProxyStreamCircuitMaxEntries = 4096
+	// 同一代理或 HTTP/2 连接故障会同时中断多条复用流，短时间内只计一次底层故障。
+	defaultOpenAIProxyStreamFailureCollapse = 3 * time.Second
+	// fail-open 告警限频，避免代理故障期间刷屏。
+	openAIProxyStreamFailOpenLogInterval = 5 * time.Second
 )
 
 type openAIProxyStreamCircuitSettings struct {
+	disabled         bool
 	failureThreshold int
 	failureWindow    time.Duration
 	quarantineTTL    time.Duration
+	collapseInterval time.Duration
 	maxEntries       int
 }
 
 type openAIProxyStreamCircuitEntry struct {
-	failureCount int
-	windowStart  time.Time
-	blockedUntil time.Time
-	lastTouched  time.Time
+	failureCount  int
+	windowStart   time.Time
+	lastFailureAt time.Time
+	blockedUntil  time.Time
+	lastTouched   time.Time
 }
 
 // openAIProxyStreamCircuit 是按代理 ID 隔离的进程内有界熔断器。
@@ -44,12 +51,14 @@ func resolveOpenAIProxyStreamCircuitSettings(s *OpenAIGatewayService) openAIProx
 		failureThreshold: defaultOpenAIProxyStreamFailureThreshold,
 		failureWindow:    defaultOpenAIProxyStreamFailureWindow,
 		quarantineTTL:    defaultOpenAIProxyStreamQuarantineTTL,
+		collapseInterval: defaultOpenAIProxyStreamFailureCollapse,
 		maxEntries:       defaultOpenAIProxyStreamCircuitMaxEntries,
 	}
 	if s == nil || s.cfg == nil {
 		return settings
 	}
 	cfg := s.cfg.Gateway.OpenAIProxyStreamCircuit
+	settings.disabled = cfg.Disabled
 	if cfg.FailureThreshold > 0 {
 		settings.failureThreshold = cfg.FailureThreshold
 	}
@@ -75,6 +84,9 @@ func newOpenAIProxyStreamCircuit(settings openAIProxyStreamCircuitSettings) *ope
 	if settings.maxEntries <= 0 {
 		settings.maxEntries = defaultOpenAIProxyStreamCircuitMaxEntries
 	}
+	if settings.collapseInterval < 0 {
+		settings.collapseInterval = 0
+	}
 	return &openAIProxyStreamCircuit{
 		settings: settings,
 		entries:  make(map[int64]openAIProxyStreamCircuitEntry),
@@ -94,7 +106,7 @@ func (s *OpenAIGatewayService) getOpenAIProxyStreamCircuit() *openAIProxyStreamC
 }
 
 func (c *openAIProxyStreamCircuit) recordFailure(proxyID int64, now time.Time) (bool, time.Time) {
-	if c == nil || proxyID <= 0 {
+	if c == nil || c.settings.disabled || proxyID <= 0 {
 		return false, time.Time{}
 	}
 	c.mu.Lock()
@@ -114,7 +126,15 @@ func (c *openAIProxyStreamCircuit) recordFailure(proxyID int64, now time.Time) (
 		entry.windowStart = now
 		entry.blockedUntil = time.Time{}
 	}
+	// 复用连接断开会让同一代理的并发流同时报错，折叠为一次故障事件。
+	if c.settings.collapseInterval > 0 && !entry.lastFailureAt.IsZero() &&
+		now.Sub(entry.lastFailureAt) >= 0 && now.Sub(entry.lastFailureAt) < c.settings.collapseInterval {
+		entry.lastTouched = now
+		c.entries[proxyID] = entry
+		return false, time.Time{}
+	}
 	entry.failureCount++
+	entry.lastFailureAt = now
 	entry.lastTouched = now
 	tripped := entry.failureCount >= c.settings.failureThreshold
 	if tripped {
@@ -138,7 +158,7 @@ func (c *openAIProxyStreamCircuit) recordSuccess(proxyID int64) bool {
 }
 
 func (c *openAIProxyStreamCircuit) isBlocked(proxyID int64, now time.Time) bool {
-	if c == nil || proxyID <= 0 {
+	if c == nil || c.settings.disabled || proxyID <= 0 {
 		return false
 	}
 	c.mu.Lock()
@@ -152,6 +172,22 @@ func (c *openAIProxyStreamCircuit) isBlocked(proxyID int64, now time.Time) bool 
 		return false
 	}
 	return true
+}
+
+// activeBlockCount 返回当前仍在隔离期的代理数，用于判断是否需要第二次 fail-open 调度。
+func (c *openAIProxyStreamCircuit) activeBlockCount(now time.Time) int {
+	if c == nil || c.settings.disabled {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for _, entry := range c.entries {
+		if !entry.blockedUntil.IsZero() && now.Before(entry.blockedUntil) {
+			count++
+		}
+	}
+	return count
 }
 
 func (c *openAIProxyStreamCircuit) ensureCapacityLocked(now time.Time) {
@@ -218,11 +254,44 @@ func (s *OpenAIGatewayService) clearOpenAIProxyStreamDisconnect(account *Account
 	}
 }
 
-func (s *OpenAIGatewayService) isOpenAIProxyStreamQuarantined(account *Account) bool {
+// openAIProxyStreamQuarantineBypassKey 只标记首次调度无容量后的第二次 fail-open 尝试。
+type openAIProxyStreamQuarantineBypassKey struct{}
+
+func withOpenAIProxyStreamQuarantineBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, openAIProxyStreamQuarantineBypassKey{}, true)
+}
+
+func openAIProxyStreamQuarantineBypassed(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	bypassed, _ := ctx.Value(openAIProxyStreamQuarantineBypassKey{}).(bool)
+	return bypassed
+}
+
+func (s *OpenAIGatewayService) isOpenAIProxyStreamQuarantined(ctx context.Context, account *Account) bool {
 	proxyID, ok := openAIProxyStreamCircuitProxyID(account)
 	if !ok {
 		return false
 	}
+	if openAIProxyStreamQuarantineBypassed(ctx) {
+		return false
+	}
 	circuit := s.getOpenAIProxyStreamCircuit()
 	return circuit != nil && circuit.isBlocked(proxyID, time.Now())
+}
+
+// logOpenAIProxyStreamQuarantineFailOpen 对重新放行隔离代理的告警做进程内限频。
+func (s *OpenAIGatewayService) logOpenAIProxyStreamQuarantineFailOpen(requestedModel string, blockedProxies int) {
+	now := time.Now().UnixNano()
+	last := s.openaiProxyStreamFailOpenLogAt.Load()
+	if now-last < int64(openAIProxyStreamFailOpenLogInterval) ||
+		!s.openaiProxyStreamFailOpenLogAt.CompareAndSwap(last, now) {
+		return
+	}
+	logger.L().With(zap.String("component", "service.openai_gateway")).Warn(
+		"openai.proxy_stream_quarantine_fail_open",
+		zap.Int("blocked_proxies", blockedProxies),
+		zap.String("model", requestedModel),
+	)
 }

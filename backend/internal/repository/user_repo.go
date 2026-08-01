@@ -233,20 +233,20 @@ func (r *userRepository) GetByEmail(ctx context.Context, email string) (*service
 	return out, nil
 }
 
-func (r *userRepository) Update(ctx context.Context, userIn *service.User) error {
-	return r.updateWithNormalizationGuard(ctx, userIn, "")
+func (r *userRepository) Update(ctx context.Context, userIn *service.User, fields service.UserUpdateFields) error {
+	return r.updateWithNormalizationGuard(ctx, userIn, "", fields)
 }
 
-func (r *userRepository) UpdateWithNormalizedEmailGuard(ctx context.Context, userIn *service.User, normalizedEmail string) error {
-	return r.updateWithNormalizationGuard(ctx, userIn, normalizedEmail)
+func (r *userRepository) UpdateWithNormalizedEmailGuard(ctx context.Context, userIn *service.User, normalizedEmail string, fields service.UserUpdateFields) error {
+	return r.updateWithNormalizationGuard(ctx, userIn, normalizedEmail, fields)
 }
 
-func (r *userRepository) updateWithNormalizationGuard(ctx context.Context, userIn *service.User, normalizedEmail string) error {
-	if userIn == nil {
+func (r *userRepository) updateWithNormalizationGuard(ctx context.Context, userIn *service.User, normalizedEmail string, fields service.UserUpdateFields) error {
+	if userIn == nil || fields.IsEmpty() {
 		return nil
 	}
 
-	// 使用 ent 事务包裹用户更新与 allowed_groups 同步，避免跨层事务不一致。
+	// 使用 ent 事务包裹用户列更新与分组关系同步，避免跨层事务不一致。
 	tx, err := r.client.Tx(ctx)
 	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
 		return err
@@ -259,7 +259,7 @@ func (r *userRepository) updateWithNormalizationGuard(ctx context.Context, userI
 		txClient = tx.Client()
 		txCtx = dbent.NewTxContext(ctx, tx)
 	} else {
-		// 已处于外部事务中（ErrTxStarted），复用当前事务 client 并由调用方负责提交/回滚。
+		// 已处于外部事务中时复用事务客户端，由外层调用方负责提交或回滚。
 		if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
 			txClient = existingTx.Client()
 		} else {
@@ -267,49 +267,58 @@ func (r *userRepository) updateWithNormalizationGuard(ctx context.Context, userI
 		}
 	}
 
-	oldEmail := ""
-	if existing, err := clientFromContext(txCtx, txClient).User.Get(txCtx, userIn.ID); err == nil {
-		oldEmail = existing.Email
-	} else if !dbent.IsNotFound(err) {
-		return err
-	}
-	releaseEmailLock, err := lockRepositoryScopedKeys(
-		txCtx,
-		txClient,
-		txAwareSQLExecutor(txCtx, r.sql, r.client),
-		normalizedEmailUniquenessLockKey(userIn.Email),
-	)
-	if err != nil {
-		return err
-	}
-	defer releaseEmailLock()
-	if err := ensureNormalizedEmailAvailableWithClient(txCtx, txClient, userIn.ID, userIn.Email); err != nil {
-		return err
-	}
-	if normalizedEmail != "" {
-		if err := r.LockRegistrationEmail(txCtx, normalizedEmail); err != nil {
-			return err
-		}
-		exists, err := r.existsByNormalizedEmail(txCtx, normalizedEmail, userIn.ID)
+	// 只有显式修改邮箱时才获取唯一性锁，普通资料更新不会被邮箱快照串行化。
+	if fields.Email {
+		releaseEmailLock, err := lockRepositoryScopedKeys(
+			txCtx,
+			txClient,
+			txAwareSQLExecutor(txCtx, r.sql, r.client),
+			normalizedEmailUniquenessLockKey(userIn.Email),
+		)
 		if err != nil {
 			return err
 		}
-		if exists {
-			return service.ErrEmailExists
+		defer releaseEmailLock()
+
+		if err := ensureNormalizedEmailAvailableWithClient(txCtx, txClient, userIn.ID, userIn.Email); err != nil {
+			return err
+		}
+		if normalizedEmail != "" {
+			if err := r.LockRegistrationEmail(txCtx, normalizedEmail); err != nil {
+				return err
+			}
+			exists, err := r.existsByNormalizedEmail(txCtx, normalizedEmail, userIn.ID)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return service.ErrEmailExists
+			}
 		}
 	}
 
-	updated, err := r.updateWithClient(txCtx, txClient, userIn)
+	existing, err := clientFromContext(txCtx, txClient).User.Get(txCtx, userIn.ID)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrUserNotFound, nil)
+	}
+	oldEmail := existing.Email
+
+	updated, err := r.updateWithClient(txCtx, txClient, userIn, fields)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrUserNotFound, service.ErrEmailExists)
 	}
 
-	if err := r.syncUserAllowedGroupsWithClient(txCtx, txClient, updated.ID, userIn.AllowedGroups); err != nil {
-		return err
+	if fields.AllowedGroups {
+		if err := r.syncUserAllowedGroupsWithClient(txCtx, txClient, updated.ID, userIn.AllowedGroups); err != nil {
+			return err
+		}
 	}
-	if err := r.syncUserDisabledPublicGroupsWithClient(txCtx, txClient, updated.ID, userIn.DisabledPublicGroups); err != nil {
-		return err
+	if fields.DisabledPublicGroups {
+		if err := r.syncUserDisabledPublicGroupsWithClient(txCtx, txClient, updated.ID, userIn.DisabledPublicGroups); err != nil {
+			return err
+		}
 	}
+	// 始终以数据库中的邮箱补齐认证身份；未改邮箱时该操作保持幂等。
 	if err := replaceEmailAuthIdentityWithClient(txCtx, txClient, updated.ID, oldEmail, updated.Email, "user_repo_update"); err != nil {
 		return err
 	}
@@ -867,6 +876,106 @@ func (r *userRepository) DeductBalance(ctx context.Context, id int64, amount flo
 	return deductedAmount, nil
 }
 
+// AdjustBalance 原子地把 delta 累加到余额上，结果为负时整条语句不生效。
+// 相比"读余额 → 算新值 → 整行写回"，这里把读与写压进同一条 UPDATE，
+// 并发的计费扣款不会被旧快照覆盖。
+func (r *userRepository) AdjustBalance(ctx context.Context, id int64, delta float64) (service.BalanceChange, error) {
+	const updateSQL = `
+		UPDATE users
+		SET balance = balance + $1, updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL AND balance + $1 >= 0
+		RETURNING balance - $1, balance
+	`
+	change, ok, err := scanBalanceChange(ctx, clientFromContext(ctx, r.client), updateSQL, delta, id)
+	if err != nil {
+		return service.BalanceChange{}, err
+	}
+	if ok {
+		return change, nil
+	}
+
+	// 0 行既可能是用户不存在，也可能是余额不足以承受这次扣减，需要区分。
+	current, err := r.currentBalance(ctx, id)
+	if err != nil {
+		return service.BalanceChange{}, err
+	}
+	return service.BalanceChange{Old: current, New: current + delta}, service.ErrBalanceNegative
+}
+
+// SetBalance 原子地把余额置为 value，并返回变更前后的值。
+func (r *userRepository) SetBalance(ctx context.Context, id int64, value float64) (service.BalanceChange, error) {
+	if value < 0 {
+		// 连同当前余额一起返回，便于上层给出可读的错误信息。
+		current, err := r.currentBalance(ctx, id)
+		if err != nil {
+			return service.BalanceChange{}, err
+		}
+		return service.BalanceChange{Old: current, New: value}, service.ErrBalanceNegative
+	}
+	const updateSQL = `
+		UPDATE users AS u
+		SET balance = $1, updated_at = NOW()
+		FROM (SELECT id, balance FROM users WHERE id = $2 AND deleted_at IS NULL) AS prev
+		WHERE u.id = prev.id AND u.deleted_at IS NULL
+		RETURNING prev.balance, u.balance
+	`
+	change, ok, err := scanBalanceChange(ctx, clientFromContext(ctx, r.client), updateSQL, value, id)
+	if err != nil {
+		return service.BalanceChange{}, err
+	}
+	if !ok {
+		return service.BalanceChange{}, service.ErrUserNotFound
+	}
+	return change, nil
+}
+
+// currentBalance 读取用户当前余额，用户不存在时返回 ErrUserNotFound。
+func (r *userRepository) currentBalance(ctx context.Context, id int64) (balance float64, err error) {
+	rows, err := clientFromContext(ctx, r.client).QueryContext(ctx,
+		`SELECT balance FROM users WHERE id = $1 AND deleted_at IS NULL`, id)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	if !rows.Next() {
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return 0, rowsErr
+		}
+		return 0, service.ErrUserNotFound
+	}
+	if err := rows.Scan(&balance); err != nil {
+		return 0, err
+	}
+	return balance, rows.Err()
+}
+
+// scanBalanceChange 执行一条 RETURNING 旧余额、新余额的语句。ok 为 false 表示语句未命中任何行。
+func scanBalanceChange(ctx context.Context, client *dbent.Client, query string, args ...any) (change service.BalanceChange, ok bool, err error) {
+	rows, err := client.QueryContext(ctx, query, args...)
+	if err != nil {
+		return service.BalanceChange{}, false, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	if !rows.Next() {
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return service.BalanceChange{}, false, rowsErr
+		}
+		return service.BalanceChange{}, false, nil
+	}
+	if err := rows.Scan(&change.Old, &change.New); err != nil {
+		return service.BalanceChange{}, false, err
+	}
+	return change, true, rows.Err()
+}
+
 func (r *userRepository) UpdateConcurrency(ctx context.Context, id int64, amount int) error {
 	client := clientFromContext(ctx, r.client)
 	n, err := client.User.Update().Where(dbuser.IDEQ(id)).AddConcurrency(amount).Save(ctx)
@@ -1383,28 +1492,64 @@ func deductUserBalance(ctx context.Context, q sqlQueryer, userID int64, amount f
 	return newBalance, deductedAmount, nil
 }
 
-func (r *userRepository) updateWithClient(ctx context.Context, client *dbent.Client, userIn *service.User) (*dbent.User, error) {
-	updateOp := client.User.UpdateOneID(userIn.ID).
-		SetEmail(userIn.Email).
-		SetUsername(userIn.Username).
-		SetNotes(userIn.Notes).
-		SetPasswordHash(userIn.PasswordHash).
-		SetRole(userIn.Role).
-		SetBalance(userIn.Balance).
-		SetConcurrency(userIn.Concurrency).
-		SetStatus(userIn.Status).
-		SetSignupSource(userSignupSourceOrDefault(userIn.SignupSource)).
-		SetNillableLastLoginAt(userIn.LastLoginAt).
-		SetNillableLastActiveAt(userIn.LastActiveAt).
-		SetRpmLimit(userIn.RPMLimit).
-		SetAPIKeyLimit(userIn.APIKeyLimit).
-		SetBalanceNotifyEnabled(userIn.BalanceNotifyEnabled).
-		SetBalanceNotifyThresholdType(userIn.BalanceNotifyThresholdType).
-		SetNillableBalanceNotifyThreshold(userIn.BalanceNotifyThreshold).
-		SetBalanceNotifyExtraEmails(marshalExtraEmails(userIn.BalanceNotifyExtraEmails)).
-		SetTotalRecharged(userIn.TotalRecharged)
-	if userIn.BalanceNotifyThreshold == nil {
-		updateOp = updateOp.ClearBalanceNotifyThreshold()
+func (r *userRepository) updateWithClient(ctx context.Context, client *dbent.Client, userIn *service.User, fields service.UserUpdateFields) (*dbent.User, error) {
+	updateOp := client.User.UpdateOneID(userIn.ID)
+	if fields.Email {
+		updateOp = updateOp.SetEmail(userIn.Email)
+	}
+	if fields.Username {
+		updateOp = updateOp.SetUsername(userIn.Username)
+	}
+	if fields.Notes {
+		updateOp = updateOp.SetNotes(userIn.Notes)
+	}
+	if fields.PasswordHash {
+		updateOp = updateOp.SetPasswordHash(userIn.PasswordHash)
+	}
+	if fields.Role {
+		updateOp = updateOp.SetRole(userIn.Role)
+	}
+	if fields.Concurrency {
+		updateOp = updateOp.SetConcurrency(userIn.Concurrency)
+	}
+	if fields.Status {
+		updateOp = updateOp.SetStatus(userIn.Status)
+	}
+	if fields.SignupSource {
+		updateOp = updateOp.SetSignupSource(userSignupSourceOrDefault(userIn.SignupSource))
+	}
+	if fields.LastLoginAt {
+		if userIn.LastLoginAt != nil {
+			updateOp = updateOp.SetLastLoginAt(*userIn.LastLoginAt)
+		} else {
+			updateOp = updateOp.ClearLastLoginAt()
+		}
+	}
+	if fields.LastActiveAt {
+		if userIn.LastActiveAt != nil {
+			updateOp = updateOp.SetLastActiveAt(*userIn.LastActiveAt)
+		} else {
+			updateOp = updateOp.ClearLastActiveAt()
+		}
+	}
+	if fields.RPMLimit {
+		updateOp = updateOp.SetRpmLimit(userIn.RPMLimit)
+	}
+	if fields.APIKeyLimit {
+		updateOp = updateOp.SetAPIKeyLimit(userIn.APIKeyLimit)
+	}
+	if fields.BalanceNotifySettings {
+		updateOp = updateOp.
+			SetBalanceNotifyEnabled(userIn.BalanceNotifyEnabled).
+			SetBalanceNotifyThresholdType(userIn.BalanceNotifyThresholdType)
+		if userIn.BalanceNotifyThreshold != nil {
+			updateOp = updateOp.SetBalanceNotifyThreshold(*userIn.BalanceNotifyThreshold)
+		} else {
+			updateOp = updateOp.ClearBalanceNotifyThreshold()
+		}
+	}
+	if fields.BalanceNotifyExtraEmails {
+		updateOp = updateOp.SetBalanceNotifyExtraEmails(marshalExtraEmails(userIn.BalanceNotifyExtraEmails))
 	}
 	return updateOp.Save(ctx)
 }

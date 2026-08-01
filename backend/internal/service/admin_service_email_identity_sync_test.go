@@ -64,15 +64,15 @@ func (s *emailSyncRepoStub) GetFirstAdmin(context.Context) (*User, error) {
 	return nil, fmt.Errorf("unexpected GetFirstAdmin call")
 }
 
-func (s *emailSyncRepoStub) Update(_ context.Context, user *User) error {
+func (s *emailSyncRepoStub) Update(_ context.Context, user *User, _ UserUpdateFields) error {
 	s.updateCalls++
 	s.updated = append(s.updated, user)
 	s.user = user
 	return nil
 }
 
-func (s *emailSyncRepoStub) UpdateWithNormalizedEmailGuard(ctx context.Context, user *User, normalizedEmail string) error {
-	return s.Update(ctx, user)
+func (s *emailSyncRepoStub) UpdateWithNormalizedEmailGuard(ctx context.Context, user *User, normalizedEmail string, fields UserUpdateFields) error {
+	return s.Update(ctx, user, fields)
 }
 
 func (s *emailSyncRepoStub) Delete(context.Context, int64) error { return nil }
@@ -115,6 +115,14 @@ func (s *emailSyncRepoStub) AddBalance(context.Context, int64, float64) error { 
 
 func (s *emailSyncRepoStub) DeductBalance(context.Context, int64, float64) (float64, error) {
 	return 0, nil
+}
+
+func (s *emailSyncRepoStub) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
+	panic("unexpected AdjustBalance call")
+}
+
+func (s *emailSyncRepoStub) SetBalance(ctx context.Context, id int64, value float64) (BalanceChange, error) {
+	panic("unexpected SetBalance call")
 }
 
 func (s *emailSyncRepoStub) UpdateConcurrency(context.Context, int64, int) error { return nil }

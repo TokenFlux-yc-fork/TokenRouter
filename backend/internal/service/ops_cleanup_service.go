@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/robfig/cron/v3"
+	"go.uber.org/zap"
 )
 
 const (
@@ -323,7 +324,11 @@ func (s *OpsCleanupService) runScheduled() {
 		return
 	}
 	s.recordHeartbeatSuccess(runAt, time.Since(startedAt), counts)
-	logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cleanup complete: %s", counts)
+	// 成功完成属于常规运行事件，显式写入 info 并保留可查询的删除计数字段。
+	logger.L().Info("[OpsCleanup] cleanup complete",
+		zap.String("component", "service.ops_cleanup"),
+		zap.String("deleted_counts", counts.String()),
+	)
 }
 
 func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDeletedCounts, error) {

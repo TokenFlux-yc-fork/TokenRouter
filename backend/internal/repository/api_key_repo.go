@@ -365,14 +365,19 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 	return apiKeyEntityToService(m), nil
 }
 
-func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) error {
-	// 复合映射与 API Key 主记录必须原子更新，避免认证读取到半套配置。
-	if dbent.TxFromContext(ctx) == nil {
+func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey, fields service.APIKeyUpdateFields) error {
+	// 空掩码代表调用方不改任何列，直接返回，避免产生一次无意义的整行写。
+	if fields.IsEmpty() {
+		return nil
+	}
+
+	// 只有复合配置会改关联表，需要与 API Key 主记录放在同一事务中。
+	if fields.CompositeConfiguration && dbent.TxFromContext(ctx) == nil {
 		tx, err := r.client.Tx(ctx)
 		if err == nil {
 			defer func() { _ = tx.Rollback() }()
 			opCtx := dbent.NewTxContext(ctx, tx)
-			if err := r.Update(opCtx, key); err != nil {
+			if err := r.Update(opCtx, key, fields); err != nil {
 				return err
 			}
 			return tx.Commit()
@@ -390,73 +395,101 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 	now := time.Now()
 	builder := client.APIKey.Update().
 		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).
-		SetName(key.Name).
-		SetStatus(key.Status).
-		SetIsComposite(key.IsComposite).
-		SetFastModePolicy(apiKeyFastModePolicyForPersistence(key.FastModePolicy)).
-		SetQuota(key.Quota).
-		SetQuotaUsed(key.QuotaUsed).
-		SetRateLimit5h(key.RateLimit5h).
-		SetRateLimit1d(key.RateLimit1d).
-		SetRateLimit7d(key.RateLimit7d).
-		SetFallbackToDefaultGroupWhenUnavailable(key.FallbackToDefaultGroupWhenUnavailable).
-		SetUsage5h(key.Usage5h).
-		SetUsage1d(key.Usage1d).
-		SetUsage7d(key.Usage7d).
-		SetDataSharingNoticeVersion(key.DataSharingNoticeVersion).
 		SetUpdatedAt(now)
-	if key.GroupID != nil {
-		builder.SetGroupID(*key.GroupID)
-	} else {
-		builder.ClearGroupID()
+	if fields.Name {
+		builder.SetName(key.Name)
+	}
+	if fields.Status {
+		builder.SetStatus(key.Status)
+	}
+	if fields.CompositeConfiguration {
+		builder.SetIsComposite(key.IsComposite)
+	}
+	if fields.FastModePolicy {
+		builder.SetFastModePolicy(apiKeyFastModePolicyForPersistence(key.FastModePolicy))
+	}
+	if fields.FallbackToDefaultGroupWhenUnavailable {
+		builder.SetFallbackToDefaultGroupWhenUnavailable(key.FallbackToDefaultGroupWhenUnavailable)
+	}
+	if fields.Quota {
+		builder.SetQuota(key.Quota)
+	}
+	if fields.QuotaUsed {
+		builder.SetQuotaUsed(key.QuotaUsed)
+	}
+	if fields.RateLimits {
+		builder.
+			SetRateLimit5h(key.RateLimit5h).
+			SetRateLimit1d(key.RateLimit1d).
+			SetRateLimit7d(key.RateLimit7d)
+	}
+	if fields.RateLimitUsage {
+		builder.
+			SetUsage5h(key.Usage5h).
+			SetUsage1d(key.Usage1d).
+			SetUsage7d(key.Usage7d)
+
+		// Rate limit window start times
+		if key.Window5hStart != nil {
+			builder.SetWindow5hStart(*key.Window5hStart)
+		} else {
+			builder.ClearWindow5hStart()
+		}
+		if key.Window1dStart != nil {
+			builder.SetWindow1dStart(*key.Window1dStart)
+		} else {
+			builder.ClearWindow1dStart()
+		}
+		if key.Window7dStart != nil {
+			builder.SetWindow7dStart(*key.Window7dStart)
+		} else {
+			builder.ClearWindow7dStart()
+		}
+	}
+	if fields.GroupID {
+		if key.GroupID != nil {
+			builder.SetGroupID(*key.GroupID)
+		} else {
+			builder.ClearGroupID()
+		}
 	}
 
-	// 数据共享确认信息与分组切换同事务保存，保证“确认后才切组”的语义。
-	if key.DataSharingConfirmedGroupID != nil {
-		builder.SetDataSharingConfirmedGroupID(*key.DataSharingConfirmedGroupID)
-	} else {
-		builder.ClearDataSharingConfirmedGroupID()
-	}
-	if key.DataSharingConfirmedAt != nil {
-		builder.SetDataSharingConfirmedAt(*key.DataSharingConfirmedAt)
-	} else {
-		builder.ClearDataSharingConfirmedAt()
+	if fields.DataSharingConfirmation {
+		// 数据共享确认信息与分组切换同一次主记录更新保存。
+		builder.SetDataSharingNoticeVersion(key.DataSharingNoticeVersion)
+		if key.DataSharingConfirmedGroupID != nil {
+			builder.SetDataSharingConfirmedGroupID(*key.DataSharingConfirmedGroupID)
+		} else {
+			builder.ClearDataSharingConfirmedGroupID()
+		}
+		if key.DataSharingConfirmedAt != nil {
+			builder.SetDataSharingConfirmedAt(*key.DataSharingConfirmedAt)
+		} else {
+			builder.ClearDataSharingConfirmedAt()
+		}
 	}
 
 	// Expiration time
-	if key.ExpiresAt != nil {
-		builder.SetExpiresAt(*key.ExpiresAt)
-	} else {
-		builder.ClearExpiresAt()
-	}
-
-	// Rate limit window start times
-	if key.Window5hStart != nil {
-		builder.SetWindow5hStart(*key.Window5hStart)
-	} else {
-		builder.ClearWindow5hStart()
-	}
-	if key.Window1dStart != nil {
-		builder.SetWindow1dStart(*key.Window1dStart)
-	} else {
-		builder.ClearWindow1dStart()
-	}
-	if key.Window7dStart != nil {
-		builder.SetWindow7dStart(*key.Window7dStart)
-	} else {
-		builder.ClearWindow7dStart()
+	if fields.ExpiresAt {
+		if key.ExpiresAt != nil {
+			builder.SetExpiresAt(*key.ExpiresAt)
+		} else {
+			builder.ClearExpiresAt()
+		}
 	}
 
 	// IP 限制字段
-	if len(key.IPWhitelist) > 0 {
-		builder.SetIPWhitelist(key.IPWhitelist)
-	} else {
-		builder.ClearIPWhitelist()
-	}
-	if len(key.IPBlacklist) > 0 {
-		builder.SetIPBlacklist(key.IPBlacklist)
-	} else {
-		builder.ClearIPBlacklist()
+	if fields.IPRules {
+		if len(key.IPWhitelist) > 0 {
+			builder.SetIPWhitelist(key.IPWhitelist)
+		} else {
+			builder.ClearIPWhitelist()
+		}
+		if len(key.IPBlacklist) > 0 {
+			builder.SetIPBlacklist(key.IPBlacklist)
+		} else {
+			builder.ClearIPBlacklist()
+		}
 	}
 
 	affected, err := builder.Save(ctx)
@@ -467,8 +500,10 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 		// 更新影响行数为 0，说明记录不存在或已被软删除。
 		return service.ErrAPIKeyNotFound
 	}
-	if err := replaceCompositeGroupRecords(ctx, client, key.ID, key.CompositeGroups); err != nil {
-		return err
+	if fields.CompositeConfiguration {
+		if err := replaceCompositeGroupRecords(ctx, client, key.ID, key.CompositeGroups); err != nil {
+			return err
+		}
 	}
 
 	// 使用同一时间戳回填，避免并发删除导致二次查询失败。

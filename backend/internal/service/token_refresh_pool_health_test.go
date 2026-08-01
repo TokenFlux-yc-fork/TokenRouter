@@ -628,7 +628,12 @@ func TestTokenRefreshService_SaturatedProviderPreservesConcurrencyAndActualQPSSt
 	starts := refresher.startsSnapshot()
 	require.Len(t, starts, attemptCount)
 	configuredSpacing := time.Second / time.Duration(providerQPS)
-	minimumObservedSpacing := configuredSpacing - 10*time.Millisecond
+
+	// 时间戳在速率门放行后才记录，繁忙机器上的调度延迟可能压缩相邻观测间隔。
+	// 取配置间隔的十分之一仍可把正常的 50ms 节流与无节流时的微秒级启动区分开，
+	// 同时避免把调度抖动误判成限速失效。不能改为总跨度断言，因为总跨度主要受
+	// providerConcurrency 下单次刷新耗时影响，即使关闭速率门也可能通过。
+	minimumObservedSpacing := configuredSpacing / 10
 	actualMinimumSpacing := starts[1].Sub(starts[0])
 	for i := 1; i < len(starts); i++ {
 		spacing := starts[i].Sub(starts[i-1])

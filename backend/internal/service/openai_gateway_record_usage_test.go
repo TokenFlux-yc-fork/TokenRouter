@@ -219,6 +219,14 @@ func (s *openAIRecordUsageUserRepoStub) DeductBalance(ctx context.Context, id in
 	return amount, nil
 }
 
+func (s *openAIRecordUsageUserRepoStub) AdjustBalance(ctx context.Context, id int64, delta float64) (BalanceChange, error) {
+	panic("unexpected AdjustBalance call")
+}
+
+func (s *openAIRecordUsageUserRepoStub) SetBalance(ctx context.Context, id int64, value float64) (BalanceChange, error) {
+	panic("unexpected SetBalance call")
+}
+
 type openAIRecordUsageSubRepoStub struct {
 	UserSubscriptionRepository
 
@@ -596,6 +604,10 @@ func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputToke
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	subRepo := &openAIRecordUsageSubRepoStub{}
 	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+	// 固定在峰值窗口内，避免测试在每天 23:59 的右开边界偶发失败。
+	svc.usageBillingNow = func() time.Time {
+		return time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	}
 	svc.resolver = newOpenAITokenImageChannelPricingResolverForTest(t, groupID, "gpt-5.1")
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
@@ -613,8 +625,8 @@ func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputToke
 				ID:                 groupID,
 				RateMultiplier:     groupRate,
 				PeakRateEnabled:    true,
-				PeakStart:          "00:00",
-				PeakEnd:            "23:59",
+				PeakStart:          "11:59",
+				PeakEnd:            "12:01",
 				PeakRateMultiplier: 3.0,
 			},
 		},
@@ -1606,6 +1618,71 @@ func TestOpenAIGatewayServiceRecordUsage_UsesRequestedModelAndUpstreamModelMetad
 	require.InDelta(t, usageRepo.lastLog.ActualCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_PreservesChannelMappedUpstreamModel(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:     "openai_channel_mapping_models",
+			Model:         "gpt-5.6-terra",
+			UpstreamModel: "gpt-5.6-terra",
+			Usage: OpenAIUsage{
+				InputTokens:  20,
+				OutputTokens: 10,
+			},
+			Duration: time.Second,
+		},
+		APIKey:  &APIKey{ID: 10},
+		User:    &User{ID: 20},
+		Account: &Account{ID: 30},
+		ChannelUsageFields: ChannelUsageFields{
+			OriginalModel:      "gpt-5.6-sol",
+			ChannelMappedModel: "gpt-5.6-terra",
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, "gpt-5.6-sol", usageRepo.lastLog.RequestedModel)
+	require.Equal(t, "gpt-5.6-terra", usageRepo.lastLog.Model)
+	require.NotNil(t, usageRepo.lastLog.UpstreamModel)
+	require.Equal(t, "gpt-5.6-terra", *usageRepo.lastLog.UpstreamModel)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_PreservesLoopedChannelAndAccountUpstreamModel(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:     "openai_looped_mapping_models",
+			Model:         "gpt-5.6-terra",
+			UpstreamModel: "gpt-5.6-sol",
+			Usage:         OpenAIUsage{InputTokens: 20, OutputTokens: 10},
+			Duration:      time.Second,
+		},
+		APIKey:  &APIKey{ID: 10},
+		User:    &User{ID: 20},
+		Account: &Account{ID: 30},
+		ChannelUsageFields: ChannelUsageFields{
+			OriginalModel:      "gpt-5.6-sol",
+			ChannelMappedModel: "gpt-5.6-terra",
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, "gpt-5.6-sol", usageRepo.lastLog.RequestedModel)
+	require.Equal(t, "gpt-5.6-terra", usageRepo.lastLog.Model)
+	require.NotNil(t, usageRepo.lastLog.UpstreamModel)
+	require.Equal(t, "gpt-5.6-sol", *usageRepo.lastLog.UpstreamModel)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_BillsMappedRequestsUsingRequestedModel(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
@@ -1825,6 +1902,84 @@ func TestOpenAIGatewayServiceRecordUsage_ResponsesMappedBillingModelHonorsBillin
 			require.InDelta(t, expectedCost.ActualCost, billingRepo.lastCmd.BillableAmountUSD, 1e-12)
 			require.Zero(t, userRepo.deductCalls)
 			require.True(t, usageRepo.lastLog.ActualCost > 0, "cost must not be zero")
+		})
+	}
+}
+
+// TestOpenAIUsageBillingModelPreservesImagePricingModel 验证图片轮次不会被文本上游模型覆盖计价。
+func TestOpenAIUsageBillingModelPreservesImagePricingModel(t *testing.T) {
+	tests := []struct {
+		name   string
+		result OpenAIForwardResult
+		fields ChannelUsageFields
+		want   string
+	}{
+		{
+			name: "上游计费保留图片模型",
+			result: OpenAIForwardResult{
+				Model:         "gpt-5.6-sol",
+				UpstreamModel: "gpt-5.6-sol",
+				BillingModel:  "gpt-image-2",
+				ImageCount:    1,
+			},
+			fields: ChannelUsageFields{BillingModelSource: BillingModelSourceUpstream},
+			want:   "gpt-image-2",
+		},
+		{
+			name: "普通上游计费使用最终模型",
+			result: OpenAIForwardResult{
+				Model:         "public-alias",
+				UpstreamModel: "gpt-5.6-sol",
+				BillingModel:  "channel-model",
+			},
+			fields: ChannelUsageFields{BillingModelSource: BillingModelSourceUpstream},
+			want:   "gpt-5.6-sol",
+		},
+		{
+			name: "未映射渠道计费保留图片模型",
+			result: OpenAIForwardResult{
+				Model:         "gpt-5.6-sol",
+				UpstreamModel: "gpt-5.6-sol",
+				BillingModel:  "gpt-image-2",
+				ImageCount:    1,
+			},
+			fields: ChannelUsageFields{
+				BillingModelSource: BillingModelSourceChannelMapped,
+				OriginalModel:      "gpt-5.6-sol",
+				ChannelMappedModel: "gpt-5.6-sol",
+			},
+			want: "gpt-image-2",
+		},
+		{
+			name: "请求模型来源覆盖图片模型",
+			result: OpenAIForwardResult{
+				BillingModel: "gpt-image-2",
+				ImageCount:   1,
+			},
+			fields: ChannelUsageFields{
+				BillingModelSource: BillingModelSourceRequested,
+				OriginalModel:      "public-image-alias",
+			},
+			want: "public-image-alias",
+		},
+		{
+			name: "映射渠道来源覆盖图片模型",
+			result: OpenAIForwardResult{
+				BillingModel: "gpt-image-2",
+				ImageCount:   1,
+			},
+			fields: ChannelUsageFields{
+				BillingModelSource: BillingModelSourceChannelMapped,
+				OriginalModel:      "public-image-alias",
+				ChannelMappedModel: "priced-channel-model",
+			},
+			want: "priced-channel-model",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, openAIUsageBillingModel(&tt.result, tt.fields))
 		})
 	}
 }

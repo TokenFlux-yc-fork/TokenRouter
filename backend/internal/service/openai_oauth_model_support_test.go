@@ -49,6 +49,8 @@ func TestIsModelSupported_OpenAIOAuthEmptyMapping_RejectsForeignModels(t *testin
 		"deepseek-chat",
 		"glm-4.7",
 		"kimi-k2",
+		"k3",
+		"k3-256k",
 		"moonshot-v1-128k",
 		"gemini-3.0-pro",
 		"grok-4",
@@ -56,6 +58,7 @@ func TestIsModelSupported_OpenAIOAuthEmptyMapping_RejectsForeignModels(t *testin
 		"minimax-m2.5",
 		"llama-3.3-70b",
 		"provider/deepseek-v4", // vendor/model 形式取最后一段判定。
+		"provider/k3",          // Kimi Code bare ID 的 vendor/model 形式。
 	}
 	for _, model := range foreign {
 		require.False(t, account.IsModelSupported(model), "expected %q to be rejected by empty-mapping OpenAI OAuth account", model)
@@ -65,11 +68,12 @@ func TestIsModelSupported_OpenAIOAuthEmptyMapping_RejectsForeignModels(t *testin
 func TestIsModelSupported_OpenAIOAuthMappingKeepsForkSemantics(t *testing.T) {
 	account := newOpenAIOAuthAccountForModelTest()
 	account.Credentials = map[string]any{
-		"model_mapping": map[string]any{"deepseek-v4": "gpt-5.4"},
+		"model_mapping": map[string]any{"deepseek-v4": "gpt-5.4", "k3": "gpt-5.4"},
 	}
 
 	// fork 中映射是可选改写规则，没有独立白名单时不限制未命中的请求。
 	require.True(t, account.IsModelSupported("deepseek-v4"))
+	require.True(t, account.IsModelSupported("k3"))
 	require.True(t, account.IsModelSupported("glm-4.7"))
 
 	account.Credentials["model_whitelist"] = []any{"gpt-5.4"}
@@ -120,5 +124,9 @@ func TestIsOpenAIOAuthServableModel(t *testing.T) {
 	require.True(t, isOpenAIOAuthServableModel("DeepThink-x"))  // 非黑名单前缀，保持允许。
 	require.False(t, isOpenAIOAuthServableModel("DeepSeek-V4")) // 大小写不敏感。
 	require.False(t, isOpenAIOAuthServableModel("qwen3-235b-thinking"))
+	require.False(t, isOpenAIOAuthServableModel("k3"))
+	require.False(t, isOpenAIOAuthServableModel("k3-256k"))
+	require.False(t, isOpenAIOAuthServableModel("provider/k3"))
+	require.True(t, isOpenAIOAuthServableModel("my-k3-alias"))   // 自定义别名继续 fail-open。
 	require.True(t, isOpenAIOAuthServableModel("deepseekcoder")) // 无连字符时不匹配黑名单前缀。
 }

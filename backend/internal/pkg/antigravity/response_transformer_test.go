@@ -24,6 +24,17 @@ func TestGenerateRandomID_Uniqueness(t *testing.T) {
 	}
 }
 
+func TestGenerateAnthropicMsgID_FormatAndUniqueness(t *testing.T) {
+	seen := make(map[string]struct{}, 100)
+	for i := 0; i < 100; i++ {
+		id := generateAnthropicMsgID()
+		require.Regexp(t, `^msg_01[0-9A-Za-z]{22}$`, id)
+		_, duplicate := seen[id]
+		require.False(t, duplicate, "第 %d 次调用生成了重复 ID: %s", i, id)
+		seen[id] = struct{}{}
+	}
+}
+
 func TestFallbackCounter_Increments(t *testing.T) {
 	// 验证 fallbackCounter 的原子递增行为确保降级分支不会生成相同 seed
 	before := atomic.LoadUint64(&fallbackCounter)

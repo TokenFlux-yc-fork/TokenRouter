@@ -895,6 +895,85 @@ func (s *UsageLogRepoSuite) TestGetUserDashboardStats() {
 	s.Require().Equal(int64(1), stats.TotalRequests)
 }
 
+// TestGetUserDashboardStatsIncludesOwnedTeamWithoutDuplicates 验证 Owner 可见团队用量且重叠条件不会重复计数。
+func (s *UsageLogRepoSuite) TestGetUserDashboardStatsIncludesOwnedTeamWithoutDuplicates() {
+	owner := mustCreateUser(s.T(), s.client, &service.User{Email: "userdash-owner@test.com"})
+	member := mustCreateUser(s.T(), s.client, &service.User{Email: "userdash-member@test.com"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-userdash-team"})
+
+	team, err := s.client.Team.Create().
+		SetName("仪表盘范围测试团队").
+		SetStatus("active").
+		SetMemberLimit(10).
+		Save(s.ctx)
+	s.Require().NoError(err)
+	teamID := team.ID
+	_, err = s.client.TeamMembership.Create().
+		SetTeamID(teamID).
+		SetUserID(owner.ID).
+		SetRole(service.TeamRoleOwner).
+		Save(s.ctx)
+	s.Require().NoError(err)
+	_, err = s.client.TeamMembership.Create().
+		SetTeamID(teamID).
+		SetUserID(member.ID).
+		SetRole(service.TeamRoleMember).
+		Save(s.ctx)
+	s.Require().NoError(err)
+
+	ownerPersonalKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: owner.ID, Key: "sk-userdash-owner-personal"})
+	ownerTeamKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: owner.ID, TeamID: &teamID, Key: "sk-userdash-owner-team"})
+	memberTeamKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: member.ID, TeamID: &teamID, Key: "sk-userdash-member-team"})
+	memberPersonalKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: member.ID, Key: "sk-userdash-member-personal"})
+
+	// 使用固定时间只验证累计范围，避免测试跨日期边界时产生不稳定的今日统计。
+	createdAt := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	// 四条记录分别覆盖 Owner 本人、成员团队、Owner 团队 Key 和成员个人用量。
+	logs := []*service.UsageLog{
+		{
+			UserID: owner.ID, BillingUserID: owner.ID, APIKeyID: ownerPersonalKey.ID, AccountID: account.ID,
+			RequestID: uuid.NewString(), Model: "dashboard-scope", InputTokens: 10, OutputTokens: 1,
+			TotalCost: 0.1, ActualCost: 0.1, CreatedAt: createdAt,
+		},
+		{
+			UserID: member.ID, BillingUserID: owner.ID, TeamID: &teamID, APIKeyID: memberTeamKey.ID, AccountID: account.ID,
+			RequestID: uuid.NewString(), Model: "dashboard-scope", InputTokens: 20, OutputTokens: 2,
+			TotalCost: 0.2, ActualCost: 0.2, CreatedAt: createdAt,
+		},
+		{
+			UserID: owner.ID, BillingUserID: owner.ID, TeamID: &teamID, APIKeyID: ownerTeamKey.ID, AccountID: account.ID,
+			RequestID: uuid.NewString(), Model: "dashboard-scope", InputTokens: 30, OutputTokens: 3,
+			TotalCost: 0.3, ActualCost: 0.3, CreatedAt: createdAt,
+		},
+		{
+			UserID: member.ID, BillingUserID: member.ID, APIKeyID: memberPersonalKey.ID, AccountID: account.ID,
+			RequestID: uuid.NewString(), Model: "dashboard-scope", InputTokens: 40, OutputTokens: 4,
+			TotalCost: 0.4, ActualCost: 0.4, CreatedAt: createdAt,
+		},
+	}
+	for _, log := range logs {
+		_, err = s.repo.Create(s.ctx, log)
+		s.Require().NoError(err)
+	}
+
+	ownerStats, err := s.repo.GetUserDashboardStats(s.ctx, owner.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), ownerStats.TotalAPIKeys)
+	s.Require().Equal(int64(3), ownerStats.ActiveAPIKeys)
+	s.Require().Equal(int64(3), ownerStats.TotalRequests)
+	s.Require().Equal(int64(60), ownerStats.TotalInputTokens)
+	s.Require().Equal(int64(6), ownerStats.TotalOutputTokens)
+	s.Require().Equal(int64(66), ownerStats.TotalTokens)
+	s.Require().InDelta(0.6, ownerStats.TotalCost, 0.000001)
+
+	memberStats, err := s.repo.GetUserDashboardStats(s.ctx, member.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), memberStats.TotalAPIKeys)
+	s.Require().Equal(int64(2), memberStats.TotalRequests)
+	s.Require().Equal(int64(60), memberStats.TotalInputTokens)
+	s.Require().Equal(int64(6), memberStats.TotalOutputTokens)
+}
+
 // --- GetAccountTodayStats ---
 
 func (s *UsageLogRepoSuite) TestGetAccountTodayStats() {

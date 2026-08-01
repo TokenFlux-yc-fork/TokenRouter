@@ -606,6 +606,9 @@ func sanitizeCountTokensRequestBody(body []byte) []byte {
 		"stream",
 		"stop_sequences",
 		"stop",
+		// Anthropic 的 /v1/messages/count_tokens 只接受请求输入字段。
+		// max_tokens 是生成参数，OAuth mimic 可能为普通 messages 请求注入它，不能发送到该端点。
+		"max_tokens",
 	} {
 		if next, ok := deleteJSONPathBytes(out, path); ok {
 			out = next

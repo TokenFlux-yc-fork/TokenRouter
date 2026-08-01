@@ -580,6 +580,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。高峰因子按请求时刻现算，
 	// 不并入上面的 getUserGroupRateMultiplier，以免污染 user:group 倍率缓存。
 	rateNow := timezone.Now()
+	if s.usageBillingNow != nil {
+		rateNow = s.usageBillingNow()
+	}
 	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, multiplier, rateNow)
 	subscriptionMultiplier, _ = computePeakAwareMultipliers(apiKey, subscriptionMultiplier, rateNow)
 	balanceMultiplier, _ = computePeakAwareMultipliers(apiKey, balanceMultiplier, rateNow)
@@ -867,7 +870,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		RequestID:             requestID,
 		Model:                 result.Model,
 		RequestedModel:        requestedModel,
-		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
+		UpstreamModel:         optionalTrimmedStringPtr(result.UpstreamModel),
 		ReasoningEffort:       result.ReasoningEffort,
 		ServiceTier:           optionalTrimmedStringPtr(claudeUsageServiceTier(result.Usage.Speed)),
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),

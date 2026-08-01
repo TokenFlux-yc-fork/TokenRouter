@@ -901,7 +901,7 @@ func (s *emailBindUserRepoStub) GetFirstAdmin(context.Context) (*service.User, e
 	panic("unexpected GetFirstAdmin call")
 }
 
-func (s *emailBindUserRepoStub) Update(_ context.Context, user *service.User) error {
+func (s *emailBindUserRepoStub) Update(_ context.Context, user *service.User, _ service.UserUpdateFields) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing, ok := s.usersByID[user.ID]
@@ -915,8 +915,8 @@ func (s *emailBindUserRepoStub) Update(_ context.Context, user *service.User) er
 	return nil
 }
 
-func (s *emailBindUserRepoStub) UpdateWithNormalizedEmailGuard(ctx context.Context, user *service.User, _ string) error {
-	return s.Update(ctx, user)
+func (s *emailBindUserRepoStub) UpdateWithNormalizedEmailGuard(ctx context.Context, user *service.User, _ string, fields service.UserUpdateFields) error {
+	return s.Update(ctx, user, fields)
 }
 
 func (s *emailBindUserRepoStub) Delete(context.Context, int64) error { return nil }
@@ -998,6 +998,14 @@ func (s *emailBindUserRepoStub) ExistsByNormalizedEmail(_ context.Context, norma
 		}
 	}
 	return false, nil
+}
+
+func (s *emailBindUserRepoStub) AdjustBalance(ctx context.Context, id int64, delta float64) (service.BalanceChange, error) {
+	panic("unexpected AdjustBalance call")
+}
+
+func (s *emailBindUserRepoStub) SetBalance(ctx context.Context, id int64, value float64) (service.BalanceChange, error) {
+	panic("unexpected SetBalance call")
 }
 
 func (s *emailBindUserRepoStub) LockRegistrationEmail(context.Context, string) error {

@@ -86,6 +86,63 @@ func TestIsClaudeCodeClient(t *testing.T) {
 	}
 }
 
+// TestSystemHasClaudeCodeBillingAttribution 验证代理流量识别只接受完整的 system 计费归因块。
+func TestSystemHasClaudeCodeBillingAttribution(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "完整计费块",
+			body: `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=cli;"}]}`,
+			want: true,
+		},
+		{
+			name: "计费块可位于后续 system 元素",
+			body: `{"system":[{"type":"text","text":"project"},{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=claude-vscode;"}]}`,
+			want: true,
+		},
+		{
+			name: "缺少入口字段",
+			body: `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.abc;"}]}`,
+		},
+		{
+			name: "前缀不精确",
+			body: `{"system":[{"type":"text","text":"prefix x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=cli;"}]}`,
+		},
+		{
+			name: "system 字符串不接受",
+			body: `{"system":"x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=cli;"}`,
+		},
+		{
+			name: "无效 JSON",
+			body: `{"system":`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, systemHasClaudeCodeBillingAttribution([]byte(tt.body)))
+		})
+	}
+}
+
+// TestIsProxiedClaudeCodeRequest 验证代理识别不能由任意 metadata.user_id 绕过。
+func TestIsProxiedClaudeCodeRequest(t *testing.T) {
+	validMetadata := FormatMetadataUserID(
+		"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"550e8400-e29b-41d4-a716-446655440000",
+		"123e4567-e89b-42d3-a456-426614174000",
+		claude.CLICurrentVersion,
+	)
+	body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=cli;"}]}`)
+
+	require.True(t, isProxiedClaudeCodeRequest(body, validMetadata))
+	require.False(t, isProxiedClaudeCodeRequest(body, "arbitrary-user-id"))
+	require.False(t, isProxiedClaudeCodeRequest([]byte(`{"system":[{"type":"text","text":"project"}]}`), validMetadata))
+}
+
 func TestRewriteSystemForNonClaudeCodeWithPrompt_UsesCustomExpansionPrompt(t *testing.T) {
 	body := []byte(`{"model":"claude-3","system":"Project instructions","messages":[{"role":"user","content":"hello"}]}`)
 	customPrompt := "Custom Claude OAuth expansion prompt"
@@ -97,6 +154,34 @@ func TestRewriteSystemForNonClaudeCodeWithPrompt_UsesCustomExpansionPrompt(t *te
 	require.Len(t, system.Array(), 3)
 	require.Equal(t, customPrompt, system.Array()[2].Get("text").String())
 	require.Equal(t, "ephemeral", system.Array()[2].Get("cache_control.type").String())
+}
+
+func TestRewriteSystemForNonClaudeCode_PreservesSystemCacheControlOnMigratedMessage(t *testing.T) {
+	body := []byte(`{"model":"claude-3","system":[{"type":"text","text":"Stable project instructions","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":"hello"}]}`)
+	system := []any{
+		map[string]any{
+			"type":          "text",
+			"text":          "Stable project instructions",
+			"cache_control": map[string]any{"type": "ephemeral", "ttl": "1h"},
+		},
+	}
+
+	result := rewriteSystemForNonClaudeCode(body, system)
+
+	require.Equal(t, "[System Instructions]\nStable project instructions", gjson.GetBytes(result, "messages.0.content.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(result, "messages.0.content.0.cache_control.type").String())
+	require.Equal(t, "1h", gjson.GetBytes(result, "messages.0.content.0.cache_control.ttl").String())
+}
+
+func TestRewriteSystemForNonClaudeCode_LeavesMigratedMessageUncachedWithoutSystemBreakpoint(t *testing.T) {
+	body := []byte(`{"model":"claude-3","system":[{"type":"text","text":"Project instructions"}],"messages":[{"role":"user","content":"hello"}]}`)
+	system := []any{
+		map[string]any{"type": "text", "text": "Project instructions"},
+	}
+
+	result := rewriteSystemForNonClaudeCode(body, system)
+
+	require.False(t, gjson.GetBytes(result, "messages.0.content.0.cache_control").Exists())
 }
 
 func TestRewriteSystemForNonClaudeCodeWithPromptBlocks_UsesConfiguredBlocks(t *testing.T) {

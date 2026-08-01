@@ -23,6 +23,7 @@ func newAuthRoutesTestRouter(redisClient *redis.Client) *gin.Engine {
 		v1,
 		&handler.Handlers{
 			Auth:    &handler.AuthHandler{},
+			Passkey: &handler.PasskeyHandler{},
 			Setting: &handler.SettingHandler{},
 		},
 		servermiddleware.JWTAuthMiddleware(func(c *gin.Context) {
@@ -32,6 +33,7 @@ func newAuthRoutesTestRouter(redisClient *redis.Client) *gin.Engine {
 			c.Next()
 		}),
 		redisClient,
+		nil,
 		nil,
 	)
 
@@ -54,6 +56,8 @@ func TestAuthRoutesRateLimitFailCloseWhenRedisUnavailable(t *testing.T) {
 		"/api/v1/auth/register",
 		"/api/v1/auth/login",
 		"/api/v1/auth/login/2fa",
+		"/api/v1/auth/passkey/login/begin",
+		"/api/v1/auth/passkey/login/finish",
 		"/api/v1/auth/send-verify-code",
 		"/api/v1/auth/oauth/pending/send-verify-code",
 	}

@@ -62,6 +62,11 @@ type SettingService struct {
 	cyberSessionBlockCache      atomic.Value // *cachedCyberSessionBlockRuntime
 	cyberSessionBlockSF         singleflight.Group
 
+	// panelRateLimitCache 面板 API 限流配置进程内缓存（*cachedPanelRateLimitSettings）。
+	// 面板每个认证请求都会读取，禁止在热路径上直接访问 DB。
+	panelRateLimitCache atomic.Value
+	panelRateLimitSF    singleflight.Group
+
 	// openAIQuotaAutoPauseSettingsCache 保存最近一次观测到的配额自动暂停设置。
 	// GetOpenAIQuotaAutoPauseSettings 在请求热路径读取这个 atomic.Value，绝不阻塞等待 DB；
 	// 当缓存项过期时，后台 goroutine 通过 openAIQuotaAutoPauseSettingsSF 刷新它

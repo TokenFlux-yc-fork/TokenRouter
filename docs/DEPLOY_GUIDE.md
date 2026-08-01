@@ -332,6 +332,31 @@ default:
   rate_multiplier: 1.0
 ```
 
+### Passkey / WebAuthn 部署配置
+
+Passkey 由部署配置控制，不能在管理后台直接开启。编辑 `config.yaml`，填写浏览器
+实际访问站点时使用的公开域名和 Origin：
+
+```yaml
+webauthn:
+  enabled: true
+  rp_display_name: "TokenRouter"
+  rp_id: "tokenrouter.example.com"
+  rp_origins:
+    - "https://tokenrouter.example.com"
+```
+
+- `webauthn.rp_id` 只能填写域名，不能包含协议、端口或路径。
+- `webauthn.rp_origins` 必须填写完整 Origin，不能包含路径、查询参数或片段。生产环境
+  必须使用 HTTPS；仅 `localhost`、`127.0.0.1` 和 `::1` 的本地开发环境可使用 HTTP。
+- 每个 Origin 的主机必须等于 `rp_id` 或是它的子域名。经过反向代理部署时，应填写
+  浏览器访问的公开 HTTPS Origin，而不是容器名、内网地址或后端监听端口。
+- 修改配置后必须重启服务。`rp_id` 是 Passkey 凭据的安全边界，上线后应保持稳定；
+  更换它会导致已注册凭据无法用于新的依赖方。
+
+配置不完整或不符合上述约束时，服务会在启动校验阶段报出对应的 `webauthn.*` 错误，
+Passkey 登录不会以不可信的 `Host` 或 `Origin` 请求头作为配置回退。
+
 ### OpenAI Responses WebSocket 首消息超时
 
 账号级 WS mode（包括 `http_bridge`）仅在新版 mode router 开启时生效。关闭该开关时，

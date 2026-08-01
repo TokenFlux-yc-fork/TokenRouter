@@ -84,7 +84,7 @@ func (s *emailNormalizationRepoStub) GetFirstAdmin(context.Context) (*User, erro
 	return nil, ErrUserNotFound
 }
 
-func (s *emailNormalizationRepoStub) Update(_ context.Context, user *User) error {
+func (s *emailNormalizationRepoStub) Update(_ context.Context, user *User, _ UserUpdateFields) error {
 	if s.updateErr != nil {
 		return s.updateErr
 	}
@@ -94,7 +94,7 @@ func (s *emailNormalizationRepoStub) Update(_ context.Context, user *User) error
 	return nil
 }
 
-func (s *emailNormalizationRepoStub) UpdateWithNormalizedEmailGuard(_ context.Context, user *User, normalizedEmail string) error {
+func (s *emailNormalizationRepoStub) UpdateWithNormalizedEmailGuard(_ context.Context, user *User, normalizedEmail string, _ UserUpdateFields) error {
 	if s.normalizedUpdateErr != nil {
 		return s.normalizedUpdateErr
 	}
@@ -151,6 +151,14 @@ func (s *emailNormalizationRepoStub) UpdateBalance(context.Context, int64, float
 
 func (s *emailNormalizationRepoStub) DeductBalance(context.Context, int64, float64) (float64, error) {
 	panic("unexpected DeductBalance call")
+}
+
+func (s *emailNormalizationRepoStub) AdjustBalance(context.Context, int64, float64) (BalanceChange, error) {
+	panic("unexpected AdjustBalance call")
+}
+
+func (s *emailNormalizationRepoStub) SetBalance(context.Context, int64, float64) (BalanceChange, error) {
+	panic("unexpected SetBalance call")
 }
 
 func (s *emailNormalizationRepoStub) UpdateConcurrency(context.Context, int64, int) error {

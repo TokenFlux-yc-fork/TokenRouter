@@ -21,6 +21,7 @@ export { totpAPI } from './totp'
 export { teamAPI } from './team'
 export { marketplaceAPI } from './marketplace'
 export { dataSharingAPI } from './dataSharing'
+export { passkeyAPI, type PasskeyCredentialSummary } from './passkey'
 export { default as announcementsAPI } from './announcements'
 
 // Admin APIs

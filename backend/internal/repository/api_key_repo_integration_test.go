@@ -54,6 +54,42 @@ func (s *APIKeyRepoSuite) TestCreate() {
 	s.Require().Equal("sk-create-test", got.Key)
 }
 
+func (s *APIKeyRepoSuite) TestUpdateForkSpecificFields() {
+	user := s.mustCreateUser("fork-update-fields@test.com")
+	group := s.mustCreateGroup("g-fork-update-fields")
+	key := &service.APIKey{
+		UserID: user.ID,
+		Key:    "sk-fork-update-fields",
+		Name:   "Fork Fields",
+		Status: service.StatusActive,
+	}
+	s.Require().NoError(s.repo.Create(s.ctx, key))
+
+	loaded, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	confirmedAt := time.Now().UTC().Truncate(time.Microsecond)
+	loaded.FastModePolicy = service.APIKeyFastModePolicyForceOff
+	loaded.FallbackToDefaultGroupWhenUnavailable = false
+	loaded.DataSharingNoticeVersion = 7
+	loaded.DataSharingConfirmedGroupID = &group.ID
+	loaded.DataSharingConfirmedAt = &confirmedAt
+
+	// fork 扩展列必须各自由显式掩码控制，不能因收窄标准字段而停止持久化。
+	s.Require().NoError(s.repo.Update(s.ctx, loaded, service.APIKeyUpdateFields{
+		FastModePolicy:                        true,
+		FallbackToDefaultGroupWhenUnavailable: true,
+		DataSharingConfirmation:               true,
+	}))
+
+	updated, err := s.repo.GetByID(s.ctx, key.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.APIKeyFastModePolicyForceOff, updated.FastModePolicy)
+	s.Require().False(updated.FallbackToDefaultGroupWhenUnavailable)
+	s.Require().Equal(7, updated.DataSharingNoticeVersion)
+	s.Require().Equal(group.ID, *updated.DataSharingConfirmedGroupID)
+	s.Require().WithinDuration(confirmedAt, *updated.DataSharingConfirmedAt, time.Microsecond)
+}
+
 func (s *APIKeyRepoSuite) TestCompositeKeyCRUDAndGroupQueries() {
 	user := s.mustCreateUser("composite-key@test.com")
 	openAIGroup := s.mustCreateGroup("g-composite-openai")
@@ -91,7 +127,7 @@ func (s *APIKeyRepoSuite) TestCompositeKeyCRUDAndGroupQueries() {
 	got.CompositeGroups = []service.APIKeyCompositeGroup{
 		{GroupID: claudeGroup.ID, Prefix: "Anthropic", NormalizedPrefix: "anthropic", SortOrder: 0},
 	}
-	s.Require().NoError(s.repo.Update(s.ctx, got))
+	s.Require().NoError(s.repo.Update(s.ctx, got, service.APIKeyUpdateFields{CompositeConfiguration: true}))
 	updated, err := s.repo.GetByID(s.ctx, key.ID)
 	s.Require().NoError(err)
 	s.Require().Len(updated.CompositeGroups, 1)
@@ -231,7 +267,7 @@ func (s *APIKeyRepoSuite) TestUpdate() {
 
 	key.Name = "Renamed"
 	key.Status = service.StatusDisabled
-	err := s.repo.Update(s.ctx, key)
+	err := s.repo.Update(s.ctx, key, service.APIKeyUpdateFields{Name: true, Status: true})
 	s.Require().NoError(err, "Update")
 
 	got, err := s.repo.GetByID(s.ctx, key.ID)
@@ -255,7 +291,7 @@ func (s *APIKeyRepoSuite) TestUpdate_ClearGroupID() {
 	s.Require().NoError(s.repo.Create(s.ctx, key))
 
 	key.GroupID = nil
-	err := s.repo.Update(s.ctx, key)
+	err := s.repo.Update(s.ctx, key, service.APIKeyUpdateFields{GroupID: true})
 	s.Require().NoError(err, "Update")
 
 	got, err := s.repo.GetByID(s.ctx, key.ID)
@@ -460,7 +496,7 @@ func (s *APIKeyRepoSuite) TestCRUD_Search_ClearGroupID() {
 	key.Name = "Renamed"
 	key.Status = service.StatusDisabled
 	key.GroupID = nil
-	s.Require().NoError(s.repo.Update(s.ctx, key), "Update")
+	s.Require().NoError(s.repo.Update(s.ctx, key, service.APIKeyUpdateFields{Name: true, Status: true, GroupID: true}), "Update")
 
 	got2, err := s.repo.GetByID(s.ctx, key.ID)
 	s.Require().NoError(err, "GetByID")
@@ -578,7 +614,7 @@ func (s *APIKeyRepoSuite) TestIncrementQuotaUsedAndGetState() {
 	key := s.mustCreateApiKey(user.ID, "sk-quota-state", "QuotaState", nil)
 	key.Quota = 3
 	key.QuotaUsed = 1
-	s.Require().NoError(s.repo.Update(s.ctx, key), "Update quota")
+	s.Require().NoError(s.repo.Update(s.ctx, key, service.APIKeyUpdateFields{Quota: true, QuotaUsed: true}), "Update quota")
 
 	state, err := s.repo.IncrementQuotaUsedAndGetState(s.ctx, key.ID, 2.5)
 	s.Require().NoError(err, "IncrementQuotaUsedAndGetState")

@@ -59,6 +59,7 @@ type Handlers struct {
 	QoderGateway     *QoderGatewayHandler
 	Setting          *SettingHandler
 	Totp             *TotpHandler
+	Passkey          *PasskeyHandler
 	Payment          *PaymentHandler
 	PaymentWebhook   *PaymentWebhookHandler
 	DataSharing      *DataSharingHandler

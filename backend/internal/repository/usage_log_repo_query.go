@@ -120,6 +120,10 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 	if filters.PersonalOnly {
 		conditions = append(conditions, "team_id IS NULL")
 	}
+	if requestID := strings.TrimSpace(filters.RequestID); requestID != "" {
+		conditions = append(conditions, fmt.Sprintf("request_id = $%d", len(args)+1))
+		args = append(args, requestID)
+	}
 	conditions, args = appendUsageLogModelWhereCondition(conditions, args, filters.Model, filters.ModelFilterSource)
 	conditions, args = appendRequestTypeOrStreamWhereCondition(conditions, args, filters.RequestType, filters.Stream)
 	if filters.BillingType != nil {
@@ -176,8 +180,9 @@ func appendUserUsageScopeWhereCondition(conditions []string, args []any, userID 
 	}
 	placeholder := len(args) + 1
 	if includeOwnedTeam {
+		// 活跃成员唯一约束保证子查询至多返回一个团队，标量比较可让 PostgreSQL 合并用户与团队索引。
 		conditions = append(conditions, fmt.Sprintf(
-			"(%[1]suser_id = $%[2]d OR %[1]steam_id IN (SELECT tm.team_id FROM team_memberships tm WHERE tm.user_id = $%[2]d AND tm.role = 'owner' AND tm.left_at IS NULL))",
+			"(%[1]suser_id = $%[2]d OR %[1]steam_id = (SELECT tm.team_id FROM team_memberships tm WHERE tm.user_id = $%[2]d AND tm.role = 'owner' AND tm.left_at IS NULL))",
 			prefix,
 			placeholder,
 		))

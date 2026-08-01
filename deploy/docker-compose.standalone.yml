@@ -17,6 +17,8 @@ services:
     pull_policy: always
     container_name: sub2api
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     # 为主应用保留足够峰值余量，同时避免异常分配耗尽整台虚机。
     mem_limit: 12g
     memswap_limit: 12g

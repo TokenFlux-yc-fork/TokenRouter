@@ -530,5 +530,8 @@ const setUserKeyword = (email: string) => {
   showUserDropdown.value = false
 }
 
-defineExpose({ setUserKeyword })
+// 暴露搜索修订号，避免路由用户查询的异步结果覆盖管理员后续输入。
+const getUserSearchRevision = () => userSearchSequence
+
+defineExpose({ getUserSearchRevision, setUserKeyword })
 </script>

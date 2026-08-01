@@ -146,7 +146,10 @@ func TestSettingService_GetPublicSettingsForInjection_ExposesPublicFeatureFlags(
 			SettingKeyDataSharingEnabled:           "false",
 		},
 	}
-	svc := NewSettingService(repo, &config.Config{Team: config.TeamConfig{Enabled: true}})
+	svc := NewSettingService(repo, &config.Config{
+		Team:     config.TeamConfig{Enabled: true},
+		WebAuthn: config.WebAuthnConfig{Enabled: true},
+	})
 
 	payload, err := svc.GetPublicSettingsForInjection(context.Background())
 	require.NoError(t, err)
@@ -160,6 +163,7 @@ func TestSettingService_GetPublicSettingsForInjection_ExposesPublicFeatureFlags(
 		AllowUserViewErrorRequests   bool `json:"allow_user_view_error_requests"`
 		TeamEnabled                  bool `json:"team_enabled"`
 		DataSharingEnabled           bool `json:"data_sharing_enabled"`
+		PasskeyEnabled               bool `json:"passkey_enabled"`
 	}
 	require.NoError(t, json.Unmarshal(encoded, &settings))
 	require.True(t, settings.AffiliateEnabled)
@@ -167,6 +171,7 @@ func TestSettingService_GetPublicSettingsForInjection_ExposesPublicFeatureFlags(
 	require.True(t, settings.AllowUserViewErrorRequests)
 	require.True(t, settings.TeamEnabled)
 	require.False(t, settings.DataSharingEnabled)
+	require.True(t, settings.PasskeyEnabled)
 }
 
 func TestSettingService_GetPublicSettingsForInjection_ExposesBuildIdentitySeparately(t *testing.T) {

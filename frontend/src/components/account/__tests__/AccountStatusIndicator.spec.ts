@@ -52,6 +52,32 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  // Sonnet 5 限流状态应保持紧凑，避免完整模型名撑开账号状态区域。
+  it('Claude Sonnet 5 模型限流时显示短别名', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          extra: {
+            model_rate_limits: {
+              'claude-sonnet-5': {
+                rate_limited_at: '2026-07-28T00:00:00Z',
+                rate_limit_reset_at: '2099-07-28T00:00:00Z'
+              }
+            }
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('CSon5')
+    expect(wrapper.text()).not.toContain('claude-sonnet-5')
+  })
+
   it('Grok 账号额度限流时显示自动恢复时间而非临时不可调度', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

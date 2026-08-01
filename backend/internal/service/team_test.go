@@ -362,12 +362,13 @@ func TestTeamServiceInvitationEmailUsesCustomNotificationTemplate(t *testing.T) 
 
 	require.Equal(t, int64(1), smtpServer.messageCount())
 	message := smtpServer.lastMessage()
+	messageBody := smtpServer.lastMessageBody(t)
 	require.Contains(t, message, "Subject: Custom invitation for Platform Team")
-	require.Contains(t, message, "Custom team invitation")
-	require.Contains(t, message, "https://database.example/team?invitation=test-token")
-	require.NotContains(t, message, "https://config.example")
-	require.Contains(t, message, expiresAt.Format(time.RFC3339))
-	require.False(t, strings.Contains(message, "你被邀请加入团队"))
+	require.Contains(t, messageBody, "Custom team invitation")
+	require.Contains(t, messageBody, "https://database.example/team?invitation=test-token")
+	require.NotContains(t, messageBody, "https://config.example")
+	require.Contains(t, messageBody, expiresAt.Format(time.RFC3339))
+	require.False(t, strings.Contains(messageBody, "你被邀请加入团队"))
 }
 
 func TestTeamServiceFrontendLinkFallsBackToConfig(t *testing.T) {

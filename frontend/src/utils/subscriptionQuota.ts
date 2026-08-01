@@ -2,6 +2,14 @@ import type { UserSubscription } from '@/types'
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
+// ExpirationDateRelation 表示到期时间与当前本地日历日期的关系。
+export type ExpirationDateRelation = 'expired' | 'today' | 'tomorrow' | 'later'
+
+// RemainingExpiryDuration 提供适合界面展示的到期剩余时长精度。
+export type RemainingExpiryDuration =
+  | { unit: 'days'; days: number }
+  | { unit: 'hoursMinutes'; hours: number; minutes: number }
+
 export interface RemainingDurationParts {
   days: number
   hours: number
@@ -39,4 +47,49 @@ export function getRemainingDurationParts(
   const minutes = totalMinutes % 60
 
   return { days, hours, minutes }
+}
+
+// getExpirationDateRelation 按本地日历日判断今天、明天和更晚日期。
+export function getExpirationDateRelation(
+  targetAt: Date | string,
+  now: Date = new Date()
+): ExpirationDateRelation | null {
+  const target = targetAt instanceof Date ? targetAt : new Date(targetAt)
+  const targetTime = target.getTime()
+  const nowTime = now.getTime()
+
+  if (!Number.isFinite(targetTime) || !Number.isFinite(nowTime)) return null
+  if (targetTime <= nowTime) return 'expired'
+
+  const targetDay = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate())
+  const currentDay = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  const calendarDays = Math.round((targetDay - currentDay) / ONE_DAY_MS)
+
+  if (calendarDays === 0) return 'today'
+  if (calendarDays === 1) return 'tomorrow'
+  return 'later'
+}
+
+// getRemainingExpiryDuration 在不足一天时保留小时和分钟，否则向上取整到天。
+export function getRemainingExpiryDuration(
+  targetAt: Date | string,
+  now: Date = new Date()
+): RemainingExpiryDuration | null {
+  const targetTime = targetAt instanceof Date ? targetAt.getTime() : new Date(targetAt).getTime()
+  const nowTime = now.getTime()
+
+  if (!Number.isFinite(targetTime) || !Number.isFinite(nowTime)) return null
+
+  const diffMs = targetTime - nowTime
+  if (diffMs <= 0) return null
+  if (diffMs >= ONE_DAY_MS) {
+    return { unit: 'days', days: Math.ceil(diffMs / ONE_DAY_MS) }
+  }
+
+  const totalMinutes = Math.ceil(diffMs / (60 * 1000))
+  return {
+    unit: 'hoursMinutes',
+    hours: Math.floor(totalMinutes / 60),
+    minutes: totalMinutes % 60
+  }
 }

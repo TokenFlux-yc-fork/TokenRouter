@@ -388,6 +388,24 @@ func TestUsageLogRepositoryListWithFiltersRequestTypePriority(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestUsageLogRepositoryListWithFiltersRequestID 验证请求 ID 使用裁剪后的参数做精确查询。
+func TestUsageLogRepositoryListWithFiltersRequestID(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	filters := usagestats.UsageLogFilters{RequestID: " req-0123 "}
+
+	mock.ExpectQuery("SELECT .* FROM usage_logs WHERE request_id = \\$1 ORDER BY id DESC LIMIT \\$2 OFFSET \\$3").
+		WithArgs("req-0123", 21, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	logs, page, err := repo.ListWithFilters(context.Background(), pagination.PaginationParams{Page: 1, PageSize: 20}, filters)
+	require.NoError(t, err)
+	require.Empty(t, logs)
+	require.NotNil(t, page)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestUsageLogRepositoryListWithFiltersRequestedModelSource(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}
@@ -474,7 +492,7 @@ func TestUsageLogRepositoryGetUserModelStatsUsesRequestedModel(t *testing.T) {
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 
-	mock.ExpectQuery("(?s)SELECT\\s+COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) as model,.*WHERE created_at >= \\$1 AND created_at < \\$2\\s+AND \\(user_id = \\$3 OR team_id IN .*tm.role = 'owner'.*GROUP BY COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) ORDER BY total_tokens DESC").
+	mock.ExpectQuery("(?s)SELECT\\s+COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) as model,.*WHERE created_at >= \\$1 AND created_at < \\$2\\s+AND \\(user_id = \\$3 OR team_id = \\(SELECT .*tm.role = 'owner'.*GROUP BY COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) ORDER BY total_tokens DESC").
 		WithArgs(start, end, int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model", "requests", "input_tokens", "output_tokens",
@@ -549,15 +567,60 @@ func TestUsageLogRepositoryListPersonalOnlyExcludesTeamUsage(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestAppendUserUsageScopeIncludesOwnedTeam(t *testing.T) {
-	conditions, args := appendUserUsageScopeWhereCondition(nil, nil, 42, true, "ul")
+// TestAppendUserUsageScopeWhereCondition 验证个人、Owner、别名和已有参数下的统一范围 SQL。
+func TestAppendUserUsageScopeWhereCondition(t *testing.T) {
+	ownerSubquery := "SELECT tm.team_id FROM team_memberships tm WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL"
+	tests := []struct {
+		name             string
+		conditions       []string
+		args             []any
+		includeOwnedTeam bool
+		alias            string
+		wantConditions   []string
+		wantArgs         []any
+	}{
+		{
+			name:           "普通用户只匹配本人",
+			wantConditions: []string{"user_id = $1"},
+			wantArgs:       []any{int64(42)},
+		},
+		{
+			name:             "Owner使用标量团队子查询",
+			includeOwnedTeam: true,
+			wantConditions:   []string{"(user_id = $1 OR team_id = (" + ownerSubquery + "))"},
+			wantArgs:         []any{int64(42)},
+		},
+		{
+			name:             "表别名覆盖两个索引字段",
+			includeOwnedTeam: true,
+			alias:            "ul",
+			wantConditions:   []string{"(ul.user_id = $1 OR ul.team_id = (" + ownerSubquery + "))"},
+			wantArgs:         []any{int64(42)},
+		},
+		{
+			name:             "沿用已有参数占位符",
+			conditions:       []string{"created_at >= $1"},
+			args:             []any{"existing"},
+			includeOwnedTeam: true,
+			wantConditions: []string{
+				"created_at >= $1",
+				"(user_id = $2 OR team_id = (SELECT tm.team_id FROM team_memberships tm WHERE tm.user_id = $2 AND tm.role = 'owner' AND tm.left_at IS NULL))",
+			},
+			wantArgs: []any{"existing", int64(42)},
+		},
+	}
 
-	require.Equal(t, []any{int64(42)}, args)
-	require.Len(t, conditions, 1)
-	require.Contains(t, conditions[0], "ul.user_id = $1")
-	require.Contains(t, conditions[0], "ul.team_id IN")
-	require.Contains(t, conditions[0], "tm.role = 'owner'")
-	require.Contains(t, conditions[0], "tm.left_at IS NULL")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conditions, args := appendUserUsageScopeWhereCondition(tt.conditions, tt.args, 42, tt.includeOwnedTeam, tt.alias)
+
+			require.Equal(t, tt.wantConditions, conditions)
+			require.Equal(t, tt.wantArgs, args)
+			for _, condition := range conditions {
+				require.NotContains(t, condition, "team_id IN (")
+			}
+		})
+	}
 }
 
 func TestUsageLogRepositoryGetStatsWithFiltersRequestTypePriority(t *testing.T) {

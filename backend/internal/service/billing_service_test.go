@@ -154,14 +154,16 @@ func TestGetModelPricing_FallbackWarnPerModelNotGlobal(t *testing.T) {
 	require.Zero(t, strings.Count(out, "model: GLM-5.2"), out)
 }
 
-func TestGetModelPricing_GLM52FallsBackToGLM5Price(t *testing.T) {
+func TestGetModelPricing_GLM52UsesOwnPrice(t *testing.T) {
 	svc := newTestBillingService()
 
 	pricing, err := svc.GetModelPricing("glm-5.2")
 	require.NoError(t, err)
 	require.NotNil(t, pricing)
-	require.InDelta(t, 1e-6, pricing.InputPricePerToken, 1e-12)
-	require.InDelta(t, 3.2e-6, pricing.OutputPricePerToken, 1e-12)
+	// GLM-5.2 与 GLM-5.1 同价，不能被裸 glm-5 的子串匹配抢走。
+	require.InDelta(t, 1.4e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 4.4e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.26e-6, pricing.CacheReadPricePerToken, 1e-12)
 }
 
 func TestGetModelPricing_UnknownClaudeModelFallsBackToSonnet(t *testing.T) {
@@ -447,8 +449,8 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "openai gpt5.4", model: "gpt-5.4", expectedInput: 2.5e-6},
 		{name: "openai gpt5.4 mini", model: "gpt-5.4-mini", expectedInput: 7.5e-7},
 		{name: "openai gpt5.6 sol", model: "gpt-5.6-sol-max", expectedInput: 5e-6, expectedOutput: testPtrFloat64(30e-6), expectedCache: testPtrFloat64(0.5e-6)},
-		{name: "openai gpt5.6 terra", model: "gpt-5.6-terra-max", expectedInput: 2.5e-6, expectedOutput: testPtrFloat64(15e-6), expectedCache: testPtrFloat64(0.25e-6)},
-		{name: "openai gpt5.6 luna", model: "gpt-5.6-luna", expectedInput: 1e-6, expectedOutput: testPtrFloat64(6e-6), expectedCache: testPtrFloat64(0.1e-6)},
+		{name: "openai gpt5.6 terra", model: "gpt-5.6-terra-max", expectedInput: 2e-6, expectedOutput: testPtrFloat64(12e-6), expectedCache: testPtrFloat64(0.2e-6)},
+		{name: "openai gpt5.6 luna", model: "gpt-5.6-luna", expectedInput: 0.2e-6, expectedOutput: testPtrFloat64(1.2e-6), expectedCache: testPtrFloat64(0.02e-6)},
 		{name: "openai gpt5.3 codex", model: "gpt-5.3-codex", expectedInput: 1.5e-6},
 		{name: "openai gpt5.3 codex spark", model: "gpt-5.3-codex-spark", expectedInput: 1.5e-6},
 		{name: "openai legacy gpt5.1 falls back to gpt5.4", model: "gpt-5.1", expectedInput: 2.5e-6},
@@ -459,6 +461,7 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "deepseek v4 flash", model: "deepseek-v4-flash", expectedInput: 1.4e-7, expectedOutput: testPtrFloat64(2.8e-7), expectedCache: testPtrFloat64(2.8e-9)},
 		{name: "deepseek chat alias", model: "deepseek-chat", expectedInput: 1.4e-7, expectedOutput: testPtrFloat64(2.8e-7), expectedCache: testPtrFloat64(2.8e-9)},
 		{name: "deepseek reasoner alias", model: "deepseek-reasoner", expectedInput: 1.4e-7, expectedOutput: testPtrFloat64(2.8e-7), expectedCache: testPtrFloat64(2.8e-9)},
+		{name: "glm 5.2 ordering", model: "glm-5.2", expectedInput: 1.4e-6, expectedOutput: testPtrFloat64(4.4e-6), expectedCache: testPtrFloat64(0.26e-6)},
 		{name: "glm 5.1 ordering", model: "glm-5.1", expectedInput: 1.4e-6, expectedOutput: testPtrFloat64(4.4e-6), expectedCache: testPtrFloat64(0.26e-6)},
 		{name: "glm 5 turbo", model: "glm-5-turbo", expectedInput: 1.2e-6, expectedOutput: testPtrFloat64(4e-6), expectedCache: testPtrFloat64(0.24e-6)},
 		{name: "glm 5 base", model: "glm-5", expectedInput: 1e-6, expectedOutput: testPtrFloat64(3.2e-6), expectedCache: testPtrFloat64(0.2e-6)},
@@ -473,6 +476,17 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "glm 4.5", model: "glm-4.5", expectedInput: 0.6e-6, expectedOutput: testPtrFloat64(2.2e-6), expectedCache: testPtrFloat64(0.11e-6)},
 		{name: "glm 4 32b", model: "glm-4-32b-0414-128k", expectedInput: 0.1e-6, expectedOutput: testPtrFloat64(0.1e-6)},
 		{name: "kimi for coding", model: "kimi-for-coding", expectedInput: 0.95e-6, expectedOutput: testPtrFloat64(4e-6), expectedCache: testPtrFloat64(0.15e-6)},
+		{name: "kimi k3", model: "kimi-k3", expectedInput: 3e-6, expectedOutput: testPtrFloat64(15e-6), expectedCache: testPtrFloat64(0.30e-6)},
+		{name: "kimi code k3", model: "k3", expectedInput: 3e-6, expectedOutput: testPtrFloat64(15e-6), expectedCache: testPtrFloat64(0.30e-6)},
+		{name: "kimi code k3 256k", model: "k3-256k", expectedInput: 3e-6, expectedOutput: testPtrFloat64(15e-6), expectedCache: testPtrFloat64(0.30e-6)},
+		{name: "kimi k3 vendor path", model: "moonshot/kimi-k3", expectedInput: 3e-6, expectedOutput: testPtrFloat64(15e-6), expectedCache: testPtrFloat64(0.30e-6)},
+		{name: "kimi code k3 vendor path", model: "kimi-code/k3", expectedInput: 3e-6, expectedOutput: testPtrFloat64(15e-6), expectedCache: testPtrFloat64(0.30e-6)},
+		{name: "kimi code k3 embedded name", model: "foo-k3-bar", expectNilPricing: true},
+		{name: "kimi code k3 vendor embedded name", model: "vendor/foo-k3", expectNilPricing: true},
+		{name: "kimi k30", model: "kimi-k30", expectNilPricing: true},
+		{name: "kimi k3 embedded name", model: "foo-kimi-k3-bar", expectNilPricing: true},
+		{name: "kimi k3 client context suffix", model: "kimi-k3[1m]", expectNilPricing: true},
+		{name: "kimi k3 vendor client context suffix", model: "moonshot/kimi-k3[1m]", expectNilPricing: true},
 		{name: "kimi k2.6 ordering", model: "kimi-k2.6", expectedInput: 0.95e-6, expectedOutput: testPtrFloat64(4e-6), expectedCache: testPtrFloat64(0.15e-6)},
 		{name: "kimi k2.5 ordering", model: "kimi-k2.5", expectedInput: 0.60e-6, expectedOutput: testPtrFloat64(3e-6), expectedCache: testPtrFloat64(0.098e-6)},
 		{name: "kimi k2 thinking ordering", model: "kimi-k2-thinking-preview", expectedInput: 0.56e-6, expectedOutput: testPtrFloat64(2.24e-6), expectedCache: testPtrFloat64(0.14e-6)},

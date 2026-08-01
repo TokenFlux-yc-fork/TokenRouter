@@ -115,6 +115,10 @@ type liveTestStore struct {
 	GatewayCache
 	mu     sync.Mutex
 	record *LiveCallRecord
+	// 这些错误用于区分 Redis 抖动与记录确实不存在。
+	claimErr         error
+	getCallErr       error
+	getControllerErr error
 }
 
 func (s *liveTestStore) SaveLiveCall(_ context.Context, record *LiveCallRecord, _ time.Duration) error {
@@ -128,6 +132,9 @@ func (s *liveTestStore) SaveLiveCall(_ context.Context, record *LiveCallRecord, 
 func (s *liveTestStore) GetLiveCall(_ context.Context, callHash string) (*LiveCallRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.getCallErr != nil {
+		return nil, s.getCallErr
+	}
 	if s.record == nil || s.record.CallHash != callHash {
 		return nil, ErrLiveCallNotFound
 	}
@@ -138,6 +145,9 @@ func (s *liveTestStore) GetLiveCall(_ context.Context, callHash string) (*LiveCa
 func (s *liveTestStore) ClaimLiveController(_ context.Context, callHash, controller, owner string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.claimErr != nil {
+		return false, s.claimErr
+	}
 	if s.record == nil || s.record.CallHash != callHash || s.record.Controller == LiveControllerClosed {
 		return false, nil
 	}
@@ -166,6 +176,9 @@ func (s *liveTestStore) ReleaseLiveController(_ context.Context, callHash, owner
 func (s *liveTestStore) GetLiveController(_ context.Context, callHash string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.getControllerErr != nil {
+		return "", s.getControllerErr
+	}
 	if s.record == nil || s.record.CallHash != callHash {
 		return "", ErrLiveCallNotFound
 	}
@@ -482,4 +495,122 @@ func TestWaitForLiveObserverRetryLeavesExpiryToLoopFinalize(t *testing.T) {
 		ExpiresAt:  time.Now().Add(time.Hour),
 	}, time.Hour))
 	require.False(t, svc.waitForLiveObserverRetry(record))
+}
+
+// store 抖动不表示 observer 已失去控制权，只有记录不存在时才停止重试。
+func TestWaitForLiveObserverRetryTreatsStoreErrorAsRetryable(t *testing.T) {
+	record := &LiveCallRecord{
+		CallID:     "call_flaky_store",
+		CallHash:   hashLiveCallID("call_flaky_store"),
+		Controller: LiveControllerObserver,
+		ExpiresAt:  time.Now().Add(time.Hour),
+	}
+	store := &liveTestStore{getControllerErr: errors.New("redis: connection refused")}
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+	svc := &OpenAIGatewayService{cache: store}
+
+	require.True(t, svc.waitForLiveObserverRetry(record),
+		"store 报错时必须继续重试，否则会话会静默结束")
+	require.False(t, (&OpenAIGatewayService{cache: &liveTestStore{}}).waitForLiveObserverRetry(record),
+		"记录不存在时应停止重试")
+}
+
+// observer 持续读不到 store 时，必须使用创建阶段快照在到期后释放租约并写 usage log。
+func TestObserveLiveCallStoreOutageFallsBackToExpiryFinalize(t *testing.T) {
+	restore := liveObserverStoreRetryInterval
+	liveObserverStoreRetryInterval = time.Millisecond
+	t.Cleanup(func() { liveObserverStoreRetryInterval = restore })
+
+	cases := []struct {
+		name   string
+		inject func(*liveTestStore)
+	}{
+		{"GetLiveCall 持续报错", func(store *liveTestStore) {
+			store.getCallErr = errors.New("redis: i/o timeout")
+		}},
+		{"ClaimLiveController 报错", func(store *liveTestStore) {
+			store.claimErr = errors.New("redis: i/o timeout")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			record := &LiveCallRecord{
+				CallID:     "call_store_outage",
+				CallHash:   hashLiveCallID("call_store_outage"),
+				AccountID:  11,
+				APIKeyID:   22,
+				UserID:     33,
+				LeaseID:    "lease-1",
+				Model:      "gpt-live-test",
+				CreatedAt:  time.Now().Add(-time.Minute),
+				ExpiresAt:  time.Now().Add(-time.Second),
+				Controller: LiveControllerPending,
+			}
+			store := &liveTestStore{}
+			require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+			tc.inject(store)
+			concurrencyCache := &liveTestConcurrencyCache{}
+			usageRepo := &liveTestUsageRepo{}
+			svc := &OpenAIGatewayService{
+				cache:              store,
+				concurrencyService: NewConcurrencyService(concurrencyCache),
+				usageLogRepo:       usageRepo,
+			}
+
+			svc.observeLiveCall(record)
+
+			concurrencyCache.mu.Lock()
+			require.Equal(t, 1, concurrencyCache.releases, "store 故障时租约释放不能丢")
+			concurrencyCache.mu.Unlock()
+			usageRepo.mu.Lock()
+			require.Len(t, usageRepo.logs, 1, "store 故障时 usage log 不能丢")
+			require.Equal(t, RequestTypeLive, usageRepo.logs[0].RequestType)
+			usageRepo.mu.Unlock()
+		})
+	}
+}
+
+type liveTestBestEffortUsageRepo struct {
+	liveTestUsageRepo
+	bestEffortErr   error
+	bestEffortCalls int
+}
+
+func (r *liveTestBestEffortUsageRepo) CreateBestEffort(_ context.Context, _ *UsageLog) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bestEffortCalls++
+	return r.bestEffortErr
+}
+
+// Live finalize 的异步队列写入失败后必须同步落库，避免唯一一次记录机会被吞掉。
+func TestFinalizeLiveCallUsageLogFallsBackToSyncCreate(t *testing.T) {
+	record := &LiveCallRecord{
+		CallID:     "call_usage_fallback",
+		CallHash:   hashLiveCallID("call_usage_fallback"),
+		AccountID:  11,
+		APIKeyID:   22,
+		UserID:     33,
+		LeaseID:    "lease-1",
+		Model:      "gpt-live-test",
+		CreatedAt:  time.Now().Add(-time.Second),
+		ExpiresAt:  time.Now().Add(time.Hour),
+		Controller: LiveControllerPending,
+	}
+	store := &liveTestStore{}
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+	usageRepo := &liveTestBestEffortUsageRepo{bestEffortErr: errors.New("usage log queue dropped")}
+	svc := &OpenAIGatewayService{
+		cache:              store,
+		concurrencyService: NewConcurrencyService(&liveTestConcurrencyCache{}),
+		usageLogRepo:       usageRepo,
+	}
+
+	svc.finalizeLiveCall(record)
+
+	usageRepo.mu.Lock()
+	defer usageRepo.mu.Unlock()
+	require.Equal(t, 1, usageRepo.bestEffortCalls)
+	require.Len(t, usageRepo.logs, 1, "best-effort 失败后必须同步兜底落库")
+	require.Equal(t, record.CallHash, usageRepo.logs[0].RequestID)
 }

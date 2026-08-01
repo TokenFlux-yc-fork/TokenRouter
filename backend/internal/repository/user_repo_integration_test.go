@@ -75,6 +75,27 @@ func (s *UserRepoSuite) mustCreateGroup(name string) *service.Group {
 	return groupEntityToService(g)
 }
 
+func (s *UserRepoSuite) TestUpdateForkSpecificFields() {
+	user := s.mustCreateUser(&service.User{Email: "fork-update-fields@example.com", APIKeyLimit: 100})
+	group := s.mustCreateGroup("fork-update-public-group")
+
+	loaded, err := s.repo.GetByID(s.ctx, user.ID)
+	s.Require().NoError(err)
+	loaded.APIKeyLimit = 7
+	loaded.DisabledPublicGroups = []int64{group.ID}
+
+	// fork 的数量上限与公共分组禁用关系必须独立受掩码控制。
+	s.Require().NoError(s.repo.Update(s.ctx, loaded, service.UserUpdateFields{
+		APIKeyLimit:          true,
+		DisabledPublicGroups: true,
+	}))
+
+	updated, err := s.repo.GetByID(s.ctx, user.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(7, updated.APIKeyLimit)
+	s.Require().Equal([]int64{group.ID}, updated.DisabledPublicGroups)
+}
+
 func (s *UserRepoSuite) mustCreatePlan(name string) *service.SubscriptionPlan {
 	s.T().Helper()
 
@@ -165,7 +186,7 @@ func (s *UserRepoSuite) TestUpdate() {
 	got, err := s.repo.GetByID(s.ctx, user.ID)
 	s.Require().NoError(err)
 	got.Username = "updated"
-	s.Require().NoError(s.repo.Update(s.ctx, got), "Update")
+	s.Require().NoError(s.repo.Update(s.ctx, got, service.UserUpdateFields{Username: true}), "Update")
 
 	updated, err := s.repo.GetByID(s.ctx, user.ID)
 	s.Require().NoError(err, "GetByID after update")
@@ -243,7 +264,7 @@ func (s *UserRepoSuite) TestUpdateIgnoresNoRowsFromConflictingEmailIdentityUpser
 	got, err := s.repo.GetByID(s.ctx, user.ID)
 	s.Require().NoError(err)
 	got.Username = "updated"
-	s.Require().NoError(s.repo.Update(s.ctx, got), "Update should tolerate ON CONFLICT DO NOTHING returning no rows")
+	s.Require().NoError(s.repo.Update(s.ctx, got, service.UserUpdateFields{Username: true}), "Update should tolerate ON CONFLICT DO NOTHING returning no rows")
 
 	updated, err := s.repo.GetByID(s.ctx, user.ID)
 	s.Require().NoError(err)
@@ -635,7 +656,7 @@ func (s *UserRepoSuite) TestUpdateWithNormalizedEmailGuard_RejectsConflict() {
 	s.Require().NoError(err)
 	got.Email = "yourname+alias@googlemail.com."
 
-	err = s.repo.UpdateWithNormalizedEmailGuard(s.ctx, got, service.NormalizeRegistrationEmailAddress(got.Email))
+	err = s.repo.UpdateWithNormalizedEmailGuard(s.ctx, got, service.NormalizeRegistrationEmailAddress(got.Email), service.UserUpdateFields{Email: true})
 	s.Require().ErrorIs(err, service.ErrEmailExists)
 
 	reloaded, err := s.repo.GetByID(s.ctx, other.ID)
@@ -650,7 +671,7 @@ func (s *UserRepoSuite) TestUpdateWithNormalizedEmailGuard_AllowsSameUser() {
 	s.Require().NoError(err)
 	got.Email = "yourname@gmail.com"
 
-	err = s.repo.UpdateWithNormalizedEmailGuard(s.ctx, got, service.NormalizeRegistrationEmailAddress(got.Email))
+	err = s.repo.UpdateWithNormalizedEmailGuard(s.ctx, got, service.NormalizeRegistrationEmailAddress(got.Email), service.UserUpdateFields{Email: true})
 	s.Require().NoError(err)
 
 	reloaded, err := s.repo.GetByID(s.ctx, user.ID)
@@ -776,7 +797,7 @@ func (s *UserRepoSuite) TestCRUD_And_Filters_And_AtomicUpdates() {
 	s.Require().Equal(user2.ID, gotByEmail.ID, "GetByEmail ID mismatch")
 
 	got.Username = "Alice2"
-	s.Require().NoError(s.repo.Update(s.ctx, got), "Update")
+	s.Require().NoError(s.repo.Update(s.ctx, got, service.UserUpdateFields{Username: true}), "Update")
 	got2, err := s.repo.GetByID(s.ctx, user1.ID)
 	s.Require().NoError(err, "GetByID after update")
 	s.Require().Equal("Alice2", got2.Username, "Update did not persist")

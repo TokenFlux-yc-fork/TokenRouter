@@ -14,14 +14,16 @@ import (
 type rpmUserRepoStub struct {
 	*userRepoStub
 	lastUpdated *User
+	lastFields  UserUpdateFields
 }
 
-func (s *rpmUserRepoStub) Update(_ context.Context, user *User) error {
+func (s *rpmUserRepoStub) Update(_ context.Context, user *User, fields UserUpdateFields) error {
 	if user == nil {
 		return nil
 	}
 	clone := *user
 	s.lastUpdated = &clone
+	s.lastFields = fields
 	if s.userRepoStub != nil {
 		s.userRepoStub.user = &clone
 	}
@@ -45,6 +47,7 @@ func TestAdminService_UpdateUser_InvalidatesAuthCacheOnRPMLimitChange(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, updated)
 	require.Equal(t, 60, updated.RPMLimit)
+	require.Equal(t, UserUpdateFields{RPMLimit: true}, repo.lastFields)
 	require.Equal(t, []int64{42}, invalidator.userIDs, "仅修改 RPMLimit 也应失效 API Key 认证缓存")
 }
 
@@ -84,6 +87,7 @@ func TestAdminService_UpdateUser_InvalidatesAuthCacheOnDisabledPublicGroupsChang
 	})
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 3}, updated.DisabledPublicGroups)
+	require.Equal(t, UserUpdateFields{DisabledPublicGroups: true}, repo.lastFields)
 	require.Equal(t, []int64{42}, invalidator.userIDs)
 }
 
@@ -98,6 +102,7 @@ func TestAdminService_UpdateUser_SavesExplicitZeroAPIKeyLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, updated.APIKeyLimit)
 	require.Equal(t, 0, repo.lastUpdated.APIKeyLimit)
+	require.Equal(t, UserUpdateFields{APIKeyLimit: true}, repo.lastFields)
 }
 
 func TestAdminService_UpdateUser_RejectsNegativeAPIKeyLimit(t *testing.T) {

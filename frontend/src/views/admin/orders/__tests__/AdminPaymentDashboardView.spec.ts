@@ -76,17 +76,17 @@ describe('AdminPaymentDashboardView', () => {
     mockGetDashboard.mockReset()
     mockGetDashboard.mockResolvedValue({
       data: {
-        today_amount: 0,
-        total_amount: 0,
+        today_amount: {},
+        total_amount: {},
         today_count: 0,
         total_count: 0,
-        avg_amount: 0,
+        avg_amount: {},
         avg_reasoning_point_purchase_unit_price: 0,
         reasoning_point_purchase_order_count: 0,
         daily_series: [],
         payment_methods: [],
         purchase_distribution: [],
-        top_users: []
+        top_users: {}
       }
     })
   })

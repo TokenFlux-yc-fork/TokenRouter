@@ -170,3 +170,13 @@ func TestOllamaCloudUsageSessionRouteOmitsAuditBody(t *testing.T) {
 	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
 	require.NotContains(t, logs[0].RequestBody, "audit-canary")
 }
+
+func TestPasskeyFinishRoutesOmitAuditBody(t *testing.T) {
+	// WebAuthn finish body 含完整 assertion/attestation，不能作为普通审计 JSON 入库。
+	for _, route := range []string{
+		"POST /api/v1/auth/passkey/login/finish",
+		"POST /api/v1/user/passkeys/register/finish",
+	} {
+		require.Contains(t, auditBodyOmittedRoutes, route)
+	}
+}

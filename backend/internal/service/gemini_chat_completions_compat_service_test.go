@@ -109,6 +109,7 @@ func TestConvertGeminiToClaudeMessageOmitsInlineDataForAnthropicMessages(t *test
 	require.NoError(t, err)
 
 	withInlineData, _ := convertGeminiToClaudeMessage(geminiResp, "gemini-test", rawData, true)
+	require.Regexp(t, `^msg_01[0-9A-Za-z]{22}$`, withInlineData["id"])
 	contentWithInlineData, ok := withInlineData["content"].([]any)
 	require.True(t, ok)
 	require.Len(t, contentWithInlineData, 4)
@@ -130,6 +131,17 @@ func TestConvertGeminiToClaudeMessageOmitsInlineDataForAnthropicMessages(t *test
 	require.Equal(t, "tool_use", toolUseWithoutInlineData["type"])
 	require.Equal(t, "get_weather", toolUseWithoutInlineData["name"])
 	require.Equal(t, map[string]any{"type": "text", "text": "after"}, contentWithoutInlineData[2])
+}
+
+func TestGenerateAnthropicMsgID_FormatAndUniqueness(t *testing.T) {
+	seen := make(map[string]struct{}, 100)
+	for i := 0; i < 100; i++ {
+		id := generateAnthropicMsgID()
+		require.Regexp(t, `^msg_01[0-9A-Za-z]{22}$`, id)
+		_, duplicate := seen[id]
+		require.False(t, duplicate, "第 %d 次调用生成了重复 ID: %s", i, id)
+		seen[id] = struct{}{}
+	}
 }
 
 func TestGeminiResponseToChatCompletionsRetainsTextAndToolBehavior(t *testing.T) {
