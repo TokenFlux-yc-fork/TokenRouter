@@ -425,7 +425,8 @@ WHERE e.request_id = $1
 ORDER BY
   CASE WHEN event->>'at_unix_ms' ~ '^-?[0-9]+$' THEN (event->>'at_unix_ms')::bigint ELSE 0 END ASC,
   attempts.ordinality ASC,
-  e.id ASC`
+  e.id ASC
+LIMIT 200`
 
 	rows, err := r.db.QueryContext(ctx, q, requestID)
 	if err != nil {
