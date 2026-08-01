@@ -388,6 +388,18 @@ export default {
           status: '状态码',
           requestId: '请求ID',
           actions: '操作'
+        },
+        timeline: {
+          title: '尝试时间线',
+          view: '查看尝试',
+          loading: '正在加载尝试时间线…',
+          failedToLoad: '加载尝试时间线失败',
+          empty: '该请求没有记录上游尝试。',
+          attempt: '第 {n} 次尝试',
+          status: '上游状态码 {code}',
+          passthrough: '直通',
+          gateway: '网关',
+          telemetryNotice: '仅用于运营遥测，不用于计费。'
         }
       },
       alertEvents: {

@@ -388,6 +388,18 @@ export default {
           status: 'Status',
           requestId: 'Request ID',
           actions: 'Actions'
+        },
+        timeline: {
+          title: 'Attempt timeline',
+          view: 'View attempts',
+          loading: 'Loading attempt timeline...',
+          failedToLoad: 'Failed to load attempt timeline',
+          empty: 'No upstream attempts recorded for this request.',
+          attempt: 'Attempt {n}',
+          status: 'Upstream status {code}',
+          passthrough: 'Passthrough',
+          gateway: 'Gateway',
+          telemetryNotice: 'Operational telemetry only. This data is not used for billing.'
         }
       },
       alertEvents: {

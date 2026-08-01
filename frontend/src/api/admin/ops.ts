@@ -162,6 +162,21 @@ export interface OpsRequestDetailsParams {
 
 export type OpsRequestDetailsResponse = PaginatedResponse<OpsRequestDetail>
 
+export interface OpsAttemptTimelineItem {
+  at_unix_ms: number
+  index: number
+  passthrough: boolean
+  platform?: string
+  account_id?: number
+  account_name?: string
+  upstream_status_code?: number
+  upstream_request_id?: string
+  kind?: string
+  stage?: string
+  scope?: string
+  reason?: string
+}
+
 export interface OpsLatencyHistogramBucket {
   range: string
   count: number
@@ -1187,6 +1202,13 @@ export async function listRequestDetails(params: OpsRequestDetailsParams): Promi
   return data
 }
 
+export async function getAttemptTimeline(requestId: string): Promise<OpsAttemptTimelineItem[]> {
+  const { data } = await apiClient.get<OpsAttemptTimelineItem[]>(
+    `/admin/ops/requests/${encodeURIComponent(requestId)}/attempt-timeline`
+  )
+  return data || []
+}
+
 // Alert rules
 export async function listAlertRules(): Promise<AlertRule[]> {
   const { data } = await apiClient.get<AlertRule[]>('/admin/ops/alert-rules')
@@ -1349,6 +1371,7 @@ export const opsAPI = {
   listRequestErrorUpstreamErrors,
 
   listRequestDetails,
+  getAttemptTimeline,
   listAlertRules,
   createAlertRule,
   updateAlertRule,
