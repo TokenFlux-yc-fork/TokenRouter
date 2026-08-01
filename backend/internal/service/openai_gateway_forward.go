@@ -944,7 +944,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Skip non-WSv2 invalid_encrypted_content retry because encrypted reasoning items are missing (account: %s)", account.Name)
 			}
 			if !nativeRemoteCompactionV2 {
-				if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {
+				if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBodyWithPolicy(resp.StatusCode, body, respBody, s.cfg != nil && s.cfg.Gateway.StrictOutputLimit); retryErr != nil {
 					return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
 				} else if changed && rejectedFieldRetryState.Allow(retryBody) {
 					body = retryBody

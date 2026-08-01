@@ -60,6 +60,10 @@ func (s *openAIResponsesRejectedFieldRetryState) remember(body []byte) {
 // normalizeOpenAIResponsesRejectedFieldRetryBody 只处理上游明确指出的已知可选字段，
 // 并且每次仅删除被拒绝的精确路径，避免根据模糊错误文案扩大请求变更范围。
 func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, responseBody []byte) ([]byte, string, bool, error) {
+	return normalizeOpenAIResponsesRejectedFieldRetryBodyWithPolicy(statusCode, body, responseBody, false)
+}
+
+func normalizeOpenAIResponsesRejectedFieldRetryBodyWithPolicy(statusCode int, body, responseBody []byte, strictOutputLimit bool) ([]byte, string, bool, error) {
 	if statusCode != http.StatusBadRequest || len(body) == 0 || len(responseBody) == 0 {
 		return nil, "", false, nil
 	}
@@ -84,6 +88,9 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 		return removeOpenAIResponsesRejectedStatusesAtIndex(body, index)
 	}
 	if param == "max_output_tokens" && gjson.GetBytes(body, "max_output_tokens").Exists() {
+		if strictOutputLimit {
+			return nil, "", false, nil
+		}
 		retryBody, err := sjson.DeleteBytes(body, "max_output_tokens")
 		if err != nil {
 			return nil, "", false, fmt.Errorf("delete rejected max_output_tokens: %w", err)
