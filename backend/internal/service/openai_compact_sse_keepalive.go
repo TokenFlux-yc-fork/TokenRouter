@@ -18,12 +18,12 @@ const (
 	openAIProtocolKeepaliveKey   = "openai_protocol_keepalive_bytes"
 )
 
-// openAICompactSSEKeepalive 在 compact 上游 unary 等待期间向下游写 SSE 注释行
-// 心跳。上游 /responses/compact 在模型处理期间不发送任何字节（大上下文可长达
+// openAICompactSSEKeepalive 在 compact 上游 unary 等待期间向下游写 SSE data ping
+// 和注释行心跳。上游 /responses/compact 在模型处理期间不发送任何字节（大上下文可长达
 // 数分钟），下游若经过反向代理（Nginx/Cloudflare Tunnel 等），零字节静默会触发
 // 代理的空闲/读超时并掐断连接，Codex 只会盲目重连并重复消耗上游 compact
-// 配额（#3887）。SSE 注释行在 eventsource 解析层被直接忽略，不会进入客户端
-// 事件流。
+// 配额（#3887）。data ping 可被 EventSource 客户端观察，注释行则维持中间代理
+// 的字节级活性。
 //
 // 首拍延迟一个 interval：绝大多数硬错误（鉴权/参数/限流）在此之前返回，仍走
 // 原 JSON+状态码链路（Codex 按 HTTP 状态码重试）；首拍之后状态码固化为 200，
@@ -34,7 +34,7 @@ type openAICompactSSEKeepalive struct {
 	writer     gin.ResponseWriter
 	started    bool
 	stopped    bool
-	// bytes 是心跳已写出的注释字节数。心跳不构成语义响应，handler 的
+	// bytes 是心跳已写出的 ping 与注释字节数。心跳不构成语义响应，handler 的
 	// "Forward 期间是否已写响应"判定（failover 放弃换号的依据）必须扣除
 	// 这部分字节，见 OpenAICompactKeepaliveAdjustedWrittenSize。
 	bytes int
@@ -93,8 +93,8 @@ func StartOpenAICompactSSEKeepalive(c *gin.Context, interval time.Duration) func
 	}
 }
 
-// beat 在锁内提交（首次）响应头并写出一条 SSE 注释行；返回 false 表示心跳已
-// 停止或下游写入失败，goroutine 应退出。
+// beat 在锁内提交（首次）响应头并写出一条可观察的 SSE ping 和一条注释行；
+// 返回 false 表示心跳已停止或下游写入失败，goroutine 应退出。
 func (k *openAICompactSSEKeepalive) beat() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -110,7 +110,14 @@ func (k *openAICompactSSEKeepalive) beat() bool {
 		k.writer.WriteHeader(http.StatusOK)
 		k.started = true
 	}
-	n, err := k.writer.Write([]byte(": keepalive\n\n"))
+	n, err := writeOpenAINativeRemoteCompactionPingFrame(k.writer)
+	k.bytes += n
+	if err != nil {
+		MarkOpsStreamError(k.ginContext, "downstream_write_error", err.Error(), 0)
+		k.markStoppedLocked()
+		return false
+	}
+	n, err = k.writer.Write([]byte(": keepalive\n\n"))
 	k.bytes += n
 	if err != nil {
 		MarkOpsStreamError(k.ginContext, "downstream_write_error", err.Error(), 0)
@@ -163,7 +170,7 @@ func StopOpenAICompactSSEKeepaliveCommitted(c *gin.Context) bool {
 	return committed
 }
 
-// OpenAICompactKeepaliveAdjustedWrittenSize 返回排除 compact 心跳注释字节后
+// OpenAICompactKeepaliveAdjustedWrittenSize 返回排除 compact 心跳字节后
 // 的响应已写字节数；无心跳的请求等价于 c.Writer.Size()。心跳字节不构成语义
 // 响应——handler 以"Forward 前后 Size 是否变化"判定是否已向客户端写出响应
 // （变化则放弃 failover 换号），该判定不得被心跳污染，否则 compact 请求

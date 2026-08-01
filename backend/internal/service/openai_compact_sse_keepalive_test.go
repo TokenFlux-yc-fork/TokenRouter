@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,11 +22,12 @@ func waitForKeepaliveBeats() {
 	time.Sleep(20 * keepaliveTestInterval)
 }
 
-// stripKeepaliveComments 去掉 SSE 注释块，返回真实事件文本。
-func stripKeepaliveComments(body string) string {
+// stripKeepaliveFrames 去掉 SSE ping 和注释块，返回真实事件文本。
+func stripKeepaliveFrames(body string) string {
 	var blocks []string
 	for _, block := range strings.Split(strings.TrimSpace(body), "\n\n") {
-		if strings.HasPrefix(strings.TrimSpace(block), ":") {
+		trimmed := strings.TrimSpace(block)
+		if strings.HasPrefix(trimmed, ":") || strings.HasPrefix(trimmed, "event: ping\n") {
 			continue
 		}
 		blocks = append(blocks, block)
@@ -51,7 +53,13 @@ func TestStartOpenAICompactSSEKeepalive_NoopWhenUnmarkedOrDisabled(t *testing.T)
 	require.False(t, StopOpenAICompactSSEKeepaliveCommitted(c))
 }
 
-func TestOpenAICompactSSEKeepalive_CommitsHeadersAndComments(t *testing.T) {
+func TestOpenAICompactSSEKeepalive_EventSourceObservesPingButNotComment(t *testing.T) {
+	require.Empty(t, parseNativeRemoteCompactionEventSource(": keepalive\n\n"))
+	events := parseNativeRemoteCompactionEventSource(openAINativeRemoteCompactionPing)
+	require.Equal(t, [][2]string{{"ping", `{"type":"ping"}`}}, events)
+}
+
+func TestOpenAICompactSSEKeepalive_CommitsHeadersAndPing(t *testing.T) {
 	c, rec := newCompactBridgeTestContext(t, true)
 	stop := StartOpenAICompactSSEKeepalive(c, keepaliveTestInterval)
 	defer stop()
@@ -61,6 +69,7 @@ func TestOpenAICompactSSEKeepalive_CommitsHeadersAndComments(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
 	require.Equal(t, "no", rec.Header().Get("X-Accel-Buffering"))
+	require.Contains(t, rec.Body.String(), "event: ping\ndata: {\"type\":\"ping\"}\n\n")
 	require.Contains(t, rec.Body.String(), ": keepalive\n\n")
 }
 
@@ -86,7 +95,7 @@ func TestWriteOpenAICompactSSEBridge_AfterKeepaliveCommitAppendsEvents(t *testin
 	require.True(t, handled)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	events := parseCompactBridgeSSE(t, stripKeepaliveComments(rec.Body.String()))
+	events := parseCompactBridgeSSE(t, stripKeepaliveFrames(rec.Body.String()))
 	require.Len(t, events, 2)
 	require.Equal(t, "response.output_item.done", events[0][0])
 	require.Equal(t, "compaction", gjson.Get(events[0][1], "item.type").String())
@@ -106,7 +115,7 @@ func TestWriteOpenAICompactSSEBridge_AfterKeepaliveCommitFailureEmitsFailedEvent
 	require.NoError(t, err)
 	require.True(t, handled)
 
-	events := parseCompactBridgeSSE(t, stripKeepaliveComments(rec.Body.String()))
+	events := parseCompactBridgeSSE(t, stripKeepaliveFrames(rec.Body.String()))
 	require.Len(t, events, 1)
 	require.Equal(t, "response.failed", events[0][0])
 	require.Equal(t, "failed", gjson.Get(events[0][1], "response.status").String())
@@ -269,7 +278,7 @@ func TestWriteOpenAIFastPolicyBlockedResponse_AfterKeepaliveCommit(t *testing.T)
 	writeOpenAIFastPolicyBlockedResponse(c, &OpenAIFastBlockedError{Message: "tier blocked"})
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	events := parseCompactBridgeSSE(t, stripKeepaliveComments(rec.Body.String()))
+	events := parseCompactBridgeSSE(t, stripKeepaliveFrames(rec.Body.String()))
 	require.Len(t, events, 1)
 	require.Equal(t, "response.failed", events[0][0])
 	require.Equal(t, "permission_error", gjson.Get(events[0][1], "response.error.code").String())
@@ -338,4 +347,40 @@ func TestWriteOpenAIFastPolicyBlockedResponse_BeforeKeepaliveCommit(t *testing.T
 
 	require.Equal(t, http.StatusForbidden, rec.Code)
 	require.Equal(t, "permission_error", gjson.Get(rec.Body.String(), "error.type").String())
+}
+
+func TestOpenAICompactKeepalive_PingIsOwnedByCompactAccounting(t *testing.T) {
+	c, rec := newCompactBridgeTestContext(t, true)
+	stop := StartOpenAICompactSSEKeepalive(c, keepaliveTestInterval)
+	waitForKeepaliveBeats()
+	StopOpenAICompactSSEKeepaliveCommitted(c)
+	stop()
+
+	require.NotEmpty(t, rec.Body.String())
+	require.Equal(t, -1, OpenAICompactKeepaliveAdjustedWrittenSize(c))
+	require.Equal(t, -1, OpenAISemanticWrittenSize(c))
+	value, ok := c.Get(openAIProtocolKeepaliveKey)
+	if ok {
+		counter, _ := value.(*atomic.Int64)
+		require.NotNil(t, counter)
+		require.Zero(t, counter.Load(), "compact ping must not enter native protocol accounting")
+	}
+
+	_, err := c.Writer.Write([]byte("x"))
+	require.NoError(t, err)
+	require.Equal(t, 1, OpenAICompactKeepaliveAdjustedWrittenSize(c))
+	require.Equal(t, 1, OpenAISemanticWrittenSize(c))
+}
+
+func TestOpenAINativeRemoteCompactionPing_RetainsProtocolAccounting(t *testing.T) {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	before := OpenAISemanticWrittenSize(c)
+	n, err := writeOpenAINativeRemoteCompactionPing(c, c.Writer)
+	require.NoError(t, err)
+	require.Positive(t, n)
+	require.Equal(t, before, OpenAISemanticWrittenSize(c))
+	_, err = c.Writer.WriteString("semantic-output")
+	require.NoError(t, err)
+	require.Equal(t, len("semantic-output"), OpenAISemanticWrittenSize(c))
 }

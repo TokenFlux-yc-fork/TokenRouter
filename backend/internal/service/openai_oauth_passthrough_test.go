@@ -1381,7 +1381,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_CompactErrorAfterKeepaliveIsFail
 	require.Error(t, err)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Result().Header.Get("Content-Type"), "text/event-stream")
-	events := parseCompactBridgeSSE(t, stripKeepaliveComments(rec.Body.String()))
+	events := parseCompactBridgeSSE(t, stripKeepaliveFrames(rec.Body.String()))
 	require.Len(t, events, 1)
 	require.Equal(t, "response.failed", events[0][0])
 	require.Equal(t, "failed", gjson.Get(events[0][1], "response.status").String())
