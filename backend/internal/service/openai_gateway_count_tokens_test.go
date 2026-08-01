@@ -21,6 +21,27 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+type countTokensCapabilityRepository struct {
+	ensured      []OpenAIResponsesInputTokensCapabilityKey
+	observations []OpenAIResponsesInputTokensCapabilityObservation
+	ensureErr    error
+	upsertErr    error
+}
+
+func (r *countTokensCapabilityRepository) GetExact(context.Context, OpenAIResponsesInputTokensCapabilityKey) (*OpenAIResponsesInputTokensCapabilityRecord, error) {
+	return nil, nil
+}
+
+func (r *countTokensCapabilityRepository) EnsureUnknown(_ context.Context, _ *Account, key OpenAIResponsesInputTokensCapabilityKey) (bool, error) {
+	r.ensured = append(r.ensured, key)
+	return r.ensureErr == nil, r.ensureErr
+}
+
+func (r *countTokensCapabilityRepository) UpsertObservation(_ context.Context, _ *Account, observation OpenAIResponsesInputTokensCapabilityObservation) (bool, error) {
+	r.observations = append(r.observations, observation)
+	return r.upsertErr == nil, r.upsertErr
+}
+
 type countTokensRuntimeStateRepo struct {
 	AccountRepository
 	tempUnschedCalls int
@@ -91,12 +112,14 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUsesResponsesI
 		Body:       io.NopCloser(strings.NewReader(`{"object":"response.input_tokens","input_tokens":42}`)),
 	}}
 
+	capabilityRepo := &countTokensCapabilityRepository{}
 	svc := &OpenAIGatewayService{
 		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
 			Enabled:           false,
 			AllowInsecureHTTP: true,
 		}}},
-		httpUpstream: upstream,
+		httpUpstream:                             upstream,
+		openAIResponsesInputTokensCapabilityRepo: capabilityRepo,
 	}
 	account := &Account{
 		ID:          101,
@@ -123,6 +146,12 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUsesResponsesI
 	require.Equal(t, "gpt-5.3-codex", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
+	require.Len(t, capabilityRepo.ensured, 1)
+	require.Len(t, capabilityRepo.observations, 1)
+	require.Equal(t, capabilityRepo.ensured[0], capabilityRepo.observations[0].Key)
+	require.Equal(t, OpenAIResponsesInputTokensCapabilitySupported, capabilityRepo.observations[0].State)
+	require.Equal(t, "upstream_success", capabilityRepo.observations[0].LastOutcome)
+	require.Equal(t, http.StatusOK, *capabilityRepo.observations[0].StatusCode)
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_OAuthFallsBackWhenPlatformEndpointUnsupported(t *testing.T) {
@@ -373,15 +402,20 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUnsupportedFal
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"The /v1/responses/input_tokens endpoint was not found"}}`)),
 	}}
+	capabilityRepo := &countTokensCapabilityRepository{}
 	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true}}},
-		httpUpstream: upstream,
+		cfg:                                      &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true}}},
+		httpUpstream:                             upstream,
+		openAIResponsesInputTokensCapabilityRepo: capabilityRepo,
 	}
 
 	err = svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5")
 	require.NoError(t, err)
 	require.JSONEq(t, `{"input_tokens":`+strconv.Itoa(expected)+`}`, rec.Body.String())
 	require.Equal(t, OpsInputTokensSourceEstimate, c.GetString(OpsInputTokensSourceKey))
+	require.Len(t, capabilityRepo.observations, 1)
+	require.Equal(t, OpenAIResponsesInputTokensCapabilityUnsupported, capabilityRepo.observations[0].State)
+	require.Equal(t, inputTokensFallbackUnsupported, capabilityRepo.observations[0].LastOutcome)
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_InvalidSuccessIsUncommittedFailover(t *testing.T) {
@@ -401,9 +435,11 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_InvalidSuccessIsUnco
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(responseBody)),
 		}}
+		capabilityRepo := &countTokensCapabilityRepository{}
 		svc := &OpenAIGatewayService{
-			cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true}}},
-			httpUpstream: upstream,
+			cfg:                                      &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true}}},
+			httpUpstream:                             upstream,
+			openAIResponsesInputTokensCapabilityRepo: capabilityRepo,
 		}
 
 		err := svc.ForwardCountTokensAsAnthropic(context.Background(), c, account, body, "gpt-5")
@@ -412,6 +448,7 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_InvalidSuccessIsUnco
 		require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 		require.True(t, failoverErr.SuppressAccountScheduleFailure)
 		require.Zero(t, rec.Body.Len(), responseBody)
+		require.Empty(t, capabilityRepo.observations, responseBody)
 	}
 }
 
