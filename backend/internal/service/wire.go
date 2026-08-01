@@ -832,6 +832,7 @@ func ProvideOpenAIGatewayService(
 	pricingService *PricingService,
 	probeBudgetRepo OpenAINativeCompactionProbeBudgetRepository,
 	capabilityRepo OpenAINativeCompactionCapabilityRepository,
+	inputTokensCapabilityRepo OpenAIResponsesInputTokensCapabilityRepository,
 	attemptAttributionRepo UpstreamAttemptAttributionRepository,
 	tlsFPRouterServices ...*TLSFingerprintRouterService,
 ) *OpenAIGatewayService {
@@ -865,6 +866,7 @@ func ProvideOpenAIGatewayService(
 	svc.openAIProbePriceLookup = pricingService
 	svc.openAIProbeBudgetRepo = probeBudgetRepo
 	svc.openAINativeCompactionCapabilityRepo = capabilityRepo
+	svc.openAIResponsesInputTokensCapabilityRepo = inputTokensCapabilityRepo
 	svc.upstreamAttemptAttributionRepo = attemptAttributionRepo
 	return svc
 }

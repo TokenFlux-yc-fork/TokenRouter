@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
@@ -97,6 +98,7 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return err
 	}
+	capabilityKey, capabilityKeyOK := s.ensureOpenAIInputTokensCapabilityUnknown(ctx, account, prepared.UpstreamModel)
 
 	upstreamBody, err := marshalOpenAIUpstreamJSON(prepared.Request)
 	if err != nil {
@@ -161,6 +163,13 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	if resp.StatusCode >= 400 {
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if fallbackReason, ok := classifyOpenAIInputTokensLocalFallback(account, resp.StatusCode, respBody); ok {
+			if capabilityKeyOK {
+				state := OpenAIResponsesInputTokensCapabilityUnsupported
+				if fallbackReason == inputTokensFallbackScopeDenied {
+					state = OpenAIResponsesInputTokensCapabilityScopeDenied
+				}
+				s.observeOpenAIInputTokensCapability(ctx, account, capabilityKey, state, resp.StatusCode, fallbackReason)
+			}
 			writeOpenAIInputTokensFallback(c, account, prepared, resp.StatusCode, fallbackReason)
 			return nil
 		}
@@ -225,6 +234,9 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	if err != nil {
 		return newOpenAIInputTokensProtocolFailoverError(resp, "input_tokens_invalid_response_schema")
 	}
+	if capabilityKeyOK {
+		s.observeOpenAIInputTokensCapability(ctx, account, capabilityKey, OpenAIResponsesInputTokensCapabilitySupported, resp.StatusCode, "upstream_success")
+	}
 
 	if c != nil {
 		c.Set(OpsInputTokensSourceKey, OpsInputTokensSourceUpstream)
@@ -233,6 +245,58 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		"input_tokens": inputTokens,
 	})
 	return nil
+}
+
+func (s *OpenAIGatewayService) ensureOpenAIInputTokensCapabilityUnknown(
+	ctx context.Context,
+	account *Account,
+	effectiveModel string,
+) (OpenAIResponsesInputTokensCapabilityKey, bool) {
+	if s == nil || s.openAIResponsesInputTokensCapabilityRepo == nil {
+		return OpenAIResponsesInputTokensCapabilityKey{}, false
+	}
+	key, err := ResolveOpenAIResponsesInputTokensCapabilityKey(account, effectiveModel)
+	if err != nil {
+		logger.L().Warn("openai count_tokens: capability key unavailable",
+			zap.Int64("account_id", account.ID),
+			zap.Error(err),
+		)
+		return OpenAIResponsesInputTokensCapabilityKey{}, false
+	}
+	if _, err := s.openAIResponsesInputTokensCapabilityRepo.EnsureUnknown(ctx, account, key); err != nil {
+		logger.L().Warn("openai count_tokens: capability initialization failed",
+			zap.Int64("account_id", account.ID),
+			zap.Error(err),
+		)
+	}
+	return key, true
+}
+
+func (s *OpenAIGatewayService) observeOpenAIInputTokensCapability(
+	ctx context.Context,
+	account *Account,
+	key OpenAIResponsesInputTokensCapabilityKey,
+	state OpenAIResponsesInputTokensCapabilityState,
+	statusCode int,
+	outcome string,
+) {
+	if s == nil || s.openAIResponsesInputTokensCapabilityRepo == nil {
+		return
+	}
+	if _, err := s.openAIResponsesInputTokensCapabilityRepo.UpsertObservation(ctx, account, OpenAIResponsesInputTokensCapabilityObservation{
+		Key:         key,
+		State:       state,
+		StatusCode:  &statusCode,
+		LastOutcome: outcome,
+		CheckedAt:   time.Now().UTC(),
+	}); err != nil {
+		logger.L().Warn("openai count_tokens: capability observation failed",
+			zap.Int64("account_id", account.ID),
+			zap.String("state", string(state)),
+			zap.Int("upstream_status", statusCode),
+			zap.Error(err),
+		)
+	}
 }
 
 func prepareOpenAIInputTokensCountRequest(

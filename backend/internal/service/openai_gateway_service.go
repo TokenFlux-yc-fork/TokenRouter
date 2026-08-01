@@ -466,9 +466,10 @@ type OpenAIGatewayService struct {
 	userPlatformQuotaRepo                UserPlatformQuotaRepository
 	dataSharingService                   *DataSharingService
 	openAIProbePriceLookup               OpenAIProviderPriceLookup
-	openAIProbeBudgetRepo                OpenAINativeCompactionProbeBudgetRepository
-	openAINativeCompactionCapabilityRepo OpenAINativeCompactionCapabilityRepository
-	upstreamAttemptAttributionRepo       UpstreamAttemptAttributionRepository
+	openAIProbeBudgetRepo                     OpenAINativeCompactionProbeBudgetRepository
+	openAINativeCompactionCapabilityRepo     OpenAINativeCompactionCapabilityRepository
+	openAIResponsesInputTokensCapabilityRepo OpenAIResponsesInputTokensCapabilityRepository
+	upstreamAttemptAttributionRepo           UpstreamAttemptAttributionRepository
 	openAINativeCompactionStageBudget    *OpenAIStageBudget
 	liveAttestation                      liveattestation.Provider
 	liveAttestationCipher                SecretEncryptor
