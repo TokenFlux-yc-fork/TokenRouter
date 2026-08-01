@@ -105,6 +105,7 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUsesResponsesI
 	body := []byte(`{"model":"claude-sonnet-4-5","system":"You are helpful.","messages":[{"role":"user","content":"hello"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	MarkOpenAINativeRemoteCompactionV2(c)
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -113,6 +114,7 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUsesResponsesI
 	}}
 
 	capabilityRepo := &countTokensCapabilityRepository{}
+	attemptRepo := &stubUpstreamAttemptAttributionRepository{}
 	svc := &OpenAIGatewayService{
 		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{
 			Enabled:           false,
@@ -120,6 +122,7 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUsesResponsesI
 		}}},
 		httpUpstream:                             upstream,
 		openAIResponsesInputTokensCapabilityRepo: capabilityRepo,
+		upstreamAttemptAttributionRepo:           attemptRepo,
 	}
 	account := &Account{
 		ID:          101,
@@ -152,6 +155,14 @@ func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_APIKeyUsesResponsesI
 	require.Equal(t, OpenAIResponsesInputTokensCapabilitySupported, capabilityRepo.observations[0].State)
 	require.Equal(t, "upstream_success", capabilityRepo.observations[0].LastOutcome)
 	require.Equal(t, http.StatusOK, *capabilityRepo.observations[0].StatusCode)
+	attempts := attemptRepo.snapshot()
+	require.Len(t, attempts, 3)
+	require.Equal(t, UpstreamAttemptStateStarted, attempts[0].State)
+	require.Equal(t, UpstreamAttemptStateInProgress, attempts[1].State)
+	require.Equal(t, UpstreamAttemptStateTerminal, attempts[2].State)
+	require.Equal(t, OpenAINativeCompactionValid, OpenAINativeCompactionOutcome(attempts[2].Semantic.Outcome))
+	require.True(t, attempts[2].DeliveryCommitted)
+	require.NotContains(t, fmt.Sprintf("%+v", attempts[2]), "hello")
 }
 
 func TestOpenAIGatewayService_ForwardCountTokensAsAnthropic_OAuthFallsBackWhenPlatformEndpointUnsupported(t *testing.T) {

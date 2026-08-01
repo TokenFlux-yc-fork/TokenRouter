@@ -192,27 +192,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		defer func() { _ = nativeStage.Close() }()
 		nativeValidator = NewOpenAINativeCompactionValidator()
 	}
-	wsAttempt := s.beginOpenAINativeWSAttempt(
-		ctx,
-		account,
-		originalModel,
-		openAIServiceTierIsPriority(extractOpenAIServiceTier(reqBody)),
-		nativeCompaction,
-		UpstreamAttemptTransportWebSocket,
-		NewOpenAIWSConnectionID(),
-		NewOpenAIWSTurnID(),
-	)
-	defer func() {
-		if wsAttempt == nil {
-			return
-		}
-		if nativeValidation.Outcome == "" || nativeValidation.Outcome == OpenAINativeCompactionPending {
-			nativeValidation = nativeValidator.Finish()
-		}
-		wsAttempt.finishWebSocket(nativeValidation, responseID, usage, usageObserved, nativeDeliveryCommitted && !clientDisconnected, !nativeDeliveryStarted, forwardErr)
-		finalizeOpenAINativeForwardResult(forwardResult, account, wsAttempt, nativeCompaction, UpstreamAttemptTransportWebSocket)
-	}()
-
 	acquireCtx, acquireCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 	defer acquireCancel()
 	tlsProfile, tlsProfileKey := s.resolveOpenAIWSTLSProfile(account, tlsRouterMatch)
@@ -301,9 +280,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		lease.Release()
 	}()
 	connID := strings.TrimSpace(lease.ConnID())
-	if wsAttempt != nil {
-		wsAttempt.observeWebSocket(lease.HandshakeHeaders())
-	}
 	logOpenAIWSModeDebug(
 		"connected account_id=%d account_type=%s transport=%s conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d has_previous_response_id=%v",
 		account.ID,
@@ -378,6 +354,30 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			return nil, err
 		}
 	}
+
+	wsAttempt := s.beginOpenAINativeWSAttempt(
+		ctx,
+		account,
+		originalModel,
+		openAIServiceTierIsPriority(extractOpenAIServiceTier(reqBody)),
+		nativeCompaction,
+		UpstreamAttemptTransportWebSocket,
+		NewOpenAIWSConnectionID(),
+		NewOpenAIWSTurnID(),
+	)
+	if wsAttempt != nil {
+		wsAttempt.observeWebSocket(lease.HandshakeHeaders())
+	}
+	defer func() {
+		if wsAttempt == nil {
+			return
+		}
+		if nativeValidation.Outcome == "" || nativeValidation.Outcome == OpenAINativeCompactionPending {
+			nativeValidation = nativeValidator.Finish()
+		}
+		wsAttempt.finishWebSocket(nativeValidation, responseID, usage, usageObserved, nativeDeliveryCommitted && !clientDisconnected, !nativeDeliveryStarted, forwardErr)
+		finalizeOpenAINativeForwardResult(forwardResult, account, wsAttempt, nativeCompaction, UpstreamAttemptTransportWebSocket)
+	}()
 
 	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
 		lease.MarkBroken()

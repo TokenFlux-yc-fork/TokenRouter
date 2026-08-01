@@ -190,6 +190,48 @@ func (a *openAIUpstreamAttemptCoordinator) finishStreamingPassthrough(result *op
 	a.finishStreamingTerminal(terminal, err)
 }
 
+func (a *openAIUpstreamAttemptCoordinator) finishNonStreaming(result *openaiNonStreamingResult, err error) {
+	if a == nil {
+		return
+	}
+	terminal := openAIUpstreamAttemptTerminal{
+		outcome:          string(OpenAINativeCompactionIncompleteStream),
+		deliveryObserved: true,
+		safeToFailover:   err != nil,
+	}
+	if result != nil {
+		terminal.responseID = result.responseID
+		terminal.usage = result.usage
+		terminal.usageObserved = result.usage != nil
+		terminal.deliveryCommitted = err == nil && !result.clientDisconnect
+	}
+	if err == nil && terminal.deliveryCommitted {
+		terminal.outcome = string(OpenAINativeCompactionValid)
+	}
+	a.finish(terminal)
+}
+
+func (a *openAIUpstreamAttemptCoordinator) finishNonStreamingPassthrough(result *openaiNonStreamingResultPassthrough, err error) {
+	if a == nil {
+		return
+	}
+	terminal := openAIUpstreamAttemptTerminal{
+		outcome:          string(OpenAINativeCompactionIncompleteStream),
+		deliveryObserved: true,
+		safeToFailover:   err != nil,
+	}
+	if result != nil {
+		terminal.responseID = result.responseID
+		terminal.usage = result.usage
+		terminal.usageObserved = result.usage != nil
+		terminal.deliveryCommitted = err == nil && !result.clientDisconnect
+	}
+	if err == nil && terminal.deliveryCommitted {
+		terminal.outcome = string(OpenAINativeCompactionValid)
+	}
+	a.finish(terminal)
+}
+
 func (a *openAIUpstreamAttemptCoordinator) finishStreamingTerminal(terminal openAIUpstreamAttemptTerminal, err error) {
 	if a == nil {
 		return

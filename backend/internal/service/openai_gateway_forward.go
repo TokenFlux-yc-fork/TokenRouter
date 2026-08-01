@@ -1033,6 +1033,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			responseBody = streamResult.responseBody
 		} else {
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
+			attempt.finishNonStreaming(nonStreamResult, err)
 			if err != nil {
 				return nil, err
 			}

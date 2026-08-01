@@ -130,8 +130,11 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	attempt := s.beginOpenAINativeHTTPAttempt(ctx, c, account, prepared.UpstreamModel, false)
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	attempt.observeTransport(resp)
 	if err != nil {
+		attempt.finishHTTPError(resp, string(OpenAINativeCompactionTransportFailure), true)
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
@@ -157,10 +160,16 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		if errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			reason = "input_tokens_response_too_large"
 		}
+		attempt.finish(openAIUpstreamAttemptTerminal{
+			outcome:          string(OpenAINativeCompactionIncompleteStream),
+			deliveryObserved: true,
+			safeToFailover:   true,
+		})
 		return newOpenAIInputTokensProtocolFailoverError(resp, reason)
 	}
 
 	if resp.StatusCode >= 400 {
+		attempt.finishHTTPError(resp, string(OpenAINativeCompactionHTTPFailure), true)
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if fallbackReason, ok := classifyOpenAIInputTokensLocalFallback(account, resp.StatusCode, respBody); ok {
 			if capabilityKeyOK {
@@ -232,8 +241,20 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 
 	inputTokens, err := parseOpenAIInputTokensResponse(respBody)
 	if err != nil {
+		attempt.finish(openAIUpstreamAttemptTerminal{
+			outcome:          string(OpenAINativeCompactionIncompleteStream),
+			deliveryObserved: true,
+			safeToFailover:   true,
+		})
 		return newOpenAIInputTokensProtocolFailoverError(resp, "input_tokens_invalid_response_schema")
 	}
+	attempt.finish(openAIUpstreamAttemptTerminal{
+		outcome:           string(OpenAINativeCompactionValid),
+		usage:             &OpenAIUsage{InputTokens: inputTokens},
+		usageObserved:     true,
+		deliveryObserved:  true,
+		deliveryCommitted: true,
+	})
 	if capabilityKeyOK {
 		s.observeOpenAIInputTokensCapability(ctx, account, capabilityKey, OpenAIResponsesInputTokensCapabilitySupported, resp.StatusCode, "upstream_success")
 	}
