@@ -393,6 +393,64 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 	}, nil
 }
 
+func (r *opsRepository) ListAttemptTimeline(ctx context.Context, requestID string) ([]*service.OpsAttemptTimelineItem, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("nil ops repository")
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return []*service.OpsAttemptTimelineItem{}, nil
+	}
+
+	const q = `
+SELECT jsonb_build_object(
+  'at_unix_ms', CASE WHEN event->>'at_unix_ms' ~ '^-?[0-9]+$' THEN (event->>'at_unix_ms')::bigint ELSE 0 END,
+  'index', attempts.ordinality - 1,
+  'passthrough', CASE WHEN jsonb_typeof(event->'passthrough') = 'boolean' THEN event->'passthrough' ELSE 'false'::jsonb END,
+  'platform', CASE WHEN jsonb_typeof(event->'platform') = 'string' THEN event->'platform' ELSE '""'::jsonb END,
+  'account_id', CASE WHEN event->>'account_id' ~ '^-?[0-9]+$' THEN (event->>'account_id')::bigint ELSE 0 END,
+  'account_name', CASE WHEN jsonb_typeof(event->'account_name') = 'string' THEN event->'account_name' ELSE '""'::jsonb END,
+  'upstream_status_code', CASE WHEN event->>'upstream_status_code' ~ '^-?[0-9]+$' THEN (event->>'upstream_status_code')::int ELSE 0 END,
+  'upstream_request_id', CASE WHEN jsonb_typeof(event->'upstream_request_id') = 'string' THEN event->'upstream_request_id' ELSE '""'::jsonb END,
+  'kind', CASE WHEN jsonb_typeof(event->'kind') = 'string' THEN event->'kind' ELSE '""'::jsonb END,
+  'stage', CASE WHEN jsonb_typeof(event->'stage') = 'string' THEN event->'stage' ELSE '""'::jsonb END,
+  'scope', CASE WHEN jsonb_typeof(event->'scope') = 'string' THEN event->'scope' ELSE '""'::jsonb END,
+  'reason', CASE WHEN jsonb_typeof(event->'reason') = 'string' THEN event->'reason' ELSE '""'::jsonb END
+)::text
+FROM ops_error_logs e
+CROSS JOIN LATERAL jsonb_array_elements(
+  CASE WHEN jsonb_typeof(e.upstream_errors) = 'array' THEN e.upstream_errors ELSE '[]'::jsonb END
+) WITH ORDINALITY AS attempts(event, ordinality)
+WHERE e.request_id = $1
+ORDER BY
+  CASE WHEN event->>'at_unix_ms' ~ '^-?[0-9]+$' THEN (event->>'at_unix_ms')::bigint ELSE 0 END ASC,
+  attempts.ordinality ASC,
+  e.id ASC`
+
+	rows, err := r.db.QueryContext(ctx, q, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]*service.OpsAttemptTimelineItem, 0)
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var item service.OpsAttemptTimelineItem
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, fmt.Errorf("decode attempt timeline: %w", err)
+		}
+		items = append(items, &item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (r *opsRepository) GetErrorLogByID(ctx context.Context, id int64) (*service.OpsErrorLogDetail, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("nil ops repository")

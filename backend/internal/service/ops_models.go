@@ -22,6 +22,25 @@ type OpsSystemLog struct {
 	Extra           map[string]any `json:"extra,omitempty"`
 }
 
+type OpsAttemptTimelineItem struct {
+	AtUnixMs int64 `json:"at_unix_ms"`
+	Index    int   `json:"index"`
+
+	Passthrough bool `json:"passthrough"`
+
+	Platform    string `json:"platform,omitempty"`
+	AccountID   int64  `json:"account_id,omitempty"`
+	AccountName string `json:"account_name,omitempty"`
+
+	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
+	UpstreamRequestID  string `json:"upstream_request_id,omitempty"`
+
+	Kind   string `json:"kind,omitempty"`
+	Stage  string `json:"stage,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
 type OpsErrorLog struct {
 	ID        int64     `json:"id"`
 	CreatedAt time.Time `json:"created_at"`

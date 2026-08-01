@@ -291,6 +291,7 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 
 		// 请求明细（成功和失败）
 		ops.GET("/requests", h.Admin.Ops.ListRequestDetails)
+		ops.GET("/requests/:request_id/attempt-timeline", h.Admin.Ops.GetAttemptTimeline)
 
 		// 已索引系统日志
 		ops.GET("/system-logs", h.Admin.Ops.ListSystemLogs)
