@@ -221,7 +221,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			continue
 		}
 		if !nativeRemoteCompactionV2 {
-			retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody)
+			retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBodyWithPolicy(resp.StatusCode, body, probeBody, s.cfg != nil && s.cfg.Gateway.StrictOutputLimit)
 			if retryErr != nil {
 				return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
 			}

@@ -13,6 +13,7 @@ type opsRepoMock struct {
 	ListSystemLogsFn              func(ctx context.Context, filter *OpsSystemLogFilter) (*OpsSystemLogList, error)
 	DeleteSystemLogsFn            func(ctx context.Context, filter *OpsSystemLogCleanupFilter) (int64, error)
 	InsertSystemLogCleanupAuditFn func(ctx context.Context, input *OpsSystemLogCleanupAudit) error
+	ListAttemptTimelineFn         func(ctx context.Context, requestID string) ([]*OpsAttemptTimelineItem, error)
 }
 
 func (m *opsRepoMock) InsertErrorLog(ctx context.Context, input *OpsInsertErrorLogInput) (int64, error) {
@@ -35,6 +36,13 @@ func (m *opsRepoMock) ListErrorLogs(ctx context.Context, filter *OpsErrorLogFilt
 
 func (m *opsRepoMock) GetErrorLogByID(ctx context.Context, id int64) (*OpsErrorLogDetail, error) {
 	return &OpsErrorLogDetail{}, nil
+}
+
+func (m *opsRepoMock) ListAttemptTimeline(ctx context.Context, requestID string) ([]*OpsAttemptTimelineItem, error) {
+	if m.ListAttemptTimelineFn != nil {
+		return m.ListAttemptTimelineFn(ctx, requestID)
+	}
+	return []*OpsAttemptTimelineItem{}, nil
 }
 
 func (m *opsRepoMock) ListRequestDetails(ctx context.Context, filter *OpsRequestDetailFilter) ([]*OpsRequestDetail, int64, error) {

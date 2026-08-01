@@ -17,6 +17,37 @@ type OpsHandler struct {
 	opsService *service.OpsService
 }
 
+// GetAttemptTimeline returns content-free upstream attempt events for one request.
+// GET /api/v1/admin/ops/requests/:request_id/attempt-timeline
+func (h *OpsHandler) GetAttemptTimeline(c *gin.Context) {
+	if h.opsService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
+		return
+	}
+	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	requestID := strings.TrimSpace(c.Param("request_id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(c.Query("request_id"))
+	}
+	if requestID == "" {
+		response.BadRequest(c, "request_id is required")
+		return
+	}
+	items, err := h.opsService.ListAttemptTimeline(c.Request.Context(), requestID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if items == nil {
+		items = []*service.OpsAttemptTimelineItem{}
+	}
+	response.Success(c, items)
+}
+
 // GetErrorLogByID returns ops error log detail.
 // GET /api/v1/admin/ops/errors/:id
 func (h *OpsHandler) GetErrorLogByID(c *gin.Context) {

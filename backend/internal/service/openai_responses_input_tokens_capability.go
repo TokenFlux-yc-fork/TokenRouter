@@ -1,6 +1,9 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,11 +29,13 @@ type OpenAIResponsesInputTokensCapabilityKey struct {
 	UpstreamFingerprint OpenAIUpstreamFingerprint
 	EffectiveModel      string
 	ContractVersion     string
+	ConfigGeneration    string
 }
 
 func (k OpenAIResponsesInputTokensCapabilityKey) Valid() bool {
 	return k.AccountID > 0 && strings.TrimSpace(string(k.UpstreamFingerprint)) != "" &&
-		strings.TrimSpace(k.EffectiveModel) != "" && strings.TrimSpace(k.ContractVersion) != ""
+		strings.TrimSpace(k.EffectiveModel) != "" && strings.TrimSpace(k.ContractVersion) != "" &&
+		strings.TrimSpace(k.ConfigGeneration) != ""
 }
 
 func ResolveOpenAIResponsesInputTokensCapabilityKey(account *Account, effectiveModel string) (OpenAIResponsesInputTokensCapabilityKey, error) {
@@ -52,11 +57,24 @@ func ResolveOpenAIResponsesInputTokensCapabilityKey(account *Account, effectiveM
 	if err != nil {
 		return OpenAIResponsesInputTokensCapabilityKey{}, fmt.Errorf("fingerprint openai input tokens upstream: %w", err)
 	}
-	key := OpenAIResponsesInputTokensCapabilityKey{AccountID: account.ID, UpstreamFingerprint: fingerprint, EffectiveModel: effectiveModel, ContractVersion: OpenAIResponsesInputTokensContractVersion}
+	configGeneration, err := openAIResponsesInputTokensConfigGeneration(account)
+	if err != nil {
+		return OpenAIResponsesInputTokensCapabilityKey{}, fmt.Errorf("derive openai input tokens config generation: %w", err)
+	}
+	key := OpenAIResponsesInputTokensCapabilityKey{AccountID: account.ID, UpstreamFingerprint: fingerprint, EffectiveModel: effectiveModel, ContractVersion: OpenAIResponsesInputTokensContractVersion, ConfigGeneration: configGeneration}
 	if !key.Valid() {
 		return OpenAIResponsesInputTokensCapabilityKey{}, errors.New("openai input tokens capability key is invalid")
 	}
 	return key, nil
+}
+
+func openAIResponsesInputTokensConfigGeneration(account *Account) (string, error) {
+	credentials, err := json.Marshal(account.Credentials)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(credentials)
+	return "credentials_sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 // OpenAIResponsesInputTokensCapability is an account-projected capability row.

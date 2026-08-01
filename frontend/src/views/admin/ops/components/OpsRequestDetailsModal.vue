@@ -6,7 +6,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { useAppStore } from '@/stores'
-import { opsAPI, type OpsRequestDetailsParams, type OpsRequestDetail } from '@/api/admin/ops'
+import { opsAPI, type OpsRequestDetailsParams, type OpsRequestDetail, type OpsAttemptTimelineItem } from '@/api/admin/ops'
 import { parseTimeRangeMinutes, formatDateTime } from '../utils/opsFormatters'
 
 export interface OpsRequestDetailsPreset {
@@ -44,6 +44,10 @@ const items = ref<OpsRequestDetail[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(10)
+const timelineRequestId = ref<string | null>(null)
+const timelineLoading = ref(false)
+const timelineError = ref('')
+const timelineItems = ref<OpsAttemptTimelineItem[]>([])
 
 const close = () => emit('update:modelValue', false)
 
@@ -149,6 +153,33 @@ function openErrorDetail(errorId: number | null | undefined) {
   emit('openErrorDetail', errorId)
 }
 
+function closeTimeline() {
+  timelineRequestId.value = null
+  timelineItems.value = []
+  timelineError.value = ''
+}
+
+async function loadTimeline(requestId: string) {
+  const normalized = requestId.trim()
+  if (!normalized) return
+  timelineRequestId.value = normalized
+  timelineItems.value = []
+  timelineError.value = ''
+  timelineLoading.value = true
+  try {
+    timelineItems.value = await opsAPI.getAttemptTimeline(normalized)
+  } catch (e: any) {
+    console.error('[OpsRequestDetailsModal] Failed to fetch attempt timeline', e)
+    timelineError.value = e?.message || t('admin.ops.requestDetails.timeline.failedToLoad')
+  } finally {
+    timelineLoading.value = false
+  }
+}
+
+function formatAttemptTime(atUnixMs: number) {
+  return formatDateTime(new Date(atUnixMs).toISOString())
+}
+
 const kindBadgeClass = (kind: string) => {
   if (kind === 'error') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
@@ -172,7 +203,51 @@ const kindBadgeClass = (kind: string) => {
           </button>
         </div>
 
-        <!-- Loading -->
+          <div class="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
+            {{ t('admin.ops.requestDetails.timeline.telemetryNotice') }}
+          </div>
+
+          <div v-if="timelineRequestId" class="mb-4 rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+            <div class="mb-3 flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-sm font-semibold text-gray-700 dark:text-gray-200">{{ t('admin.ops.requestDetails.timeline.title') }}</div>
+                <div class="truncate font-mono text-[11px] text-gray-500 dark:text-gray-400">{{ timelineRequestId }}</div>
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm shrink-0" @click="closeTimeline">
+                {{ t('common.close') }}
+              </button>
+            </div>
+            <div v-if="timelineLoading" class="py-5 text-center text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.ops.requestDetails.timeline.loading') }}
+            </div>
+            <div v-else-if="timelineError" class="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+              {{ timelineError }}
+            </div>
+            <div v-else-if="timelineItems.length === 0" class="rounded-lg border border-dashed border-gray-200 px-3 py-5 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-gray-400">
+              {{ t('admin.ops.requestDetails.timeline.empty') }}
+            </div>
+            <ol v-else class="space-y-3">
+              <li v-for="item in timelineItems" :key="`${item.at_unix_ms}-${item.index}`" class="relative border-l-2 border-blue-200 pl-4 dark:border-blue-900/50">
+                <div class="text-xs font-semibold text-gray-700 dark:text-gray-200">
+                  {{ t('admin.ops.requestDetails.timeline.attempt', { n: item.index + 1 }) }}
+                  <span class="ml-2 font-normal text-gray-500 dark:text-gray-400">{{ formatAttemptTime(item.at_unix_ms) }}</span>
+                </div>
+                <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600 dark:text-gray-300">
+                  <span v-if="item.platform">{{ item.platform }}</span>
+                  <span v-if="item.account_name || item.account_id">{{ item.account_name || `#${item.account_id}` }}</span>
+                  <span v-if="item.upstream_status_code">{{ t('admin.ops.requestDetails.timeline.status', { code: item.upstream_status_code }) }}</span>
+                  <span v-if="item.upstream_request_id" class="max-w-[220px] truncate font-mono" :title="item.upstream_request_id">{{ item.upstream_request_id }}</span>
+                  <span>{{ item.passthrough ? t('admin.ops.requestDetails.timeline.passthrough') : t('admin.ops.requestDetails.timeline.gateway') }}</span>
+                  <span v-if="item.kind">{{ item.kind }}</span>
+                  <span v-if="item.stage">{{ item.stage }}</span>
+                  <span v-if="item.scope">{{ item.scope }}</span>
+                </div>
+                <div v-if="item.reason" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ item.reason }}</div>
+              </li>
+            </ol>
+          </div>
+
+          <!-- Loading -->
         <div v-if="loading" class="flex flex-1 items-center justify-center py-16">
           <div class="flex flex-col items-center gap-3">
             <svg class="h-8 w-8 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
@@ -221,6 +296,13 @@ const kindBadgeClass = (kind: string) => {
                       {{ t('admin.ops.requestDetails.copy') }}
                     </button>
                   </div>
+                  <button
+                    v-if="row.request_id"
+                    class="w-full rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/30"
+                    @click="loadTimeline(row.request_id)"
+                  >
+                    {{ t('admin.ops.requestDetails.timeline.view') }}
+                  </button>
                   <button
                     v-if="row.kind === 'error' && row.error_id"
                     class="w-full rounded-lg bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"
@@ -296,6 +378,13 @@ const kindBadgeClass = (kind: string) => {
                     <span v-else class="text-xs text-gray-400">-</span>
                   </td>
                   <td class="whitespace-nowrap px-4 py-3 text-right">
+                    <button
+                      v-if="row.request_id"
+                      class="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/30"
+                      @click="loadTimeline(row.request_id)"
+                    >
+                      {{ t('admin.ops.requestDetails.timeline.view') }}
+                    </button>
                     <button
                       v-if="row.kind === 'error' && row.error_id"
                       class="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-300 dark:hover:bg-red-900/30"

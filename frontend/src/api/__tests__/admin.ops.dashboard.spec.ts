@@ -9,7 +9,7 @@ vi.mock('@/api/client', () => ({
   buildGatewayUrl: vi.fn(),
 }))
 
-import { getLatencyHistogram, getTokenStats } from '@/api/admin/ops'
+import { getAttemptTimeline, getLatencyHistogram, getTokenStats } from '@/api/admin/ops'
 
 describe('admin ops dashboard API', () => {
   beforeEach(() => {
@@ -34,6 +34,12 @@ describe('admin ops dashboard API', () => {
     })
   })
 
+  it('request attempt timeline uses encoded request ID endpoint', async () => {
+    get.mockResolvedValue({ data: [{ index: 0, at_unix_ms: 1 }] })
+
+    await expect(getAttemptTimeline('req/a')).resolves.toEqual([{ index: 0, at_unix_ms: 1 }])
+    expect(get).toHaveBeenCalledWith('/admin/ops/requests/req%2Fa/attempt-timeline')
+  })
   it('Token 统计使用新的通用路由', async () => {
     await getTokenStats({ time_range: '30d', platform: 'anthropic', group_id: 7, top_n: 20 })
 

@@ -287,6 +287,10 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 	if err != nil {
 		return nil, err
 	}
+	inputTokensCapabilitiesByAccount, err := r.loadOpenAIResponsesInputTokensCapabilities(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	outByID := make(map[int64]*service.Account, len(entAccounts))
 	for _, entAcc := range entAccounts {
@@ -310,6 +314,7 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 			out.AccountGroups = ags
 		}
 		out.OpenAINativeCompactionCapabilities = capabilitiesByAccount[entAcc.ID]
+		out.OpenAIResponsesInputTokensCapabilities = inputTokensCapabilitiesByAccount[entAcc.ID]
 		outByID[entAcc.ID] = out
 	}
 
@@ -3016,6 +3021,10 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	if err != nil {
 		return nil, err
 	}
+	inputTokensCapabilitiesByAccount, err := r.loadOpenAIResponsesInputTokensCapabilities(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	outAccounts := make([]service.Account, 0, len(accounts))
 	for _, acc := range accounts {
@@ -3045,10 +3054,47 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 			out.AccountGroups = ags
 		}
 		out.OpenAINativeCompactionCapabilities = capabilitiesByAccount[acc.ID]
+		out.OpenAIResponsesInputTokensCapabilities = inputTokensCapabilitiesByAccount[acc.ID]
 		outAccounts = append(outAccounts, *out)
 	}
 
 	return outAccounts, nil
+}
+
+func (r *accountRepository) loadOpenAIResponsesInputTokensCapabilities(
+	ctx context.Context,
+	accountIDs []int64,
+) (map[int64][]service.OpenAIResponsesInputTokensCapability, error) {
+	result := make(map[int64][]service.OpenAIResponsesInputTokensCapability)
+	if len(accountIDs) == 0 || r.sql == nil {
+		return result, nil
+	}
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT account_id, upstream_fingerprint, effective_model, contract_version, config_generation, state
+		FROM openai_responses_input_tokens_capabilities
+		WHERE account_id = ANY($1)
+		ORDER BY account_id, upstream_fingerprint, effective_model, contract_version, config_generation
+	`, pq.Array(accountIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var capability service.OpenAIResponsesInputTokensCapability
+		var fingerprint, state string
+		if err := rows.Scan(&capability.Key.AccountID, &fingerprint, &capability.Key.EffectiveModel, &capability.Key.ContractVersion, &capability.Key.ConfigGeneration, &state); err != nil {
+			return nil, err
+		}
+		capability.Key.UpstreamFingerprint = service.OpenAIUpstreamFingerprint(fingerprint)
+		capability.State = service.OpenAIResponsesInputTokensCapabilityState(state)
+		if capability.Valid() {
+			result[capability.Key.AccountID] = append(result[capability.Key.AccountID], capability)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (r *accountRepository) loadOpenAINativeCompactionCapabilities(

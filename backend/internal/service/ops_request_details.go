@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -113,6 +115,34 @@ type OpsRequestDetailList struct {
 	Total    int64               `json:"total"`
 	Page     int                 `json:"page"`
 	PageSize int                 `json:"page_size"`
+}
+
+func (s *OpsService) ListAttemptTimeline(ctx context.Context, requestID string) ([]*OpsAttemptTimelineItem, error) {
+	if err := s.RequireMonitoringEnabled(ctx); err != nil {
+		return nil, err
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil, nil
+	}
+	if s.opsRepo == nil {
+		return []*OpsAttemptTimelineItem{}, nil
+	}
+
+	items, err := s.opsRepo.ListAttemptTimeline(ctx, requestID)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return []*OpsAttemptTimelineItem{}, nil
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].AtUnixMs != items[j].AtUnixMs {
+			return items[i].AtUnixMs < items[j].AtUnixMs
+		}
+		return items[i].Index < items[j].Index
+	})
+	return items, nil
 }
 
 func (s *OpsService) ListRequestDetails(ctx context.Context, filter *OpsRequestDetailFilter) (*OpsRequestDetailList, error) {
