@@ -149,6 +149,7 @@ type openAIAccountLoadPlan struct {
 	topK                      int
 	loadSkew                  float64
 	includeOverflowFallback   bool
+	includePriorityFallback   bool
 }
 
 type openAIAccountLoadSelectionAttempt struct {
@@ -437,6 +438,13 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		}
 		if escapedSticky {
 			req.PreserveStickyBinding = true
+			if req.StickyAccountID > 0 {
+				req.ExcludedIDs = cloneExcludedAccountIDs(req.ExcludedIDs)
+				if req.ExcludedIDs == nil {
+					req.ExcludedIDs = make(map[int64]struct{}, 1)
+				}
+				req.ExcludedIDs[req.StickyAccountID] = struct{}{}
+			}
 		}
 	}
 
@@ -992,6 +1000,8 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		plan.topK = 1
 	}
 
+	plan.includePriorityFallback = !req.StickyWeighted && !plan.includeOverflowFallback &&
+		hasOpenAIPriorityFallback(plan.candidates, plan.topK)
 	plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
 	return plan
 }
@@ -1000,7 +1010,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 	req OpenAIAccountScheduleRequest,
 	plan openAIAccountLoadPlan,
 ) []openAIAccountCandidateScore {
-	buildSelectionOrder := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+	buildScoredSelectionOrder := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
 		if len(pool) == 0 || plan.topK <= 0 {
 			return nil
 		}
@@ -1050,6 +1060,14 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		return append(primary, overflow...)
 	}
 
+	buildSelectionOrder := func(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+		pool = filterOpenAIAccountCandidatesBelowFullLoad(pool)
+		if req.StickyWeighted || plan.includeOverflowFallback {
+			return buildScoredSelectionOrder(pool)
+		}
+		return buildOpenAISelectionOrderByPriority(pool, plan.topK, req)
+	}
+
 	if req.RequireCompact {
 		supported := make([]openAIAccountCandidateScore, 0, len(plan.candidates))
 		unknown := make([]openAIAccountCandidateScore, 0, len(plan.candidates))
@@ -1071,6 +1089,76 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 	}
 
 	return buildSelectionOrder(plan.candidates)
+}
+
+func filterOpenAIAccountCandidatesBelowFullLoad(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
+	if len(pool) == 0 {
+		return nil
+	}
+	hasFull, hasAvailable := false, false
+	for _, candidate := range pool {
+		if candidate.loadInfo != nil && candidate.loadInfo.LoadRate >= 100 {
+			hasFull = true
+		} else {
+			hasAvailable = true
+		}
+	}
+	if !hasFull || !hasAvailable {
+		return pool
+	}
+	available := make([]openAIAccountCandidateScore, 0, len(pool))
+	for _, candidate := range pool {
+		if candidate.loadInfo == nil || candidate.loadInfo.LoadRate < 100 {
+			available = append(available, candidate)
+		}
+	}
+	return available
+}
+
+func hasOpenAIPriorityFallback(pool []openAIAccountCandidateScore, topK int) bool {
+	pool = filterOpenAIAccountCandidatesBelowFullLoad(pool)
+	if len(pool) <= topK || len(pool) < 2 {
+		return false
+	}
+	priority := openAIAccountSchedulingPriority(pool[0].account)
+	for _, candidate := range pool[1:] {
+		if openAIAccountSchedulingPriority(candidate.account) != priority {
+			return true
+		}
+	}
+	return false
+}
+
+func buildOpenAISelectionOrderByPriority(pool []openAIAccountCandidateScore, topK int, req OpenAIAccountScheduleRequest) []openAIAccountCandidateScore {
+	if len(pool) == 0 {
+		return nil
+	}
+	ordered := append([]openAIAccountCandidateScore(nil), pool...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftPriority := openAIAccountSchedulingPriority(ordered[i].account)
+		rightPriority := openAIAccountSchedulingPriority(ordered[j].account)
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		return isOpenAIAccountCandidateBetter(ordered[i], ordered[j])
+	})
+
+	selectionOrder := make([]openAIAccountCandidateScore, 0, len(ordered))
+	for start := 0; start < len(ordered); {
+		end := start + 1
+		priority := openAIAccountSchedulingPriority(ordered[start].account)
+		for end < len(ordered) && openAIAccountSchedulingPriority(ordered[end].account) == priority {
+			end++
+		}
+		groupTopK := topK
+		if groupTopK <= 0 || groupTopK > end-start {
+			groupTopK = end - start
+		}
+		ranked := selectTopKOpenAICandidates(ordered[start:end], groupTopK)
+		selectionOrder = append(selectionOrder, buildOpenAIWeightedSelectionOrder(ranked, req)...)
+		start = end
+	}
+	return selectionOrder
 }
 
 func sortOpenAICompactRetryCandidates(pool []openAIAccountCandidateScore) []openAIAccountCandidateScore {
@@ -1469,7 +1557,7 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 	budget *openAISelectionProbeBudget,
 ) openAIAccountLoadSelectionAttempt {
 	plan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, loadMap)
-	if openAICostOverflowExpanded(req, plan) {
+	if plan.includePriorityFallback || openAICostOverflowExpanded(req, plan) {
 		budget.enableLimit()
 	}
 	attempt := openAIAccountLoadSelectionAttempt{
@@ -1508,7 +1596,7 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 		loadReq := buildOpenAIAccountLoadRequest(filtered)
 		if freshLoadMap, loadErr := s.service.concurrencyService.GetAccountsLoadBatchFresh(ctx, loadReq); loadErr == nil {
 			freshPlan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, freshLoadMap)
-			if openAICostOverflowExpanded(req, freshPlan) {
+			if freshPlan.includePriorityFallback || openAICostOverflowExpanded(req, freshPlan) {
 				budget.enableLimit()
 			}
 			if len(freshPlan.selectionOrder) > 0 {
