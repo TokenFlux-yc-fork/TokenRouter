@@ -72,6 +72,8 @@ type AnnouncementRepository interface {
 	GetByID(ctx context.Context, id int64) (*Announcement, error)
 	Update(ctx context.Context, a *Announcement) error
 	Delete(ctx context.Context, id int64) error
+	// ArchiveExpired 将已超过结束时间的展示中公告批量归档。
+	ArchiveExpired(ctx context.Context, now time.Time) (int64, error)
 
 	List(ctx context.Context, params pagination.PaginationParams, filters AnnouncementListFilters) ([]Announcement, *pagination.PaginationResult, error)
 	ListActive(ctx context.Context, now time.Time) ([]Announcement, error)

@@ -4,6 +4,7 @@ import { announcementsAPI } from '@/api'
 import type { UserAnnouncement } from '@/types'
 
 const THROTTLE_MS = 20 * 60 * 1000 // 20 minutes
+const MAX_POPUP_CANDIDATES = 20
 
 export const useAnnouncementStore = defineStore('announcements', () => {
   // State
@@ -33,8 +34,9 @@ export const useAnnouncementStore = defineStore('announcements', () => {
 
     try {
       loading.value = true
-      const all = await announcementsAPI.list(false)
-      announcements.value = all.slice(0, 20)
+      const all = await announcementsAPI.list(false, force)
+      // 保留完整可见列表，确保不同界面可以按各自规则排序和统计。
+      announcements.value = all
       enqueueNewPopups()
     } catch (err: any) {
       // Revert throttle timestamp on failure so retry is allowed
@@ -46,9 +48,10 @@ export const useAnnouncementStore = defineStore('announcements', () => {
   }
 
   function enqueueNewPopups() {
-    const newPopups = announcements.value.filter(
-      (a) => a.notify_mode === 'popup' && !a.read_at && !shownPopupIds.has(a.id)
-    )
+    // 弹窗候选仍限制为服务端优先级最高的前 20 条，避免一次会话堆积过多弹窗。
+    const newPopups = announcements.value
+      .slice(0, MAX_POPUP_CANDIDATES)
+      .filter((a) => a.notify_mode === 'popup' && !a.read_at && !shownPopupIds.has(a.id))
     if (newPopups.length === 0) return
 
     for (const p of newPopups) {

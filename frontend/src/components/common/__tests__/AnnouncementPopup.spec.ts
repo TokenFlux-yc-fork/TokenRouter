@@ -22,6 +22,11 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
+vi.mock('@/utils/format', () => ({
+  formatDateTime: () => '2026/07/24 15:30:00',
+  formatRelativeTime: () => '3 hours ago',
+}))
+
 const announcement = {
   id: 1,
   title: 'Preview announcement',
@@ -95,6 +100,7 @@ describe('AnnouncementPopup', () => {
     expect(document.body.querySelector('.markdown-body h2')?.textContent).toBe('Preview heading')
     expect(document.body.querySelector('.markdown-body script')).toBeNull()
     expect(document.body.textContent).toContain('common.close')
+    expect(document.body.querySelector('[data-testid="announcement-popup-status"]')).toBeNull()
 
     const dismissButton = document.body.querySelector<HTMLButtonElement>(
       '[data-testid="announcement-popup-dismiss"]',
@@ -107,6 +113,32 @@ describe('AnnouncementPopup', () => {
 
     await wrapper.setProps({ announcement: null })
     expect(document.body.style.overflow).toBe('')
+    wrapper.unmount()
+  })
+
+  it('shows compact read metadata for a controlled user announcement', async () => {
+    const wrapper = mount(AnnouncementPopup, {
+      props: {
+        announcement: {
+          ...announcement,
+          read_at: '2026-07-24T08:00:00Z',
+        },
+        preview: true,
+        showReadStatus: true,
+      },
+    })
+
+    const dialog = document.body.querySelector('[role="dialog"]')
+    const status = document.body.querySelector('[data-testid="announcement-popup-status"]')
+
+    expect(dialog?.classList).toContain('max-w-[640px]')
+    expect(dialog?.classList).toContain('rounded-xl')
+    expect(document.body.textContent).toContain('announcements.title')
+    expect(document.body.textContent).toContain('announcements.read')
+    expect(document.body.textContent?.match(/announcements\.read/g)).toHaveLength(1)
+    expect(status?.textContent).toContain('announcements.read')
+    expect(document.body.querySelector('[data-testid="announcement-popup-close"]')).not.toBeNull()
+
     wrapper.unmount()
   })
 

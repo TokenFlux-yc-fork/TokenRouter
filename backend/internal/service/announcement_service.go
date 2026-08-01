@@ -122,6 +122,7 @@ func (s *AnnouncementService) Create(ctx context.Context, input *CreateAnnouncem
 		a.CreatedBy = input.ActorID
 		a.UpdatedBy = input.ActorID
 	}
+	archiveAnnouncementIfExpired(a, time.Now())
 
 	if err := s.announcementRepo.Create(ctx, a); err != nil {
 		return nil, fmt.Errorf("create announcement: %w", err)
@@ -193,6 +194,7 @@ func (s *AnnouncementService) Update(ctx context.Context, id int64, input *Updat
 	if input.ActorID != nil && *input.ActorID > 0 {
 		a.UpdatedBy = input.ActorID
 	}
+	archiveAnnouncementIfExpired(a, time.Now())
 
 	if err := s.announcementRepo.Update(ctx, a); err != nil {
 		return nil, fmt.Errorf("update announcement: %w", err)
@@ -208,11 +210,32 @@ func (s *AnnouncementService) Delete(ctx context.Context, id int64) error {
 }
 
 func (s *AnnouncementService) GetByID(ctx context.Context, id int64) (*Announcement, error) {
+	if err := s.archiveExpired(ctx, time.Now()); err != nil {
+		return nil, err
+	}
 	return s.announcementRepo.GetByID(ctx, id)
 }
 
 func (s *AnnouncementService) List(ctx context.Context, params pagination.PaginationParams, filters AnnouncementListFilters) ([]Announcement, *pagination.PaginationResult, error) {
+	if err := s.archiveExpired(ctx, time.Now()); err != nil {
+		return nil, nil, err
+	}
 	return s.announcementRepo.List(ctx, params, filters)
+}
+
+func (s *AnnouncementService) archiveExpired(ctx context.Context, now time.Time) error {
+	if _, err := s.announcementRepo.ArchiveExpired(ctx, now); err != nil {
+		return fmt.Errorf("archive expired announcements: %w", err)
+	}
+	return nil
+}
+
+// archiveAnnouncementIfExpired 保证新建或编辑后的展示中公告不会保留已过期状态。
+func archiveAnnouncementIfExpired(a *Announcement, now time.Time) {
+	if a == nil || a.Status != AnnouncementStatusActive || a.EndsAt == nil || a.EndsAt.After(now) {
+		return
+	}
+	a.Status = AnnouncementStatusArchived
 }
 
 func (s *AnnouncementService) ListForUser(ctx context.Context, userID int64, unreadOnly bool) ([]UserAnnouncement, error) {

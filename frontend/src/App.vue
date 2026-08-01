@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { onMounted, onBeforeUnmount, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import Toast from '@/components/common/Toast.vue'
 import NavigationProgress from '@/components/common/NavigationProgress.vue'
 import { resolveRouteDocumentTitle } from '@/router/title'
@@ -17,6 +17,11 @@ const authStore = useAuthStore()
 const subscriptionStore = useSubscriptionStore()
 const announcementStore = useAnnouncementStore()
 const adminSettingsStore = useAdminSettingsStore()
+
+// 网站根目录和 Home 门面不展示新公告弹窗，进入控制台后再按原有逻辑展示。
+const shouldShowAnnouncementPopup = computed(() => (
+  route.path !== '/' && route.name !== 'Home'
+))
 
 function updateDocumentTitle() {
   const customMenuItems = [
@@ -124,5 +129,5 @@ onMounted(async () => {
   <NavigationProgress />
   <RouterView />
   <Toast />
-  <AnnouncementPopup />
+  <AnnouncementPopup v-if="shouldShowAnnouncementPopup" />
 </template>

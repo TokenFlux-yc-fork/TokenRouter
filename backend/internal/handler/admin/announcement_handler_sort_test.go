@@ -18,6 +18,11 @@ type announcementRepoCapture struct {
 	listParams pagination.PaginationParams
 }
 
+// ArchiveExpired 在排序测试中无需落库，仅满足列表查询前的归档流程。
+func (r *announcementRepoCapture) ArchiveExpired(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
+
 func (r *announcementRepoCapture) List(ctx context.Context, params pagination.PaginationParams, filters service.AnnouncementListFilters) ([]service.Announcement, *pagination.PaginationResult, error) {
 	r.listParams = params
 	return []service.Announcement{}, &pagination.PaginationResult{

@@ -49,6 +49,26 @@
         />
       </button>
 
+      <button
+        v-if="paymentEnabled"
+        data-testid="purchase-quick-action"
+        @click="router.push('/purchase')"
+        class="group flex w-full items-center gap-4 rounded-xl bg-gray-50 p-4 text-left transition-all duration-200 hover:bg-gray-100 dark:bg-dark-800/50 dark:hover:bg-dark-800"
+      >
+        <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-rose-100 transition-transform group-hover:scale-105 dark:bg-rose-900/30">
+          <Icon name="creditCard" size="lg" class="text-rose-600 dark:text-rose-400" />
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('nav.buySubscription') }}</p>
+          <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('dashboard.purchasePlanOrRecharge') }}</p>
+        </div>
+        <Icon
+          name="chevronRight"
+          size="md"
+          class="text-gray-400 transition-colors group-hover:text-rose-500 dark:text-dark-500"
+        />
+      </button>
+
       <button @click="router.push('/redeem')" class="group flex w-full items-center gap-4 rounded-xl bg-gray-50 p-4 text-left transition-all duration-200 hover:bg-gray-100 dark:bg-dark-800/50 dark:hover:bg-dark-800">
         <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-amber-100 transition-transform group-hover:scale-105 dark:bg-amber-900/30">
           <Icon name="gift" size="lg" class="text-amber-600 dark:text-amber-400" />
@@ -68,14 +88,19 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
+import { useAppStore } from '@/stores/app'
+
 const router = useRouter()
 const { t } = useI18n()
+const appStore = useAppStore()
 const { canUseBatchImage, refreshBatchImageAccess } = useBatchImageAccess()
+// 公共设置明确启用支付时才展示入口，避免加载失败时暴露不可用路由。
+const paymentEnabled = computed(() => appStore.cachedPublicSettings?.payment_enabled === true)
 
 onMounted(() => {
   void refreshBatchImageAccess()

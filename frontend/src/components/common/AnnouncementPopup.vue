@@ -3,104 +3,118 @@
     <Transition name="popup-fade">
       <div
         v-if="displayedAnnouncement"
-        class="fixed inset-0 z-[120] flex items-start justify-center overflow-y-auto bg-gradient-to-br from-black/70 via-black/60 to-black/70 p-4 pt-[8vh] backdrop-blur-md"
+        class="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-black/55 p-3 backdrop-blur-sm sm:p-6"
+        @click.self="handleDismiss"
       >
-        <div
-          class="w-full max-w-[680px] overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
+        <section
+          role="dialog"
+          aria-modal="true"
+          :aria-label="displayedAnnouncement.title"
+          class="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[640px] flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl shadow-black/20 dark:border-dark-600 dark:bg-dark-900 dark:shadow-black/50 sm:max-h-[calc(100dvh-3rem)]"
           @click.stop
         >
-          <!-- Header with warm gradient -->
-          <div class="relative overflow-hidden border-b border-amber-100/80 bg-gradient-to-br from-amber-50/80 via-orange-50/50 to-yellow-50/30 px-8 py-6 dark:border-dark-700/50 dark:from-amber-900/20 dark:via-orange-900/10 dark:to-yellow-900/5">
-            <!-- Decorative background -->
-            <div class="absolute right-0 top-0 h-full w-64 bg-gradient-to-l from-orange-100/30 to-transparent dark:from-orange-900/20"></div>
-            <div class="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-gradient-to-br from-amber-400/20 to-orange-500/20 blur-3xl"></div>
-            <div class="absolute -left-4 -bottom-4 h-24 w-24 rounded-full bg-gradient-to-tr from-yellow-400/20 to-amber-500/20 blur-2xl"></div>
-
-            <div class="relative z-10">
-              <!-- Icon and badge -->
-              <div class="mb-3 flex items-center gap-2">
-                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-lg shadow-amber-500/30">
-                  <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                  </svg>
-                </div>
-                <span class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-2.5 py-1 text-xs font-medium text-white shadow-lg shadow-amber-500/30">
-                  <span class="relative flex h-2 w-2">
-                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75"></span>
-                    <span class="relative inline-flex h-2 w-2 rounded-full bg-white"></span>
-                  </span>
-                  {{ t('announcements.unread') }}
-                </span>
-              </div>
-
-              <!-- Title -->
-              <h2 class="mb-2 text-2xl font-bold leading-tight text-gray-900 dark:text-white">
-                {{ displayedAnnouncement.title }}
-              </h2>
-
-              <!-- Time -->
-              <div class="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
-                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <time>{{ formatRelativeWithDateTime(displayedAnnouncement.created_at) }}</time>
-              </div>
+          <!-- 头部仅保留公告类型、标题和元信息，维持站内通知的轻量层级。 -->
+          <header class="relative shrink-0 px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
+            <div class="flex items-center gap-1.5 text-xs font-medium text-primary-600 dark:text-primary-400">
+              <Icon name="bell" size="sm" :stroke-width="2" />
+              <span>{{ t('announcements.title') }}</span>
             </div>
+
+            <button
+              type="button"
+              data-testid="announcement-popup-close"
+              class="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 dark:text-dark-400 dark:hover:bg-dark-700 dark:hover:text-dark-100 sm:right-4 sm:top-4"
+              :aria-label="t('common.close')"
+              @click="handleDismiss"
+            >
+              <Icon name="x" size="md" :stroke-width="1.75" />
+            </button>
+
+            <h2 class="mt-4 break-words pr-10 text-lg font-semibold leading-7 text-gray-900 dark:text-white sm:text-xl">
+              {{ displayedAnnouncement.title }}
+            </h2>
+
+            <div class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-dark-300">
+              <span class="inline-flex items-center gap-1.5">
+                <Icon name="clock" size="sm" :stroke-width="1.75" />
+                <time :datetime="displayedAnnouncement.created_at">
+                  {{ formatRelativeTime(displayedAnnouncement.created_at) }}
+                </time>
+              </span>
+              <span aria-hidden="true" class="text-gray-300 dark:text-dark-500">·</span>
+              <time :datetime="displayedAnnouncement.created_at">
+                {{ formatDateTime(displayedAnnouncement.created_at) }}
+              </time>
+            </div>
+          </header>
+
+          <!-- 正文独立滚动，长公告不会挤压标题和底部操作。 -->
+          <div class="announcement-popup-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-3 sm:px-6 sm:py-3.5">
+            <div
+              class="announcement-popup-content markdown-body max-w-none"
+              v-html="renderedContent"
+            ></div>
           </div>
 
-          <!-- Body -->
-          <div class="max-h-[50vh] overflow-y-auto bg-white px-8 py-8 dark:bg-dark-800">
-            <div class="relative">
-              <div class="absolute left-0 top-0 bottom-0 w-1 rounded-full bg-gradient-to-b from-amber-500 via-orange-500 to-yellow-500"></div>
-              <div class="pl-6">
-                <div
-                  class="markdown-body prose prose-sm max-w-none dark:prose-invert"
-                  v-html="renderedContent"
-                ></div>
-              </div>
+          <footer
+            class="flex shrink-0 items-center gap-4 px-5 py-3 sm:px-6 sm:py-3.5"
+            :class="showStatus ? 'justify-between' : 'justify-end'"
+          >
+            <div
+              v-if="showStatus"
+              data-testid="announcement-popup-status"
+              class="flex min-w-0 items-center gap-1.5 text-xs text-gray-500 dark:text-dark-300"
+            >
+              <Icon
+                :name="isRead ? 'checkCircle' : 'eye'"
+                size="sm"
+                class="shrink-0"
+                :class="isRead ? 'text-primary-500 dark:text-primary-400' : ''"
+                :stroke-width="1.75"
+              />
+              <span class="truncate">{{ t(isRead ? 'announcements.read' : 'announcements.unread') }}</span>
             </div>
-          </div>
 
-          <!-- Footer -->
-          <div class="border-t border-gray-100 bg-gray-50/50 px-8 py-5 dark:border-dark-700 dark:bg-dark-900/30">
-            <div class="flex items-center justify-end">
-              <button
-                @click="handleDismiss"
-                data-testid="announcement-popup-dismiss"
-                class="rounded-xl bg-amber-500 px-6 py-2.5 text-sm font-medium text-white shadow-none transition-all hover:scale-105 hover:bg-amber-600 hover:shadow-none"
-              >
-                <span class="flex items-center gap-2">
-                  <Icon :name="preview ? 'x' : 'check'" size="sm" :stroke-width="2" />
-                  {{ preview ? t('common.close') : t('announcements.markRead') }}
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
+            <button
+              type="button"
+              data-testid="announcement-popup-dismiss"
+              class="shrink-0 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2 dark:bg-primary-500 dark:hover:bg-primary-600 dark:focus-visible:ring-offset-dark-900"
+              @click="handleDismiss"
+            >
+              {{ t('common.close') }}
+            </button>
+          </footer>
+        </section>
       </div>
     </Transition>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useAnnouncementStore } from '@/stores/announcements'
-import { formatRelativeWithDateTime } from '@/utils/format'
+import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import type { Announcement, UserAnnouncement } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
 import '@/styles/announcement-markdown.css'
 
-type PreviewAnnouncement = Pick<Announcement | UserAnnouncement, 'title' | 'content' | 'created_at'>
+type PopupAnnouncement = Pick<Announcement | UserAnnouncement, 'title' | 'content' | 'created_at'> & {
+  read_at?: string | null
+}
 
 const props = withDefaults(defineProps<{
-  announcement?: PreviewAnnouncement | null
+  announcement?: PopupAnnouncement | null
   preview?: boolean
+  showReadStatus?: boolean
+  lockBodyScroll?: boolean
 }>(), {
   announcement: null,
   preview: false,
+  showReadStatus: false,
+  lockBodyScroll: true,
 })
 
 const emit = defineEmits<{
@@ -112,12 +126,15 @@ const announcementStore = useAnnouncementStore()
 const displayedAnnouncement = computed(() => (
   props.preview ? props.announcement : announcementStore.currentPopup
 ))
+const showStatus = computed(() => !props.preview || props.showReadStatus)
+const isRead = computed(() => Boolean(displayedAnnouncement.value?.read_at))
 
 marked.setOptions({
   breaks: true,
   gfm: true,
 })
 
+// 公告支持 Markdown 和有限 HTML，渲染前统一清理不安全节点和属性。
 const renderedContent = computed(() => {
   const content = displayedAnnouncement.value?.content
   if (!content) return ''
@@ -133,10 +150,17 @@ function handleDismiss() {
   announcementStore.dismissPopup()
 }
 
-// 普通公告由铃铛组件恢复页面滚动，独立预览则由当前组件负责恢复。
+function handleEscape(event: KeyboardEvent) {
+  if (event.key === 'Escape' && displayedAnnouncement.value) {
+    handleDismiss()
+  }
+}
+
+// 普通公告由铃铛组件恢复页面滚动；受控弹窗默认由当前组件负责恢复。
 watch(
   displayedAnnouncement,
   (popup) => {
+    if (!props.lockBodyScroll) return
     if (popup) {
       document.body.style.overflow = 'hidden'
     } else if (props.preview) {
@@ -146,20 +170,32 @@ watch(
   { immediate: true },
 )
 
+onMounted(() => {
+  document.addEventListener('keydown', handleEscape)
+})
+
 onBeforeUnmount(() => {
-  if (props.preview) {
+  document.removeEventListener('keydown', handleEscape)
+  // 路由切换会直接卸载弹窗，组件需要自行解除页面滚动锁定。
+  if (props.lockBodyScroll) {
     document.body.style.overflow = ''
   }
 })
 </script>
 
 <style scoped>
+/* 浮层只做轻微缩放和位移，避免出现营销页式的大幅动效。 */
 .popup-fade-enter-active {
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.18s ease;
 }
 
 .popup-fade-leave-active {
-  transition: all 0.2s cubic-bezier(0.4, 0, 1, 1);
+  transition: opacity 0.14s ease;
+}
+
+.popup-fade-enter-active > section,
+.popup-fade-leave-active > section {
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 
 .popup-fade-enter-from,
@@ -167,31 +203,40 @@ onBeforeUnmount(() => {
   opacity: 0;
 }
 
-.popup-fade-enter-from > div {
-  transform: scale(0.94) translateY(-12px);
+.popup-fade-enter-from > section,
+.popup-fade-leave-to > section {
+  transform: scale(0.98) translateY(4px);
   opacity: 0;
 }
 
-.popup-fade-leave-to > div {
-  transform: scale(0.96) translateY(-8px);
-  opacity: 0;
-}
-
-/* Scrollbar Styling */
-.overflow-y-auto::-webkit-scrollbar {
+/* 滚动条沿用中性色，避免正文区域出现额外强调色。 */
+.announcement-popup-scrollbar::-webkit-scrollbar {
   width: 8px;
 }
 
-.overflow-y-auto::-webkit-scrollbar-track {
+.announcement-popup-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.overflow-y-auto::-webkit-scrollbar-thumb {
-  background: linear-gradient(to bottom, #BFEAFF, #8BDDF8);
-  border-radius: 4px;
+.announcement-popup-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(156 163 175 / 0.45);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: padding-box;
 }
 
-.dark .overflow-y-auto::-webkit-scrollbar-thumb {
-  background: linear-gradient(to bottom, #333338, #29292E);
+:global(.dark) .announcement-popup-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(82 82 91 / 0.7);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popup-fade-enter-active,
+  .popup-fade-leave-active,
+  .popup-fade-enter-active > section,
+  .popup-fade-leave-active > section {
+    transition: none;
+  }
 }
 </style>

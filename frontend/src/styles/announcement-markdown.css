@@ -111,3 +111,72 @@
 .markdown-body em {
   @apply italic text-gray-600 dark:text-gray-400;
 }
+
+/* 公告浮层使用紧凑排版，避免正文重新形成大标题式视觉层级。 */
+.announcement-popup-content {
+  @apply text-sm leading-7 text-gray-700 dark:text-dark-200;
+}
+
+.announcement-popup-content > :first-child {
+  @apply mt-0;
+}
+
+.announcement-popup-content > :last-child {
+  @apply mb-0;
+}
+
+.announcement-popup-content h1 {
+  @apply mb-4 mt-6 border-0 pb-0 text-xl font-semibold;
+}
+
+.announcement-popup-content h2 {
+  @apply mb-3 mt-5 border-0 pb-0 text-lg font-semibold;
+}
+
+.announcement-popup-content h3 {
+  @apply mb-2 mt-4 text-base font-semibold;
+}
+
+.announcement-popup-content h4 {
+  @apply mb-2 mt-4 text-sm font-semibold;
+}
+
+.announcement-popup-content p,
+.announcement-popup-content ul,
+.announcement-popup-content ol {
+  @apply mb-3;
+}
+
+.announcement-popup-content ul,
+.announcement-popup-content ol {
+  @apply space-y-1;
+}
+
+.announcement-popup-content blockquote {
+  @apply my-4 border-l-2 border-primary-500 bg-gray-50 py-2 pl-4 pr-3 not-italic dark:border-primary-400 dark:bg-dark-800;
+}
+
+.announcement-popup-content blockquote::before {
+  content: none;
+}
+
+.announcement-popup-content pre {
+  @apply my-4 rounded-lg p-4;
+}
+
+.announcement-popup-content table {
+  @apply mb-4;
+}
+
+.announcement-popup-content th,
+.announcement-popup-content td {
+  @apply px-3 py-2;
+}
+
+.announcement-popup-content th {
+  @apply bg-none bg-gray-50 dark:bg-dark-800;
+}
+
+.announcement-popup-content img {
+  @apply my-4 rounded-lg shadow-none;
+}

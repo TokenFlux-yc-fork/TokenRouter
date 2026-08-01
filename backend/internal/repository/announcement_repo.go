@@ -107,6 +107,20 @@ func (r *announcementRepository) Delete(ctx context.Context, id int64) error {
 	return err
 }
 
+// ArchiveExpired 只归档展示中且已经到达结束时间的公告，避免覆盖草稿或人工归档状态。
+func (r *announcementRepository) ArchiveExpired(ctx context.Context, now time.Time) (int64, error) {
+	client := clientFromContext(ctx, r.client)
+	updated, err := client.Announcement.Update().
+		Where(
+			announcement.StatusEQ(service.AnnouncementStatusActive),
+			announcement.EndsAtNotNil(),
+			announcement.EndsAtLTE(now),
+		).
+		SetStatus(service.AnnouncementStatusArchived).
+		Save(ctx)
+	return int64(updated), err
+}
+
 func (r *announcementRepository) List(
 	ctx context.Context,
 	params pagination.PaginationParams,
