@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apicompat"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 	"github.com/tiktoken-go/tokenizer"
 	"go.uber.org/zap"
 )
@@ -21,6 +22,12 @@ const (
 	openAIResponsesInputItemTokenOverhead = 3
 	openAIResponsesContentPartOverhead    = 1
 	openAIInputTokensFallbackMinimum      = 1
+
+	OpsInputTokensSourceKey        = "ops_input_tokens_source"
+	OpsInputTokensSourceUpstream   = "upstream"
+	OpsInputTokensSourceEstimate   = "local_estimate"
+	inputTokensFallbackUnsupported = "endpoint_unsupported"
+	inputTokensFallbackScopeDenied = "scope_denied"
 )
 
 type openAIInputTokensCountRequest struct {
@@ -124,7 +131,6 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
 			AccountID:          account.ID,
@@ -133,25 +139,29 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
-		return fmt.Errorf("openai input_tokens upstream request failed: %s", safeErr)
+		return &UpstreamFailoverError{
+			StatusCode:                     http.StatusBadGateway,
+			SuppressAccountScheduleFailure: true,
+			Stage:                          GatewayFailureStageInference,
+			Scope:                          GatewayFailureScopeRequest,
+			Reason:                         GatewayFailureReason("input_tokens_transport_error"),
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, nil)
 	if err != nil {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
-		return fmt.Errorf("read input_tokens response: %w", err)
+		reason := "input_tokens_response_read_error"
+		if errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
+			reason = "input_tokens_response_too_large"
+		}
+		return newOpenAIInputTokensProtocolFailoverError(resp, reason)
 	}
 
 	if resp.StatusCode >= 400 {
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if account.Type == AccountTypeOAuth && isOpenAIOAuthInputTokensUnsupported(resp.StatusCode, respBody) {
-			writeOpenAIOAuthInputTokensFallback(c, account, prepared, resp.StatusCode)
-			return nil
-		}
-		if isOpenAIInputTokensUnsupported(resp.StatusCode, respBody) {
-			writeAnthropicCountTokensError(c, http.StatusNotFound, "not_found_error", "Token counting is not supported by upstream")
+		if fallbackReason, ok := classifyOpenAIInputTokensLocalFallback(account, resp.StatusCode, respBody); ok {
+			writeOpenAIInputTokensFallback(c, account, prepared, resp.StatusCode, fallbackReason)
 			return nil
 		}
 		var decision UpstreamErrorDecision
@@ -211,14 +221,16 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 		return fmt.Errorf("input_tokens upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 	}
 
-	inputTokens := gjson.GetBytes(respBody, "input_tokens")
-	if !inputTokens.Exists() {
-		writeAnthropicCountTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response missing input_tokens")
-		return fmt.Errorf("input_tokens response missing input_tokens field")
+	inputTokens, err := parseOpenAIInputTokensResponse(respBody)
+	if err != nil {
+		return newOpenAIInputTokensProtocolFailoverError(resp, "input_tokens_invalid_response_schema")
 	}
 
+	if c != nil {
+		c.Set(OpsInputTokensSourceKey, OpsInputTokensSourceUpstream)
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"input_tokens": int(inputTokens.Int()),
+		"input_tokens": inputTokens,
 	})
 	return nil
 }
@@ -325,67 +337,122 @@ func writeAnthropicCountTokensError(c *gin.Context, status int, errType, message
 	})
 }
 
-func isOpenAIInputTokensUnsupported(statusCode int, body []byte) bool {
-	if statusCode != http.StatusNotFound {
-		return false
-	}
-	msg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(body)))
-	return strings.Contains(msg, "input_tokens") && strings.Contains(msg, "not found")
-}
-
-func writeOpenAIOAuthInputTokensFallback(c *gin.Context, account *Account, prepared *openAIInputTokensCountPrepared, statusCode int) {
-	estimated := openAIInputTokensFallbackMinimum
-	if got, err := estimateOpenAIInputTokens(prepared.Request); err == nil {
-		if got > 0 {
-			estimated = got
-		}
-		logger.L().Info("openai count_tokens: oauth fallback to local tiktoken estimate",
-			zap.Int64("account_id", account.ID),
-			zap.Int("upstream_status", statusCode),
-			zap.Int("estimated_input_tokens", estimated),
-			zap.String("upstream_model", prepared.UpstreamModel),
-		)
-	} else {
-		logger.L().Warn("openai count_tokens: oauth local tiktoken fallback failed, using minimum estimate",
-			zap.Int64("account_id", account.ID),
-			zap.Int("upstream_status", statusCode),
-			zap.Int("estimated_input_tokens", estimated),
-			zap.String("upstream_model", prepared.UpstreamModel),
-			zap.Error(err),
-		)
+func classifyOpenAIInputTokensLocalFallback(account *Account, statusCode int, body []byte) (string, bool) {
+	if account == nil || account.Platform != PlatformOpenAI ||
+		(account.Type != AccountTypeAPIKey && account.Type != AccountTypeOAuth) {
+		return "", false
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"input_tokens": estimated,
-	})
-}
-
-func isOpenAIOAuthInputTokensUnsupported(statusCode int, body []byte) bool {
-	switch statusCode {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-	default:
-		return false
-	}
-
-	bodyLower := strings.ToLower(string(body))
 	msg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(body)))
 	code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(body)))
+	bodyLower := strings.ToLower(string(body))
 
-	if code == "missing_scope" ||
-		strings.Contains(bodyLower, "api.responses.write") ||
-		strings.Contains(bodyLower, "missing scopes") ||
-		strings.Contains(bodyLower, "insufficient_scope") {
-		return true
+	if account.Type == AccountTypeOAuth && (statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden) {
+		explicitMissingScope := code == "missing_scope" || code == "insufficient_scope" ||
+			strings.Contains(bodyLower, "missing scopes") ||
+			strings.Contains(bodyLower, "insufficient_scope") ||
+			strings.Contains(bodyLower, "api.responses.write")
+		if explicitMissingScope {
+			return inputTokensFallbackScopeDenied, true
+		}
 	}
 
-	if statusCode == http.StatusNotFound && isOpenAIInputTokensUnsupported(statusCode, body) {
-		return true
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusNotFound &&
+		statusCode != http.StatusMethodNotAllowed && statusCode != http.StatusNotImplemented {
+		return "", false
+	}
+	mentionsEndpoint := strings.Contains(msg, "input_tokens") ||
+		strings.Contains(msg, "/v1/responses/input_tokens") ||
+		strings.Contains(bodyLower, "/v1/responses/input_tokens")
+	unsupported := strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "not supported") ||
+		strings.Contains(msg, "unsupported") ||
+		strings.Contains(msg, "unknown endpoint") ||
+		strings.Contains(msg, "unknown route") ||
+		statusCode == http.StatusMethodNotAllowed || statusCode == http.StatusNotImplemented
+	if mentionsEndpoint && unsupported {
+		return inputTokensFallbackUnsupported, true
+	}
+	return "", false
+}
+
+func writeOpenAIInputTokensFallback(c *gin.Context, account *Account, prepared *openAIInputTokensCountPrepared, statusCode int, reason string) {
+	estimated := openAIInputTokensFallbackMinimum
+	got, estimateErr := estimateOpenAIInputTokens(prepared.Request)
+	if estimateErr == nil && got > 0 {
+		estimated = got
+	}
+	if c != nil {
+		c.Set(OpsInputTokensSourceKey, OpsInputTokensSourceEstimate)
 	}
 
-	return strings.Contains(msg, "input_tokens") &&
-		(strings.Contains(msg, "not found") ||
-			strings.Contains(msg, "not supported") ||
-			strings.Contains(msg, "unsupported"))
+	fields := []zap.Field{
+		zap.Int64("account_id", account.ID),
+		zap.Int("upstream_status", statusCode),
+		zap.String("fallback_reason", reason),
+		zap.Int("estimated_input_tokens", estimated),
+		zap.String("upstream_model", prepared.UpstreamModel),
+	}
+	if estimateErr == nil {
+		logger.L().Info("openai count_tokens: fallback to local tiktoken estimate", fields...)
+	} else {
+		fields = append(fields, zap.Error(estimateErr))
+		logger.L().Warn("openai count_tokens: local tiktoken fallback failed, using minimum estimate", fields...)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"input_tokens": estimated})
+}
+
+func newOpenAIInputTokensProtocolFailoverError(resp *http.Response, reason string) error {
+	headers := make(http.Header)
+	if resp != nil && resp.Header != nil {
+		headers = resp.Header.Clone()
+	}
+	return &UpstreamFailoverError{
+		StatusCode:                     http.StatusBadGateway,
+		ResponseHeaders:                headers,
+		SuppressAccountScheduleFailure: true,
+		Stage:                          GatewayFailureStageInference,
+		Scope:                          GatewayFailureScopeRequest,
+		Reason:                         GatewayFailureReason(reason),
+	}
+}
+
+func parseOpenAIInputTokensResponse(body []byte) (int, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var root map[string]json.RawMessage
+	if err := decoder.Decode(&root); err != nil {
+		return 0, fmt.Errorf("decode input_tokens response: %w", err)
+	}
+	if root == nil {
+		return 0, fmt.Errorf("input_tokens response must be an object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return 0, fmt.Errorf("input_tokens response has trailing JSON")
+		}
+		return 0, fmt.Errorf("decode trailing input_tokens response: %w", err)
+	}
+	raw, ok := root["input_tokens"]
+	if !ok {
+		return 0, fmt.Errorf("input_tokens field is missing")
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return 0, fmt.Errorf("input_tokens must be a non-negative JSON integer")
+	}
+	for _, ch := range trimmed {
+		if ch < '0' || ch > '9' {
+			return 0, fmt.Errorf("input_tokens must be a non-negative JSON integer")
+		}
+	}
+	value, err := strconv.ParseUint(trimmed, 10, strconv.IntSize)
+	if err != nil {
+		return 0, fmt.Errorf("input_tokens must be a representable non-negative JSON integer: %w", err)
+	}
+	return int(value), nil
 }
 
 func estimateOpenAIInputTokens(req openAIInputTokensCountRequest) (int, error) {
