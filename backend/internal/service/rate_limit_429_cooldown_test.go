@@ -15,15 +15,25 @@ import (
 
 type rateLimit429AccountRepoStub struct {
 	mockAccountRepoForGemini
-	rateLimitCalls     int
-	lastRateLimitID    int64
-	lastRateLimitReset time.Time
+	rateLimitCalls        int
+	rateLimitIfLaterCalls int
+	lastRateLimitID       int64
+	lastRateLimitReset    time.Time
 }
 
 func (r *rateLimit429AccountRepoStub) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
 	r.rateLimitCalls++
 	r.lastRateLimitID = id
 	r.lastRateLimitReset = resetAt
+	return nil
+}
+
+func (r *rateLimit429AccountRepoStub) SetRateLimitedIfLater(_ context.Context, id int64, resetAt time.Time) error {
+	r.rateLimitIfLaterCalls++
+	r.lastRateLimitID = id
+	if resetAt.After(r.lastRateLimitReset) {
+		r.lastRateLimitReset = resetAt
+	}
 	return nil
 }
 
@@ -76,7 +86,7 @@ func TestHandle429_FallbackUsesDBSeconds(t *testing.T) {
 	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"slow down"}}`))
 	after := time.Now()
 
-	require.Equal(t, 1, accountRepo.rateLimitCalls)
+	require.Equal(t, 1, accountRepo.rateLimitIfLaterCalls)
 	require.Equal(t, int64(42), accountRepo.lastRateLimitID)
 	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(12*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(12*time.Second)))
 }
@@ -94,7 +104,7 @@ func TestHandle429_FallbackDisabledSkipsLocalMark(t *testing.T) {
 	account := &Account{ID: 43, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"slow down"}}`))
 
-	require.Zero(t, accountRepo.rateLimitCalls)
+	require.Zero(t, accountRepo.rateLimitIfLaterCalls)
 }
 
 // Anthropic 缺少 reset 头的 429 也应进入短期兜底冷却，避免持续消耗故障转移预算。
@@ -113,7 +123,7 @@ func TestHandle429_AnthropicNoResetTimeUsesFallbackCooldown(t *testing.T) {
 	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"Extra usage required"}}`))
 	after := time.Now()
 
-	require.Equal(t, 1, accountRepo.rateLimitCalls)
+	require.Equal(t, 1, accountRepo.rateLimitIfLaterCalls)
 	require.Equal(t, int64(45), accountRepo.lastRateLimitID)
 	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(12*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(12*time.Second)))
 }
@@ -132,7 +142,57 @@ func TestHandle429_AnthropicNoResetTimeFallbackDisabledSkipsMark(t *testing.T) {
 	account := &Account{ID: 46, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
 	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"type":"rate_limit_error","message":"Extra usage required"}}`))
 
-	require.Zero(t, accountRepo.rateLimitCalls)
+	require.Zero(t, accountRepo.rateLimitIfLaterCalls)
+}
+
+func TestHandle429_RetryAfterSetsOpenAICooldown(t *testing.T) {
+	accountRepo := &rateLimit429AccountRepoStub{}
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	account := &Account{ID: 47, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	before := time.Now()
+	svc.handle429(context.Background(), account, http.Header{"Retry-After": []string{"45"}}, nil)
+	after := time.Now()
+
+	require.Equal(t, 1, accountRepo.rateLimitIfLaterCalls)
+	require.Equal(t, int64(47), accountRepo.lastRateLimitID)
+	require.False(t, accountRepo.lastRateLimitReset.Before(before.Add(45*time.Second)))
+	require.False(t, accountRepo.lastRateLimitReset.After(after.Add(45*time.Second)))
+}
+
+func TestHandle429_RetryAfterHTTPDateSetsOpenAICooldown(t *testing.T) {
+	accountRepo := &rateLimit429AccountRepoStub{}
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	account := &Account{ID: 48, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	resetAt := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Second)
+
+	svc.handle429(context.Background(), account, http.Header{"Retry-After": []string{resetAt.Format(http.TimeFormat)}}, nil)
+
+	require.Equal(t, 1, accountRepo.rateLimitIfLaterCalls)
+	require.WithinDuration(t, resetAt, accountRepo.lastRateLimitReset, time.Second)
+}
+
+func TestParseRetryAfterResetTimeRejectsUnsafeValues(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, raw := range []string{
+		"", "0", "-1", "1.5", "NaN", "+Inf", "604801",
+		now.Add(-time.Minute).Format(http.TimeFormat),
+		now.Add(8 * 24 * time.Hour).Format(http.TimeFormat),
+	} {
+		require.Nil(t, parseRetryAfterResetTime(http.Header{"Retry-After": []string{raw}}, now), raw)
+	}
+}
+
+func TestHandle429_DoesNotShortenExistingCooldown(t *testing.T) {
+	later := time.Now().Add(10 * time.Minute)
+	accountRepo := &rateLimit429AccountRepoStub{lastRateLimitReset: later}
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	account := &Account{ID: 49, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	svc.handle429(context.Background(), account, http.Header{"Retry-After": []string{"30"}}, nil)
+
+	require.Equal(t, 1, accountRepo.rateLimitIfLaterCalls)
+	require.Equal(t, later, accountRepo.lastRateLimitReset)
 }
 
 func TestHandle429_FallbackUsesDefaultSecondsWhenSettingServiceMissing(t *testing.T) {
@@ -145,7 +205,7 @@ func TestHandle429_FallbackUsesDefaultSecondsWhenSettingServiceMissing(t *testin
 	svc.handle429(context.Background(), account, http.Header{}, []byte(`{"error":{"message":"slow down"}}`))
 	after := time.Now()
 
-	require.Equal(t, 1, accountRepo.rateLimitCalls)
+	require.Equal(t, 1, accountRepo.rateLimitIfLaterCalls)
 	require.Equal(t, int64(44), accountRepo.lastRateLimitID)
 	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(5*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(5*time.Second)))
 }

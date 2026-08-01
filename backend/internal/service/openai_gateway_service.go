@@ -514,6 +514,13 @@ func (s *OpenAIGatewayService) TempUnscheduleRetryableError(ctx context.Context,
 		slog.Warn("openai_retryable_error_passive_account_lookup_failed", "account_id", accountID, "status_code", failoverErr.StatusCode, "error", err)
 		return
 	}
+	if failoverErr.StatusCode == http.StatusTooManyRequests {
+		// pool-mode 429 必须在同账号重试预算耗尽后才阻断调度，否则下一次
+		// 已获准的重试会被 scheduler 提前过滤掉。
+		s.markOpenAIOAuth429RateLimited(ctx, account, failoverErr.ResponseHeaders, failoverErr.ResponseBody)
+		s.rateLimitService.handle429(ctx, account, failoverErr.ResponseHeaders, failoverErr.ResponseBody)
+		return
+	}
 	s.rateLimitService.recordPassiveAccountFailure(ctx, account, failoverErr.StatusCode, failoverErr.ResponseBody)
 }
 

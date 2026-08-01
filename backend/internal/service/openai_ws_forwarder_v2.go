@@ -741,13 +741,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				defaultFailover,
 			) {
 				lease.MarkBroken()
-				return nil, newOpenAIUpstreamFailoverError(
+				failoverErr := newOpenAIUpstreamFailoverError(
 					terminalPolicy.StatusCode,
 					lease.HandshakeHeaders(),
 					message,
 					failedMessage,
 					terminalPolicy.Decision.RetryableOnSameAccount(account, terminalPolicy.StatusCode),
 				)
+				if terminalPolicy.StatusCode == http.StatusBadGateway {
+					return nil, wrapOpenAIWSFallback("upstream_error_event", fmt.Errorf("%s: %w", failedMessage, failoverErr))
+				}
+				return nil, failoverErr
 			}
 		}
 
