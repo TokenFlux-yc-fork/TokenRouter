@@ -15,7 +15,7 @@ func TestOpsRepositoryListAttemptTimeline(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT jsonb_build_object(")).
+	mock.ExpectQuery(`(?s)` + regexp.QuoteMeta("SELECT jsonb_build_object(") + `.*ORDER BY\s+.*attempts\.ordinality ASC,\s+e\.id ASC\s+LIMIT 200`).
 		WithArgs("request-1").
 		WillReturnRows(sqlmock.NewRows([]string{"attempt"}).
 			AddRow(`{"at_unix_ms":200,"index":1,"platform":"openai","upstream_status_code":429,"upstream_request_id":"up-2","kind":"http_error"}`).
