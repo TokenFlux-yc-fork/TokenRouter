@@ -1323,11 +1323,8 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		persistOpenAI429PlanType(ctx, s.accountRepo, account, responseBody)
 		s.persistOpenAICodexSnapshot(ctx, account, headers)
 		now := time.Now()
-		resetAt := s.calculateOpenAI429ResetTime(headers)
-		if resetAt == nil {
-			resetAt = parseRetryAfterResetTime(headers, now)
-		}
-		if resetAt != nil && resetAt.After(now) {
+		resetAt := resolveOpenAI429ResetTime(headers, responseBody, now)
+		if resetAt != nil {
 			s.notifyAccountSchedulingBlocked(account, *resetAt, "429")
 			if err := s.setRateLimitedWithoutShortening(ctx, account.ID, *resetAt); err != nil {
 				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
@@ -1365,19 +1362,9 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 
 	// 4. 如果响应头没有，尝试从响应体解析（OpenAI usage_limit_reached, Gemini）
 	if resetTimestamp == "" {
+		// OpenAI 的 header/body deadline 已在统一 resolver 中处理；这里仅保留
+		// 其他平台的响应体兼容解析，避免重新接受过期或超出上限的 body reset。
 		switch account.Platform {
-		case PlatformOpenAI:
-			// 尝试解析 OpenAI 的 usage_limit_reached 错误
-			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
-				resetTime := time.Unix(*resetAt, 0)
-				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
-				if err := s.setRateLimitedWithoutShortening(ctx, account.ID, resetTime); err != nil {
-					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
-					return
-				}
-				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
-				return
-			}
 		case PlatformGemini, PlatformAntigravity:
 			// 尝试解析 Gemini 格式（用于其他平台）
 			if resetAt := ParseGeminiRateLimitResetTime(responseBody); resetAt != nil {
@@ -1483,6 +1470,10 @@ func clampRateLimit429CooldownSeconds(seconds int) int {
 // calculateOpenAI429ResetTime 从 OpenAI 429 响应头计算正确的重置时间
 // 返回 nil 表示无法从响应头中确定重置时间
 func calculateOpenAI429ResetTime(headers http.Header) *time.Time {
+	return calculateOpenAI429ResetTimeAt(headers, time.Now())
+}
+
+func calculateOpenAI429ResetTimeAt(headers http.Header, now time.Time) *time.Time {
 	snapshot := ParseCodexRateLimitHeaders(headers)
 	if snapshot == nil {
 		return nil
@@ -1492,8 +1483,6 @@ func calculateOpenAI429ResetTime(headers http.Header) *time.Time {
 	if normalized == nil {
 		return nil
 	}
-
-	now := time.Now()
 
 	// 判断哪个限制被触发（used_percent >= 100）
 	is7dExhausted := normalized.Used7dPercent != nil && *normalized.Used7dPercent >= 100
@@ -1526,6 +1515,29 @@ func calculateOpenAI429ResetTime(headers http.Header) *time.Time {
 	}
 
 	return nil
+}
+
+func resolveOpenAI429ResetTime(headers http.Header, responseBody []byte, now time.Time) *time.Time {
+	var latest time.Time
+	consider := func(candidate *time.Time) {
+		if candidate == nil || !candidate.After(now) || candidate.Sub(now) > 7*24*time.Hour {
+			return
+		}
+		if latest.IsZero() || candidate.After(latest) {
+			latest = *candidate
+		}
+	}
+
+	consider(calculateOpenAI429ResetTimeAt(headers, now))
+	consider(parseRetryAfterResetTime(headers, now))
+	if resetUnix := parseOpenAIRateLimitResetTime(responseBody); resetUnix != nil {
+		resetAt := time.Unix(*resetUnix, 0)
+		consider(&resetAt)
+	}
+	if latest.IsZero() {
+		return nil
+	}
+	return &latest
 }
 
 func (s *RateLimitService) calculateOpenAI429ResetTime(headers http.Header) *time.Time {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -181,6 +182,31 @@ func TestParseRetryAfterResetTimeRejectsUnsafeValues(t *testing.T) {
 	} {
 		require.Nil(t, parseRetryAfterResetTime(http.Header{"Retry-After": []string{raw}}, now), raw)
 	}
+}
+
+func TestResolveOpenAI429ResetTimeUsesLatestValidSource(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	headers := http.Header{
+		"X-Codex-Primary-Used-Percent":  []string{"100"},
+		"X-Codex-Primary-Reset-Seconds": []string{"60"},
+		"Retry-After":                    []string{"300"},
+	}
+	body := []byte(`{"error":{"type":"rate_limit_exceeded","resets_at":` + strconv.FormatInt(now.Add(10*time.Minute).Unix(), 10) + `}}`)
+
+	resetAt := resolveOpenAI429ResetTime(headers, body, now)
+
+	require.NotNil(t, resetAt)
+	require.WithinDuration(t, now.Add(10*time.Minute), *resetAt, time.Second)
+}
+
+func TestResolveOpenAI429ResetTimeRejectsUnsafeBodyDeadline(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	body := []byte(`{"error":{"type":"rate_limit_exceeded","resets_at":` + strconv.FormatInt(now.Add(8*24*time.Hour).Unix(), 10) + `}}`)
+
+	resetAt := resolveOpenAI429ResetTime(http.Header{"Retry-After": []string{"120"}}, body, now)
+
+	require.NotNil(t, resetAt)
+	require.WithinDuration(t, now.Add(2*time.Minute), *resetAt, time.Second)
 }
 
 func TestHandle429_DoesNotShortenExistingCooldown(t *testing.T) {

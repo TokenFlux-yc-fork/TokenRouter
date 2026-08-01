@@ -241,14 +241,8 @@ func (s *OpenAIGatewayService) markOpenAIOAuth429RateLimited(ctx context.Context
 	cooldownUntil := time.Now().Add(openAIOAuth429FallbackCooldown)
 	if s.rateLimitService != nil {
 		now := time.Now()
-		if resetAt := s.rateLimitService.calculateOpenAI429ResetTime(headers); resetAt != nil && resetAt.After(now) {
+		if resetAt := resolveOpenAI429ResetTime(headers, responseBody, now); resetAt != nil {
 			cooldownUntil = *resetAt
-		} else if resetAt := parseRetryAfterResetTime(headers, now); resetAt != nil {
-			cooldownUntil = *resetAt
-		} else if resetUnix := parseOpenAIRateLimitResetTime(responseBody); resetUnix != nil {
-			if resetAt := time.Unix(*resetUnix, 0); resetAt.After(now) {
-				cooldownUntil = resetAt
-			}
 		} else if cooldown, ok := s.rateLimitService.get429FallbackCooldown(ctx, account); ok && cooldown > 0 {
 			cooldownUntil = now.Add(cooldown)
 		}
