@@ -76,7 +76,18 @@ git diff --check
 
 每个实施批次应独立灰度并可独立 revert。出现 post-semantic account switch、普通 client 400 被切号、retry 放大、重复 SSE error/message_stop、账号健康误伤或敏感字段泄漏时立即回滚对应批次。本次不部署、不修改 `.deployment/ACTIVE_RELEASE`，不修改 Codex。
 
-## 非紧急 enhancement（独立 worktree/PR）
+## 后续批次：能力、限流与 attempt telemetry
+
+- `/responses/input_tokens` 的明确 endpoint unsupported 或 OAuth scope 缺失仅触发健康中性的本地 token estimate；estimate 不改变公开响应 schema，也不参与 billing/settlement。普通 401/403、429、5xx、transport 或 malformed success 不得被宽泛吞掉。
+- `Retry-After` 仅接受受限 delta-seconds/HTTP-date，具有 cap，不能缩短已有 provider/runtime cooldown；语义输出或 delivery committed 后禁止 replay。
+- `max_output_tokens` capability 按 account、canonical Responses endpoint、effective model、credential/config generation 和 version 隔离。默认 `strict_output_limit=false` 保留 bounded strip retry；strict 模式禁止静默删除字段，所有候选均明确不支持时返回稳定脱敏错误。transient、streaming failure 和 native remote-compaction v2 不得污染普通 Responses capability；unsupported 可在真实成功终态后自愈为 supported。
+- Ops attempt timeline 直接读取 durable、content-free `upstream_attempt_attributions`，按 gateway/client request ID 有界查询并稳定排序；attempt telemetry 仅用于运营排障，不参与 billing/settlement，也不记录 payload、Authorization、原始 URL/header/body。
+- 本轮 deploy 分支仅为未发布候选；不连接生产、不修改 `.deployment/ACTIVE_RELEASE`、不创建 tag 或 release。
+
+## 后续批次验证
+
+除既有定向测试外，最终候选必须通过 backend 全量 unit/integration、race、vet、build，以及 frontend lint/typecheck/test/build、Wire/migration、Compose、shell contract 和 secret scan。任何普通测试、构建或安全边界失败都不得冻结候选。
+
 
 1. model/group 的 policy 403、静态 unsupported 404、暂时不可调度 503 跨入口一致性。
 2. 仅在请求明确携带完整历史时做双向 tool call/output preflight；只拒绝，不删除、补空、重排或转换未知 arguments。

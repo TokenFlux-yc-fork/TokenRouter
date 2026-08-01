@@ -4,7 +4,14 @@ This file tracks behavior that the YC fork must preserve while following
 upstream. It describes the current maintenance surface, not every historical
 commit in the fork.
 
-## Status Values
+## 2026-08 运维与能力契约
+
+- `/responses/input_tokens` 的本地 fallback 是带 `estimate` 语义的健康中性兼容路径，不参与 customer billing 或 settlement；成功 schema 仍为 Anthropic-compatible `{"input_tokens": N}`。
+- `Retry-After` 使用有界解析和 cooldown deadline 合并，不能缩短已有 block；pre-semantic 才允许有限 retry/failover，post-semantic 或 delivery committed 后绝不透明 replay。
+- `max_output_tokens` capability 以 account、canonical endpoint、effective/mapped model、credential/config generation 和 version 组成 exact identity。默认 `strict_output_limit=false` 可使用单次 bounded strip retry；strict 模式不得静默删除字段，所有候选不支持时返回稳定脱敏 capability error；transient/streaming/native-v2 结果不得污染普通 Responses capability。
+- `upstream_attempt_attributions` 是 content-free、durable 的运营遥测 ledger。Ops timeline 只读查询该 ledger，支持 gateway/client request ID、稳定时间排序和有界结果；attempt telemetry 不得用于 billing/settlement，且不得保存 payload、Authorization 或原始 URL/header/body。
+- Deploy candidate 只表示已验证但未发布的候选，不创建 tag/release，不连接生产，不修改 `.deployment/ACTIVE_RELEASE`。
+
 
 - `local`: the behavior is maintained by this fork.
 - `partial`: upstream covers part of the behavior; a local delta remains.
