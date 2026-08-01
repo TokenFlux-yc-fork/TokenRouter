@@ -281,6 +281,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		responseBody = result.responseBody
 	} else {
 		result, err := s.handleNonStreamingResponsePassthrough(ctx, resp, c, account, reqModel, upstreamPassthroughModel)
+		attempt.finishNonStreamingPassthrough(result, err)
 		if err != nil {
 			return nil, err
 		}

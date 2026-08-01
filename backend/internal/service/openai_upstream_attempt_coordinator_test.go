@@ -100,6 +100,60 @@ func TestFinalizeOpenAINativeHTTPForwardResultProjectsTerminalAttempt(t *testing
 	require.True(t, result.SucceededForScheduling())
 }
 
+func TestNonStreamingAttemptFinishIsTerminalForSuccessAndProtocolError(t *testing.T) {
+	newAttempt := func(repo *stubUpstreamAttemptAttributionRepository, attemptID AttemptID) *openAIUpstreamAttemptCoordinator {
+		now := time.Now().UTC()
+		return &openAIUpstreamAttemptCoordinator{
+			service: &OpenAIGatewayService{upstreamAttemptAttributionRepo: repo},
+			ctx:     context.Background(),
+			attribution: UpstreamAttemptAttribution{
+				AttemptID:        attemptID,
+				ClientRequestID:  "client-non-stream",
+				GatewayRequestID: "gateway-non-stream",
+				AccountID:        42,
+				Transport:        UpstreamAttemptTransportHTTP,
+				Domain: OpenAICompatibilityDomain{
+					Provider:            OpenAIUpstreamProvider(PlatformOpenAI),
+					UpstreamFingerprint: "upstream_v1_0123456789abcdef0123456789abcdef",
+					EffectiveModel:      "fixture-model",
+					ContractVersion:     OpenAINativeCompactionContractVersion,
+				},
+				State:             UpstreamAttemptStateInProgress,
+				StateVersion:      2,
+				TransportObserved: true,
+				StartedAt:         now,
+				ObservedAt:        now,
+			},
+		}
+	}
+
+	t.Run("native success", func(t *testing.T) {
+		repo := &stubUpstreamAttemptAttributionRepository{}
+		attempt := newAttempt(repo, "attempt-native-success")
+		attempt.finishNonStreaming(&openaiNonStreamingResult{usage: &OpenAIUsage{InputTokens: 7}, responseID: "resp-native"}, nil)
+
+		rows := repo.snapshot()
+		require.Len(t, rows, 1)
+		require.Equal(t, UpstreamAttemptStateTerminal, rows[0].State)
+		require.Equal(t, string(OpenAINativeCompactionValid), rows[0].Semantic.Outcome)
+		require.True(t, rows[0].DeliveryCommitted)
+		require.True(t, rows[0].Usage.Observed)
+	})
+
+	t.Run("passthrough protocol error", func(t *testing.T) {
+		repo := &stubUpstreamAttemptAttributionRepository{}
+		attempt := newAttempt(repo, "attempt-passthrough-protocol-error")
+		attempt.finishNonStreamingPassthrough(nil, errors.New("invalid upstream response"))
+
+		rows := repo.snapshot()
+		require.Len(t, rows, 1)
+		require.Equal(t, UpstreamAttemptStateTerminal, rows[0].State)
+		require.Equal(t, string(OpenAINativeCompactionIncompleteStream), rows[0].Semantic.Outcome)
+		require.True(t, rows[0].SafeToFailover)
+		require.False(t, rows[0].DeliveryCommitted)
+	})
+}
+
 func TestFinalizeOpenAINativeHTTPForwardResultRequiresDurableTerminalAttempt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, tt := range []struct {
