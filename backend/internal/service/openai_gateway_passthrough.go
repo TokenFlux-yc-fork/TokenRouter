@@ -195,11 +195,15 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			return nil, buildErr
 		}
 
-		maxOutputEffectiveModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-		if maxOutputEffectiveModel == "" {
-			maxOutputEffectiveModel = reqModel
+		maxOutputCapabilityKey = OpenAIResponsesMaxOutputTokensCapabilityKey{}
+		maxOutputCapabilityKeyOK = false
+		if !nativeRemoteCompactionV2 {
+			maxOutputEffectiveModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+			if maxOutputEffectiveModel == "" {
+				maxOutputEffectiveModel = reqModel
+			}
+			maxOutputCapabilityKey, maxOutputCapabilityKeyOK = s.prepareOpenAIResponsesMaxOutputTokensCapability(ctx, account, body, maxOutputEffectiveModel)
 		}
-		maxOutputCapabilityKey, maxOutputCapabilityKeyOK = s.prepareOpenAIResponsesMaxOutputTokensCapability(ctx, account, body, maxOutputEffectiveModel)
 		attempt = s.beginOpenAINativeHTTPAttempt(ctx, c, account, reqModel, openAIServiceTierIsPriority(extractOpenAIServiceTierFromBody(body)))
 		upstreamStart := time.Now()
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
@@ -216,15 +220,15 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 		// 只读取一次响应体判断 task 是否失效；恢复失败时仍把原响应交给既有错误路径。
 		probeBody := s.readUpstreamErrorBody(resp)
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(probeBody))
+		attempt.finishHTTPError(resp, string(OpenAINativeCompactionHTTPFailure), true)
 		if maxOutputCapabilityKeyOK && IsExplicitOpenAIResponsesMaxOutputTokensUnsupported(resp.StatusCode, probeBody) {
 			s.observeOpenAIResponsesMaxOutputTokensCapability(ctx, account, maxOutputCapabilityKey, OpenAIResponsesMaxOutputTokensCapabilityUnsupported, resp.StatusCode, "explicit_unsupported_parameter")
 			if s.cfg != nil && s.cfg.Gateway.StrictOutputLimit {
 				return nil, NewOpenAIResponsesMaxOutputTokensUnsupportedFailoverError(resp.StatusCode)
 			}
 		}
-		_ = resp.Body.Close()
-		resp.Body = io.NopCloser(bytes.NewReader(probeBody))
-		attempt.finishHTTPError(resp, string(OpenAINativeCompactionHTTPFailure), true)
 		if !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, probeBody) {
 			agentTaskRecoveryTried = true
 			expectedTaskID := account.GetCredential("task_id")
