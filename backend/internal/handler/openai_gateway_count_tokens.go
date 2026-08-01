@@ -230,6 +230,7 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 			}
 			continue
 		}
+		h.gatewayService.TempUnscheduleRetryableError(c.Request.Context(), account.ID, failoverErr)
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr
 		if switchCount >= h.maxAccountSwitches {

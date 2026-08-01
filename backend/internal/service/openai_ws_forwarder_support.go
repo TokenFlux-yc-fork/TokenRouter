@@ -793,6 +793,8 @@ func openAIWSErrorHTTPStatusFromRaw(codeRaw, errTypeRaw string) int {
 		return http.StatusForbidden
 	case isOpenAIWSRateLimitError(codeRaw, errTypeRaw, ""):
 		return http.StatusTooManyRequests
+	case code == "server_is_overloaded", code == "slow_down":
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusBadGateway
 	}

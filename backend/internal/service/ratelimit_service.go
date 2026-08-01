@@ -41,6 +41,10 @@ type AccountRuntimeBlocker interface {
 	ClearAccountSchedulingBlock(accountID int64)
 }
 
+type rateLimitDeadlineExtender interface {
+	SetRateLimitedIfLater(ctx context.Context, id int64, resetAt time.Time) error
+}
+
 type ScheduledAccountCircuitBreakerPlanReader interface {
 	ListByAccountID(ctx context.Context, accountID int64) ([]*ScheduledTestPlan, error)
 }
@@ -150,6 +154,16 @@ func (s *RateLimitService) notifyAccountSchedulingBlockCleared(accountID int64) 
 		return
 	}
 	s.runtimeBlocker.ClearAccountSchedulingBlock(accountID)
+}
+
+func (s *RateLimitService) setRateLimitedWithoutShortening(ctx context.Context, accountID int64, resetAt time.Time) error {
+	if s == nil || s.accountRepo == nil {
+		return errors.New("account repository is nil")
+	}
+	if extendingRepo, ok := s.accountRepo.(rateLimitDeadlineExtender); ok {
+		return extendingRepo.SetRateLimitedIfLater(ctx, accountID, resetAt)
+	}
+	return s.accountRepo.SetRateLimited(ctx, accountID, resetAt)
 }
 
 // ErrorPolicyResult 表示错误策略检查的结果
@@ -1308,9 +1322,14 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	if account.Platform == PlatformOpenAI {
 		persistOpenAI429PlanType(ctx, s.accountRepo, account, responseBody)
 		s.persistOpenAICodexSnapshot(ctx, account, headers)
-		if resetAt := s.calculateOpenAI429ResetTime(headers); resetAt != nil {
+		now := time.Now()
+		resetAt := s.calculateOpenAI429ResetTime(headers)
+		if resetAt == nil {
+			resetAt = parseRetryAfterResetTime(headers, now)
+		}
+		if resetAt != nil && resetAt.After(now) {
 			s.notifyAccountSchedulingBlocked(account, *resetAt, "429")
-			if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
+			if err := s.setRateLimitedWithoutShortening(ctx, account.ID, *resetAt); err != nil {
 				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 				return
 			}
@@ -1322,7 +1341,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	// 2. Anthropic 平台：尝试解析 per-window 头（5h / 7d），选择实际触发的窗口
 	if result := calculateAnthropic429ResetTime(headers); result != nil {
 		s.notifyAccountSchedulingBlocked(account, result.resetAt, "429")
-		if err := s.accountRepo.SetRateLimited(ctx, account.ID, result.resetAt); err != nil {
+		if err := s.setRateLimitedWithoutShortening(ctx, account.ID, result.resetAt); err != nil {
 			slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 			return
 		}
@@ -1352,7 +1371,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
 				resetTime := time.Unix(*resetAt, 0)
 				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
-				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
+				if err := s.setRateLimitedWithoutShortening(ctx, account.ID, resetTime); err != nil {
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 					return
 				}
@@ -1364,7 +1383,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			if resetAt := ParseGeminiRateLimitResetTime(responseBody); resetAt != nil {
 				resetTime := time.Unix(*resetAt, 0)
 				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
-				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
+				if err := s.setRateLimitedWithoutShortening(ctx, account.ID, resetTime); err != nil {
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 					return
 				}
@@ -1403,7 +1422,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 
 	// 标记限流状态
 	s.notifyAccountSchedulingBlocked(account, resetAt, "429")
-	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+	if err := s.setRateLimitedWithoutShortening(ctx, account.ID, resetAt); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
@@ -1428,7 +1447,7 @@ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, accoun
 	resetAt := time.Now().Add(cooldown)
 	slog.Warn("rate_limit_429_fallback_used", "account_id", account.ID, "platform", account.Platform, "reason", reason, "using_default", cooldown.String())
 	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
-	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
+	if err := s.setRateLimitedWithoutShortening(ctx, account.ID, resetAt); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 	}
 }
@@ -1625,7 +1644,7 @@ func (s *RateLimitService) persistAnthropicExhaustedWindowLimit(ctx context.Cont
 	}
 
 	s.notifyAccountSchedulingBlocked(account, limit.resetAt, limit.reason)
-	if err := s.accountRepo.SetRateLimited(ctx, account.ID, limit.resetAt); err != nil {
+	if err := s.setRateLimitedWithoutShortening(ctx, account.ID, limit.resetAt); err != nil {
 		slog.Warn("anthropic_window_rate_limit_set_failed",
 			"account_id", account.ID,
 			"window", limit.window,
@@ -2417,14 +2436,24 @@ func parseRetryAfterResetTime(headers http.Header, now time.Time) *time.Time {
 	if raw == "" {
 		return nil
 	}
-	if seconds, err := strconv.ParseFloat(raw, 64); err == nil {
-		resetAt := now.Add(time.Duration(seconds * float64(time.Second)))
+	// RFC 9110 permits delta-seconds or an HTTP date.  Accept only a bounded,
+	// positive integer delay so malformed or unreasonably distant provider input
+	// cannot create an effectively permanent scheduler block.
+	if seconds, err := strconv.ParseUint(raw, 10, 64); err == nil {
+		if seconds == 0 || seconds > uint64((7*24*time.Hour)/time.Second) {
+			return nil
+		}
+		resetAt := now.Add(time.Duration(seconds) * time.Second)
+		if !resetAt.After(now) {
+			return nil
+		}
 		return &resetAt
 	}
-	if parsed, err := http.ParseTime(raw); err == nil {
-		return &parsed
+	parsed, err := http.ParseTime(raw)
+	if err != nil || !parsed.After(now) || parsed.Sub(now) > 7*24*time.Hour {
+		return nil
 	}
-	return nil
+	return &parsed
 }
 
 func parseOpenAIImageTryAgainCooldown(body []byte) time.Duration {
