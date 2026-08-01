@@ -683,6 +683,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.Float64("load_skew", scheduleDecision.LoadSkew),
 		)
 		account := selection.Account
+		if h.cfg != nil && h.cfg.Gateway.StrictOutputLimit && h.gatewayService.OpenAIResponsesMaxOutputTokensCapabilityKnownUnsupported(selectionCtx, account, forwardBody, routingModel, requireCompact) {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			failedAccountIDs[account.ID] = struct{}{}
+			lastFailoverErr = service.NewOpenAIResponsesMaxOutputTokensUnsupportedFailoverError(http.StatusBadRequest)
+			continue
+		}
 		if compatibilityAttempt != nil {
 			if _, domainErr := compatibilityAttempt.CheckCandidate(selectionCtx, account, routingModel); domainErr != nil {
 				if selection.ReleaseFunc != nil {
@@ -2207,6 +2215,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		account := selection.Account
+		if h.cfg != nil && h.cfg.Gateway.StrictOutputLimit && h.gatewayService.OpenAIResponsesMaxOutputTokensCapabilityKnownUnsupported(initialSchedulingCtx, account, firstMessage, routingModelWS, false) {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			failedAccountIDs[account.ID] = struct{}{}
+			lastFailoverErr = service.NewOpenAIResponsesMaxOutputTokensUnsupportedFailoverError(http.StatusBadRequest)
+			continue
+		}
 		if compatibilityAttempt != nil {
 			if _, domainErr := compatibilityAttempt.CheckCandidate(ctx, account, routingModelWS); domainErr != nil {
 				if selection.ReleaseFunc != nil {
@@ -2821,6 +2837,11 @@ func (h *OpenAIGatewayHandler) acquireImageGenerationSlot(c *gin.Context, stream
 func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, streamStarted bool) {
 	if failoverErr == nil {
 		h.handleFailoverExhaustedSimple(c, http.StatusBadGateway, streamStarted)
+		return
+	}
+	if failoverErr.IsOpenAIResponsesMaxOutputTokensUnsupported() {
+		service.SetOpsUpstreamError(c, failoverErr.StatusCode, service.OpenAIResponsesMaxOutputTokensUnsupportedClientMessage, "")
+		h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_capability_error", service.OpenAIResponsesMaxOutputTokensUnsupportedClientMessage, streamStarted)
 		return
 	}
 	if failoverErr.IsOpenAIRequestBodyTooLarge() {

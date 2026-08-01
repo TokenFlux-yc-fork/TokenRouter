@@ -185,6 +185,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	var resp *http.Response
 	var attempt *openAIUpstreamAttemptCoordinator
+	maxOutputCapabilityKey := OpenAIResponsesMaxOutputTokensCapabilityKey{}
+	maxOutputCapabilityKeyOK := false
 	for {
 		upstreamCtx, releaseUpstreamCtx := openAIUpstreamContextForCompactionAttempt(ctx, nativeRemoteCompactionV2)
 		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token, tlsRouterMatch...)
@@ -193,6 +195,11 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			return nil, buildErr
 		}
 
+		maxOutputEffectiveModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+		if maxOutputEffectiveModel == "" {
+			maxOutputEffectiveModel = reqModel
+		}
+		maxOutputCapabilityKey, maxOutputCapabilityKeyOK = s.prepareOpenAIResponsesMaxOutputTokensCapability(ctx, account, body, maxOutputEffectiveModel)
 		attempt = s.beginOpenAINativeHTTPAttempt(ctx, c, account, reqModel, openAIServiceTierIsPriority(extractOpenAIServiceTierFromBody(body)))
 		upstreamStart := time.Now()
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch...))
@@ -209,6 +216,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 		// 只读取一次响应体判断 task 是否失效；恢复失败时仍把原响应交给既有错误路径。
 		probeBody := s.readUpstreamErrorBody(resp)
+		if maxOutputCapabilityKeyOK && IsExplicitOpenAIResponsesMaxOutputTokensUnsupported(resp.StatusCode, probeBody) {
+			s.observeOpenAIResponsesMaxOutputTokensCapability(ctx, account, maxOutputCapabilityKey, OpenAIResponsesMaxOutputTokensCapabilityUnsupported, resp.StatusCode, "explicit_unsupported_parameter")
+			if s.cfg != nil && s.cfg.Gateway.StrictOutputLimit {
+				return nil, NewOpenAIResponsesMaxOutputTokensUnsupportedFailoverError(resp.StatusCode)
+			}
+		}
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(probeBody))
 		attempt.finishHTTPError(resp, string(OpenAINativeCompactionHTTPFailure), true)
@@ -277,6 +290,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
 		responseBody = result.responseBody
+	}
+	if maxOutputCapabilityKeyOK {
+		s.observeOpenAIResponsesMaxOutputTokensCapability(ctx, account, maxOutputCapabilityKey, OpenAIResponsesMaxOutputTokensCapabilitySupported, resp.StatusCode, "successful_terminal")
 	}
 	s.bindHTTPResponseAccount(ctx, c, account, responseID)
 

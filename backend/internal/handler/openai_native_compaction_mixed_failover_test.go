@@ -242,6 +242,7 @@ func newNativeCompactionMixedFailoverHandler(
 		nil,
 		capabilityRepo,
 		nil,
+		nil,
 		attemptRepo,
 	)
 	cache := &concurrencyCacheMock{

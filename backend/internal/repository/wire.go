@@ -73,6 +73,7 @@ var ProviderSet = wire.NewSet(
 	NewGroupAvailabilityProbeRepository,
 	NewOpenAINativeCompactionCapabilityRepository,
 	NewOpenAIResponsesInputTokensCapabilityRepository,
+	NewOpenAIResponsesMaxOutputTokensCapabilityRepository,
 	NewOpenAINativeCompactionProbeBudgetRepository,
 	NewAdminGroupRepository,
 	NewAccountRepository,
