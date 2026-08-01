@@ -60,6 +60,9 @@ type Account struct {
 	// OpenAINativeCompactionCapabilities is a candidate-specific projection.
 	// It contains no credentials, payloads, or encrypted compaction content.
 	OpenAINativeCompactionCapabilities []OpenAINativeCompactionCapability
+	// OpenAIResponsesInputTokensCapabilities is the exact candidate-specific
+	// projection for passive /v1/responses/input_tokens learning.
+	OpenAIResponsesInputTokensCapabilities []OpenAIResponsesInputTokensCapability
 
 	SessionWindowStart  *time.Time
 	SessionWindowEnd    *time.Time
