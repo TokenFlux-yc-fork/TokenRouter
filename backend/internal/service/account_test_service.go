@@ -30,6 +30,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 // sseDataPrefix matches SSE data lines with optional whitespace after colon.
@@ -2319,7 +2320,11 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 
 // sendErrorAndEnd sends an error event and ends the stream
 func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) error {
-	log.Printf("Account test error: %s", errorMsg)
+	if c == nil || c.Request == nil {
+		log.Printf("Account test error: %s", errorMsg)
+	} else if _, background := accountTestBackgroundOptionsFromContext(c.Request.Context()); !background {
+		log.Printf("Account test error: %s", errorMsg)
+	}
 	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
 	return fmt.Errorf("%s", errorMsg)
 }
@@ -2368,7 +2373,9 @@ func (s *AccountTestService) RunTestBackgroundWithPromptAndUserAgent(ctx context
 			return result, nil
 		}
 
-		log.Printf("Account test active retry: account=%d status=%d retry=%d/%d", accountID, statusCode, attempt+1, maxRetries)
+		if _, background := accountTestBackgroundOptionsFromContext(ctx); !background {
+			log.Printf("Account test active retry: account=%d status=%d retry=%d/%d", accountID, statusCode, attempt+1, maxRetries)
+		}
 		select {
 		case <-ctx.Done():
 			return failedScheduledTestResult(startedAt, ctx.Err().Error(), lastResult), nil
@@ -2415,10 +2422,48 @@ func shouldRetryPoolModeAccountTest(account *Account, errorMessage string) (int,
 	if !ok {
 		return 0, false
 	}
-	if isOpenAIRequestBlockedError(statusCode, errorMessage, []byte(errorMessage)) {
+	if !account.IsPoolModeRetryableStatus(statusCode) {
 		return statusCode, false
 	}
-	return statusCode, account.IsPoolModeRetryableStatus(statusCode)
+	if isOpenAIRequestBlockedError(statusCode, errorMessage, []byte(errorMessage)) ||
+		isTerminalPoolModeAccountTestError(statusCode, errorMessage) {
+		return statusCode, false
+	}
+	return statusCode, true
+}
+
+// isTerminalPoolModeAccountTestError recognizes stable credential and billing
+// failures observed from configured pool-mode upstreams. Replaying these errors
+// only amplifies logs and consumes capacity; unknown 401/403 responses remain
+// retryable when the account explicitly configures those statuses.
+func isTerminalPoolModeAccountTestError(statusCode int, errorMessage string) bool {
+	code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCodeFromEmbeddedJSON(errorMessage)))
+	errorType := strings.ToLower(strings.TrimSpace(extractAccountTestEmbeddedErrorType(errorMessage)))
+	message := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessageFromEmbeddedJSON(errorMessage)))
+
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return code == "bad_response_status_code" && strings.Contains(message, "invalid or expired credentials")
+	case http.StatusForbidden:
+		if code == "insufficient_balance" || code == "insufficient_user_quota" {
+			return true
+		}
+		return (errorType == "virtual_key_blocked" && message == "virtual key is inactive") ||
+			(errorType == "billing_error" && message == "insufficient balance")
+	default:
+		return false
+	}
+}
+
+func extractAccountTestEmbeddedErrorType(text string) string {
+	for _, candidate := range embeddedJSONCandidates(text) {
+		for _, path := range []string{"error.type", "response.error.type", "response.status_details.error.type", "type"} {
+			if errorType := strings.TrimSpace(gjson.Get(candidate, path).String()); errorType != "" {
+				return errorType
+			}
+		}
+	}
+	return ""
 }
 
 func shouldDeferPoolModeAccountTestState(account *Account, statusCode int) bool {

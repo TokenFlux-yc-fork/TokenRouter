@@ -320,6 +320,7 @@ func TestAccountTestService_RunTestBackgroundWithPromptAndUserAgentOverridesHead
 
 func TestAccountTestService_RunTestBackgroundUsesPoolModeActiveRetry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	buf := captureStdLog(t)
 
 	success := newJSONResponse(http.StatusOK, "")
 	success.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
@@ -365,6 +366,62 @@ func TestAccountTestService_RunTestBackgroundUsesPoolModeActiveRetry(t *testing.
 	require.Equal(t, "success", result.Status)
 	require.Len(t, upstream.requests, 2)
 	require.Zero(t, repo.rateLimitedID, "retryable pool-mode probe failures should not mark account rate-limited before retry is exhausted")
+	require.NotContains(t, buf.String(), "Account test active retry:")
+	require.NotContains(t, buf.String(), "Account test error:")
+}
+
+func TestAccountTestService_RunTestBackgroundStopsTerminalPoolModeRetryWithoutStdlog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buf := captureStdLog(t)
+	account := &Account{
+		ID:          904,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":                      "sk-test",
+			"base_url":                     "https://compat-upstream.example",
+			"pool_mode":                    true,
+			"pool_mode_retry_count":        3,
+			"pool_mode_retry_status_codes": []any{float64(http.StatusForbidden)},
+		},
+	}
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{
+		newJSONResponse(http.StatusForbidden, `{"code":"INSUFFICIENT_BALANCE","message":"Insufficient account balance"}`),
+	}}
+	svc := &AccountTestService{
+		accountRepo:          repo,
+		httpUpstream:         upstream,
+		openAIGatewayService: &OpenAIGatewayService{},
+		cfg:                  &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+
+	result, err := svc.RunTestBackground(context.Background(), account.ID, "gpt-5.4")
+
+	require.NoError(t, err)
+	require.Equal(t, "failed", result.Status)
+	require.Contains(t, result.ErrorMessage, "INSUFFICIENT_BALANCE")
+	require.Len(t, upstream.requests, 1)
+	require.NotContains(t, buf.String(), "Account test active retry:")
+	require.NotContains(t, buf.String(), "Account test error:")
+}
+
+func TestAccountTestService_SendErrorAndEndKeepsManualStdlog(t *testing.T) {
+	buf := captureStdLog(t)
+	svc := &AccountTestService{}
+	c, _ := newTestContext()
+
+	err := svc.sendErrorAndEnd(c, "manual failure")
+
+	require.EqualError(t, err, "manual failure")
+	require.Contains(t, buf.String(), "Account test error: manual failure")
 }
 
 func TestAccountTestService_OpenAI429PersistsSnapshotAndRateLimitState(t *testing.T) {
