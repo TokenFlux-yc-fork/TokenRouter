@@ -137,6 +137,21 @@ upstream merge.
 - Focused Grok, pool-policy, OpenAI terminal, and WebSocket tests plus the
   complete baseline gates remain required before this merge is finalized.
 
+## Upstream Review: v0.1.244
+
+- Upstream target: `f8b84d4668ef04c29a87ca3e8ac61a25bab6b182` (the
+  post-tag `VERSION=0.1.244` sync commit).
+- Reviewed range: `fa7ed9c5fabef508f3c8cae9e4d1a413ddba34b7..f8b84d4668ef04c29a87ca3e8ac61a25bab6b182`.
+- No active customization is fully upstreamed in this range; all rows remain
+  `local`.
+- Upstream announcement and version changes are combined with the fork's
+  durable attempt timeline, capability contracts, compact liveness, terminal
+  probe policy, and scheduler priority semantics.
+- Full backend tests, `go vet`, backend build, frontend lint/typecheck/tests/build,
+  Compose parsing, deployment contract tests, and affected race tests pass on
+  the combined tree. The default parallel service race gate retains the known
+  upstream Gin `SetMode` test-harness race documented in the v0.1.238 review.
+
 ## Active Customizations
 
 | ID | Behavior | Source commits | Main paths | Status | Verification |
@@ -145,12 +160,13 @@ upstream merge.
 | `group-health-observability` | Persist group health state and expose health controls and status in the admin UI. | `f05fab8d1`, `0ac502cc8`, `b7a892ad6` | group schema/repository/service, admin groups UI | `local` | Group health service tests, repository contract tests and Groups UI tests. |
 | `group-backup-pool-refill` | Refill the Codex backup pool from configured group mappings. | `c4f42b433` | group schema/service, admin groups UI | `local` | Backup-pool service, mapper, repository and Groups UI tests. |
 | `openai-oauth-schedulability` | Keep externally managed OpenAI OAuth accounts schedulable without allowing runtime failures to corrupt their ownership state. | `055ec2369`, `55015979b` | account scheduler, token refresh, runtime block and rate-limit services | `local` | Scheduler, token refresh, runtime block and rate-limit tests. |
-| `scheduled-test-circuit-breaker` | Apply passive account circuit breaking only after bounded retries and keep request-level OpenAI blocked responses out of account health state. | `ef26ee67e`, `d30849206` | scheduled-test handler/repository/service, OpenAI upstream error classification, gateway failover | `local` | Scheduled-test, request-blocked classification, passive-breaker and failover tests. |
-| `scheduled-test-runner-isolation` | Keep the scheduled-test runner enabled by default, allow temporary blue-green instances to disable it without mutating shared schedules, and require enabled instances to hold a renewable fail-closed Redis lease with a handoff fencing token. | `d01eb92f4`, task `scheduled-runner-fenced-lease` | config loading, scheduled-test runner, leader-lease cache and startup wiring | `local` | Config switch tests; lease acquire/renew/expiry/release, stale-token, Redis-failure and two-instance handoff tests; blue-green release rehearsal. |
-| `parallel-startup-concurrency-safety` | Preserve live account/user concurrency slots and wait counters across parallel blue-green startup; reclaim them only through Redis TTL and active-index expiry rather than process-prefix mismatch or a startup-wide wait-key sweep. | task `parallel-startup-concurrency-safety` | concurrency cache, active indexes and startup wiring | `local` | Repository integration tests for two live prefixes, indexed TTL expiry and unindexed wait-counter preservation; rolling-deployment rehearsal. |
+| `scheduled-test-circuit-breaker` | Apply passive account circuit breaking only after bounded retries, stop replaying observed terminal credential/billing failures, and keep request-level OpenAI blocked responses out of account health state. | `ef26ee67e`, `d30849206`, `694acd804` | scheduled-test handler/repository/service, OpenAI upstream error classification, gateway failover | `local` | Scheduled-test retry, terminal-error, background-log, request-blocked classification, passive-breaker and failover tests. |
+| `scheduled-test-runner-isolation` | Keep the scheduled-test runner enabled by default, allow temporary blue-green instances to disable it without mutating shared schedules, and require enabled instances to hold a renewable fail-closed Redis lease with a handoff fencing token. | `d01eb92f4`, `d7a3fe2c8` | config loading, scheduled-test runner, leader-lease cache and startup wiring | `local` | Config switch tests; lease acquire/renew/expiry/release, stale-token, Redis-failure and two-instance handoff tests; blue-green release rehearsal. |
+| `parallel-startup-concurrency-safety` | Preserve live account/user concurrency slots and wait counters across parallel blue-green startup; reclaim them only through Redis TTL and active-index expiry rather than process-prefix mismatch or a startup-wide wait-key sweep. | `53092b3fc` | concurrency cache, active indexes and startup wiring | `local` | Repository integration tests for two live prefixes, indexed TTL expiry and unindexed wait-counter preservation; rolling-deployment rehearsal. |
 | `openai-capacity-failure-semantics` | Keep capacity, retry and terminal stream failures inside the gateway until failover is exhausted. | `93980cc41`, `863a94711`, `317678716` | OpenAI gateway HTTP/SSE/WebSocket paths | `local` | Gateway failure, SSE, WebSocket, retry and terminal-status tests. |
 | `openai-http2-body-fallback` | Retry eligible HTTP/2 internal stream/body failures through the bounded upstream fallback path. | `87a2387ec` | `backend/internal/repository/http_upstream*` | `local` | HTTP upstream repository tests. |
-| `openai-native-compact-liveness` | Preserve native compact stream liveness, writer state and completion semantics, and keep native v2 on Responses-capable accounts. | `ac83503f1`, `a41329a2a` | compact bridge, native compact liveness, SSE writer, account capability routing | `local` | Native compact, Responses capability/fallback, scheduler, stream bridge, SSE writer and ops logger tests. |
+| `openai-native-compact-liveness` | Preserve native compact stream liveness, writer state and completion semantics, keep native v2 on Responses-capable accounts, and emit an observable data-bearing ping while legacy compact fallback waits without double-counting keepalive bytes as semantic output. | `ac83503f1`, `a41329a2a`, `3df49fe7c` | compact bridge, native compact liveness, SSE writer, account capability routing | `local` | Native compact, Responses capability/fallback, EventSource ping, accounting, scheduler, stream bridge, SSE writer and ops logger tests. |
+| `openai-scheduler-priority-tiers` | Treat lower numeric account priority as a hard scheduling tier before load scoring, skip known-full higher tiers when an available tier exists, and exclude an escaped sticky account from the same request's load-balance fallback. | `a1949f78d` | `backend/internal/service/openai_account_scheduler*` | `local` | Strict-priority selection, known-full tier fallback, sticky-escape, full service package and affected race tests. |
 | `cloudra-tool-call-compat` | Recover late tool-call IDs and preserve Codex tool event shapes for Cloudra compatibility. | `bea049769`, `ce6f03ee6` | `backend/internal/pkg/apicompat` | `local` | API compatibility Codex event tests and lint. |
 | `openai-oauth-pool-capacity` | Estimate and expose aggregate OpenAI OAuth pool capacity. | `4cdb5f0e9` | admin capacity service/API and capacity UI | `local` | Admin capacity service/API, locale, router and UI tests. |
 | `openai-oauth-group-capacity` | Break OpenAI OAuth capacity down by group and expose group management controls. | `daedbb5eb` | admin capacity service/API and capacity UI | `local` | Group-capacity service/API and UI tests. |
@@ -159,7 +175,7 @@ upstream merge.
 | `responses-lite-validation` | Reject residual unsupported Responses Lite fields and preserve event/tool validation semantics. | `6a73e12df` | OpenAI gateway handler/forwarder, Responses Lite tools | `local` | Responses Lite unit tests and production protocol probes. |
 | `grok-inference-error-classification` | Persist Grok inference scheduling state only for 429; other inference errors fail over for the current request only. | `6f31ce627` | `openai_gateway_grok*` | `local` | Grok gateway tests, refresh race tests and account-state production probe. |
 | `grok-responses-transient-404` | Retry the exact xAI Responses `bad_response_status_code` 404 once on the same account, then fail over without entering another same-account pool retry; unrelated 404 responses keep their existing behavior. | `5f7439b85` | `grok_upstream_errors*`, `openai_gateway_grok*` | `local` | Exact classifier, API-key same-account recovery, retry exhaustion/failover and non-overmatch Grok tests. |
-| `openai-remote-compaction-v2-contract` | Require native Remote Compaction v2 to use an exact, current capability domain and to validate and stage the complete upstream attempt before committing exactly one valid result; before semantic commit, unavailable native capability or exhausted native attempts fall back to the legacy compact bridge; final candidate qualification remains release-gated. | task `#102` (pending commit) | OpenAI HTTP/SSE/WebSocket gateway, capability/probe/attribution repositories, migrations `227`-`231` | `local` | Strict classifier and validator fixtures; bounded staging, disconnect, native-to-legacy fallback and failover tests; capability, probe-fencing, migration, attribution, settlement and HTTP/WebSocket parity gates below. |
+| `openai-remote-compaction-v2-contract` | Require native Remote Compaction v2 to use an exact, current capability domain and to validate and stage the complete upstream attempt before committing exactly one valid result; before semantic commit, unavailable native capability or exhausted native attempts fall back to the legacy compact bridge; final candidate qualification remains release-gated. | `9f2f6df03`, `164d607eb` | OpenAI HTTP/SSE/WebSocket gateway, capability/probe/attribution repositories, migrations `227`-`231` | `local` | Strict classifier and validator fixtures; bounded staging, disconnect, native-to-legacy fallback and failover tests; capability, probe-fencing, migration, attribution, settlement and HTTP/WebSocket parity gates below. |
 | `frontend-build-heap` | Give the containerized frontend build enough heap for the fork UI. | `fe599ead3` | `deploy/Dockerfile` | `local` | Container image build. |
 
 ## Scheduled Test Runner Lease
@@ -320,7 +336,7 @@ recorded as passing on the final combined tree:
    service packages, Compose validation, and controlled non-production HTTP and
    WebSocket protocol probes.
 
-At task `#102` implementation time, production classifier, exact capability,
+At commit `9f2f6df03` implementation time, production classifier, exact capability,
 probe and reaper, shared validator/staging, semantic quarantine, attempt
 attribution, settlement, bounded telemetry, and all enabled HTTP/WebSocket mode
 wiring are present with focused regression coverage. Controlled protocol probes,
