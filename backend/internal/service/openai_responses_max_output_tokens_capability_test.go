@@ -13,6 +13,10 @@ func TestResponsesMaxOutputTokensCapabilityIdentityAndStructuredRejection(t *tes
 	require.NoError(t, err)
 	require.True(t, key.Valid())
 	require.NotEqual(t, key, func() OpenAIResponsesMaxOutputTokensCapabilityKey { k := key; k.EffectiveModel = "other"; return k }())
+	account.Credentials["api_key"] = "rotated"
+	rotatedKey, err := ResolveOpenAIResponsesMaxOutputTokensCapabilityKey(account, "gpt-5.5")
+	require.NoError(t, err)
+	require.NotEqual(t, key.ConfigGeneration, rotatedKey.ConfigGeneration)
 	require.True(t, IsExplicitOpenAIResponsesMaxOutputTokensUnsupported(http.StatusBadRequest,
 		[]byte(`{"error":{"code":"unsupported_parameter","param":"max_output_tokens","message":"Unsupported parameter: max_output_tokens"}}`)))
 	for _, body := range []string{

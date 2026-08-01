@@ -843,6 +843,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	const maxNeutralEdgeBlockRetries = 2
 	neutralEdgeBlockRetries := 0
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
+	maxOutputCapabilityKey := OpenAIResponsesMaxOutputTokensCapabilityKey{}
+	maxOutputCapabilityKeyOK := false
 	for {
 
 		upstreamCtx, releaseUpstreamCtx := openAIUpstreamContextForCompactionAttempt(ctx, nativeRemoteCompactionV2)
@@ -868,6 +870,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			proxyURL = account.Proxy.URL()
 		}
 
+		maxOutputCapabilityKey, maxOutputCapabilityKeyOK = s.prepareOpenAIResponsesMaxOutputTokensCapability(ctx, account, body, upstreamModel)
 		attempt := s.beginOpenAINativeHTTPAttempt(ctx, c, account, originalModel, openAIServiceTierIsPriority(extractOpenAIServiceTierFromBody(body)))
 		upstreamStart := time.Now()
 		resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.resolveOpenAITLSProfile(account, tlsRouterMatch))
@@ -902,6 +905,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		if resp.StatusCode >= 400 {
 			respBody := s.readUpstreamErrorBody(resp)
+			if maxOutputCapabilityKeyOK && IsExplicitOpenAIResponsesMaxOutputTokensUnsupported(resp.StatusCode, respBody) {
+				s.observeOpenAIResponsesMaxOutputTokensCapability(ctx, account, maxOutputCapabilityKey, OpenAIResponsesMaxOutputTokensCapabilityUnsupported, resp.StatusCode, "explicit_unsupported_parameter")
+				if s.cfg != nil && s.cfg.Gateway.StrictOutputLimit {
+					return nil, NewOpenAIResponsesMaxOutputTokensUnsupportedFailoverError(resp.StatusCode)
+				}
+			}
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			attempt.finishHTTPError(resp, string(OpenAINativeCompactionHTTPFailure), true)
@@ -1029,6 +1038,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = nonStreamResult.imageCount
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			responseBody = nonStreamResult.responseBody
+		}
+		if maxOutputCapabilityKeyOK {
+			s.observeOpenAIResponsesMaxOutputTokensCapability(ctx, account, maxOutputCapabilityKey, OpenAIResponsesMaxOutputTokensCapabilitySupported, resp.StatusCode, "successful_terminal")
 		}
 		s.bindHTTPResponseAccount(ctx, c, account, responseID)
 
