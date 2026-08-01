@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
@@ -19,7 +20,8 @@ type attemptTimelineCaptureRepo struct {
 
 func (r *attemptTimelineCaptureRepo) ListAttemptTimeline(_ context.Context, requestID string) ([]*service.OpsAttemptTimelineItem, error) {
 	r.requestID = requestID
-	return []*service.OpsAttemptTimelineItem{{AtUnixMs: 2, Index: 1, Platform: "openai"}, {AtUnixMs: 1, Index: 0}}, nil
+	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	return []*service.OpsAttemptTimelineItem{{AttemptID: "attempt-1", Index: 0, StartedAt: startedAt, ObservedAt: startedAt, State: "started", Transport: "http", AccountID: 7, UpstreamProvider: "openai", EffectiveModel: "gpt-test"}}, nil
 }
 
 func TestOpsHandlerGetAttemptTimeline(t *testing.T) {
@@ -40,7 +42,9 @@ func TestOpsHandlerGetAttemptTimeline(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.Equal(t, 0, response.Code)
-	require.Equal(t, []int64{1, 2}, []int64{response.Data[0].AtUnixMs, response.Data[1].AtUnixMs})
+	require.Equal(t, "attempt-1", response.Data[0].AttemptID)
+	require.Nil(t, response.Data[0].CompletedAt)
+	require.Nil(t, response.Data[0].HTTPStatus)
 }
 
 func TestOpsHandlerGetAttemptTimelineRequiresRequestID(t *testing.T) {

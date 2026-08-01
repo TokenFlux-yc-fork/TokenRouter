@@ -34,6 +34,8 @@ func TestUpstreamAttemptAttributionMigrationContract(t *testing.T) {
 		"delivery_committed BOOLEAN NOT NULL DEFAULT FALSE",
 		"safe_to_failover BOOLEAN NOT NULL DEFAULT FALSE",
 		"NOT (delivery_committed AND safe_to_failover)",
+		"ON upstream_attempt_attributions(gateway_request_id, started_at, attempt_id)",
+		"ON upstream_attempt_attributions(client_request_id, started_at, attempt_id)",
 		"NULL means unknown",
 	} {
 		require.Contains(t, sql, fragment)

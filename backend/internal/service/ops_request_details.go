@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"sort"
 	"strings"
 	"time"
 )
@@ -136,12 +135,6 @@ func (s *OpsService) ListAttemptTimeline(ctx context.Context, requestID string) 
 	if items == nil {
 		return []*OpsAttemptTimelineItem{}, nil
 	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].AtUnixMs != items[j].AtUnixMs {
-			return items[i].AtUnixMs < items[j].AtUnixMs
-		}
-		return items[i].Index < items[j].Index
-	})
 	return items, nil
 }
 

@@ -403,29 +403,37 @@ func (r *opsRepository) ListAttemptTimeline(ctx context.Context, requestID strin
 	}
 
 	const q = `
-SELECT jsonb_build_object(
-  'at_unix_ms', CASE WHEN event->>'at_unix_ms' ~ '^-?[0-9]+$' THEN (event->>'at_unix_ms')::bigint ELSE 0 END,
-  'index', attempts.ordinality - 1,
-  'passthrough', CASE WHEN jsonb_typeof(event->'passthrough') = 'boolean' THEN event->'passthrough' ELSE 'false'::jsonb END,
-  'platform', CASE WHEN jsonb_typeof(event->'platform') = 'string' THEN event->'platform' ELSE '""'::jsonb END,
-  'account_id', CASE WHEN event->>'account_id' ~ '^-?[0-9]+$' THEN (event->>'account_id')::bigint ELSE 0 END,
-  'account_name', CASE WHEN jsonb_typeof(event->'account_name') = 'string' THEN event->'account_name' ELSE '""'::jsonb END,
-  'upstream_status_code', CASE WHEN event->>'upstream_status_code' ~ '^-?[0-9]+$' THEN (event->>'upstream_status_code')::int ELSE 0 END,
-  'upstream_request_id', CASE WHEN jsonb_typeof(event->'upstream_request_id') = 'string' THEN event->'upstream_request_id' ELSE '""'::jsonb END,
-  'kind', CASE WHEN jsonb_typeof(event->'kind') = 'string' THEN event->'kind' ELSE '""'::jsonb END,
-  'stage', CASE WHEN jsonb_typeof(event->'stage') = 'string' THEN event->'stage' ELSE '""'::jsonb END,
-  'scope', CASE WHEN jsonb_typeof(event->'scope') = 'string' THEN event->'scope' ELSE '""'::jsonb END,
-  'reason', CASE WHEN jsonb_typeof(event->'reason') = 'string' THEN event->'reason' ELSE '""'::jsonb END
-)::text
-FROM ops_error_logs e
-CROSS JOIN LATERAL jsonb_array_elements(
-  CASE WHEN jsonb_typeof(e.upstream_errors) = 'array' THEN e.upstream_errors ELSE '[]'::jsonb END
-) WITH ORDINALITY AS attempts(event, ordinality)
-WHERE e.request_id = $1
-ORDER BY
-  CASE WHEN event->>'at_unix_ms' ~ '^-?[0-9]+$' THEN (event->>'at_unix_ms')::bigint ELSE 0 END ASC,
-  attempts.ordinality ASC,
-  e.id ASC
+SELECT
+  attempt_id,
+  client_request_id,
+  gateway_request_id,
+  started_at,
+  completed_at,
+  observed_at,
+  account_id,
+  transport,
+  upstream_provider,
+  effective_model,
+  state,
+  state_version,
+  transport_observed,
+  http_observed,
+  CASE WHEN http_observed THEN http_status END,
+  upstream_request_id,
+  upstream_response_id,
+  ws_connection_id,
+  ws_turn_id,
+  semantic_observed,
+  CASE WHEN semantic_observed THEN NULLIF(semantic_outcome, '') END,
+  CASE WHEN semantic_observed THEN NULLIF(terminal_event, '') END,
+  CASE WHEN semantic_observed THEN successful_terminal END,
+  usage_observed,
+  delivery_observed,
+  CASE WHEN delivery_observed THEN delivery_committed END,
+  CASE WHEN delivery_observed THEN safe_to_failover END
+FROM upstream_attempt_attributions
+WHERE gateway_request_id = $1 OR client_request_id = $1
+ORDER BY started_at ASC, attempt_id ASC
 LIMIT 200`
 
 	rows, err := r.db.QueryContext(ctx, q, requestID)
@@ -436,15 +444,19 @@ LIMIT 200`
 
 	items := make([]*service.OpsAttemptTimelineItem, 0)
 	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
+		item := &service.OpsAttemptTimelineItem{Index: len(items)}
+		if err := rows.Scan(
+			&item.AttemptID, &item.ClientRequestID, &item.GatewayRequestID,
+			&item.StartedAt, &item.CompletedAt, &item.ObservedAt, &item.AccountID, &item.Transport,
+			&item.UpstreamProvider, &item.EffectiveModel, &item.State, &item.StateVersion,
+			&item.TransportObserved, &item.HTTPObserved, &item.HTTPStatus,
+			&item.UpstreamRequestID, &item.UpstreamResponseID, &item.WSConnectionID, &item.WSTurnID,
+			&item.SemanticObserved, &item.SemanticOutcome, &item.TerminalEvent, &item.SuccessfulTerminal,
+			&item.UsageObserved, &item.DeliveryObserved, &item.DeliveryCommitted, &item.SafeToFailover,
+		); err != nil {
 			return nil, err
 		}
-		var item service.OpsAttemptTimelineItem
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, fmt.Errorf("decode attempt timeline: %w", err)
-		}
-		items = append(items, &item)
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

@@ -163,18 +163,34 @@ export interface OpsRequestDetailsParams {
 export type OpsRequestDetailsResponse = PaginatedResponse<OpsRequestDetail>
 
 export interface OpsAttemptTimelineItem {
-  at_unix_ms: number
+  attempt_id: string
   index: number
-  passthrough: boolean
-  platform?: string
-  account_id?: number
-  account_name?: string
-  upstream_status_code?: number
-  upstream_request_id?: string
-  kind?: string
-  stage?: string
-  scope?: string
-  reason?: string
+  client_request_id: string
+  gateway_request_id: string
+  started_at: string
+  completed_at: string | null
+  observed_at: string
+  account_id: number
+  transport: string
+  upstream_provider: string
+  effective_model: string
+  state: string
+  state_version: number
+  transport_observed: boolean
+  http_observed: boolean
+  http_status: number | null
+  upstream_request_id: string | null
+  upstream_response_id: string | null
+  ws_connection_id: string | null
+  ws_turn_id: string | null
+  semantic_observed: boolean
+  semantic_outcome: string | null
+  terminal_event: string | null
+  successful_terminal: boolean | null
+  usage_observed: boolean
+  delivery_observed: boolean
+  delivery_committed: boolean | null
+  safe_to_failover: boolean | null
 }
 
 export interface OpsLatencyHistogramBucket {

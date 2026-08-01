@@ -23,22 +23,38 @@ type OpsSystemLog struct {
 }
 
 type OpsAttemptTimelineItem struct {
-	AtUnixMs int64 `json:"at_unix_ms"`
-	Index    int   `json:"index"`
+	AttemptID        string `json:"attempt_id"`
+	Index            int    `json:"index"`
+	ClientRequestID  string `json:"client_request_id"`
+	GatewayRequestID string `json:"gateway_request_id"`
 
-	Passthrough bool `json:"passthrough"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+	ObservedAt  time.Time  `json:"observed_at"`
 
-	Platform    string `json:"platform,omitempty"`
-	AccountID   int64  `json:"account_id,omitempty"`
-	AccountName string `json:"account_name,omitempty"`
+	AccountID          int64   `json:"account_id"`
+	Transport          string  `json:"transport"`
+	UpstreamProvider   string  `json:"upstream_provider"`
+	EffectiveModel     string  `json:"effective_model"`
+	State              string  `json:"state"`
+	StateVersion       int64   `json:"state_version"`
+	TransportObserved  bool    `json:"transport_observed"`
+	HTTPObserved       bool    `json:"http_observed"`
+	HTTPStatus         *int    `json:"http_status"`
+	UpstreamRequestID  *string `json:"upstream_request_id"`
+	UpstreamResponseID *string `json:"upstream_response_id"`
+	WSConnectionID     *string `json:"ws_connection_id"`
+	WSTurnID           *string `json:"ws_turn_id"`
 
-	UpstreamStatusCode int    `json:"upstream_status_code,omitempty"`
-	UpstreamRequestID  string `json:"upstream_request_id,omitempty"`
+	SemanticObserved   bool    `json:"semantic_observed"`
+	SemanticOutcome    *string `json:"semantic_outcome"`
+	TerminalEvent      *string `json:"terminal_event"`
+	SuccessfulTerminal *bool   `json:"successful_terminal"`
+	UsageObserved      bool    `json:"usage_observed"`
 
-	Kind   string `json:"kind,omitempty"`
-	Stage  string `json:"stage,omitempty"`
-	Scope  string `json:"scope,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	DeliveryObserved  bool  `json:"delivery_observed"`
+	DeliveryCommitted *bool `json:"delivery_committed"`
+	SafeToFailover    *bool `json:"safe_to_failover"`
 }
 
 type OpsErrorLog struct {

@@ -176,8 +176,8 @@ async function loadTimeline(requestId: string) {
   }
 }
 
-function formatAttemptTime(atUnixMs: number) {
-  return formatDateTime(new Date(atUnixMs).toISOString())
+function formatAttemptTime(startedAt: string) {
+  return formatDateTime(startedAt)
 }
 
 const kindBadgeClass = (kind: string) => {
@@ -227,22 +227,21 @@ const kindBadgeClass = (kind: string) => {
               {{ t('admin.ops.requestDetails.timeline.empty') }}
             </div>
             <ol v-else class="space-y-3">
-              <li v-for="item in timelineItems" :key="`${item.at_unix_ms}-${item.index}`" class="relative border-l-2 border-blue-200 pl-4 dark:border-blue-900/50">
+              <li v-for="item in timelineItems" :key="item.attempt_id" class="relative border-l-2 border-blue-200 pl-4 dark:border-blue-900/50">
                 <div class="text-xs font-semibold text-gray-700 dark:text-gray-200">
                   {{ t('admin.ops.requestDetails.timeline.attempt', { n: item.index + 1 }) }}
-                  <span class="ml-2 font-normal text-gray-500 dark:text-gray-400">{{ formatAttemptTime(item.at_unix_ms) }}</span>
+                  <span class="ml-2 font-normal text-gray-500 dark:text-gray-400">{{ formatAttemptTime(item.started_at) }}</span>
                 </div>
                 <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600 dark:text-gray-300">
-                  <span v-if="item.platform">{{ item.platform }}</span>
-                  <span v-if="item.account_name || item.account_id">{{ item.account_name || `#${item.account_id}` }}</span>
-                  <span v-if="item.upstream_status_code">{{ t('admin.ops.requestDetails.timeline.status', { code: item.upstream_status_code }) }}</span>
+                  <span>{{ item.upstream_provider }}</span>
+                  <span>#{{ item.account_id }}</span>
+                  <span>{{ item.transport }}</span>
+                  <span>{{ item.state }}</span>
+                  <span v-if="item.http_status">{{ t('admin.ops.requestDetails.timeline.status', { code: item.http_status }) }}</span>
                   <span v-if="item.upstream_request_id" class="max-w-[220px] truncate font-mono" :title="item.upstream_request_id">{{ item.upstream_request_id }}</span>
-                  <span>{{ item.passthrough ? t('admin.ops.requestDetails.timeline.passthrough') : t('admin.ops.requestDetails.timeline.gateway') }}</span>
-                  <span v-if="item.kind">{{ item.kind }}</span>
-                  <span v-if="item.stage">{{ item.stage }}</span>
-                  <span v-if="item.scope">{{ item.scope }}</span>
+                  <span v-if="item.semantic_outcome">{{ item.semantic_outcome }}</span>
+                  <span v-if="item.terminal_event">{{ item.terminal_event }}</span>
                 </div>
-                <div v-if="item.reason" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ item.reason }}</div>
               </li>
             </ol>
           </div>
