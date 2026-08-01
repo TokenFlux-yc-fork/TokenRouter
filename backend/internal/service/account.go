@@ -113,6 +113,9 @@ const (
 	// compaction v2 的 /v1/responses 调度，避免把请求调度到会在 forward 阶段
 	// 被降级为 Chat Completions 的账号（#4417）。
 	OpenAIEndpointCapabilityResponses OpenAIEndpointCapability = "responses"
+	// OpenAIEndpointCapabilityInputTokens 表示 /v1/responses/input_tokens 端点。
+	// 更精细的被动学习状态由 SupportsOpenAIResponsesInputTokens 按 exact key 判断。
+	OpenAIEndpointCapabilityInputTokens OpenAIEndpointCapability = "input_tokens"
 	// OpenAIEndpointCapabilityNativeRemoteCompactionV2 is intentionally
 	// independent from generic Responses and legacy /responses/compact support.
 	OpenAIEndpointCapabilityNativeRemoteCompactionV2 OpenAIEndpointCapability = "native_remote_compaction_v2"
@@ -1668,7 +1671,7 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		// this account-only API. Call SupportsOpenAINativeRemoteCompactionV2 with
 		// the exact key instead; unknown context must fail closed.
 		return false
-	case OpenAIEndpointCapabilityResponses:
+	case OpenAIEndpointCapabilityResponses, OpenAIEndpointCapabilityInputTokens:
 		// Responses 支持状态由 accounts.extra 的自动探测标记决定，而非
 		// credentials 能力集。已探测确认不支持 /v1/responses 的 APIKey 上游
 		// 必须排除——否则会在 forward 阶段被静默降级为 Chat Completions，

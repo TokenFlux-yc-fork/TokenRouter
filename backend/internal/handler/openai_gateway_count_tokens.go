@@ -163,7 +163,7 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 			accountLayerModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportAny,
-			service.OpenAIEndpointCapabilityChatCompletions,
+			service.OpenAIEndpointCapabilityInputTokens,
 			false,
 			false,
 			false,
