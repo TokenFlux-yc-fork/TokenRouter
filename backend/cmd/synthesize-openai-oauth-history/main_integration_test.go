@@ -120,17 +120,17 @@ func TestExecuteHistoryAndRollback(t *testing.T) {
 			FROM accounts
 			WHERE extra->>$1 = $2
 		), stats AS (
-			SELECT g.id, g.created_at, g.extra, COUNT(ul.id) AS rows, MIN(ul.created_at) AS first_usage
+			SELECT g.id, g.created_at, g.extra, COUNT(ul.id) AS rows
 			FROM generated g
 			LEFT JOIN usage_logs ul ON ul.account_id = g.id
 			GROUP BY g.id, g.created_at, g.extra
 		)
 		SELECT
 			COUNT(*) FILTER (WHERE rows = 0),
-			COUNT(*) FILTER (WHERE created_at >= first_usage),
+			COUNT(*) FILTER (WHERE created_at < $3 OR created_at >= $4),
 			COUNT(*) FILTER (WHERE NOT (extra ? 'codex_5h_used_percent' AND extra ? 'codex_7d_used_percent' AND extra ? 'synthetic_history_assigned_cost_usd')),
 			COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM account_groups ag WHERE ag.account_id = stats.id))
-		FROM stats`, batchIDExtraKey, opts.BatchID).Scan(&emptyHistoryAccounts, &invalidCreationTimes, &missingSnapshots, &missingGroups))
+		FROM stats`, batchIDExtraKey, opts.BatchID, createdAtWindowStart, createdAtWindowEnd).Scan(&emptyHistoryAccounts, &invalidCreationTimes, &missingSnapshots, &missingGroups))
 	require.Zero(t, emptyHistoryAccounts)
 	require.Zero(t, invalidCreationTimes)
 	require.Zero(t, missingSnapshots)

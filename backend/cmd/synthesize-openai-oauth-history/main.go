@@ -41,6 +41,13 @@ const (
 
 var batchIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
 
+var (
+	eastEight              = time.FixedZone("UTC+8", 8*60*60)
+	createdAtWindowStart   = time.Date(2026, 8, 1, 12, 0, 0, 0, eastEight)
+	createdAtWindowEnd     = time.Date(2026, 8, 3, 12, 0, 0, 0, eastEight)
+	createdAtWindowSeconds = int64(createdAtWindowEnd.Sub(createdAtWindowStart) / time.Second)
+)
+
 type options struct {
 	Before           time.Time
 	AccountCount     int
@@ -457,11 +464,10 @@ func generateAccountSpecs(sources []sourceAccount, opts options) ([]accountSpec,
 	accounts := make([]accountSpec, 0, opts.AccountCount)
 	planIndex := 0
 	for _, source := range sources {
-		batchAnchor := source.FirstUsage.Add(-time.Duration(7+rng.Intn(24)) * 24 * time.Hour)
 		for slot := 0; slot < source.TargetCount; slot++ {
 			planType := plans[planIndex]
 			planIndex++
-			createdAt := batchAnchor.Add(time.Duration(rng.Intn(6*60)) * time.Minute).UTC()
+			createdAt := createdAtWindowStart.Add(time.Duration(rng.Int63n(createdAtWindowSeconds)) * time.Second).UTC()
 			localPart := randomAlphaNumeric(rng, 10+rng.Intn(5))
 			email := localPart + "@example.invalid"
 			accountID := randomUUID(rng)

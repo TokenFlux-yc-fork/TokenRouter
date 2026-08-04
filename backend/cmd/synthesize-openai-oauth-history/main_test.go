@@ -106,8 +106,8 @@ func TestGenerateAccountSpecsIsDeterministicAndMatchesOAuthShape(t *testing.T) {
 
 	names := make(map[string]struct{}, len(first))
 	for _, account := range first {
-		if !account.CreatedAt.Before(sourceFirstUsage(sources, account.SourceID)) {
-			t.Fatalf("account %q created at %s, not before its source history", account.Name, account.CreatedAt)
+		if account.CreatedAt.Before(createdAtWindowStart) || !account.CreatedAt.Before(createdAtWindowEnd) {
+			t.Fatalf("account %q created at %s, outside [%s, %s)", account.Name, account.CreatedAt, createdAtWindowStart, createdAtWindowEnd)
 		}
 		if _, exists := names[account.Name]; exists {
 			t.Fatalf("duplicate generated name %q", account.Name)
@@ -139,13 +139,4 @@ func TestGenerateAccountSpecsIsDeterministicAndMatchesOAuthShape(t *testing.T) {
 			t.Fatalf("source ID = %d, want %d", got, account.SourceID)
 		}
 	}
-}
-
-func sourceFirstUsage(sources []sourceAccount, sourceID int64) time.Time {
-	for _, source := range sources {
-		if source.ID == sourceID {
-			return source.FirstUsage
-		}
-	}
-	return time.Time{}
 }

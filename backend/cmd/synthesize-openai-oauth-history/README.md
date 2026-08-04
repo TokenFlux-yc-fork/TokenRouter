@@ -19,6 +19,9 @@ following value includes all rows before August 4 and excludes August 4 itself:
   and `team`, with reserved `.invalid` emails and fixture-prefixed tokens.
 - Account names, identifiers, plan ordering, and usage assignment are random
   but repeatable for the same `--seed`.
+- Generated account creation times are repeatably randomized inside the
+  exclusive-end East-8 window from `2026-08-01 12:00:00` through
+  `2026-08-03 12:00:00`.
 - Generated accounts inherit the source account's proxy, concurrency,
   priority, rate multiplier, and group bindings.
 - Every generated account receives at least one historical request. Only
