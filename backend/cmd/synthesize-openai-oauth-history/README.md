@@ -16,7 +16,8 @@ following value includes all rows before August 4 and excludes August 4 itself:
 - Source rows are `usage_logs` whose current account has
   `platform='openai'` and `type='apikey'`.
 - The generated account batch defaults to 90 accounts, split between `plus`
-  and `team`, with reserved `.invalid` emails and fixture-prefixed tokens.
+  and `team`, with randomized `gmail.com`/`outlook.com` emails and
+  fixture-prefixed tokens.
 - Account names, identifiers, plan ordering, and usage assignment are random
   but repeatable for the same `--seed`.
 - Generated account creation times are repeatably randomized inside the

@@ -469,7 +469,11 @@ func generateAccountSpecs(sources []sourceAccount, opts options) ([]accountSpec,
 			planIndex++
 			createdAt := createdAtWindowStart.Add(time.Duration(rng.Int63n(createdAtWindowSeconds)) * time.Second).UTC()
 			localPart := randomAlphaNumeric(rng, 10+rng.Intn(5))
-			email := localPart + "@example.invalid"
+			domain := "gmail.com"
+			if localPart[len(localPart)-1]%2 == 1 {
+				domain = "outlook.com"
+			}
+			email := localPart + "@" + domain
 			accountID := randomUUID(rng)
 			userID := randomUUID(rng)
 			credentials, err := json.Marshal(map[string]any{

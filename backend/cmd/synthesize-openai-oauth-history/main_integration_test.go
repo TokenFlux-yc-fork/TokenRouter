@@ -94,15 +94,20 @@ func TestExecuteHistoryAndRollback(t *testing.T) {
 	require.Zero(t, result.SourceRowsRemaining)
 	require.Zero(t, result.GeneratedRowsAtCutoff)
 
-	var generatedCount, revokedCount, generatedUsageBefore, generatedUsageAfter int64
+	var generatedCount, revokedCount, gmailCount, outlookCount, generatedUsageBefore, generatedUsageAfter int64
 	require.NoError(t, db.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*),
-			COUNT(*) FILTER (WHERE status = 'error' AND schedulable = FALSE AND error_message = $1)
+			COUNT(*) FILTER (WHERE status = 'error' AND schedulable = FALSE AND error_message = $1),
+			COUNT(*) FILTER (WHERE name = credentials->>'email' AND name LIKE '%@gmail.com'),
+			COUNT(*) FILTER (WHERE name = credentials->>'email' AND name LIKE '%@outlook.com')
 		FROM accounts
-		WHERE extra->>$2 = $3`, revokedErrorMessage, batchIDExtraKey, opts.BatchID).Scan(&generatedCount, &revokedCount))
+		WHERE extra->>$2 = $3`, revokedErrorMessage, batchIDExtraKey, opts.BatchID).Scan(&generatedCount, &revokedCount, &gmailCount, &outlookCount))
 	require.Equal(t, int64(80), generatedCount)
 	require.Equal(t, generatedCount, revokedCount)
+	require.Positive(t, gmailCount)
+	require.Positive(t, outlookCount)
+	require.Equal(t, generatedCount, gmailCount+outlookCount)
 	require.NoError(t, db.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE ul.created_at < $3),

@@ -105,6 +105,7 @@ func TestGenerateAccountSpecsIsDeterministicAndMatchesOAuthShape(t *testing.T) {
 	}
 
 	names := make(map[string]struct{}, len(first))
+	domains := make(map[string]int)
 	for _, account := range first {
 		if account.CreatedAt.Before(createdAtWindowStart) || !account.CreatedAt.Before(createdAtWindowEnd) {
 			t.Fatalf("account %q created at %s, outside [%s, %s)", account.Name, account.CreatedAt, createdAtWindowStart, createdAtWindowEnd)
@@ -124,9 +125,12 @@ func TestGenerateAccountSpecsIsDeterministicAndMatchesOAuthShape(t *testing.T) {
 		if token, _ := credentials["access_token"].(string); !strings.HasPrefix(token, "fixture-at-") {
 			t.Fatalf("access token = %q, want fixture prefix", token)
 		}
-		if email, _ := credentials["email"].(string); !strings.HasSuffix(email, "@example.invalid") {
-			t.Fatalf("email = %q, want reserved fixture domain", email)
+		email, _ := credentials["email"].(string)
+		domain := email[strings.LastIndexByte(email, '@')+1:]
+		if domain != "gmail.com" && domain != "outlook.com" {
+			t.Fatalf("email = %q, want gmail.com or outlook.com", email)
 		}
+		domains[domain]++
 
 		var extra map[string]any
 		if err := json.Unmarshal(account.Extra, &extra); err != nil {
@@ -138,5 +142,8 @@ func TestGenerateAccountSpecsIsDeterministicAndMatchesOAuthShape(t *testing.T) {
 		if got := int64(extra[sourceIDExtraKey].(float64)); got != account.SourceID {
 			t.Fatalf("source ID = %d, want %d", got, account.SourceID)
 		}
+	}
+	if domains["gmail.com"] == 0 || domains["outlook.com"] == 0 {
+		t.Fatalf("email domains = %v, want both gmail.com and outlook.com", domains)
 	}
 }
