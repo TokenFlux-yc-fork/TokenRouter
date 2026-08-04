@@ -30,6 +30,8 @@ const (
 	maximumAccountCount = 100
 	defaultTeamRatio    = 0.25
 	defaultSeed         = int64(20260804)
+	defaultChunkSize    = 20000
+	vacuumEveryRows     = int64(500000)
 
 	revokedErrorMessage = "Token revoked (401): Encountered invalidated oauth token for user, failing request"
 	batchIDExtraKey     = "synthetic_history_batch_id"
@@ -47,6 +49,7 @@ type options struct {
 	BatchID          string
 	ExpectedDigest   string
 	SourceAccountIDs []int64
+	ChunkSize        int
 	Execute          bool
 	RollbackBatch    string
 }
@@ -135,7 +138,7 @@ func main() {
 
 	ctx := context.Background()
 	if opts.RollbackBatch != "" {
-		plan, result, err := runRollback(ctx, db, opts.RollbackBatch, opts.Execute)
+		plan, result, err := runRollback(ctx, db, opts)
 		if err != nil {
 			log.Fatalf("rollback failed: %v", err)
 		}
@@ -175,7 +178,8 @@ func parseOptions(args []string) (options, error) {
 	seed := fs.Int64("seed", defaultSeed, "deterministic random seed")
 	batchID := fs.String("batch-id", "", "stable batch identifier; generated from cutoff and seed when omitted")
 	expectedDigest := fs.String("expected-plan-digest", "", "require this dry-run SHA-256 plan digest before --execute")
-	sourceIDsRaw := fs.String("source-account-ids", "", "optional comma-separated OpenAI upstream account IDs")
+	sourceIDsRaw := fs.String("source-account-ids", "", "optional comma-separated OpenAI API-key account IDs")
+	chunkSize := fs.Int("chunk-size", defaultChunkSize, "usage rows updated per transaction")
 	execute := fs.Bool("execute", false, "commit the planned write (default is dry-run)")
 	rollbackBatch := fs.String("rollback-batch", "", "restore usage rows and remove one generated batch")
 	if err := fs.Parse(args); err != nil {
@@ -198,6 +202,9 @@ func parseOptions(args []string) (options, error) {
 	}
 	if math.IsNaN(*teamRatio) || math.IsInf(*teamRatio, 0) || *teamRatio <= 0 || *teamRatio >= 1 {
 		return options{}, errors.New("--team-ratio must be greater than 0 and less than 1")
+	}
+	if *chunkSize <= 0 || *chunkSize > 100000 {
+		return options{}, errors.New("--chunk-size must be between 1 and 100000")
 	}
 
 	sourceIDs, err := parseIDList(*sourceIDsRaw)
@@ -228,6 +235,9 @@ func parseOptions(args []string) (options, error) {
 	if normalizedRollbackBatch != "" && normalizedExpectedDigest != "" {
 		return options{}, errors.New("--expected-plan-digest cannot be combined with --rollback-batch")
 	}
+	if *execute && normalizedRollbackBatch == "" && normalizedExpectedDigest == "" {
+		return options{}, errors.New("--execute requires --expected-plan-digest")
+	}
 
 	return options{
 		Before:           before,
@@ -237,6 +247,7 @@ func parseOptions(args []string) (options, error) {
 		BatchID:          normalizedBatchID,
 		ExpectedDigest:   normalizedExpectedDigest,
 		SourceAccountIDs: sourceIDs,
+		ChunkSize:        *chunkSize,
 		Execute:          *execute,
 		RollbackBatch:    normalizedRollbackBatch,
 	}, nil
@@ -290,7 +301,7 @@ func buildHistoryPlan(ctx context.Context, q queryer, opts options) (*historyPla
 		return nil, err
 	}
 	if len(sources) == 0 {
-		return nil, errors.New("no OpenAI upstream accounts have usage rows before the cutoff")
+		return nil, errors.New("no OpenAI API-key accounts have usage rows before the cutoff")
 	}
 	if len(sources) > opts.AccountCount {
 		return nil, fmt.Errorf("%d source accounts exceed the %d-account batch", len(sources), opts.AccountCount)
@@ -345,7 +356,7 @@ func loadSources(ctx context.Context, q queryer, before time.Time, sourceIDs []i
 		JOIN usage_logs ul ON ul.account_id = a.id AND ul.created_at < $1
 		WHERE a.deleted_at IS NULL
 		  AND a.platform = 'openai'
-		  AND a.type = 'upstream'`
+		  AND a.type = 'apikey'`
 	args := []any{before}
 	if len(sourceIDs) > 0 {
 		query += " AND a.id = ANY($2)"
@@ -394,7 +405,7 @@ func loadSources(ctx context.Context, q queryer, before time.Time, sourceIDs []i
 				missing = append(missing, strconv.FormatInt(id, 10))
 			}
 		}
-		return nil, fmt.Errorf("source accounts missing, not OpenAI upstream, or without eligible history: %s", strings.Join(missing, ","))
+		return nil, fmt.Errorf("source accounts missing, not OpenAI API-key, or without eligible history: %s", strings.Join(missing, ","))
 	}
 	return sources, nil
 }
@@ -538,17 +549,29 @@ func digestPlan(plan *historyPlan) string {
 }
 
 func executeHistory(ctx context.Context, db *sql.DB, opts options) (*historyPlan, *executionResult, error) {
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	chunkSize := opts.ChunkSize
+	if chunkSize == 0 {
+		chunkSize = defaultChunkSize
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(hashtext('synthesize_openai_oauth_history'))"); err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock(hashtext('synthesize_openai_oauth_history'))")
+	}()
+
+	tx, err := beginMaintenanceTx(ctx, conn)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '30min'"); err != nil {
-		return nil, nil, err
-	}
-	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext('synthesize_openai_oauth_history'))"); err != nil {
-		return nil, nil, err
-	}
 	var existing int64
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM accounts WHERE extra->>$1 = $2", batchIDExtraKey, opts.BatchID).Scan(&existing); err != nil {
 		return nil, nil, err
@@ -561,39 +584,21 @@ func executeHistory(ctx context.Context, db *sql.DB, opts options) (*historyPlan
 	if err != nil {
 		return nil, nil, err
 	}
-	if opts.ExpectedDigest != "" && plan.Digest != opts.ExpectedDigest {
+	if plan.Digest != opts.ExpectedDigest {
 		return nil, nil, fmt.Errorf("plan digest mismatch: current=%s expected=%s", plan.Digest, opts.ExpectedDigest)
 	}
 	inserted, err := insertAccounts(ctx, tx, plan)
 	if err != nil {
 		return nil, nil, err
 	}
-	reassigned, err := reassignUsageRows(ctx, tx, plan)
+	reassigned, err := seedUsageRows(ctx, tx, plan)
 	if err != nil {
 		return nil, nil, err
 	}
-	if reassigned != plan.UsageRows {
-		return nil, nil, fmt.Errorf("reassigned %d usage rows, expected %d", reassigned, plan.UsageRows)
+	if reassigned != int64(len(plan.Accounts)) {
+		return nil, nil, fmt.Errorf("seeded %d usage rows, expected %d", reassigned, len(plan.Accounts))
 	}
-	updatedSnapshots, err := updateUsageSnapshots(ctx, tx, plan)
-	if err != nil {
-		return nil, nil, err
-	}
-	if updatedSnapshots != int64(len(plan.Accounts)) {
-		return nil, nil, fmt.Errorf("updated %d usage snapshots, expected %d", updatedSnapshots, len(plan.Accounts))
-	}
-	errored, err := markBatchRevoked(ctx, tx, plan.BatchID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if errored != int64(len(plan.Accounts)) {
-		return nil, nil, fmt.Errorf("marked %d accounts revoked, expected %d", errored, len(plan.Accounts))
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT 'account_changed', id, NULL, NULL
-		FROM accounts
-		WHERE extra->>$1 = $2`, batchIDExtraKey, plan.BatchID); err != nil {
+	if err := tx.Commit(); err != nil {
 		return nil, nil, err
 	}
 
@@ -601,12 +606,81 @@ func executeHistory(ctx context.Context, db *sql.DB, opts options) (*historyPlan
 	for _, source := range plan.Sources {
 		sourceIDs = append(sourceIDs, source.ID)
 	}
+	rowsSinceVacuum := reassigned
+	batchNumber := 0
+	for {
+		chunkTx, err := beginMaintenanceTx(ctx, conn)
+		if err != nil {
+			return nil, nil, fmt.Errorf("batch %q prepared after %d rows: %w", plan.BatchID, reassigned, err)
+		}
+		chunkRows, chunkErr := reassignUsageChunk(ctx, chunkTx, plan, sourceIDs, chunkSize)
+		if chunkErr == nil {
+			chunkErr = chunkTx.Commit()
+		} else {
+			_ = chunkTx.Rollback()
+		}
+		if chunkErr != nil {
+			return nil, nil, fmt.Errorf("batch %q prepared after %d rows: %w", plan.BatchID, reassigned, chunkErr)
+		}
+		if chunkRows == 0 {
+			break
+		}
+		batchNumber++
+		reassigned += chunkRows
+		rowsSinceVacuum += chunkRows
+		if batchNumber%10 == 0 || reassigned == plan.UsageRows {
+			fmt.Printf("progress batch_id=%s reassigned_usage_rows=%d expected_usage_rows=%d\n", plan.BatchID, reassigned, plan.UsageRows)
+		}
+		if rowsSinceVacuum >= vacuumEveryRows {
+			if err := vacuumUsageLogs(ctx, conn); err != nil {
+				return nil, nil, fmt.Errorf("batch %q assigned %d rows before vacuum failed: %w", plan.BatchID, reassigned, err)
+			}
+			rowsSinceVacuum = 0
+			fmt.Printf("progress batch_id=%s vacuumed_after_rows=%d\n", plan.BatchID, reassigned)
+		}
+	}
+	if reassigned != plan.UsageRows {
+		return nil, nil, fmt.Errorf("reassigned %d usage rows, expected %d", reassigned, plan.UsageRows)
+	}
+	if rowsSinceVacuum > 0 {
+		if err := vacuumUsageLogs(ctx, conn); err != nil {
+			return nil, nil, fmt.Errorf("batch %q assigned %d rows before final vacuum failed: %w", plan.BatchID, reassigned, err)
+		}
+	}
+
+	finalTx, err := beginMaintenanceTx(ctx, conn)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = finalTx.Rollback() }()
+	updatedSnapshots, err := updateUsageSnapshots(ctx, finalTx, plan)
+	if err != nil {
+		return nil, nil, err
+	}
+	if updatedSnapshots != int64(len(plan.Accounts)) {
+		return nil, nil, fmt.Errorf("updated %d usage snapshots, expected %d", updatedSnapshots, len(plan.Accounts))
+	}
+	errored, err := markBatchRevoked(ctx, finalTx, plan.BatchID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if errored != int64(len(plan.Accounts)) {
+		return nil, nil, fmt.Errorf("marked %d accounts revoked, expected %d", errored, len(plan.Accounts))
+	}
+	if _, err := finalTx.ExecContext(ctx, `
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT 'account_changed', id, NULL, NULL
+		FROM accounts
+		WHERE extra->>$1 = $2`, batchIDExtraKey, plan.BatchID); err != nil {
+		return nil, nil, err
+	}
+
 	var sourceRemaining int64
-	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM usage_logs WHERE account_id = ANY($1) AND created_at < $2", pq.Array(sourceIDs), plan.Before).Scan(&sourceRemaining); err != nil {
+	if err := finalTx.QueryRowContext(ctx, "SELECT COUNT(*) FROM usage_logs WHERE account_id = ANY($1) AND created_at < $2", pq.Array(sourceIDs), plan.Before).Scan(&sourceRemaining); err != nil {
 		return nil, nil, err
 	}
 	var generatedAtCutoff int64
-	if err := tx.QueryRowContext(ctx, `
+	if err := finalTx.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM usage_logs ul
 		JOIN accounts a ON a.id = ul.account_id
@@ -616,7 +690,7 @@ func executeHistory(ctx context.Context, db *sql.DB, opts options) (*historyPlan
 	if sourceRemaining != 0 || generatedAtCutoff != 0 {
 		return nil, nil, fmt.Errorf("verification failed: source_remaining=%d generated_at_or_after_cutoff=%d", sourceRemaining, generatedAtCutoff)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := finalTx.Commit(); err != nil {
 		return nil, nil, err
 	}
 	return plan, &executionResult{
@@ -629,6 +703,23 @@ func executeHistory(ctx context.Context, db *sql.DB, opts options) (*historyPlan
 	}, nil
 }
 
+func beginMaintenanceTx(ctx context.Context, conn *sql.Conn) (*sql.Tx, error) {
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '30min'"); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return tx, nil
+}
+
+func vacuumUsageLogs(ctx context.Context, conn *sql.Conn) error {
+	_, err := conn.ExecContext(ctx, "VACUUM (ANALYZE FALSE, INDEX_CLEANUP ON, TRUNCATE FALSE) usage_logs")
+	return err
+}
+
 func insertAccounts(ctx context.Context, tx *sql.Tx, plan *historyPlan) (int64, error) {
 	statement, err := tx.PrepareContext(ctx, `
 		INSERT INTO accounts (
@@ -637,7 +728,7 @@ func insertAccounts(ctx context.Context, tx *sql.Tx, plan *historyPlan) (int64, 
 			created_at, updated_at, schedulable, auto_pause_on_expired
 		) VALUES (
 			$1, $2, 'openai', 'oauth', $3::jsonb, $4::jsonb, $5,
-			$6, $7, $8, 'active', NULL,
+			$6, $7, $8, 'error', $10,
 			$9, $9, FALSE, TRUE
 		) RETURNING id`)
 	if err != nil {
@@ -663,6 +754,7 @@ func insertAccounts(ctx context.Context, tx *sql.Tx, plan *historyPlan) (int64, 
 			account.Priority,
 			account.RateMultiplier,
 			account.CreatedAt,
+			revokedErrorMessage,
 		).Scan(&accountID); err != nil {
 			return inserted, err
 		}
@@ -679,7 +771,7 @@ func insertAccounts(ctx context.Context, tx *sql.Tx, plan *historyPlan) (int64, 
 	return inserted, nil
 }
 
-func reassignUsageRows(ctx context.Context, tx *sql.Tx, plan *historyPlan) (int64, error) {
+func seedUsageRows(ctx context.Context, tx *sql.Tx, plan *historyPlan) (int64, error) {
 	result, err := tx.ExecContext(ctx, `
 		WITH targets AS MATERIALIZED (
 			SELECT
@@ -692,23 +784,23 @@ func reassignUsageRows(ctx context.Context, tx *sql.Tx, plan *historyPlan) (int6
 			SELECT source_id, COUNT(*)::bigint AS target_count
 			FROM targets
 			GROUP BY source_id
-		), ranked AS MATERIALIZED (
+		), seed_rows AS MATERIALIZED (
 			SELECT
-				ul.id,
-				ul.account_id AS source_id,
-				ROW_NUMBER() OVER (PARTITION BY ul.account_id ORDER BY ul.id) AS row_number,
-				tc.target_count
-			FROM usage_logs ul
-			JOIN target_counts tc ON tc.source_id = ul.account_id
-			WHERE ul.created_at < $5
+				tc.source_id,
+				seed.id,
+				ROW_NUMBER() OVER (PARTITION BY tc.source_id ORDER BY seed.id) - 1 AS slot
+			FROM target_counts tc
+			CROSS JOIN LATERAL (
+				SELECT ul.id
+				FROM usage_logs ul
+				WHERE ul.account_id = tc.source_id AND ul.created_at < $5
+				ORDER BY ul.id
+				LIMIT tc.target_count
+			) seed
 		), mapped AS (
-			SELECT ranked.id, targets.target_id
-			FROM ranked
-			JOIN targets ON targets.source_id = ranked.source_id
-			 AND targets.slot = CASE
-				WHEN ranked.row_number <= ranked.target_count THEN ranked.row_number - 1
-				ELSE ((hashtextextended(ranked.id::text, $6) % ranked.target_count) + ranked.target_count) % ranked.target_count
-			 END
+			SELECT seed_rows.id, targets.target_id
+			FROM seed_rows
+			JOIN targets ON targets.source_id = seed_rows.source_id AND targets.slot = seed_rows.slot
 		)
 		UPDATE usage_logs ul
 		SET account_id = mapped.target_id
@@ -719,6 +811,51 @@ func reassignUsageRows(ctx context.Context, tx *sql.Tx, plan *historyPlan) (int6
 		batchIDExtraKey,
 		plan.BatchID,
 		plan.Before,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func reassignUsageChunk(ctx context.Context, tx *sql.Tx, plan *historyPlan, sourceIDs []int64, chunkSize int) (int64, error) {
+	result, err := tx.ExecContext(ctx, `
+		WITH targets AS MATERIALIZED (
+			SELECT
+				id AS target_id,
+				(extra->>$1)::bigint AS source_id,
+				(extra->>$2)::bigint AS slot
+			FROM accounts
+			WHERE extra->>$3 = $4
+		), target_counts AS MATERIALIZED (
+			SELECT source_id, COUNT(*)::bigint AS target_count
+			FROM targets
+			GROUP BY source_id
+		), candidates AS MATERIALIZED (
+			SELECT ul.id, ul.account_id AS source_id
+			FROM usage_logs ul
+			WHERE ul.account_id = ANY($5) AND ul.created_at < $6
+			ORDER BY ul.account_id, ul.id
+			LIMIT $7
+			FOR UPDATE OF ul SKIP LOCKED
+		), mapped AS (
+			SELECT candidates.id, targets.target_id
+			FROM candidates
+			JOIN target_counts ON target_counts.source_id = candidates.source_id
+			JOIN targets ON targets.source_id = candidates.source_id
+			 AND targets.slot = ((hashtextextended(candidates.id::text, $8) % target_counts.target_count) + target_counts.target_count) % target_counts.target_count
+		)
+		UPDATE usage_logs ul
+		SET account_id = mapped.target_id
+		FROM mapped
+		WHERE ul.id = mapped.id`,
+		sourceIDExtraKey,
+		slotExtraKey,
+		batchIDExtraKey,
+		plan.BatchID,
+		pq.Array(sourceIDs),
+		plan.Before,
+		chunkSize,
 		plan.Seed,
 	)
 	if err != nil {
@@ -782,46 +919,83 @@ func markBatchRevoked(ctx context.Context, tx *sql.Tx, batchID string) (int64, e
 	return result.RowsAffected()
 }
 
-func runRollback(ctx context.Context, db *sql.DB, batchID string, execute bool) (*rollbackPlan, *rollbackResult, error) {
-	if !execute {
-		plan, err := loadRollbackPlan(ctx, db, batchID)
+func runRollback(ctx context.Context, db *sql.DB, opts options) (*rollbackPlan, *rollbackResult, error) {
+	if !opts.Execute {
+		plan, err := loadRollbackPlan(ctx, db, opts.RollbackBatch)
 		return plan, nil, err
 	}
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	chunkSize := opts.ChunkSize
+	if chunkSize == 0 {
+		chunkSize = defaultChunkSize
+	}
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '5s'; SET LOCAL statement_timeout = '30min'"); err != nil {
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(hashtext('synthesize_openai_oauth_history'))"); err != nil {
 		return nil, nil, err
 	}
-	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext('synthesize_openai_oauth_history'))"); err != nil {
-		return nil, nil, err
-	}
-	plan, err := loadRollbackPlan(ctx, tx, batchID)
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock(hashtext('synthesize_openai_oauth_history'))")
+	}()
+	plan, err := loadRollbackPlan(ctx, conn, opts.RollbackBatch)
 	if err != nil {
 		return nil, nil, err
 	}
 	if plan.AccountCount == 0 {
-		return nil, nil, fmt.Errorf("batch %q does not exist", batchID)
+		return nil, nil, fmt.Errorf("batch %q does not exist", opts.RollbackBatch)
 	}
 
-	result, err := tx.ExecContext(ctx, `
-		UPDATE usage_logs ul
-		SET account_id = (a.extra->>$1)::bigint
-		FROM accounts a
-		WHERE ul.account_id = a.id
-		  AND a.extra->>$2 = $3`, sourceIDExtraKey, batchIDExtraKey, batchID)
-	if err != nil {
-		return nil, nil, err
-	}
-	restored, err := result.RowsAffected()
-	if err != nil {
-		return nil, nil, err
+	var restored int64
+	var rowsSinceVacuum int64
+	batchNumber := 0
+	for {
+		tx, err := beginMaintenanceTx(ctx, conn)
+		if err != nil {
+			return nil, nil, err
+		}
+		chunkRows, chunkErr := rollbackUsageChunk(ctx, tx, opts.RollbackBatch, chunkSize)
+		if chunkErr == nil {
+			chunkErr = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+		if chunkErr != nil {
+			return nil, nil, fmt.Errorf("rollback %q restored %d rows before failure: %w", opts.RollbackBatch, restored, chunkErr)
+		}
+		if chunkRows == 0 {
+			break
+		}
+		batchNumber++
+		restored += chunkRows
+		rowsSinceVacuum += chunkRows
+		if batchNumber%10 == 0 || restored == plan.UsageRows {
+			fmt.Printf("progress rollback_batch=%s restored_usage_rows=%d expected_usage_rows=%d\n", opts.RollbackBatch, restored, plan.UsageRows)
+		}
+		if rowsSinceVacuum >= vacuumEveryRows {
+			if err := vacuumUsageLogs(ctx, conn); err != nil {
+				return nil, nil, fmt.Errorf("rollback %q restored %d rows before vacuum failed: %w", opts.RollbackBatch, restored, err)
+			}
+			rowsSinceVacuum = 0
+		}
 	}
 	if restored != plan.UsageRows {
 		return nil, nil, fmt.Errorf("restored %d usage rows, expected %d", restored, plan.UsageRows)
 	}
+	if rowsSinceVacuum > 0 {
+		if err := vacuumUsageLogs(ctx, conn); err != nil {
+			return nil, nil, fmt.Errorf("rollback %q restored rows before final vacuum failed: %w", opts.RollbackBatch, err)
+		}
+	}
+
+	tx, err := beginMaintenanceTx(ctx, conn)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		SELECT
@@ -835,16 +1009,16 @@ func runRollback(ctx context.Context, db *sql.DB, batchID string, execute bool) 
 		FROM accounts a
 		LEFT JOIN account_groups ag ON ag.account_id = a.id
 		WHERE a.extra->>$1 = $2
-		GROUP BY a.id`, batchIDExtraKey, batchID); err != nil {
+		GROUP BY a.id`, batchIDExtraKey, opts.RollbackBatch); err != nil {
 		return nil, nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM account_groups ag
 		USING accounts a
-		WHERE ag.account_id = a.id AND a.extra->>$1 = $2`, batchIDExtraKey, batchID); err != nil {
+		WHERE ag.account_id = a.id AND a.extra->>$1 = $2`, batchIDExtraKey, opts.RollbackBatch); err != nil {
 		return nil, nil, err
 	}
-	deleteResult, err := tx.ExecContext(ctx, "DELETE FROM accounts WHERE extra->>$1 = $2", batchIDExtraKey, batchID)
+	deleteResult, err := tx.ExecContext(ctx, "DELETE FROM accounts WHERE extra->>$1 = $2", batchIDExtraKey, opts.RollbackBatch)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -859,6 +1033,30 @@ func runRollback(ctx context.Context, db *sql.DB, batchID string, execute bool) 
 		return nil, nil, err
 	}
 	return plan, &rollbackResult{RestoredUsageRows: restored, DeletedAccounts: deleted}, nil
+}
+
+func rollbackUsageChunk(ctx context.Context, tx *sql.Tx, batchID string, chunkSize int) (int64, error) {
+	result, err := tx.ExecContext(ctx, `
+		WITH generated AS MATERIALIZED (
+			SELECT id, (extra->>$1)::bigint AS source_id
+			FROM accounts
+			WHERE extra->>$2 = $3
+		), candidates AS MATERIALIZED (
+			SELECT ul.id, generated.source_id
+			FROM usage_logs ul
+			JOIN generated ON generated.id = ul.account_id
+			ORDER BY ul.account_id, ul.id
+			LIMIT $4
+			FOR UPDATE OF ul SKIP LOCKED
+		)
+		UPDATE usage_logs ul
+		SET account_id = candidates.source_id
+		FROM candidates
+		WHERE ul.id = candidates.id`, sourceIDExtraKey, batchIDExtraKey, batchID, chunkSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func loadRollbackPlan(ctx context.Context, q queryer, batchID string) (*rollbackPlan, error) {

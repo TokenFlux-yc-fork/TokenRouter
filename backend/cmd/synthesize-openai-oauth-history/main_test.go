@@ -22,6 +22,9 @@ func TestParseOptionsUsesExclusiveEastEightCutoff(t *testing.T) {
 	if opts.AccountCount != 90 {
 		t.Fatalf("AccountCount = %d, want 90", opts.AccountCount)
 	}
+	if opts.ChunkSize != defaultChunkSize {
+		t.Fatalf("ChunkSize = %d, want %d", opts.ChunkSize, defaultChunkSize)
+	}
 }
 
 func TestParseOptionsRejectsWrongTimezoneAndBatchSize(t *testing.T) {
@@ -35,6 +38,8 @@ func TestParseOptionsRejectsWrongTimezoneAndBatchSize(t *testing.T) {
 		{name: "too many accounts", args: []string{"--account-count", "101"}, want: "between 80 and 100"},
 		{name: "non-finite team ratio", args: []string{"--team-ratio", "NaN"}, want: "greater than 0 and less than 1"},
 		{name: "invalid digest", args: []string{"--expected-plan-digest", "xyz"}, want: "64-character SHA-256"},
+		{name: "invalid chunk size", args: []string{"--chunk-size", "0"}, want: "between 1 and 100000"},
+		{name: "execute requires digest", args: []string{"--execute"}, want: "requires --expected-plan-digest"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

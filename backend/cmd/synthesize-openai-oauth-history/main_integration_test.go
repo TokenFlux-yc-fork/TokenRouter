@@ -60,6 +60,7 @@ func TestExecuteHistoryAndRollback(t *testing.T) {
 		Seed:             42,
 		BatchID:          "integration-history-batch",
 		SourceAccountIDs: []int64{sourceOne, sourceTwo},
+		ChunkSize:        17,
 	}
 	dryPlan, err := buildHistoryPlan(ctx, db, opts)
 	require.NoError(t, err)
@@ -144,7 +145,8 @@ func TestExecuteHistoryAndRollback(t *testing.T) {
 	require.Len(t, generatedIDs, 80)
 	var outboxWatermark int64
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM scheduler_outbox").Scan(&outboxWatermark))
-	rollbackPlan, rollbackResult, err := runRollback(ctx, db, opts.BatchID, true)
+	rollbackOpts := options{RollbackBatch: opts.BatchID, Execute: true, ChunkSize: 13}
+	rollbackPlan, rollbackResult, err := runRollback(ctx, db, rollbackOpts)
 	require.NoError(t, err)
 	require.Equal(t, int64(80), rollbackPlan.AccountCount)
 	require.Equal(t, int64(240), rollbackPlan.UsageRows)
@@ -185,14 +187,14 @@ func seedHistoryFixture(t *testing.T, ctx context.Context, db *sql.DB, cutoff ti
 		var accountID int64
 		require.NoError(t, db.QueryRowContext(ctx, `
 			INSERT INTO accounts (name, platform, type, credentials, extra, concurrency, priority, status, schedulable)
-			VALUES ($1, 'openai', 'upstream', '{"api_key":"fixture"}'::jsonb, '{}'::jsonb, 8, 30, 'active', TRUE)
+			VALUES ($1, 'openai', 'apikey', '{"api_key":"fixture"}'::jsonb, '{}'::jsonb, 8, 30, 'active', TRUE)
 			RETURNING id`, name).Scan(&accountID))
 		_, err := db.ExecContext(ctx, "INSERT INTO account_groups (account_id, group_id, priority) VALUES ($1, $2, 10)", accountID, groupID)
 		require.NoError(t, err)
 		return accountID
 	}
-	sourceOne := insertSource("fixture-upstream-one", groupOne)
-	sourceTwo := insertSource("fixture-upstream-two", groupTwo)
+	sourceOne := insertSource("fixture-apikey-one", groupOne)
+	sourceTwo := insertSource("fixture-apikey-two", groupTwo)
 
 	insertUsage := func(sourceID int64, prefix string, beforeRows int, spacing time.Duration) {
 		for i := 0; i < beforeRows; i++ {
