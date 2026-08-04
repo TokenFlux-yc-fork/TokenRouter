@@ -80,7 +80,7 @@ go run ./cmd/synthesize-openai-oauth-history \
 ```
 
 The write holds one advisory lock for the operation. Account creation and each
-history chunk use repeatable-read transactions. Generated accounts are revoked
+history chunk use short read-committed transactions. Generated accounts are revoked
 and unschedulable from insertion onward. Finalization aborts unless the number
 of reassigned rows matches the dry-run plan, no source rows remain before the
 cutoff, and the generated accounts own zero rows at or after the cutoff.

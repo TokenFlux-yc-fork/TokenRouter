@@ -47,6 +47,15 @@ func TestExecuteHistoryAndRollback(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.PingContext(ctx))
 	require.NoError(t, repository.ApplyMigrations(ctx, db))
+	maintenanceConn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	maintenanceTx, err := beginMaintenanceTx(ctx, maintenanceConn)
+	require.NoError(t, err)
+	var isolation string
+	require.NoError(t, maintenanceTx.QueryRowContext(ctx, "SHOW transaction_isolation").Scan(&isolation))
+	require.Equal(t, "read committed", isolation)
+	require.NoError(t, maintenanceTx.Rollback())
+	require.NoError(t, maintenanceConn.Close())
 
 	cutoff := time.Date(2026, 8, 4, 0, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
 	userID, apiKeyID, sourceOne, sourceTwo := seedHistoryFixture(t, ctx, db, cutoff)

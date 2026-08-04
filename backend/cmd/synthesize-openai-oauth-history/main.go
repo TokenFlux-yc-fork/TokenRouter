@@ -703,7 +703,7 @@ func executeHistory(ctx context.Context, db *sql.DB, opts options) (*historyPlan
 }
 
 func beginMaintenanceTx(ctx context.Context, conn *sql.Conn) (*sql.Tx, error) {
-	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
 	}
