@@ -354,8 +354,7 @@ func loadSources(ctx context.Context, q queryer, before time.Time, sourceIDs []i
 			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost, 0) * COALESCE(ul.account_rate_multiplier, 1)), 0)
 		FROM accounts a
 		JOIN usage_logs ul ON ul.account_id = a.id AND ul.created_at < $1
-		WHERE a.deleted_at IS NULL
-		  AND a.platform = 'openai'
+		WHERE a.platform = 'openai'
 		  AND a.type = 'apikey'`
 	args := []any{before}
 	if len(sourceIDs) > 0 {

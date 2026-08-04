@@ -221,5 +221,7 @@ func seedHistoryFixture(t *testing.T, ctx context.Context, db *sql.DB, cutoff ti
 	}
 	insertUsage(sourceOne, "one", 160, 15*time.Minute)
 	insertUsage(sourceTwo, "two", 80, 30*time.Minute)
+	_, err := db.ExecContext(ctx, "UPDATE accounts SET deleted_at = NOW() WHERE id = $1", sourceTwo)
+	require.NoError(t, err)
 	return userID, apiKeyID, sourceOne, sourceTwo
 }
