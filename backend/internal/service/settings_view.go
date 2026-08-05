@@ -196,7 +196,6 @@ type SystemSettings struct {
 	// Ops monitoring (vNext)
 	OpsMonitoringEnabled         bool
 	OpsRealtimeMonitoringEnabled bool
-	OpsQueryModeDefault          string
 	OpsMetricsIntervalSeconds    int
 
 	// Claude Code version check

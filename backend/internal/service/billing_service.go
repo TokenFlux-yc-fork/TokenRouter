@@ -295,6 +295,14 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown:     false,
 	}
 
+	// Gemini 3.5 Flash（Google AI 定价：输入 $1.50、输出 $9、缓存输入 $0.15/百万 token）
+	s.fallbackPrices["gemini-3.5-flash"] = &ModelPricing{
+		InputPricePerToken:     1.5e-6,
+		OutputPricePerToken:    9e-6,
+		CacheReadPricePerToken: 0.15e-6,
+		SupportsCacheBreakdown: false,
+	}
+
 	// Gemini 3.6 Flash（Google AI 定价：输入 $1.50、输出 $7.50、缓存输入
 	// $0.15/百万 token）。下方会匹配 Antigravity 的 -high/-low/-medium/-tiered
 	// 别名，避免远端定价不可用时把有 token 的请求记为 $0。
@@ -694,6 +702,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 	if strings.Contains(modelLower, "gemini-3.1-pro") || strings.Contains(modelLower, "gemini-3-1-pro") {
 		return s.fallbackPrices["gemini-3.1-pro"]
+	}
+	if strings.Contains(modelLower, "gemini-3.5-flash") || strings.Contains(modelLower, "gemini-3-5-flash") {
+		return s.fallbackPrices["gemini-3.5-flash"]
 	}
 	if strings.Contains(modelLower, "gemini-3.6-flash") || strings.Contains(modelLower, "gemini-3-6-flash") {
 		return s.fallbackPrices["gemini-3.6-flash"]
@@ -1504,7 +1515,7 @@ func (s *BillingService) getDisplayPricing(model string, rateMultiplier float64,
 	}
 
 	rawPricing := s.getRawModelPricing(model)
-	if hasExplicitImagePricing(rawPricing) || looksLikeImageModel(model) {
+	if hasExplicitImageGenerationPricing(rawPricing) || looksLikeImageModel(model) {
 		return buildImageDisplayPricing(
 			s.getImageUnitPrice(model, "1K", groupConfig)*imageRateMultiplier,
 			s.getImageUnitPrice(model, "2K", groupConfig)*imageRateMultiplier,
@@ -1992,8 +2003,12 @@ func (s *BillingService) getRawModelPricing(model string) *LiteLLMModelPricing {
 	return s.pricingService.GetModelPricing(model)
 }
 
-func hasExplicitImagePricing(pricing *LiteLLMModelPricing) bool {
-	return pricing != nil && pricing.OutputCostPerImage > 0
+// hasExplicitImageGenerationPricing 仅把明确标记为图片生成的按图价格视为图片计费。
+// 部分聊天模型也携带 output_cost_per_image 元数据，不能据此覆盖其 token 定价。
+func hasExplicitImageGenerationPricing(pricing *LiteLLMModelPricing) bool {
+	return pricing != nil &&
+		pricing.OutputCostPerImage > 0 &&
+		strings.EqualFold(strings.TrimSpace(pricing.Mode), "image_generation")
 }
 
 func hasAnyDisplayTokenPricing(pricing *ModelPricing) bool {

@@ -42,9 +42,10 @@ type OpsRuntimeSettingsRefreshHealth struct {
 
 // OpsService provides ingestion and query APIs for the Ops monitoring module.
 type OpsService struct {
-	opsRepo     OpsRepository
-	settingRepo SettingRepository
-	cfg         *config.Config
+	opsRepo                OpsRepository
+	settingRepo            SettingRepository
+	cfg                    *config.Config
+	preAggregationSettings *PreAggregationSettingsService
 
 	accountRepo AccountRepository
 	userRepo    UserRepository
@@ -82,6 +83,14 @@ type OpsService struct {
 	runtimeRefreshSuccess        atomic.Uint64
 	runtimeRefreshFailure        atomic.Uint64
 	runtimeRefreshLastFailureLog atomic.Int64
+}
+
+// SetPreAggregationSettings 注入统一预聚合配置，运维查询只读取这一运行时开关。
+func (s *OpsService) SetPreAggregationSettings(settings *PreAggregationSettingsService) {
+	if s == nil {
+		return
+	}
+	s.preAggregationSettings = settings
 }
 
 // CleanupReloader 由 OpsCleanupService 实现。

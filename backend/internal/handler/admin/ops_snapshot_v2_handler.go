@@ -24,12 +24,11 @@ type opsDashboardSnapshotV2Response struct {
 }
 
 type opsDashboardSnapshotV2CacheKey struct {
-	StartTime    string               `json:"start_time"`
-	EndTime      string               `json:"end_time"`
-	Platform     string               `json:"platform"`
-	GroupID      *int64               `json:"group_id"`
-	QueryMode    service.OpsQueryMode `json:"mode"`
-	BucketSecond int                  `json:"bucket_second"`
+	StartTime    string `json:"start_time"`
+	EndTime      string `json:"end_time"`
+	Platform     string `json:"platform"`
+	GroupID      *int64 `json:"group_id"`
+	BucketSecond int    `json:"bucket_second"`
 }
 
 // GetDashboardSnapshotV2 returns ops dashboard core snapshot in one request.
@@ -54,7 +53,6 @@ func (h *OpsHandler) GetDashboardSnapshotV2(c *gin.Context) {
 		StartTime: startTime,
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
-		QueryMode: parseOpsQueryMode(c),
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -71,7 +69,6 @@ func (h *OpsHandler) GetDashboardSnapshotV2(c *gin.Context) {
 		EndTime:      endTime.UTC().Format(time.RFC3339),
 		Platform:     filter.Platform,
 		GroupID:      filter.GroupID,
-		QueryMode:    filter.QueryMode,
 		BucketSecond: bucketSeconds,
 	})
 	cacheKey := string(keyRaw)

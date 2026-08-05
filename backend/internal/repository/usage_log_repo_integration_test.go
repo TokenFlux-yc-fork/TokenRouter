@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	dbent "github.com/TokenFlux/TokenRouter/ent"
+	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/usagestats"
@@ -1098,6 +1099,7 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 	aggStart := hour1.Add(-5 * time.Minute)
 	aggEnd := hour2.Add(time.Hour) // 确保覆盖 hour2 的所有数据
 	s.Require().NoError(aggRepo.AggregateRange(s.ctx, aggStart, aggEnd))
+	s.Require().NoError(aggRepo.AggregateUsageAnalyticsRange(s.ctx, aggStart, aggEnd))
 
 	type hourlyRow struct {
 		totalRequests       int64
@@ -1177,6 +1179,124 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 	s.Require().Equal(2.1, daily.actualCost)
 	s.Require().Equal(int64(450), daily.totalDurationMs)
 	s.Require().Equal(int64(2), daily.activeUsers)
+
+	// 多维小时表的用户汇总必须与相同范围的原始记录一致。
+	var analyticsRequests, analyticsInput, analyticsOutput, analyticsDuration int64
+	var analyticsTotalCost, analyticsActualCost float64
+	err = scanSingleRow(s.ctx, s.tx, `
+		SELECT COALESCE(SUM(total_requests), 0), COALESCE(SUM(input_tokens), 0),
+		       COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_duration_ms), 0),
+		       COALESCE(SUM(total_cost), 0), COALESCE(SUM(actual_cost), 0)
+		FROM usage_analytics_hourly
+		WHERE user_id = $1 AND bucket_start >= $2 AND bucket_start < $3
+	`, []any{user1.ID, hour1, hour2}, &analyticsRequests, &analyticsInput, &analyticsOutput,
+		&analyticsDuration, &analyticsTotalCost, &analyticsActualCost)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), analyticsRequests)
+	s.Require().Equal(int64(15), analyticsInput)
+	s.Require().Equal(int64(25), analyticsOutput)
+	s.Require().Equal(int64(300), analyticsDuration)
+	s.Require().InDelta(1.5, analyticsTotalCost, 0.000001)
+	s.Require().InDelta(1.4, analyticsActualCost, 0.000001)
+
+	// 迟到记录落入已完成小时后，回看重算应替换该桶而不是重复累加。
+	lateDuration := 50
+	_, err = s.repo.Create(s.ctx, &service.UsageLog{
+		UserID: user1.ID, APIKeyID: apiKey1.ID, AccountID: account.ID,
+		RequestID: uuid.NewString(), Model: "claude-3", InputTokens: 3, OutputTokens: 4,
+		TotalCost: 0.2, ActualCost: 0.15, DurationMs: &lateDuration,
+		CreatedAt: hour1.Add(45 * time.Minute),
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(aggRepo.AggregateUsageAnalyticsRange(s.ctx, hour1, hour1.Add(time.Hour)))
+
+	err = scanSingleRow(s.ctx, s.tx, `
+		SELECT COALESCE(SUM(total_requests), 0), COALESCE(SUM(input_tokens), 0),
+		       COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_duration_ms), 0),
+		       COALESCE(SUM(total_cost), 0), COALESCE(SUM(actual_cost), 0)
+		FROM usage_analytics_hourly
+		WHERE user_id = $1 AND bucket_start = $2
+	`, []any{user1.ID, hour1}, &analyticsRequests, &analyticsInput, &analyticsOutput,
+		&analyticsDuration, &analyticsTotalCost, &analyticsActualCost)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), analyticsRequests)
+	s.Require().Equal(int64(18), analyticsInput)
+	s.Require().Equal(int64(29), analyticsOutput)
+	s.Require().Equal(int64(350), analyticsDuration)
+	s.Require().InDelta(1.7, analyticsTotalCost, 0.000001)
+	s.Require().InDelta(1.55, analyticsActualCost, 0.000001)
+}
+
+// TestUsageAnalyticsQueriesExecuteOnPostgreSQL 验证非日参数、批量 ID 和分组汇总能通过 PostgreSQL 类型解析并执行。
+func (s *UsageLogRepoSuite) TestUsageAnalyticsQueriesExecuteOnPostgreSQL() {
+	previousTimezone := timezone.Name()
+	s.Require().NoError(timezone.Init("Pacific/Honolulu"))
+	s.T().Cleanup(func() { _ = timezone.Init(previousTimezone) })
+
+	now := time.Now().UTC().Truncate(time.Second)
+	todayStart := timezone.Today().UTC()
+	if !now.After(todayStart.Add(3 * time.Hour)) {
+		s.T().Skip("当前业务日尚无足够的完整小时用于聚合查询")
+	}
+	createdAt := todayStart.Add(90 * time.Minute)
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "analytics-query@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-analytics-query", Name: "analytics"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "analytics-query-account"})
+	group := mustCreateGroup(s.T(), s.client, &service.Group{Name: "analytics-query-group"})
+	groupID := group.ID
+	_, err := s.repo.Create(s.ctx, &service.UsageLog{
+		UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID, GroupID: &groupID,
+		RequestID: uuid.NewString(), Model: "claude-3", RequestedModel: "claude-3",
+		InputTokens: 10, OutputTokens: 20, TotalCost: 1, ActualCost: 0.8,
+		CreatedAt: createdAt,
+	})
+	s.Require().NoError(err)
+
+	aggRepo := newDashboardAggregationRepositoryWithSQL(s.tx)
+	s.Require().NoError(aggRepo.AggregateUsageAnalyticsRange(s.ctx, todayStart, now))
+	_, err = s.tx.ExecContext(s.ctx, `
+		UPDATE usage_analytics_aggregation_state
+		SET live_watermark = $1, coverage_start = $2, backfill_cursor = $2,
+		    source_oldest_at = $3, phase = 'idle'
+		WHERE id = 1
+	`, now, todayStart, createdAt)
+	s.Require().NoError(err)
+	s.repo.preAggregation = service.NewPreAggregationSettingsService(nil, &config.Config{
+		DashboardAgg: config.DashboardAggregationConfig{Enabled: true, IntervalSeconds: 60},
+	})
+
+	trend, ok, err := s.repo.getUsageTrendFromAnalytics(s.ctx, todayStart, now, "hour", UsageLogFilters{})
+	s.Require().NoError(err)
+	s.Require().True(ok)
+	s.Require().NotEmpty(trend)
+
+	stats, ok, err := s.repo.getUsageStatsFromAnalytics(s.ctx, UsageLogFilters{StartTime: &todayStart, EndTime: &now})
+	s.Require().NoError(err)
+	s.Require().True(ok)
+	s.Require().Equal(int64(1), stats.TotalRequests)
+
+	keyStats, ok, err := s.repo.getBatchAPIKeyUsageStatsFromAnalytics(s.ctx, []int64{apiKey.ID}, todayStart, now)
+	s.Require().NoError(err)
+	s.Require().True(ok)
+	s.Require().InDelta(0.8, keyStats[apiKey.ID].TodayActualCost, 0.000001)
+
+	userStats, ok, err := s.repo.getBatchUserUsageStatsFromAnalytics(s.ctx, []int64{user.ID}, todayStart, now)
+	s.Require().NoError(err)
+	s.Require().True(ok)
+	s.Require().InDelta(0.8, userStats[user.ID].TodayActualCost, 0.000001)
+
+	groups, ok, err := s.repo.getAllGroupUsageSummaryFromAnalytics(s.ctx, todayStart)
+	s.Require().NoError(err)
+	s.Require().True(ok)
+	foundGroup := false
+	for _, item := range groups {
+		if item.GroupID == group.ID {
+			foundGroup = true
+			s.Require().InDelta(0.8, item.TodayCost, 0.000001)
+			break
+		}
+	}
+	s.Require().True(foundGroup)
 }
 
 // --- GetBatchUserUsageStats ---

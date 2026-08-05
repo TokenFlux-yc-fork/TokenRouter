@@ -327,7 +327,7 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	require.NoError(t, json.Unmarshal([]byte(repo.values[service.SettingKeyOpsAdvancedSettings]), &advanced))
 	require.True(t, advanced.DataRetention.CleanupEnabled)
 	require.Equal(t, "0 4 * * *", advanced.DataRetention.CleanupSchedule)
-	require.True(t, advanced.Aggregation.AggregationEnabled)
+	require.NotContains(t, repo.values[service.SettingKeyOpsAdvancedSettings], `"aggregation"`)
 	require.Equal(t, 0.95, advanced.OpenAIAccountQuotaAutoPause.DefaultThreshold5h)
 	require.Equal(t, 0.9, advanced.OpenAIAccountQuotaAutoPause.DefaultThreshold7d)
 

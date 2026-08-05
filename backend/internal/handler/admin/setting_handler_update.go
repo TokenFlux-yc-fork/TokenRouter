@@ -228,10 +228,9 @@ type UpdateSettingsRequest struct {
 	IdentityPatchPrompt string `json:"identity_patch_prompt"`
 
 	// Ops monitoring (vNext)
-	OpsMonitoringEnabled         *bool   `json:"ops_monitoring_enabled"`
-	OpsRealtimeMonitoringEnabled *bool   `json:"ops_realtime_monitoring_enabled"`
-	OpsQueryModeDefault          *string `json:"ops_query_mode_default"`
-	OpsMetricsIntervalSeconds    *int    `json:"ops_metrics_interval_seconds"`
+	OpsMonitoringEnabled         *bool `json:"ops_monitoring_enabled"`
+	OpsRealtimeMonitoringEnabled *bool `json:"ops_realtime_monitoring_enabled"`
+	OpsMetricsIntervalSeconds    *int  `json:"ops_metrics_interval_seconds"`
 
 	MinClaudeCodeVersion string `json:"min_claude_code_version"`
 	MaxClaudeCodeVersion string `json:"max_claude_code_version"`
@@ -1641,12 +1640,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpsRealtimeMonitoringEnabled
 		}(),
-		OpsQueryModeDefault: func() string {
-			if req.OpsQueryModeDefault != nil {
-				return *req.OpsQueryModeDefault
-			}
-			return previousSettings.OpsQueryModeDefault
-		}(),
 		OpsMetricsIntervalSeconds: func() int {
 			if req.OpsMetricsIntervalSeconds != nil {
 				return *req.OpsMetricsIntervalSeconds
@@ -2140,7 +2133,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		IdentityPatchPrompt:                                    updatedSettings.IdentityPatchPrompt,
 		OpsMonitoringEnabled:                                   updatedSettings.OpsMonitoringEnabled,
 		OpsRealtimeMonitoringEnabled:                           updatedSettings.OpsRealtimeMonitoringEnabled,
-		OpsQueryModeDefault:                                    updatedSettings.OpsQueryModeDefault,
 		OpsMetricsIntervalSeconds:                              updatedSettings.OpsMetricsIntervalSeconds,
 		MinClaudeCodeVersion:                                   updatedSettings.MinClaudeCodeVersion,
 		MaxClaudeCodeVersion:                                   updatedSettings.MaxClaudeCodeVersion,

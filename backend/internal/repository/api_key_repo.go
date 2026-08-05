@@ -25,8 +25,16 @@ import (
 )
 
 type apiKeyRepository struct {
-	client *dbent.Client
-	sql    sqlExecutor
+	client         *dbent.Client
+	sql            sqlExecutor
+	preAggregation *service.PreAggregationSettingsService
+}
+
+// ProvideAPIKeyRepository 注入统一预聚合配置，供用量排序复用多维聚合表。
+func ProvideAPIKeyRepository(client *dbent.Client, sqlDB *sql.DB, preAggregation *service.PreAggregationSettingsService) service.APIKeyRepository {
+	repo := newAPIKeyRepositoryWithSQL(client, sqlDB)
+	repo.preAggregation = preAggregation
+	return repo
 }
 
 func NewAPIKeyRepository(client *dbent.Client, sqlDB *sql.DB) service.APIKeyRepository {
@@ -832,6 +840,22 @@ func (r *apiKeyRepository) loadAPIKeyUsageTotals(ctx context.Context, keyIDs []i
 		result[id] = 0
 	}
 
+	now := time.Now()
+	start := now.AddDate(0, 0, -30)
+	if r.preAggregation != nil {
+		usageRepo := &usageLogRepository{sql: r.sql, preAggregation: r.preAggregation}
+		if stats, ok, err := usageRepo.getBatchAPIKeyUsageStatsFromAnalytics(ctx, keyIDs, start, now); err == nil && ok {
+			for keyID, stat := range stats {
+				if stat != nil {
+					result[keyID] = stat.TotalActualCost
+				}
+			}
+			return result, nil
+		} else if err != nil {
+			usageRepo.logUsageAnalyticsFallback("api_key_list_usage", err)
+		}
+	}
+
 	query := `
 		SELECT api_key_id, COALESCE(SUM(actual_cost), 0)
 		FROM usage_logs
@@ -840,7 +864,6 @@ func (r *apiKeyRepository) loadAPIKeyUsageTotals(ctx context.Context, keyIDs []i
 		  AND created_at < $3
 		GROUP BY api_key_id
 	`
-	now := time.Now()
 	rows, err := r.sql.QueryContext(ctx, query, pq.Array(keyIDs), now.AddDate(0, 0, -30), now)
 	if err != nil {
 		return nil, err

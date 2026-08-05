@@ -5395,6 +5395,8 @@
 
         <!-- Tab: General -->
         <div v-show="activeTab === 'general'" class="space-y-6">
+          <PreAggregationSettings />
+
           <!-- Balance Display Settings -->
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
@@ -7968,6 +7970,7 @@ import BackupSettings from "@/views/admin/BackupView.vue";
 import { useBalanceDisplay } from "@/composables/useBalanceDisplay";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
+import PreAggregationSettings from "@/views/admin/settings/PreAggregationSettings.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   useStepUp,
@@ -8647,7 +8650,6 @@ const form = reactive<SettingsForm>({
   // Ops monitoring (vNext)
   ops_monitoring_enabled: true,
   ops_realtime_monitoring_enabled: true,
-  ops_query_mode_default: "auto",
   ops_metrics_interval_seconds: 60,
   // Claude Code version check
   min_claude_code_version: "",

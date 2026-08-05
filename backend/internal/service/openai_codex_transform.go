@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 )
 
 var codexModelMap = map[string]string{
@@ -1115,7 +1116,13 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 }
 
 func normalizeOpenAIModelForUpstream(account *Account, model string) string {
-	if account == nil || account.Type == AccountTypeOAuth {
+	if account == nil {
+		return strings.TrimSpace(model)
+	}
+	if account.IsGrok() {
+		return xai.NormalizeModelID(model)
+	}
+	if account.IsOpenAIOAuth() {
 		return normalizeCodexModel(model)
 	}
 	return strings.TrimSpace(model)

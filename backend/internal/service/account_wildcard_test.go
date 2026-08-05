@@ -288,6 +288,57 @@ func TestAccountIsModelSupported(t *testing.T) {
 			expected:       true,
 		},
 		{
+			name:           "qoder global accepts qwen 38 public alias",
+			platform:       PlatformQoder,
+			credentials:    map[string]any{"site": "global"},
+			requestedModel: "qwen3.8-max",
+			expected:       true,
+		},
+		{
+			name:           "qoder global accepts qwen 38 raw route",
+			platform:       PlatformQoder,
+			credentials:    map[string]any{"site": "global"},
+			requestedModel: "qmodel_38max",
+			expected:       true,
+		},
+		{
+			name:           "qoder cn accepts qwen 38 public alias",
+			platform:       PlatformQoder,
+			credentials:    map[string]any{"site": "cn"},
+			requestedModel: "qwen3.8-max",
+			expected:       true,
+		},
+		{
+			name:           "qoder cn accepts qwen 38 raw route",
+			platform:       PlatformQoder,
+			credentials:    map[string]any{"site": "cn"},
+			requestedModel: "qmodel_38max",
+			expected:       true,
+		},
+		{
+			name:     "qoder preview requires explicit mapping when route whitelist is used",
+			platform: PlatformQoder,
+			credentials: map[string]any{
+				"site":            "cn",
+				"model_whitelist": []any{"qmodel_38max"},
+			},
+			requestedModel: "qwen3.8-max-preview",
+			expected:       false,
+		},
+		{
+			name:     "qoder explicit preview mapping remains compatible",
+			platform: PlatformQoder,
+			credentials: map[string]any{
+				"site": "cn",
+				"model_mapping": map[string]any{
+					"qwen3.8-max-preview": "qmodel_38max",
+				},
+				"model_whitelist": []any{"qmodel_38max"},
+			},
+			requestedModel: "qwen3.8-max-preview",
+			expected:       true,
+		},
+		{
 			name:     "qoder mapping only does not restrict unmatched request model",
 			platform: PlatformQoder,
 			credentials: map[string]any{

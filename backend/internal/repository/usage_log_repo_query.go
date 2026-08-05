@@ -100,7 +100,13 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
-	conditions, args = appendUserUsageScopeWhereCondition(conditions, args, filters.UserID, filters.IncludeOwnedTeam, "")
+	source, scopeCondition, args, err := r.buildUsageLogScopeSource(ctx, args, filters.UserID, filters.IncludeOwnedTeam, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	if scopeCondition != "" {
+		conditions = append(conditions, scopeCondition)
+	}
 	if filters.APIKeyID > 0 {
 		conditions = append(conditions, fmt.Sprintf("api_key_id = $%d", len(args)+1))
 		args = append(args, filters.APIKeyID)
@@ -142,23 +148,65 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 
 	whereClause := buildWhere(conditions)
 	var (
-		logs []service.UsageLog
-		page *pagination.PaginationResult
-		err  error
+		logs    []service.UsageLog
+		page    *pagination.PaginationResult
+		listErr error
 	)
 	if shouldUseFastUsageLogTotal(filters) {
-		logs, page, err = r.listUsageLogsWithFastPagination(ctx, whereClause, args, params)
+		logs, page, listErr = r.listUsageLogsWithFastPaginationFrom(ctx, source, whereClause, args, params)
 	} else {
-		logs, page, err = r.listUsageLogsWithPagination(ctx, whereClause, args, params)
+		logs, page, listErr = r.listUsageLogsWithPaginationFrom(ctx, source, whereClause, args, params)
 	}
-	if err != nil {
-		return nil, nil, err
+	if listErr != nil {
+		return nil, nil, listErr
 	}
 
 	if err := r.hydrateUsageLogAssociations(ctx, logs); err != nil {
 		return nil, nil, err
 	}
 	return logs, page, nil
+}
+
+// buildUsageLogScopeSource 将用户与 Owner 团队范围拆为两个可索引且去重的分支。
+func (r *usageLogRepository) buildUsageLogScopeSource(ctx context.Context, args []any, userID int64, includeOwnedTeam bool, alias string) (string, string, []any, error) {
+	sourceAlias := alias
+	if sourceAlias == "" {
+		sourceAlias = "usage_scope"
+	}
+	baseSource := "usage_logs"
+	if alias != "" {
+		baseSource += " " + alias
+	}
+	if userID <= 0 {
+		return baseSource, "", args, nil
+	}
+
+	args = append(args, userID)
+	userPosition := len(args)
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	userCondition := fmt.Sprintf("%suser_id = $%d", prefix, userPosition)
+	if !includeOwnedTeam {
+		return baseSource, userCondition, args, nil
+	}
+
+	teamID, err := r.getOwnedTeamID(ctx, userID)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if teamID <= 0 {
+		return baseSource, userCondition, args, nil
+	}
+	args = append(args, teamID)
+	teamPosition := len(args)
+	source := fmt.Sprintf(`(
+		SELECT * FROM usage_logs WHERE user_id = $%d
+		UNION ALL
+		SELECT * FROM usage_logs WHERE team_id = $%d AND user_id <> $%d
+	) %s`, userPosition, teamPosition, userPosition, sourceAlias)
+	return source, "", args, nil
 }
 
 func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
@@ -169,41 +217,12 @@ func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
 	return filters.UserID == 0 && filters.APIKeyID == 0 && filters.AccountID == 0 && filters.TeamID == 0
 }
 
-// appendUserUsageScopeWhereCondition 统一构造用户用量可见范围，避免列表与统计口径漂移。
-func appendUserUsageScopeWhereCondition(conditions []string, args []any, userID int64, includeOwnedTeam bool, alias string) ([]string, []any) {
-	if userID <= 0 {
-		return conditions, args
-	}
-	prefix := ""
-	if alias != "" {
-		prefix = alias + "."
-	}
-	placeholder := len(args) + 1
-	if includeOwnedTeam {
-		// 活跃成员唯一约束保证子查询至多返回一个团队，标量比较可让 PostgreSQL 合并用户与团队索引。
-		conditions = append(conditions, fmt.Sprintf(
-			"(%[1]suser_id = $%[2]d OR %[1]steam_id = (SELECT tm.team_id FROM team_memberships tm WHERE tm.user_id = $%[2]d AND tm.role = 'owner' AND tm.left_at IS NULL))",
-			prefix,
-			placeholder,
-		))
-	} else {
-		conditions = append(conditions, fmt.Sprintf("%suser_id = $%d", prefix, placeholder))
-	}
-	args = append(args, userID)
-	return conditions, args
-}
-
-// appendUserUsageScopeQueryFilter 将统一可见范围附加到已有 WHERE 查询。
-func appendUserUsageScopeQueryFilter(query string, args []any, userID int64, includeOwnedTeam bool, alias string) (string, []any) {
-	conditions, nextArgs := appendUserUsageScopeWhereCondition(nil, args, userID, includeOwnedTeam, alias)
-	if len(conditions) == 0 {
-		return query, nextArgs
-	}
-	return query + " AND " + conditions[0], nextArgs
-}
-
 func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	countQuery := "SELECT COUNT(*) FROM usage_logs " + whereClause
+	return r.listUsageLogsWithPaginationFrom(ctx, "usage_logs", whereClause, args, params)
+}
+
+func (r *usageLogRepository) listUsageLogsWithPaginationFrom(ctx context.Context, source, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
+	countQuery := "SELECT COUNT(*) FROM " + source + " " + whereClause
 	var total int64
 	if err := scanSingleRow(ctx, r.sql, countQuery, args, &total); err != nil {
 		return nil, nil, err
@@ -212,7 +231,7 @@ func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, wh
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	listArgs := append(append([]any{}, args...), params.Limit(), params.Offset())
-	query := fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogSelectColumns, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
+	query := fmt.Sprintf("SELECT %s FROM %s %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogSelectColumns, source, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
 	logs, err := r.queryUsageLogs(ctx, query, listArgs...)
 	if err != nil {
 		return nil, nil, err
@@ -220,14 +239,14 @@ func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, wh
 	return logs, paginationResultFromTotal(total, params), nil
 }
 
-func (r *usageLogRepository) listUsageLogsWithFastPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
+func (r *usageLogRepository) listUsageLogsWithFastPaginationFrom(ctx context.Context, source, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
 	limit := params.Limit()
 	offset := params.Offset()
 
 	limitPos := len(args) + 1
 	offsetPos := len(args) + 2
 	listArgs := append(append([]any{}, args...), limit+1, offset)
-	query := fmt.Sprintf("SELECT %s FROM usage_logs %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogSelectColumns, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
+	query := fmt.Sprintf("SELECT %s FROM %s %s ORDER BY %s LIMIT $%d OFFSET $%d", usageLogSelectColumns, source, whereClause, usageLogOrderBy(params), limitPos, offsetPos)
 
 	logs, err := r.queryUsageLogs(ctx, query, listArgs...)
 	if err != nil {

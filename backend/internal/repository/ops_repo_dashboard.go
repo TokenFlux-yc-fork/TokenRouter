@@ -34,11 +34,9 @@ func (r *opsRepository) GetDashboardOverview(ctx context.Context, filter *servic
 	}
 
 	switch mode {
-	case service.OpsQueryModePreagg:
-		return r.getDashboardOverviewPreaggregated(ctx, filter)
 	case service.OpsQueryModeAuto:
 		out, err := r.getDashboardOverviewPreaggregated(ctx, filter)
-		if err != nil && errors.Is(err, service.ErrOpsPreaggregatedNotPopulated) {
+		if err != nil {
 			return r.getDashboardOverviewRaw(ctx, filter)
 		}
 		return out, err
@@ -195,6 +193,13 @@ func (r *opsRepository) getDashboardOverviewPreaggregated(ctx context.Context, f
 	if !aggFullStart.Before(aggFullEnd) {
 		return r.getDashboardOverviewRaw(ctx, filter)
 	}
+	covered, err := r.hasCompleteHourlyMetricsCoverage(ctx, aggFullStart, aggFullEnd)
+	if err != nil {
+		return nil, err
+	}
+	if !covered {
+		return nil, service.ErrOpsPreaggregatedNotPopulated
+	}
 
 	// 1) Pre-aggregated stable segment.
 	preaggRows, err := r.listHourlyMetricsRows(ctx, filter, aggFullStart, aggFullEnd)
@@ -341,6 +346,31 @@ func (r *opsRepository) getDashboardOverviewPreaggregated(ctx context.Context, f
 		Duration: duration,
 		TTFT:     ttft,
 	}, nil
+}
+
+// hasCompleteHourlyMetricsCoverage 使用全局桶确认每个稳定小时都已经由任务处理。
+// 过滤维度可能在某小时没有数据，因此不能用过滤后的结果行判断覆盖范围。
+func (r *opsRepository) hasCompleteHourlyMetricsCoverage(ctx context.Context, start, end time.Time) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, fmt.Errorf("nil ops repository")
+	}
+	start = utcFloorToHour(start.UTC())
+	end = utcFloorToHour(end.UTC())
+	if !start.Before(end) {
+		return true, nil
+	}
+	expected := int64(end.Sub(start) / time.Hour)
+	var actual int64
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM ops_metrics_hourly
+		WHERE bucket_start >= $1 AND bucket_start < $2
+		  AND platform IS NULL AND group_id IS NULL
+	`, start, end).Scan(&actual)
+	if err != nil {
+		return false, err
+	}
+	return actual == expected, nil
 }
 
 type opsHourlyMetricsRow struct {

@@ -861,6 +861,8 @@ func TestProxyOpenAIWSHTTPBridgeTurnForGrokDefaultsEmptyModelTo45(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, grokDefaultResponsesModel, gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Empty(t, result.BillingModel)
+	require.Equal(t, grokDefaultResponsesModel, result.UpstreamModel)
 	require.Len(t, events, 2)
 }
 

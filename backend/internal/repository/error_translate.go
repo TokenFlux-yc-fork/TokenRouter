@@ -95,3 +95,20 @@ func isUniqueConstraintViolation(err error) bool {
 		strings.Contains(msg, "unique constraint") ||
 		strings.Contains(msg, "duplicate entry")
 }
+
+// isPostgresDeadlock 仅通过 PostgreSQL SQLSTATE 识别死锁，避免错误文本变化导致误判。
+func isPostgresDeadlock(err error) bool {
+	return postgresSQLState(err) == "40P01"
+}
+
+// postgresSQLState 提取可被包装的 lib/pq 错误码；非 PostgreSQL 错误返回空字符串。
+func postgresSQLState(err error) string {
+	if err == nil {
+		return ""
+	}
+	var pgErr *pq.Error
+	if !errors.As(err, &pgErr) || pgErr == nil {
+		return ""
+	}
+	return string(pgErr.Code)
+}

@@ -56,7 +56,7 @@ func TestCNClientUsesGatewayEndpointVersionAndCanonicalSignaturePath(t *testing.
 	require.NotNil(t, resp)
 	require.Equal(t, "gateway.example", captured.URL.Host)
 	require.Equal(t, "/algo/api/v2/service/pro/sse/agent_chat_generation", captured.URL.Path)
-	require.Equal(t, CNClientVersion, captured.Header.Get("Cosy-Version"))
+	require.Equal(t, "1.10.0", captured.Header.Get("Cosy-Version"))
 	require.Equal(t, "aarch64_darwin", captured.Header.Get("Cosy-Machineos"))
 	require.Equal(t, "mid-abc", captured.Header.Get("Cosy-Machineid"))
 	require.Equal(t, []string{""}, captured.Header.Values("Cosy-Machinetoken"))
@@ -208,8 +208,8 @@ func TestHeadersDataPolicyIsDisagree(t *testing.T) {
 
 func TestHeadersUseGlobalSiteVersion(t *testing.T) {
 	h := getHeaders(t)
-	if h.Get("cosy-version") != GlobalClientVersion {
-		t.Errorf("cosy-version = %q, want %s", h.Get("cosy-version"), GlobalClientVersion)
+	if h.Get("cosy-version") != "1.21.2" {
+		t.Errorf("cosy-version = %q, want 1.21.2", h.Get("cosy-version"))
 	}
 }
 

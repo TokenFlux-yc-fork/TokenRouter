@@ -62,6 +62,7 @@ type DashboardService struct {
 	aggInterval    time.Duration
 	aggLookback    time.Duration
 	aggUsageDays   int
+	preAggregation *PreAggregationSettingsService
 }
 
 func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregationRepository, cache DashboardStatsCache, cfg *config.Config) *DashboardService {
@@ -113,6 +114,28 @@ func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregat
 	}
 }
 
+// SetPreAggregationSettings 注入统一运行时配置，并在设置变化时清除共享仪表盘缓存。
+func (s *DashboardService) SetPreAggregationSettings(settings *PreAggregationSettingsService) {
+	if s == nil {
+		return
+	}
+	s.preAggregation = settings
+	if settings != nil {
+		settings.RegisterListener(func(previous, next PreAggregationSettings) {
+			if previous.Usage != next.Usage {
+				go s.evictDashboardStatsCache(nil)
+			}
+		})
+	}
+}
+
+// ProvideDashboardService 创建读取统一预聚合配置的仪表盘服务。
+func ProvideDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregationRepository, cache DashboardStatsCache, cfg *config.Config, settings *PreAggregationSettingsService) *DashboardService {
+	service := NewDashboardService(usageRepo, aggRepo, cache, cfg)
+	service.SetPreAggregationSettings(settings)
+	return service
+}
+
 func (s *DashboardService) GetDashboardStats(ctx context.Context) (*usagestats.DashboardStats, error) {
 	if s.cache != nil {
 		cached, fresh, err := s.getCachedDashboardStats(ctx)
@@ -140,7 +163,7 @@ func (s *DashboardService) GetPublicDashboardStats(ctx context.Context) (*Dashbo
 	if fetcher, ok := s.usageRepo.(dashboardPublicStatsFetcher); ok {
 		now := time.Now().UTC()
 		start := truncateToDayUTC(now.AddDate(0, 0, -s.aggUsageDays))
-		stats, err := fetcher.GetDashboardPublicStats(ctx, start, now, s.aggEnabled)
+		stats, err := fetcher.GetDashboardPublicStats(ctx, start, now, s.aggregationEnabled(ctx))
 		if err != nil {
 			return nil, fmt.Errorf("get public dashboard stats: %w", err)
 		}
@@ -316,7 +339,7 @@ func (s *DashboardService) refreshDashboardStatsAsync() {
 }
 
 func (s *DashboardService) fetchDashboardStats(ctx context.Context) (*usagestats.DashboardStats, error) {
-	if !s.aggEnabled {
+	if !s.aggregationEnabled(ctx) {
 		if fetcher, ok := s.usageRepo.(dashboardStatsRangeFetcher); ok {
 			now := time.Now().UTC()
 			start := truncateToDayUTC(now.AddDate(0, 0, -s.aggUsageDays))
@@ -398,15 +421,29 @@ func (s *DashboardService) fetchAggregationUpdatedAt(ctx context.Context) time.T
 }
 
 func (s *DashboardService) isAggregationStale(updatedAt, now time.Time) bool {
-	if !s.aggEnabled {
+	if !s.aggregationEnabled(context.Background()) {
 		return true
 	}
 	epoch := time.Unix(0, 0).UTC()
 	if !updatedAt.After(epoch) {
 		return true
 	}
-	threshold := s.aggInterval + s.aggLookback
+	interval := s.aggInterval
+	if s.preAggregation != nil {
+		interval = time.Duration(s.preAggregation.Resolve(context.Background()).Usage.IntervalSeconds) * time.Second
+	}
+	threshold := interval + s.aggLookback
 	return now.Sub(updatedAt) > threshold
+}
+
+func (s *DashboardService) aggregationEnabled(ctx context.Context) bool {
+	if s == nil || !s.aggEnabled {
+		return false
+	}
+	if s.preAggregation == nil {
+		return true
+	}
+	return s.preAggregation.UsageEnabled(ctx)
 }
 
 func parseStatsUpdatedAt(raw string) time.Time {

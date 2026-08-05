@@ -28,6 +28,11 @@ type APIKeyUsageTrendPoint = usagestats.APIKeyUsageTrendPoint
 
 // GetAPIKeyUsageTrend returns usage trend data grouped by API key and date
 func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) (results []APIKeyUsageTrendPoint, err error) {
+	if aggregated, ok, aggregateErr := r.getAPIKeyUsageTrendFromAnalytics(ctx, startTime, endTime, granularity, limit); aggregateErr == nil && ok {
+		return aggregated, nil
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("api_key_usage_trend", aggregateErr)
+	}
 	dateFormat := safeDateFormat(granularity)
 
 	query := fmt.Sprintf(`
@@ -83,6 +88,11 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 
 // GetUserUsageTrend returns usage trend data grouped by user and date
 func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) (results []UserUsageTrendPoint, err error) {
+	if aggregated, ok, aggregateErr := r.getUserUsageTrendFromAnalytics(ctx, startTime, endTime, granularity, limit); aggregateErr == nil && ok {
+		return aggregated, nil
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("user_usage_trend", aggregateErr)
+	}
 	dateFormat := safeDateFormat(granularity)
 
 	query := fmt.Sprintf(`
@@ -143,6 +153,11 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTime, endTime time.Time, limit int) (result *UserSpendingRankingResponse, err error) {
 	if limit <= 0 {
 		limit = 12
+	}
+	if aggregated, ok, aggregateErr := r.getUserSpendingRankingFromAnalytics(ctx, startTime, endTime, limit); aggregateErr == nil && ok {
+		return aggregated, nil
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("user_spending_ranking", aggregateErr)
 	}
 
 	query := `
@@ -239,6 +254,17 @@ func (r *usageLogRepository) GetUsageTrendWithUsageFilters(ctx context.Context, 
 }
 
 func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID, teamID int64, model string, modelSource string, requestType *int16, stream *bool, billingType *int8, billingMode string, personalOnly bool, includeOwnedTeam bool) (results []TrendDataPoint, err error) {
+	analyticsFilters := UsageLogFilters{
+		UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
+		TeamID: teamID, Model: model, ModelFilterSource: modelSource,
+		RequestType: requestType, Stream: stream, BillingType: billingType,
+		BillingMode: billingMode, PersonalOnly: personalOnly, IncludeOwnedTeam: includeOwnedTeam,
+	}
+	if aggregated, ok, aggregateErr := r.getUsageTrendFromAnalytics(ctx, startTime, endTime, granularity, analyticsFilters); aggregateErr == nil && ok {
+		return aggregated, nil
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("usage_trend", aggregateErr)
+	}
 	if teamID == 0 && shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, billingMode, personalOnly, includeOwnedTeam) {
 		aggregated, aggregatedErr := r.getUsageTrendFromAggregates(ctx, startTime, endTime, granularity)
 		if aggregatedErr == nil && len(aggregated) > 0 {
@@ -247,6 +273,11 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 	}
 
 	dateFormat := safeDateFormat(granularity)
+	args := []any{startTime, endTime}
+	source, scopeCondition, args, scopeErr := r.buildUsageLogScopeSource(ctx, args, userID, includeOwnedTeam, "")
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
 
 	query := fmt.Sprintf(`
 		SELECT
@@ -259,12 +290,13 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
 			COALESCE(SUM(actual_cost), 0) as actual_cost
-		FROM usage_logs
+		FROM %s
 		WHERE created_at >= $1 AND created_at < $2
-	`, dateFormat)
+	`, dateFormat, source)
 
-	args := []any{startTime, endTime}
-	query, args = appendUserUsageScopeQueryFilter(query, args, userID, includeOwnedTeam, "")
+	if scopeCondition != "" {
+		query += " AND " + scopeCondition
+	}
 	if apiKeyID > 0 {
 		query += fmt.Sprintf(" AND api_key_id = $%d", len(args)+1)
 		args = append(args, apiKeyID)
@@ -331,6 +363,9 @@ func shouldUsePreaggregatedTrend(granularity string, userID, apiKeyID, accountID
 }
 
 func (r *usageLogRepository) getUsageTrendFromAggregates(ctx context.Context, startTime, endTime time.Time, granularity string) (results []TrendDataPoint, err error) {
+	if r.preAggregation != nil && !r.preAggregation.UsageEnabled(ctx) {
+		return nil, nil
+	}
 	dateFormat := safeDateFormat(granularity)
 	query := ""
 	args := []any{startTime, endTime}
@@ -406,9 +441,25 @@ func (r *usageLogRepository) GetModelStatsWithUsageFiltersBySource(ctx context.C
 }
 
 func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID, teamID int64, model string, requestType *int16, stream *bool, billingType *int8, source string, billingMode string, personalOnly bool, includeOwnedTeam bool) (results []ModelStat, err error) {
+	analyticsFilters := UsageLogFilters{
+		UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
+		TeamID: teamID, Model: model, ModelFilterSource: source,
+		RequestType: requestType, Stream: stream, BillingType: billingType,
+		BillingMode: billingMode, PersonalOnly: personalOnly, IncludeOwnedTeam: includeOwnedTeam,
+	}
+	if aggregated, ok, aggregateErr := r.getModelStatsFromAnalytics(ctx, startTime, endTime, analyticsFilters); aggregateErr == nil && ok {
+		return aggregated, nil
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("model_stats", aggregateErr)
+	}
 	// “实际”始终表示用户实际扣费，账号成本由独立的 account_cost 字段承载。
 	accountCostExpr := "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost"
 	modelExpr := resolveModelDimensionExpression(source)
+	args := []any{startTime, endTime}
+	usageSource, scopeCondition, args, scopeErr := r.buildUsageLogScopeSource(ctx, args, userID, includeOwnedTeam, "")
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
 
 	query := fmt.Sprintf(`
 		SELECT
@@ -422,12 +473,13 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 			COALESCE(SUM(total_cost), 0) as cost,
 			COALESCE(SUM(actual_cost), 0) as actual_cost,
 			%s
-		FROM usage_logs
+		FROM %s
 		WHERE created_at >= $1 AND created_at < $2
-	`, modelExpr, accountCostExpr)
+	`, modelExpr, accountCostExpr, usageSource)
 
-	args := []any{startTime, endTime}
-	query, args = appendUserUsageScopeQueryFilter(query, args, userID, includeOwnedTeam, "")
+	if scopeCondition != "" {
+		query += " AND " + scopeCondition
+	}
 	if apiKeyID > 0 {
 		query += fmt.Sprintf(" AND api_key_id = $%d", len(args)+1)
 		args = append(args, apiKeyID)
@@ -489,7 +541,23 @@ func (r *usageLogRepository) GetGroupStatsWithUsageFilters(ctx context.Context, 
 }
 
 func (r *usageLogRepository) getGroupStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID, teamID int64, model string, requestType *int16, stream *bool, billingType *int8, billingMode string, personalOnly bool, includeOwnedTeam bool) (results []usagestats.GroupStat, err error) {
-	query := `
+	analyticsFilters := UsageLogFilters{
+		UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
+		TeamID: teamID, Model: model, ModelFilterSource: usagestats.ModelSourceRequested,
+		RequestType: requestType, Stream: stream, BillingType: billingType,
+		BillingMode: billingMode, PersonalOnly: personalOnly, IncludeOwnedTeam: includeOwnedTeam,
+	}
+	if aggregated, ok, aggregateErr := r.getGroupStatsFromAnalytics(ctx, startTime, endTime, analyticsFilters); aggregateErr == nil && ok {
+		return aggregated, nil
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("group_stats", aggregateErr)
+	}
+	args := []any{startTime, endTime}
+	usageSource, scopeCondition, args, scopeErr := r.buildUsageLogScopeSource(ctx, args, userID, includeOwnedTeam, "ul")
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	query := fmt.Sprintf(`
 		SELECT
 			COALESCE(ul.group_id, 0) as group_id,
 			COALESCE(g.name, '') as group_name,
@@ -498,13 +566,14 @@ func (r *usageLogRepository) getGroupStatsWithFilters(ctx context.Context, start
 			COALESCE(SUM(ul.total_cost), 0) as cost,
 			COALESCE(SUM(ul.actual_cost), 0) as actual_cost,
 			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as account_cost
-		FROM usage_logs ul
+		FROM %s
 		LEFT JOIN groups g ON g.id = ul.group_id
 		WHERE ul.created_at >= $1 AND ul.created_at < $2
-	`
+	`, usageSource)
 
-	args := []any{startTime, endTime}
-	query, args = appendUserUsageScopeQueryFilter(query, args, userID, includeOwnedTeam, "ul")
+	if scopeCondition != "" {
+		query += " AND " + scopeCondition
+	}
 	if apiKeyID > 0 {
 		query += fmt.Sprintf(" AND ul.api_key_id = $%d", len(args)+1)
 		args = append(args, apiKeyID)
@@ -572,6 +641,11 @@ func (r *usageLogRepository) getGroupStatsWithFilters(ctx context.Context, start
 
 // GetUserBreakdownStats returns per-user usage breakdown within a specific dimension.
 func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTime, endTime time.Time, dim usagestats.UserBreakdownDimension, limit int) (results []usagestats.UserBreakdownItem, err error) {
+	if aggregated, ok, aggregateErr := r.getUserBreakdownStatsFromAnalytics(ctx, startTime, endTime, dim, limit); aggregateErr == nil && ok {
+		return aggregated, nil
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("user_breakdown_stats", aggregateErr)
+	}
 	query := `
 		SELECT
 			COALESCE(ul.user_id, 0) as user_id,
@@ -682,6 +756,11 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 // When usage_logs exceeds ~1M rows, consider adding a short-lived cache (30s)
 // or a materialized view / pre-aggregation table for cumulative costs.
 func (r *usageLogRepository) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
+	if aggregated, ok, aggregateErr := r.getAllGroupUsageSummaryFromAnalytics(ctx, todayStart); aggregateErr == nil && ok {
+		return aggregated, nil
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("all_group_usage_summary", aggregateErr)
+	}
 	query := `
 		SELECT
 			g.id AS group_id,

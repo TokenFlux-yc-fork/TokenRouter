@@ -15,6 +15,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/claude"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/geminicli"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/openai"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 )
 
 const (
@@ -515,7 +516,7 @@ func qoderCanUseDefaultDisplayPricing(billingService *BillingService, model stri
 	if qoderKnownDefaultImagePricingModel(model) {
 		return true
 	}
-	return billingService != nil && hasExplicitImagePricing(billingService.getRawModelPricing(model))
+	return billingService != nil && hasExplicitImageGenerationPricing(billingService.getRawModelPricing(model))
 }
 
 func firstNonEmptyMarketplaceHint(hints ...string) string {
@@ -639,6 +640,16 @@ func defaultMarketplaceModelDefs(platform string) []marketplaceModelDef {
 			})
 		}
 		return models
+	case PlatformGrok:
+		defaultModels := xai.DefaultModels()
+		models := make([]marketplaceModelDef, 0, len(defaultModels))
+		for _, model := range defaultModels {
+			models = append(models, marketplaceModelDef{
+				ID:          model.ID,
+				DisplayName: model.DisplayName,
+			})
+		}
+		return models
 	case PlatformAntigravity:
 		defaultModels := antigravity.DefaultModels()
 		models := make([]marketplaceModelDef, 0, len(defaultModels))
@@ -675,6 +686,13 @@ func marketplaceDisplayNameLookup(platform string) map[string]string {
 	case PlatformGemini:
 		out := make(map[string]string, len(geminicli.DefaultModels))
 		for _, model := range geminicli.DefaultModels {
+			registerMarketplaceDisplayName(out, model.ID, model.DisplayName)
+		}
+		return out
+	case PlatformGrok:
+		defaultModels := xai.DefaultModels()
+		out := make(map[string]string, len(defaultModels))
+		for _, model := range defaultModels {
 			registerMarketplaceDisplayName(out, model.ID, model.DisplayName)
 		}
 		return out

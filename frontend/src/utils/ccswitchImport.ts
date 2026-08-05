@@ -35,6 +35,44 @@ const encodeBase64Utf8 = (value: string) => {
 
 const stripTrailingV1 = (value: string) => value.replace(/\/+$/, '').replace(/\/v1$/, '')
 
+// 生成可安全嵌入 CCS JavaScript 模板的字符串字面量。
+const toJsStringLiteral = (value: string) =>
+  JSON.stringify(value || 'USD')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+
+// 用量接口固定在 API 域名根路径；无效旧配置回退到兼容的后缀规范化。
+const resolveCcSwitchUsageUrl = (baseUrl: string): string => {
+  try {
+    return `${new URL(baseUrl).origin}/v1/usage`
+  } catch {
+    return `${stripTrailingV1(baseUrl)}/v1/usage`
+  }
+}
+
+// 固化导入时的用量端点，避免 CCS 中的 provider endpoint 被修改后影响用量统计。
+export function buildCcSwitchUsageScript(baseUrl: string, fallbackUnit: string): string {
+  const usageUrlLiteral = toJsStringLiteral(resolveCcSwitchUsageUrl(baseUrl))
+  const fallbackUnitLiteral = toJsStringLiteral(fallbackUnit)
+
+  return `({
+    request: {
+      url: ${usageUrlLiteral},
+      method: "GET",
+      headers: { "Authorization": "Bearer {{apiKey}}" }
+    },
+    extractor: function(response) {
+      const remaining = response?.remaining ?? response?.quota?.remaining ?? response?.balance;
+      const unit = response?.unit ?? response?.quota?.unit ?? ${fallbackUnitLiteral};
+      return {
+        isValid: response?.is_active ?? response?.isValid ?? true,
+        remaining,
+        unit
+      };
+    }
+  })`
+}
+
 // 将 Grok Build 端点规范为单个 /v1 后缀。
 function withV1Endpoint(baseUrl: string): string {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')

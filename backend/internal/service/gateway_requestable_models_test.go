@@ -240,10 +240,14 @@ func TestResolveRequestableModels_QoderUsesSchedulableAccountSiteUnion(t *testin
 
 	globalIDs := resolve(global)
 	require.Contains(t, globalIDs, "claude-opus-4-6")
+	require.Contains(t, globalIDs, "qwen3.8-max")
+	require.NotContains(t, globalIDs, "qwen3.8-max-preview")
 	require.NotContains(t, globalIDs, "qwen3.6-flash")
 	require.NotContains(t, globalIDs, "minimax-m2.7")
 
 	cnIDs := resolve(cn)
+	require.Contains(t, cnIDs, "qwen3.8-max")
+	require.NotContains(t, cnIDs, "qwen3.8-max-preview")
 	require.Contains(t, cnIDs, "qwen3.6-flash")
 	require.Contains(t, cnIDs, "minimax-m2.7")
 	require.NotContains(t, cnIDs, "claude-opus-4-6")
@@ -254,6 +258,14 @@ func TestResolveRequestableModels_QoderUsesSchedulableAccountSiteUnion(t *testin
 	require.Contains(t, mixedIDs, "qwen3.6-flash")
 	require.Contains(t, mixedIDs, "minimax-m3")
 	require.Contains(t, mixedIDs, "minimax-m2.7")
+	require.NotContains(t, mixedIDs, "qwen3.8-max-preview")
+	qwen38Count := 0
+	for _, model := range mixedIDs {
+		if model == "qwen3.8-max" {
+			qwen38Count++
+		}
+	}
+	require.Equal(t, 1, qwen38Count, "两站模型并集只能包含一个 Qwen3.8-Max")
 
 	cn.Credentials["model_mapping"] = map[string]any{"claude-opus-4-6": "ultimate"}
 	require.Contains(t, resolve(cn), "claude-opus-4-6")

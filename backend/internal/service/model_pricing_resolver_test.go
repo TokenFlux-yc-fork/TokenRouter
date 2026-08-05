@@ -30,8 +30,12 @@ func TestQoderAliasRequiresManualPricingIsCaseInsensitive(t *testing.T) {
 	// 当前公开 alias 对应的原始 route key 仍必须使用 Qoder 手工定价。
 	require.True(t, QoderAliasRequiresManualPricing("ULTIMATE"))
 	require.True(t, QoderAliasRequiresManualPricing("QMODEL"))
+	require.True(t, QoderAliasRequiresManualPricing("QWEN3.8-MAX"))
+	require.True(t, QoderAliasRequiresManualPricing("QMODEL_38MAX"))
 	require.True(t, QoderAliasRequiresManualPricing("GM51MODEL"))
 	// 已移除兼容表中的历史 route key 不再按当前 Qoder alias 处理。
+	require.False(t, QoderAliasRequiresManualPricing("QWEN3.8-MAX-PREVIEW"))
+	require.False(t, QoderAliasRequiresManualPricing("QMODEL_PREVIEW"))
 	require.False(t, QoderAliasRequiresManualPricing("GMODEL"))
 	require.False(t, QoderAliasRequiresManualPricing("Q35MODEL"))
 }

@@ -248,6 +248,7 @@ func TestForwardGrokChatViaResponsesNonStreamingCachesAndReturnsChat(t *testing.
 	require.NotNil(t, result)
 	require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
 	require.Equal(t, grokChatResponsesEndpoint, result.UpstreamEndpoint)
+	require.Equal(t, "grok", result.BillingModel)
 	require.Equal(t, "grok-4.5", result.UpstreamModel)
 	require.Equal(t, 9908, result.Usage.InputTokens)
 	require.Equal(t, 12, result.Usage.OutputTokens)

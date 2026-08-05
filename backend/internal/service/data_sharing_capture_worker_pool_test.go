@@ -390,7 +390,11 @@ func TestDataSharingCaptureWorkerPool_UpdateRuntimeSettingsChangesLogicalCapacit
 			return nil
 		},
 	})
-	t.Cleanup(pool.Stop)
+	// 无论后续断言是否通过，都先释放阻塞任务，再等待 worker 退出。
+	t.Cleanup(func() {
+		close(block)
+		pool.Stop()
+	})
 
 	require.Equal(t, DataSharingCaptureSubmitModeEnqueued, pool.Submit(DataSharingCaptureJob{Metadata: DataSharingCaptureJobMetadata{RequestID: "running"}}))
 	<-started
@@ -409,7 +413,8 @@ func TestDataSharingCaptureWorkerPool_UpdateRuntimeSettingsChangesLogicalCapacit
 	require.Equal(t, 8, stats.QueueCapacity)
 	require.Equal(t, 9, stats.FlushQueueCapacity)
 	require.Equal(t, 30, stats.TaskTimeoutSeconds)
-	require.GreaterOrEqual(t, stats.AvailableWorkers, int64(2))
-
-	close(block)
+	// 扩容后的 worker 会异步取走已有任务，等待队列排空后再检查可用容量。
+	require.Eventually(t, func() bool {
+		return pool.Stats().AvailableWorkers >= 2
+	}, time.Second, 10*time.Millisecond)
 }

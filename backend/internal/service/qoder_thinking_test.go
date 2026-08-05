@@ -82,30 +82,126 @@ func TestQoderThinkingParsersUseProtocolNativeFields(t *testing.T) {
 	require.Equal(t, qoderThinkingDirective{}, messages.thinking)
 }
 
-func TestQoderCNThinkingFlowsThroughAllEndpoints(t *testing.T) {
+func TestBuildQoderAnthropicThinkingPayloadDefaultsToGlobalSite(t *testing.T) {
+	// 不带站点的导出构造函数必须沿用旧账号语义，按国际站应用 Thinking 能力。
+	body := []byte(`{
+		"model":"deepseek-v4-pro",
+		"max_tokens":1024,
+		"thinking":{"type":"enabled","budget_tokens":1},
+		"messages":[{"role":"user","content":"hello"}]
+	}`)
+
+	payload, modelKey, err := BuildQoderPayloadFromAnthropicMessages(body, "personal_standard")
+	require.NoError(t, err)
+	require.Equal(t, "dmodel", modelKey)
+	assertQoderThinkingPayload(t, payload, true, "max", true)
+}
+
+func TestQoderThinkingFlowsThroughAllEndpoints(t *testing.T) {
 	tests := []struct {
-		name       string
-		endpoint   string
-		body       string
-		wantEffort string
+		name           string
+		site           qoder.Site
+		endpoint       string
+		body           string
+		wantEnabled    bool
+		wantEffort     string
+		wantEffortPath bool
 	}{
 		{
-			name:       "chat completions",
-			endpoint:   "chat",
-			body:       `{"model":"deepseek-v4-pro","reasoning_effort":"medium","messages":[{"role":"user","content":"hello"}],"stream":true}`,
-			wantEffort: "high",
+			name:           "cn deepseek chat completions",
+			site:           qoder.SiteCN,
+			endpoint:       "chat",
+			body:           `{"model":"deepseek-v4-pro","reasoning_effort":"medium","messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			wantEnabled:    true,
+			wantEffort:     "high",
+			wantEffortPath: true,
 		},
 		{
-			name:       "responses",
-			endpoint:   "responses",
-			body:       `{"model":"deepseek-v4-pro","reasoning":{"effort":"high"},"input":"hello","stream":true}`,
-			wantEffort: "max",
+			name:           "cn deepseek responses",
+			site:           qoder.SiteCN,
+			endpoint:       "responses",
+			body:           `{"model":"deepseek-v4-pro","reasoning":{"effort":"high"},"input":"hello","stream":true}`,
+			wantEnabled:    true,
+			wantEffort:     "max",
+			wantEffortPath: true,
 		},
 		{
-			name:       "anthropic messages",
-			endpoint:   "messages",
-			body:       `{"model":"deepseek-v4-pro","max_tokens":1024,"thinking":{"type":"enabled","budget_tokens":1},"messages":[{"role":"user","content":"hello"}],"stream":true}`,
-			wantEffort: "max",
+			name:           "cn deepseek anthropic messages",
+			site:           qoder.SiteCN,
+			endpoint:       "messages",
+			body:           `{"model":"deepseek-v4-pro","max_tokens":1024,"thinking":{"type":"enabled","budget_tokens":1},"messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			wantEnabled:    true,
+			wantEffort:     "max",
+			wantEffortPath: true,
+		},
+		{
+			name:           "global deepseek chat completions",
+			site:           qoder.SiteGlobal,
+			endpoint:       "chat",
+			body:           `{"model":"deepseek-v4-pro","reasoning_effort":"medium","messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			wantEnabled:    true,
+			wantEffort:     "high",
+			wantEffortPath: true,
+		},
+		{
+			name:           "global deepseek responses",
+			site:           qoder.SiteGlobal,
+			endpoint:       "responses",
+			body:           `{"model":"deepseek-v4-pro","reasoning":{"effort":"high"},"input":"hello","stream":true}`,
+			wantEnabled:    true,
+			wantEffort:     "max",
+			wantEffortPath: true,
+		},
+		{
+			name:           "global deepseek anthropic budget",
+			site:           qoder.SiteGlobal,
+			endpoint:       "messages",
+			body:           `{"model":"deepseek-v4-pro","max_tokens":1024,"thinking":{"type":"enabled","budget_tokens":1},"messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			wantEnabled:    true,
+			wantEffort:     "max",
+			wantEffortPath: true,
+		},
+		{
+			name:        "global qwen 38 chat completions public alias",
+			site:        qoder.SiteGlobal,
+			endpoint:    "chat",
+			body:        `{"model":"qwen3.8-max","reasoning_effort":"low","messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			wantEnabled: true,
+		},
+		{
+			name:        "global qwen 38 responses raw route",
+			site:        qoder.SiteGlobal,
+			endpoint:    "responses",
+			body:        `{"model":"qmodel_38max","reasoning":{"effort":"high"},"input":"hello","stream":true}`,
+			wantEnabled: true,
+		},
+		{
+			name:        "global qwen 38 anthropic messages",
+			site:        qoder.SiteGlobal,
+			endpoint:    "messages",
+			body:        `{"model":"qwen3.8-max","max_tokens":1024,"thinking":{"type":"enabled"},"messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			wantEnabled: true,
+		},
+		{
+			name:        "cn qwen 38 chat completions raw route",
+			site:        qoder.SiteCN,
+			endpoint:    "chat",
+			body:        `{"model":"qmodel_38max","reasoning_effort":"medium","messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			wantEnabled: true,
+		},
+		{
+			name:        "cn qwen 38 responses public alias",
+			site:        qoder.SiteCN,
+			endpoint:    "responses",
+			body:        `{"model":"qwen3.8-max","reasoning":{"effort":"max"},"input":"hello","stream":true}`,
+			wantEnabled: true,
+		},
+		{
+			name:        "cn qwen 38 anthropic messages",
+			site:        qoder.SiteCN,
+			endpoint:    "messages",
+			body:        `{"model":"qwen3.8-max","max_tokens":1024,"thinking":{"budget_tokens":1},"messages":[{"role":"user","content":"hello"}],"stream":true}`,
+			wantEnabled: true,
 		},
 	}
 
@@ -114,12 +210,13 @@ func TestQoderCNThinkingFlowsThroughAllEndpoints(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
+			credentials := map[string]any{"site": string(tt.site)}
 			account := &Account{
 				ID:          int64(920 + index),
-				Name:        "qoder-cn",
+				Name:        "qoder-" + string(tt.site),
 				Platform:    PlatformQoder,
 				Type:        AccountTypeCosy,
-				Credentials: map[string]any{"site": "cn"},
+				Credentials: credentials,
 			}
 			client := &qoderAccountTestClientStub{
 				body: "data: {\"body\":\"{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"OK\\\"}}]}\"}\n\n" +
@@ -149,32 +246,45 @@ func TestQoderCNThinkingFlowsThroughAllEndpoints(t *testing.T) {
 			}
 			require.NoError(t, err)
 			payload := qoderLastUpstreamPayloadForTest(t, client)
-			assertQoderThinkingPayload(t, payload, true, tt.wantEffort, true)
+			assertQoderThinkingPayload(t, payload, tt.wantEnabled, tt.wantEffort, tt.wantEffortPath)
 		})
 	}
 }
 
-func TestBuildQoderCNThinkingPayloadByModelCapability(t *testing.T) {
+func TestBuildQoderThinkingPayloadBySiteAndModelCapability(t *testing.T) {
 	tests := []struct {
 		name           string
+		site           qoder.Site
 		model          string
 		extra          map[string]any
 		wantEnabled    bool
 		wantEffort     string
 		wantEffortPath bool
 	}{
-		{name: "qwen 38 toggle on", model: "qwen3.8-max-preview", extra: map[string]any{"reasoning_effort": "low"}, wantEnabled: true},
-		{name: "qwen 37 max default off", model: "qwen3.7-max", wantEffort: "none", wantEffortPath: true},
-		{name: "qwen 37 plus toggle on", model: "qwen3.7-plus", extra: map[string]any{"reasoning_effort": "max"}, wantEnabled: true},
-		{name: "deepseek pro low to high", model: "deepseek-v4-pro", extra: map[string]any{"reasoning_effort": "low"}, wantEnabled: true, wantEffort: "high", wantEffortPath: true},
-		{name: "deepseek flash budget to max", model: "deepseek-v4-flash", extra: map[string]any{"thinking": map[string]any{"budget_tokens": 1}}, wantEnabled: true, wantEffort: "max", wantEffortPath: true},
-		{name: "glm high to max", model: "glm-5.2", extra: map[string]any{"reasoning_effort": "high"}, wantEnabled: true, wantEffort: "max", wantEffortPath: true},
-		{name: "deepseek explicit disabled", model: "deepseek-v4-pro", extra: map[string]any{"thinking": map[string]any{"type": "disabled", "budget_tokens": 32768}}, wantEffort: "none", wantEffortPath: true},
-		{name: "auto ignored", model: "auto", extra: map[string]any{"reasoning_effort": "max"}},
-		{name: "qwen 36 ignored", model: "qwen3.6-flash", extra: map[string]any{"reasoning_effort": "max"}},
-		{name: "kimi ignored", model: "kimi-k2.7-code", extra: map[string]any{"reasoning_effort": "max"}},
-		{name: "minimax ignored", model: "minimax-m2.7", extra: map[string]any{"reasoning_effort": "max"}},
-		{name: "unknown route ignored", model: "custom-model", extra: map[string]any{"reasoning_effort": "max"}},
+		{name: "global qwen 38 public alias on", site: qoder.SiteGlobal, model: "qwen3.8-max", extra: map[string]any{"reasoning_effort": "low"}, wantEnabled: true},
+		{name: "global qwen 38 raw route on", site: qoder.SiteGlobal, model: "qmodel_38max", extra: map[string]any{"reasoning_effort": "max"}, wantEnabled: true},
+		{name: "global qwen 38 missing control off", site: qoder.SiteGlobal, model: "qwen3.8-max", wantEffort: "none", wantEffortPath: true},
+		{name: "global qwen 38 explicit disabled", site: qoder.SiteGlobal, model: "qwen3.8-max", extra: map[string]any{"thinking": map[string]any{"type": "disabled", "budget_tokens": 32768}}, wantEffort: "none", wantEffortPath: true},
+		{name: "global qwen 38 invalid effort off", site: qoder.SiteGlobal, model: "qwen3.8-max", extra: map[string]any{"reasoning_effort": "banana"}, wantEffort: "none", wantEffortPath: true},
+		{name: "global qwen 38 invalid effort with budget on", site: qoder.SiteGlobal, model: "qwen3.8-max", extra: map[string]any{"reasoning_effort": "banana", "thinking": map[string]any{"budget_tokens": 8}}, wantEnabled: true},
+		{name: "global qwen 37 max default off", site: qoder.SiteGlobal, model: "qwen3.7-max", wantEffort: "none", wantEffortPath: true},
+		{name: "global qwen 37 plus toggle on", site: qoder.SiteGlobal, model: "qwen3.7-plus", extra: map[string]any{"reasoning_effort": "max"}, wantEnabled: true},
+		{name: "global deepseek pro low to high", site: qoder.SiteGlobal, model: "deepseek-v4-pro", extra: map[string]any{"reasoning_effort": "low"}, wantEnabled: true, wantEffort: "high", wantEffortPath: true},
+		{name: "global deepseek flash budget to max", site: qoder.SiteGlobal, model: "deepseek-v4-flash", extra: map[string]any{"thinking": map[string]any{"budget_tokens": 1}}, wantEnabled: true, wantEffort: "max", wantEffortPath: true},
+		{name: "global glm high to max", site: qoder.SiteGlobal, model: "glm-5.2", extra: map[string]any{"reasoning_effort": "high"}, wantEnabled: true, wantEffort: "max", wantEffortPath: true},
+		{name: "cn qwen 38 public alias on", site: qoder.SiteCN, model: "qwen3.8-max", extra: map[string]any{"reasoning_effort": "low"}, wantEnabled: true},
+		{name: "cn qwen 38 raw route on", site: qoder.SiteCN, model: "qmodel_38max", extra: map[string]any{"reasoning_effort": "max"}, wantEnabled: true},
+		{name: "cn qwen 37 max default off", site: qoder.SiteCN, model: "qwen3.7-max", wantEffort: "none", wantEffortPath: true},
+		{name: "cn qwen 37 plus toggle on", site: qoder.SiteCN, model: "qwen3.7-plus", extra: map[string]any{"reasoning_effort": "max"}, wantEnabled: true},
+		{name: "cn deepseek pro low to high", site: qoder.SiteCN, model: "deepseek-v4-pro", extra: map[string]any{"reasoning_effort": "low"}, wantEnabled: true, wantEffort: "high", wantEffortPath: true},
+		{name: "cn deepseek flash budget to max", site: qoder.SiteCN, model: "deepseek-v4-flash", extra: map[string]any{"thinking": map[string]any{"budget_tokens": 1}}, wantEnabled: true, wantEffort: "max", wantEffortPath: true},
+		{name: "cn glm high to max", site: qoder.SiteCN, model: "glm-5.2", extra: map[string]any{"reasoning_effort": "high"}, wantEnabled: true, wantEffort: "max", wantEffortPath: true},
+		{name: "cn deepseek explicit disabled", site: qoder.SiteCN, model: "deepseek-v4-pro", extra: map[string]any{"thinking": map[string]any{"type": "disabled", "budget_tokens": 32768}}, wantEffort: "none", wantEffortPath: true},
+		{name: "cn auto ignored", site: qoder.SiteCN, model: "auto", extra: map[string]any{"reasoning_effort": "max"}},
+		{name: "cn qwen 36 ignored", site: qoder.SiteCN, model: "qwen3.6-flash", extra: map[string]any{"reasoning_effort": "max"}},
+		{name: "cn kimi ignored", site: qoder.SiteCN, model: "kimi-k2.7-code", extra: map[string]any{"reasoning_effort": "max"}},
+		{name: "cn minimax ignored", site: qoder.SiteCN, model: "minimax-m2.7", extra: map[string]any{"reasoning_effort": "max"}},
+		{name: "cn unknown route ignored", site: qoder.SiteCN, model: "custom-model", extra: map[string]any{"reasoning_effort": "max"}},
 	}
 
 	for _, tt := range tests {
@@ -190,16 +300,16 @@ func TestBuildQoderCNThinkingPayloadByModelCapability(t *testing.T) {
 			}
 			raw, err := json.Marshal(body)
 			require.NoError(t, err)
-			payload, _, err := BuildQoderPayloadFromChatCompletionsForSite(raw, "personal_standard", qoder.SiteCN)
+			payload, _, err := BuildQoderPayloadFromChatCompletionsForSite(raw, "personal_standard", tt.site)
 			require.NoError(t, err)
 			assertQoderThinkingPayload(t, payload, tt.wantEnabled, tt.wantEffort, tt.wantEffortPath)
 		})
 	}
 }
 
-func TestBuildQoderThinkingPayloadKeepsGlobalSiteIsolated(t *testing.T) {
+func TestBuildQoderThinkingPayloadKeepsGlobalOnlyModelIsolated(t *testing.T) {
 	body := []byte(`{
-		"model":"qwen3.7-max",
+		"model":"kimi-k3",
 		"reasoning_effort":"max",
 		"messages":[{"role":"user","content":"hello"}]
 	}`)
@@ -209,19 +319,19 @@ func TestBuildQoderThinkingPayloadKeepsGlobalSiteIsolated(t *testing.T) {
 	assertQoderThinkingPayload(t, payload, false, "", false)
 }
 
-func TestQoderCNThinkingUsesAccountMappedRouteKey(t *testing.T) {
+func TestQoderThinkingUsesAccountMappedRouteKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	account := &Account{
 		ID:       901,
-		Name:     "qoder-cn",
+		Name:     "qoder-global",
 		Platform: PlatformQoder,
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
-			"site": "cn",
+			"site": "global",
 			"model_mapping": map[string]any{
-				"custom-deepseek": "dmodel",
+				"custom-qwen": "qmodel_38max",
 			},
 		},
 	}
@@ -240,7 +350,7 @@ func TestQoderCNThinkingUsesAccountMappedRouteKey(t *testing.T) {
 		},
 	}
 	body := []byte(`{
-		"model":"custom-deepseek",
+		"model":"custom-qwen",
 		"reasoning_effort":"medium",
 		"messages":[{"role":"user","content":"hello"}],
 		"stream":true
@@ -248,9 +358,9 @@ func TestQoderCNThinkingUsesAccountMappedRouteKey(t *testing.T) {
 
 	result, err := service.ForwardChatCompletions(context.Background(), c, account, body)
 	require.NoError(t, err)
-	require.Equal(t, "dmodel", result.UpstreamModel)
+	require.Equal(t, "qmodel_38max", result.UpstreamModel)
 	payload := qoderLastUpstreamPayloadForTest(t, client)
-	assertQoderThinkingPayload(t, payload, true, "high", true)
+	assertQoderThinkingPayload(t, payload, true, "", false)
 }
 
 // assertQoderThinkingPayload 校验 Qoder 会读取的所有开关和等级副本保持一致。

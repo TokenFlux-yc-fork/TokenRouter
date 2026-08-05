@@ -70,13 +70,13 @@ var defaultQoderModelAliases = map[string]qoderModelInfo{
 	// Qoder lite tier 尚未验证，观测结果不完全一致。
 	"lite": {Key: "lite", Source: "system", Provider: "Qoder", Notes: "Unverified Qoder lite tier; observations are mixed.", DisplayName: "Qoder Lite"},
 	// Qoder UI 暴露的是这些供应商模型名，这里把可读公开 alias 映射到内部 route key。
-	"qwen3.8-max-preview": {Key: "qmodel_preview", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.8-Max-Preview.", DisplayName: "Qwen3.8-Max-Preview"},
-	"qwen3.7-max":         {Key: "qmodel_latest", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.7-Max.", DisplayName: "Qwen3.7-Max"},
-	"qwen3.7-plus":        {Key: "qmodel", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.7-Plus.", DisplayName: "Qwen3.7-Plus"},
-	"qwen3.6-flash":       {Key: "q36fmodel", Source: "system", Provider: "Qwen", Notes: "Qoder CN UI model name Qwen3.6-Flash.", DisplayName: "Qwen3.6-Flash"},
-	"deepseek-v4-pro":     {Key: "dmodel", Source: "system", Provider: "DeepSeek", Notes: "Qoder UI model name DeepSeek-V4-Pro.", DisplayName: "DeepSeek-V4-Pro"},
-	"deepseek-v4-flash":   {Key: "dfmodel", Source: "system", Provider: "DeepSeek", Notes: "Qoder UI model name DeepSeek-V4-Flash.", DisplayName: "DeepSeek-V4-Flash"},
-	"glm-5.2":             {Key: "gm51model", Source: "system", Provider: "GLM", Notes: "Qoder UI model name GLM-5.2.", DisplayName: "GLM-5.2"},
+	"qwen3.8-max":       {Key: "qmodel_38max", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.8-Max.", DisplayName: "Qwen3.8-Max"},
+	"qwen3.7-max":       {Key: "qmodel_latest", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.7-Max.", DisplayName: "Qwen3.7-Max"},
+	"qwen3.7-plus":      {Key: "qmodel", Source: "system", Provider: "Qwen", Notes: "Qoder UI model name Qwen3.7-Plus.", DisplayName: "Qwen3.7-Plus"},
+	"qwen3.6-flash":     {Key: "q36fmodel", Source: "system", Provider: "Qwen", Notes: "Qoder CN UI model name Qwen3.6-Flash.", DisplayName: "Qwen3.6-Flash"},
+	"deepseek-v4-pro":   {Key: "dmodel", Source: "system", Provider: "DeepSeek", Notes: "Qoder UI model name DeepSeek-V4-Pro.", DisplayName: "DeepSeek-V4-Pro"},
+	"deepseek-v4-flash": {Key: "dfmodel", Source: "system", Provider: "DeepSeek", Notes: "Qoder UI model name DeepSeek-V4-Flash.", DisplayName: "DeepSeek-V4-Flash"},
+	"glm-5.2":           {Key: "gm51model", Source: "system", Provider: "GLM", Notes: "Qoder UI model name GLM-5.2.", DisplayName: "GLM-5.2"},
 	// Qoder 1.15.0 起同时展示 Kimi-K3 与 Kimi-K2.7-Code，两者使用不同路由 key。
 	"kimi-k3":        {Key: "kmodel_latest", Source: "system", Provider: "Kimi", Notes: "Qoder UI model name Kimi-K3.", DisplayName: "Kimi-K3"},
 	"kimi-k2.7-code": {Key: "kmodel", Source: "system", Provider: "Kimi", Notes: "Qoder UI model name Kimi-K2.7-Code.", DisplayName: "Kimi-K2.7-Code"},
@@ -1746,6 +1746,7 @@ func buildQoderPayloadWithOptions(request qoderPayloadRequest, sessionID string,
 	chatText["text"] = prompt
 	extraModelConfig["key"] = modelInfo.Key
 	extraModelConfig["source"] = modelInfo.Source
+	applyQoderContextCapability(payload, request.site, modelInfo.Key)
 	applyQoderThinkingDirective(payload, request.site, modelInfo.Key, request.thinking)
 	extraOriginalContent["text"] = prompt
 	payload["business"] = map[string]any{
@@ -1773,6 +1774,28 @@ func buildQoderPayloadWithOptions(request qoderPayloadRequest, sessionID string,
 		payload["tools"] = []any{}
 	}
 	return payload, modelInfo.Key
+}
+
+// applyQoderContextCapability 按站点和最终 route 选择官方最高上下文档位。
+// 只有官方声明 contextConfig 的 route 才写入运行时覆盖，避免为固定上限或未知 route 伪造档位。
+func applyQoderContextCapability(payload map[string]any, site qoder.Site, modelKey string) {
+	capability := qoder.ContextCapabilityForSite(site, modelKey)
+	modelConfig, _ := payload["model_config"].(map[string]any)
+	modelConfig["max_input_tokens"] = capability.MaxInputTokens
+	if !capability.RuntimeSelectable {
+		return
+	}
+
+	parameters, _ := payload["parameters"].(map[string]any)
+	parameters["context_length"] = capability.MaxInputTokens
+	chatContext, _ := payload["chat_context"].(map[string]any)
+	extra, _ := chatContext["extra"].(map[string]any)
+	runtimeOverride, _ := extra["ideModelConfigOverride"].(map[string]any)
+	if runtimeOverride == nil {
+		runtimeOverride = map[string]any{}
+		extra["ideModelConfigOverride"] = runtimeOverride
+	}
+	runtimeOverride["max_input_tokens"] = capability.MaxInputTokens
 }
 
 // applyQoderThinkingDirective 同步 Qoder 请求中重复出现的模型配置。
@@ -1880,7 +1903,7 @@ func qoderBasePayload() map[string]any {
 			"api_key":          "",
 			"url":              "",
 			"source":           "system",
-			"max_input_tokens": 180000,
+			"max_input_tokens": qoder.FallbackMaxInputTokens,
 		},
 		"messages": []any{},
 		"tools":    []any{},

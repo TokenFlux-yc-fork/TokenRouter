@@ -9,8 +9,7 @@ type OpsDashboardFilter struct {
 	Platform string
 	GroupID  *int64
 
-	// QueryMode controls whether dashboard queries should use raw logs or pre-aggregated tables.
-	// Expected values: auto/raw/preagg (see OpsQueryMode).
+	// QueryMode 仅供后端内部在自动路由和强制原始查询之间切换。
 	QueryMode OpsQueryMode
 
 	// IgnoredStatusCodes 是客户端侧状态码忽略列表；nil 表示使用系统默认值，空切片表示不按状态码忽略。

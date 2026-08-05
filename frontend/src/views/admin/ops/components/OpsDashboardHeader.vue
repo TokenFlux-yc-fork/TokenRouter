@@ -18,7 +18,6 @@ interface Props {
   platform: string
   groupId: number | null
   timeRange: string
-  queryMode: string
   loading: boolean
   lastUpdated: Date | null
   thresholds?: OpsMetricThresholds | null // 阈值配置
@@ -34,7 +33,6 @@ interface Emits {
   (e: 'update:platform', value: string): void
   (e: 'update:group', value: number | null): void
   (e: 'update:timeRange', value: string): void
-  (e: 'update:queryMode', value: string): void
   (e: 'update:customTimeRange', startTime: string, endTime: string): void
   (e: 'refresh'): void
   (e: 'openRequestDetails', preset?: OpsRequestDetailsPreset): void
@@ -121,12 +119,6 @@ const timeRangeOptions = computed(() => [
   }
 ])
 
-const queryModeOptions = computed(() => [
-  { value: 'auto', label: t('admin.ops.queryMode.auto') },
-  { value: 'raw', label: t('admin.ops.queryMode.raw') },
-  { value: 'preagg', label: t('admin.ops.queryMode.preagg') }
-])
-
 const groupOptions = computed(() => {
   const groups = props.groups ?? []
   const filtered = props.platform ? groups.filter((g) => g.platform === props.platform) : groups
@@ -186,10 +178,6 @@ function handleCustomTimeRangeCancel() {
   showCustomTimeRangeDialog.value = false
   // 如果当前不是 custom，不需要做任何事
   // 如果当前是 custom，保持不变
-}
-
-function handleQueryModeChange(val: string | number | boolean | null) {
-  emit('update:queryMode', String(val || 'auto'))
 }
 
 function openDetails(preset?: OpsRequestDetailsPreset) {
@@ -940,14 +928,6 @@ function handleToolbarRefresh() {
             @update:model-value="handleTimeRangeChange"
           />
         </template>
-
-        <Select
-          v-if="false"
-          :model-value="queryMode"
-          :options="queryModeOptions"
-          class="relative w-full sm:w-[170px]"
-          @update:model-value="handleQueryModeChange"
-        />
 
         <button
           v-if="!props.fullscreen"

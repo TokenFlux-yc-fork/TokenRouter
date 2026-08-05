@@ -152,6 +152,28 @@ upstream merge.
   the combined tree. The default parallel service race gate retains the known
   upstream Gin `SetMode` test-harness race documented in the v0.1.238 review.
 
+## Upstream Review: v0.1.249
+
+- Upstream target: `a7931363c0ce3f3b04d1e217d7b69ab44dac01cf` (the
+  post-tag `VERSION=0.1.249` sync commit).
+- Reviewed range: `f8b84d4668ef04c29a87ca3e8ac61a25bab6b182..a7931363c0ce3f3b04d1e217d7b69ab44dac01cf`.
+- No active customization is fully upstreamed in this range; all rows remain
+  `local`.
+- Upstream usage-analytics pre-aggregation, billing deadlock retries, Qoder
+  capability updates, Gemini pricing, and Grok model normalization are
+  retained. Migrations `229` and `230` require production-dump migration and
+  rollback rehearsal before release.
+- The three textual conflicts were limited to Grok error handling and the
+  OpenAI WebSocket-to-HTTP bridge. Final-model mapping and billing identity are
+  combined with the fork's hidden preamble, deferred terminal tail, native
+  compaction staging, disconnect accounting, and delivery-commit boundary.
+- Grok 404, 402, 401, 403, and 5xx inference failures remain request-scoped in
+  accordance with `grok-inference-error-classification`; only 429 or an
+  administrator's explicit error policy persists scheduling state.
+- Focused Grok normalization, HTTP bridge, native compaction, terminal policy,
+  and WebSocket tests pass on the combined tree; the complete source and
+  deployment gates remain required before the merge is finalized.
+
 ## Active Customizations
 
 | ID | Behavior | Source commits | Main paths | Status | Verification |

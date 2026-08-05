@@ -37,7 +37,6 @@ vi.mock('vue-i18n', async (importOriginal) => {
 vi.mock('@/stores', () => ({
   useAdminSettingsStore: () => ({
     opsMonitoringEnabled: true,
-    opsQueryModeDefault: 'auto',
     fetch: mocks.settingsFetch,
   }),
   useAppStore: () => ({ showError: vi.fn() }),

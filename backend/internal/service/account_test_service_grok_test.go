@@ -44,7 +44,7 @@ func TestAccountTestService_TestAccountConnection_GrokUsesXAIResponses(t *testin
 			"refresh_token": "grok-refresh-token",
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 			"model_mapping": map[string]any{
-				"grok": "grok-4.3",
+				"grok": "grok-latest",
 			},
 		},
 	}
@@ -76,13 +76,13 @@ func TestAccountTestService_TestAccountConnection_GrokUsesXAIResponses(t *testin
 	require.Equal(t, "Bearer grok-access-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, grokCLIVersion, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
 	require.Equal(t, "application/json, text/event-stream", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, "grok-4.3", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, grokDefaultResponsesModel, gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, grokQuotaProbeInput, gjson.GetBytes(upstream.lastBody, "input").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "max_output_tokens").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
 	require.NotContains(t, rec.Body.String(), "claude")
-	require.Contains(t, rec.Body.String(), `"model":"grok-4.3"`)
+	require.Contains(t, rec.Body.String(), `"model":"grok-4.5"`)
 	require.Contains(t, rec.Body.String(), `"type":"test_complete"`)
 }
 
@@ -101,6 +101,8 @@ func TestAccountTestService_TestAccountConnection_GrokDefaultsEmptyModelTo45(t *
 			"access_token":  "grok-access-token",
 			"refresh_token": "grok-refresh-token",
 			"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
+			// 空模型必须在账号映射之后才回退默认值，因此不能命中这个显式键。
+			"model_mapping": map[string]any{"grok-4.5": "grok-4.3"},
 		},
 	}
 	repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}

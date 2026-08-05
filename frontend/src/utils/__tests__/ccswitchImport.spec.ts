@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   GROK_CC_SWITCH_MODEL,
   OPENAI_CC_SWITCH_CODEX_MODEL,
-  buildCcSwitchImportDeeplink
+  buildCcSwitchImportDeeplink,
+  buildCcSwitchUsageScript
 } from '@/utils/ccswitchImport'
 import type { GroupPlatform } from '@/types'
 
@@ -22,6 +23,20 @@ describe('ccswitchImport utils', () => {
 
   it('defaults Grok Build imports to the current Grok model', () => {
     expect(GROK_CC_SWITCH_MODEL).toBe('grok-4.5')
+  })
+
+  it.each([
+    'https://api.example.com',
+    'https://api.example.com/',
+    'https://api.example.com/v1',
+    'https://api.example.com/v1/',
+    'https://api.example.com/api/v1'
+  ])('pins the usage script to /v1/usage for base URL %s', (baseUrl) => {
+    const usageScript = buildCcSwitchUsageScript(baseUrl, 'USD')
+
+    expect(usageScript).toContain('url: "https://api.example.com/v1/usage"')
+    expect(usageScript).not.toContain('{{baseUrl}}')
+    expect(usageScript).toContain('"Authorization": "Bearer {{apiKey}}"')
   })
 
   const baseInput = {

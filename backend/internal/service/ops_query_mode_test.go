@@ -16,7 +16,6 @@ func TestShouldFallbackOpsPreagg(t *testing.T) {
 
 	autoFilter := &OpsDashboardFilter{QueryMode: OpsQueryModeAuto}
 	rawFilter := &OpsDashboardFilter{QueryMode: OpsQueryModeRaw}
-	preaggFilter := &OpsDashboardFilter{QueryMode: OpsQueryModePreagg}
 
 	tests := []struct {
 		name   string
@@ -25,10 +24,9 @@ func TestShouldFallbackOpsPreagg(t *testing.T) {
 		want   bool
 	}{
 		{"auto mode + preagg error => fallback", autoFilter, preaggErr, true},
-		{"auto mode + other error => no fallback", autoFilter, otherErr, false},
+		{"auto mode + other error => fallback", autoFilter, otherErr, true},
 		{"auto mode + nil error => no fallback", autoFilter, nil, false},
 		{"raw mode + preagg error => no fallback", rawFilter, preaggErr, false},
-		{"preagg mode + preagg error => no fallback", preaggFilter, preaggErr, false},
 		{"nil filter => no fallback", nil, preaggErr, false},
 		{"wrapped preagg error => fallback", autoFilter, errors.Join(preaggErr, otherErr), true},
 	}

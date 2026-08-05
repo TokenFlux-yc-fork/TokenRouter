@@ -440,7 +440,7 @@ LIMIT 200`
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	items := make([]*service.OpsAttemptTimelineItem, 0)
 	for rows.Next() {
@@ -1287,8 +1287,8 @@ func opsNullInt(v any) any {
 	}
 }
 
-// opsNullableIntPointer 区分缺失值和显式观察到的零值。
-// 凭据阶段失败没有发起推理请求，因此有意持久化上游状态 0。
+// opsNullableIntPointer 区分缺失值和显式观察到的零值，适用于状态码、连接池计数等零值有意义的字段。
+// 凭据阶段失败没有发起推理请求时，上游状态 0 也需要按同样语义持久化。
 func opsNullableIntPointer(v *int) any {
 	if v == nil {
 		return sql.NullInt64{}

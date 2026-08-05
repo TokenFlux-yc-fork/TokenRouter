@@ -192,10 +192,9 @@ type SystemSettings struct {
 	IdentityPatchPrompt string `json:"identity_patch_prompt"`
 
 	// Ops monitoring (vNext)
-	OpsMonitoringEnabled         bool   `json:"ops_monitoring_enabled"`
-	OpsRealtimeMonitoringEnabled bool   `json:"ops_realtime_monitoring_enabled"`
-	OpsQueryModeDefault          string `json:"ops_query_mode_default"`
-	OpsMetricsIntervalSeconds    int    `json:"ops_metrics_interval_seconds"`
+	OpsMonitoringEnabled         bool `json:"ops_monitoring_enabled"`
+	OpsRealtimeMonitoringEnabled bool `json:"ops_realtime_monitoring_enabled"`
+	OpsMetricsIntervalSeconds    int  `json:"ops_metrics_interval_seconds"`
 
 	MinClaudeCodeVersion string `json:"min_claude_code_version"`
 	MaxClaudeCodeVersion string `json:"max_claude_code_version"`

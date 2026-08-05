@@ -185,7 +185,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	var resp *http.Response
 	var attempt *openAIUpstreamAttemptCoordinator
-	maxOutputCapabilityKey := OpenAIResponsesMaxOutputTokensCapabilityKey{}
+	var maxOutputCapabilityKey OpenAIResponsesMaxOutputTokensCapabilityKey
 	maxOutputCapabilityKeyOK := false
 	for {
 		upstreamCtx, releaseUpstreamCtx := openAIUpstreamContextForCompactionAttempt(ctx, nativeRemoteCompactionV2)

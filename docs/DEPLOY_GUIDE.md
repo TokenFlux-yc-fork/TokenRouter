@@ -203,7 +203,7 @@ docker compose -f docker-compose.local.yml logs -f sub2api
 - 只有该 Socket 可连通时，数据管理功能才会开启
 - Docker 场景需将宿主机 Socket 挂载到容器同路径
 
-详细部署步骤见：`deploy/DATAMANAGEMENTD_CN.md`
+详细部署步骤见：[DATAMANAGEMENTD_CN.md](./DATAMANAGEMENTD_CN.md)
 
 #### 访问
 

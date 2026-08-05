@@ -67,7 +67,7 @@ describe('useModelWhitelist', () => {
       'performance',
       'efficient',
       'lite',
-      'qwen3.8-max-preview',
+      'qwen3.8-max',
       'qwen3.7-max',
       'qwen3.7-plus',
       // 新旧 Kimi 模型应同时作为创建账号的快捷候选。
@@ -85,6 +85,7 @@ describe('useModelWhitelist', () => {
     expect(models).not.toContain('mmodel')
     expect(models).not.toContain('quest-ultimate')
     expect(models).not.toContain('qwen3.5-plus')
+    expect(models).not.toContain('qwen3.8-max-preview')
     expect(models).not.toContain('glm-5')
     expect(models).not.toContain('glm-5.1')
   })
@@ -105,7 +106,7 @@ describe('useModelWhitelist', () => {
       ['performance', 'performance'],
       ['efficient', 'efficient'],
       ['lite', 'lite'],
-      ['qwen3.8-max-preview', 'qmodel_preview'],
+      ['qwen3.8-max', 'qmodel_38max'],
       ['qwen3.7-max', 'qmodel_latest'],
       ['qwen3.7-plus', 'qmodel'],
       // Kimi-K3 使用新增的独立 latest 路由。
@@ -119,6 +120,7 @@ describe('useModelWhitelist', () => {
       ['minimax-m2.7', 'mmodel']
     ])
     expect(presets.map(preset => preset.from)).not.toContain('qwen3.5-plus')
+    expect(presets.map(preset => preset.from)).not.toContain('qwen3.8-max-preview')
     expect(presets.map(preset => preset.from)).not.toContain('glm-5')
   })
 
@@ -129,7 +131,7 @@ describe('useModelWhitelist', () => {
       'performance',
       'efficient',
       'lite',
-      'qwen3.8-max-preview',
+      'qwen3.8-max',
       'qwen3.7-max',
       'qwen3.7-plus',
       'kimi-k3',
@@ -141,7 +143,7 @@ describe('useModelWhitelist', () => {
     ])
     expect(getModelsByPlatform('qoder', 'cn')).toEqual([
       'auto',
-      'qwen3.8-max-preview',
+      'qwen3.8-max',
       'qwen3.7-max',
       'qwen3.7-plus',
       'qwen3.6-flash',
@@ -153,6 +155,9 @@ describe('useModelWhitelist', () => {
     ])
     expect(qoderModelKeyByPublicAlias('minimax-m2.7', 'cn')).toBe('mmodel')
     expect(qoderModelKeyByPublicAlias('minimax-m2.7', 'global')).toBeUndefined()
+    expect(qoderModelKeyByPublicAlias('qwen3.8-max', 'global')).toBe('qmodel_38max')
+    expect(qoderModelKeyByPublicAlias('qwen3.8-max', 'cn')).toBe('qmodel_38max')
+    expect(qoderModelKeyByPublicAlias('qwen3.8-max-preview')).toBeUndefined()
   })
 
   it('qoder 公开别名到上游 route key 仅用于创建账号快捷填充', () => {

@@ -52,17 +52,20 @@ const (
 //
 // It is safe to run in multi-replica deployments when Redis is available (leader lock).
 type OpsAggregationService struct {
-	opsRepo     OpsRepository
-	settingRepo SettingRepository
-	cfg         *config.Config
+	opsRepo                OpsRepository
+	settingRepo            SettingRepository
+	cfg                    *config.Config
+	preAggregationSettings *PreAggregationSettingsService
 
 	db          *sql.DB
 	redisClient *redis.Client
 	instanceID  string
 
-	stopCh    chan struct{}
-	startOnce sync.Once
-	stopOnce  sync.Once
+	stopCh          chan struct{}
+	hourlyTriggerCh chan struct{}
+	dailyTriggerCh  chan struct{}
+	startOnce       sync.Once
+	stopOnce        sync.Once
 
 	hourlyMu sync.Mutex
 	dailyMu  sync.Mutex
@@ -77,15 +80,81 @@ func NewOpsAggregationService(
 	db *sql.DB,
 	redisClient *redis.Client,
 	cfg *config.Config,
+	preAggregationSettings *PreAggregationSettingsService,
 ) *OpsAggregationService {
-	return &OpsAggregationService{
-		opsRepo:     opsRepo,
-		settingRepo: settingRepo,
-		cfg:         cfg,
-		db:          db,
-		redisClient: redisClient,
-		instanceID:  uuid.NewString(),
+	svc := &OpsAggregationService{
+		opsRepo:                opsRepo,
+		settingRepo:            settingRepo,
+		cfg:                    cfg,
+		preAggregationSettings: preAggregationSettings,
+		db:                     db,
+		redisClient:            redisClient,
+		instanceID:             uuid.NewString(),
+		hourlyTriggerCh:        make(chan struct{}, 1),
+		dailyTriggerCh:         make(chan struct{}, 1),
 	}
+	if preAggregationSettings != nil {
+		preAggregationSettings.RegisterListener(func(previous, next PreAggregationSettings) {
+			if !previous.Ops.Enabled && next.Ops.Enabled {
+				svc.TriggerNow()
+			}
+		})
+	}
+	return svc
+}
+
+// TriggerNow 唤醒小时和日聚合循环；重复触发会合并，避免堆积任务。
+func (s *OpsAggregationService) TriggerNow() {
+	if s == nil {
+		return
+	}
+	select {
+	case s.hourlyTriggerCh <- struct{}{}:
+	default:
+	}
+	select {
+	case s.dailyTriggerCh <- struct{}{}:
+	default:
+	}
+}
+
+// RuntimeStatus 返回运维预聚合任务的最近一次持久化心跳。
+func (s *OpsAggregationService) RuntimeStatus(ctx context.Context) PreAggregationRuntimeStatus {
+	status := PreAggregationRuntimeStatus{Phase: "unavailable"}
+	if s == nil || s.opsRepo == nil {
+		return status
+	}
+	if s.preAggregationSettings != nil && !s.preAggregationSettings.OpsEnabled(ctx) {
+		status.Phase = "disabled"
+		return status
+	}
+	heartbeats, err := s.opsRepo.ListJobHeartbeats(ctx)
+	if err != nil {
+		status.Phase = "error"
+		status.LastError = err.Error()
+		return status
+	}
+	status.Phase = "pending"
+	for _, heartbeat := range heartbeats {
+		if heartbeat == nil || heartbeat.JobName != opsAggHourlyJobName {
+			continue
+		}
+		status.LastRunAt = heartbeat.LastRunAt
+		status.LastSuccessAt = heartbeat.LastSuccessAt
+		status.LastErrorAt = heartbeat.LastErrorAt
+		if heartbeat.LastDurationMs != nil {
+			status.LastDurationMS = *heartbeat.LastDurationMs
+		}
+		if heartbeat.LastError != nil {
+			status.LastError = *heartbeat.LastError
+		}
+		status.Phase = "idle"
+		if heartbeat.LastErrorAt != nil && (heartbeat.LastSuccessAt == nil || heartbeat.LastErrorAt.After(*heartbeat.LastSuccessAt)) {
+			status.Phase = "error"
+		}
+		break
+	}
+	return status
 }
 
 func (s *OpsAggregationService) Start() {
@@ -123,6 +192,8 @@ func (s *OpsAggregationService) hourlyLoop() {
 		select {
 		case <-ticker.C:
 			s.aggregateHourly()
+		case <-s.hourlyTriggerCh:
+			s.aggregateHourly()
 		case <-s.stopCh:
 			return
 		}
@@ -139,6 +210,8 @@ func (s *OpsAggregationService) dailyLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			s.aggregateDaily()
+		case <-s.dailyTriggerCh:
 			s.aggregateDaily()
 		case <-s.stopCh:
 			return
@@ -163,6 +236,9 @@ func (s *OpsAggregationService) aggregateHourly() {
 	defer cancel()
 
 	if !s.isMonitoringEnabled(ctx) {
+		return
+	}
+	if s.preAggregationSettings != nil && !s.preAggregationSettings.OpsEnabled(ctx) {
 		return
 	}
 
@@ -264,6 +340,9 @@ func (s *OpsAggregationService) aggregateDaily() {
 	defer cancel()
 
 	if !s.isMonitoringEnabled(ctx) {
+		return
+	}
+	if s.preAggregationSettings != nil && !s.preAggregationSettings.OpsEnabled(ctx) {
 		return
 	}
 

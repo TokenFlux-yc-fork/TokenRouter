@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
 	"github.com/TokenFlux/TokenRouter/internal/domain"
@@ -20,6 +21,11 @@ import (
 
 func float64Ptr(v float64) *float64 {
 	return &v
+}
+
+type usageBillingApplyOutcome struct {
+	result *service.UsageBillingApplyResult
+	err    error
 }
 
 // insertBatchImageAllowanceTestJob 创建额度预记测试所需的最小任务记录。
@@ -994,6 +1000,223 @@ func TestUsageBillingRepositoryApply_DeductsBalanceDeficitAfterPartialSubscripti
 	var dailyUsage float64
 	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT daily_usage_usd FROM user_subscriptions WHERE id = $1", subscription.ID).Scan(&dailyUsage))
 	require.InDelta(t, 10.0, dailyUsage, 0.000001)
+}
+
+func TestUsageBillingRepositoryApply_DeadlockLockOrderAllowsConcurrentPersonalUsageLogInsert(t *testing.T) {
+	runUsageBillingConcurrentUsageLogInsert(t, false)
+}
+
+func TestUsageBillingRepositoryApply_DeadlockLockOrderAllowsConcurrentTeamUsageLogInsert(t *testing.T) {
+	runUsageBillingConcurrentUsageLogInsert(t, true)
+}
+
+// runUsageBillingConcurrentUsageLogInsert 验证个人和团队日志都不会与计费事务形成用户、订阅锁环。
+func runUsageBillingConcurrentUsageLogInsert(t *testing.T, teamRequest bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := testEntClient(t)
+	billingRepo := NewUsageBillingRepository(client, integrationDB)
+
+	owner := mustCreateUser(t, client, &service.User{
+		Email:        fmt.Sprintf("usage-billing-lock-order-%d@example.com", time.Now().UnixNano()),
+		PasswordHash: "hash",
+		Balance:      10,
+	})
+	actor := owner
+	var teamID *int64
+	if teamRequest {
+		teamRepo := NewTeamRepository(integrationDB)
+		member := mustCreateUser(t, client, &service.User{Email: uniqueTeamTestEmail("usage-billing-lock-member")})
+		teamCtx, err := teamRepo.Create(ctx, "计费锁序团队", owner.ID, 5)
+		require.NoError(t, err)
+		token := uuid.NewString()
+		_, err = teamRepo.CreateInvitation(ctx, teamCtx.Team.ID, owner.ID, member.Email, token, time.Now().Add(time.Hour))
+		require.NoError(t, err)
+		_, err = teamRepo.ResolveInvitation(ctx, token, member.ID, member.Email, "accepted", time.Now())
+		require.NoError(t, err)
+		actor = member
+		teamIDValue := teamCtx.Team.ID
+		teamID = &teamIDValue
+	}
+	plan := mustCreatePlan(t, client, &service.SubscriptionPlan{
+		Name:            "usage-billing-lock-order-plan-" + uuid.NewString(),
+		Description:     "usage billing lock order test plan",
+		Price:           10,
+		ValidityDays:    30,
+		ValidityUnit:    "day",
+		ForSale:         true,
+		DailyLimitUSD:   float64Ptr(1),
+		WeeklyLimitUSD:  float64Ptr(1),
+		MonthlyLimitUSD: float64Ptr(1),
+	})
+	apiKey := mustCreateApiKey(t, client, &service.APIKey{
+		UserID: actor.ID,
+		TeamID: teamID,
+		Key:    "sk-usage-billing-lock-order-" + uuid.NewString(),
+		Name:   "billing-lock-order",
+	})
+	account := mustCreateAccount(t, client, &service.Account{
+		Name: "usage-billing-lock-order-account-" + uuid.NewString(),
+		Type: service.AccountTypeAPIKey,
+	})
+	windowStart := time.Now().Add(-time.Hour)
+	subscription := mustCreateSubscription(t, client, &service.UserSubscription{
+		UserID:             owner.ID,
+		PlanID:             plan.ID,
+		DailyWindowStart:   &windowStart,
+		WeeklyWindowStart:  &windowStart,
+		MonthlyWindowStart: &windowStart,
+		DailyLimitUSD:      float64Ptr(1),
+		WeeklyLimitUSD:     float64Ptr(1),
+		MonthlyLimitUSD:    float64Ptr(1),
+		DailyUsageUSD:      0.9,
+		WeeklyUsageUSD:     0.9,
+		MonthlyUsageUSD:    0.9,
+	})
+
+	// 先占用订阅行，迫使计费事务在持有用户锁后等待订阅锁。
+	blockerTx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	blockerReleased := false
+	defer func() {
+		if !blockerReleased {
+			_ = blockerTx.Rollback()
+		}
+	}()
+	var blockedSubscriptionID int64
+	require.NoError(t, blockerTx.QueryRowContext(ctx,
+		`SELECT id FROM user_subscriptions WHERE id = $1 FOR UPDATE`, subscription.ID,
+	).Scan(&blockedSubscriptionID))
+
+	applyDone := make(chan usageBillingApplyOutcome, 1)
+	go func() {
+		result, applyErr := billingRepo.Apply(ctx, &service.UsageBillingCommand{
+			RequestID:         uuid.NewString(),
+			APIKeyID:          apiKey.ID,
+			UserID:            owner.ID,
+			ActorUserID:       actor.ID,
+			TeamID:            teamID,
+			BillableAmountUSD: 1,
+		})
+		applyDone <- usageBillingApplyOutcome{result: result, err: applyErr}
+	}()
+
+	require.NoError(t, waitForUsageBillingUserLock(ctx, owner.ID, applyDone))
+	assertUsageBillingUserLockAllowsKeyShare(t, ctx, owner.ID)
+
+	usageRequestID := uuid.NewString()
+	usageLog := &service.UsageLog{
+		UserID:         actor.ID,
+		BillingUserID:  owner.ID,
+		TeamID:         teamID,
+		APIKeyID:       apiKey.ID,
+		AccountID:      account.ID,
+		RequestID:      usageRequestID,
+		Model:          "gpt-5",
+		SubscriptionID: &subscription.ID,
+		InputTokens:    10,
+		OutputTokens:   5,
+		TotalCost:      1,
+		ActualCost:     1,
+		CreatedAt:      time.Now().UTC(),
+	}
+	insertDone := make(chan error, 1)
+	go func() {
+		insertDone <- execUsageLogInsertNoResult(ctx, integrationDB, prepareUsageLogInsert(usageLog))
+	}()
+
+	select {
+	case insertErr := <-insertDone:
+		require.FailNow(t, "用量日志应在订阅行被占用时等待", "unexpected error: %v", insertErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NoError(t, blockerTx.Commit())
+	blockerReleased = true
+
+	var outcome usageBillingApplyOutcome
+	select {
+	case outcome = <-applyDone:
+	case <-ctx.Done():
+		require.FailNow(t, "等待计费事务完成超时", ctx.Err().Error())
+	}
+	require.NoError(t, outcome.err)
+	require.NotNil(t, outcome.result)
+	require.True(t, outcome.result.Applied)
+	require.InDelta(t, 0.1, outcome.result.SubscriptionAmountUSD, 0.000001)
+	require.InDelta(t, 0.9, outcome.result.BalanceAmountUSD, 0.000001)
+
+	select {
+	case insertErr := <-insertDone:
+		require.NoError(t, insertErr)
+	case <-ctx.Done():
+		require.FailNow(t, "等待用量日志写入完成超时", ctx.Err().Error())
+	}
+
+	var balance, dailyUsage float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT balance FROM users WHERE id = $1`, owner.ID).Scan(&balance))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT daily_usage_usd FROM user_subscriptions WHERE id = $1`, subscription.ID).Scan(&dailyUsage))
+	require.InDelta(t, 9.1, balance, 0.000001)
+	require.InDelta(t, 1.0, dailyUsage, 0.000001)
+	if teamID != nil {
+		var memberDailyUsage float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT daily_usage_usd
+			FROM team_memberships
+			WHERE team_id = $1 AND user_id = $2 AND left_at IS NULL`, *teamID, actor.ID).Scan(&memberDailyUsage))
+		require.InDelta(t, 1.0, memberDailyUsage, 0.000001)
+	}
+
+	var usageCount int
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_logs WHERE request_id = $1 AND api_key_id = $2`, usageRequestID, apiKey.ID,
+	).Scan(&usageCount))
+	require.Equal(t, 1, usageCount)
+}
+
+// assertUsageBillingUserLockAllowsKeyShare 验证付款用户锁不会阻塞 usage_logs 外键检查。
+func assertUsageBillingUserLockAllowsKeyShare(t *testing.T, ctx context.Context, userID int64) {
+	t.Helper()
+	probeTx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = probeTx.Rollback() }()
+	var lockedUserID int64
+	require.NoError(t, probeTx.QueryRowContext(ctx,
+		`SELECT id FROM users WHERE id = $1 FOR KEY SHARE NOWAIT`, userID,
+	).Scan(&lockedUserID))
+}
+
+// waitForUsageBillingUserLock 等待计费事务取得用户行锁，确保测试稳定复现旧锁序的等待窗口。
+func waitForUsageBillingUserLock(ctx context.Context, userID int64, applyDone <-chan usageBillingApplyOutcome) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		probeTx, err := integrationDB.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		var lockedUserID int64
+		err = probeTx.QueryRowContext(ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE NOWAIT`, userID).Scan(&lockedUserID)
+		_ = probeTx.Rollback()
+		if err == nil {
+			// 尚未加锁，继续等待计费事务推进到用户锁。
+		} else {
+			var pgErr *pq.Error
+			if errors.As(err, &pgErr) && pgErr != nil && pgErr.Code == "55P03" {
+				return nil
+			}
+			return err
+		}
+
+		select {
+		case outcome := <-applyDone:
+			return fmt.Errorf("计费事务在取得用户锁前结束: %v", outcome.err)
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func TestUsageBillingRepositoryApply_PricesByActualSubscriptionAllocations(t *testing.T) {

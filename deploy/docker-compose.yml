@@ -221,6 +221,8 @@ services:
     # 限制 PostgreSQL 进程及其所属文件页缓存，避免数据库工作集占满虚机。
     mem_limit: 24g
     memswap_limit: 24g
+    # 为并行查询的动态共享内存预留空间，避免 Docker 默认 64 MiB 上限导致查询失败。
+    shm_size: ${POSTGRES_SHM_SIZE:-1gb}
     logging:
       driver: json-file
       options:

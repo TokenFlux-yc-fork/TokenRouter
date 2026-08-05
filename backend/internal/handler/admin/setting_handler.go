@@ -61,6 +61,19 @@ type SettingHandler struct {
 	notificationEmailService *service.NotificationEmailService
 	totpService              *service.TotpService
 	userService              *service.UserService
+	preAggregationSettings   *service.PreAggregationSettingsService
+	dashboardAggregation     *service.DashboardAggregationService
+	opsAggregation           *service.OpsAggregationService
+}
+
+// SetPreAggregationDeps 注入统一预聚合设置、用量任务和运维任务。
+func (h *SettingHandler) SetPreAggregationDeps(settings *service.PreAggregationSettingsService, dashboard *service.DashboardAggregationService, ops *service.OpsAggregationService) {
+	if h == nil {
+		return
+	}
+	h.preAggregationSettings = settings
+	h.dashboardAggregation = dashboard
+	h.opsAggregation = ops
 }
 
 // NewSettingHandler 创建系统设置处理器
@@ -273,7 +286,6 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		IdentityPatchPrompt:                                    settings.IdentityPatchPrompt,
 		OpsMonitoringEnabled:                                   opsEnabled && settings.OpsMonitoringEnabled,
 		OpsRealtimeMonitoringEnabled:                           settings.OpsRealtimeMonitoringEnabled,
-		OpsQueryModeDefault:                                    settings.OpsQueryModeDefault,
 		OpsMetricsIntervalSeconds:                              settings.OpsMetricsIntervalSeconds,
 		MinClaudeCodeVersion:                                   settings.MinClaudeCodeVersion,
 		MaxClaudeCodeVersion:                                   settings.MaxClaudeCodeVersion,

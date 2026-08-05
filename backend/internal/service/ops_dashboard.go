@@ -27,7 +27,7 @@ func (s *OpsService) GetDashboardOverview(ctx context.Context, filter *OpsDashbo
 		return nil, infraerrors.BadRequest("OPS_TIME_RANGE_INVALID", "start_time must be <= end_time")
 	}
 
-	// Resolve query mode (requested via query param, or DB default).
+	// 运维查询只由统一预聚合设置自动选择数据源。
 	s.resolveOpsQueryModeWithIgnoredStatusCodes(ctx, filter)
 
 	overview, err := s.opsRepo.GetDashboardOverview(ctx, filter)
@@ -36,9 +36,6 @@ func (s *OpsService) GetDashboardOverview(ctx context.Context, filter *OpsDashbo
 		overview, err = s.opsRepo.GetDashboardOverview(ctx, rawFilter)
 	}
 	if err != nil {
-		if errors.Is(err, ErrOpsPreaggregatedNotPopulated) {
-			return nil, infraerrors.Conflict("OPS_PREAGG_NOT_READY", "Pre-aggregated ops metrics are not populated yet")
-		}
 		return nil, err
 	}
 
@@ -71,24 +68,18 @@ func (s *OpsService) GetDashboardOverview(ctx context.Context, filter *OpsDashbo
 }
 
 func (s *OpsService) resolveOpsQueryMode(ctx context.Context, requested OpsQueryMode) OpsQueryMode {
-	if requested.IsValid() {
-		// Allow "auto" to be disabled via config until preagg is proven stable in production.
-		// Forced `preagg` via query param still works.
-		if requested == OpsQueryModeAuto && s != nil && s.cfg != nil && !s.cfg.Ops.UsePreaggregatedTables {
-			return OpsQueryModeRaw
-		}
-		return requested
-	}
-
-	mode := OpsQueryModeAuto
-	if s != nil && s.settingRepo != nil {
-		if raw, err := s.settingRepo.GetValue(ctx, SettingKeyOpsQueryModeDefault); err == nil {
-			mode = ParseOpsQueryMode(raw)
-		}
-	}
-
-	if mode == OpsQueryModeAuto && s != nil && s.cfg != nil && !s.cfg.Ops.UsePreaggregatedTables {
+	// raw 仅供实时监控、告警和自定义忽略状态码等后端内部调用。
+	if requested == OpsQueryModeRaw {
 		return OpsQueryModeRaw
 	}
-	return mode
+	if s != nil && s.preAggregationSettings != nil {
+		if s.preAggregationSettings.OpsEnabled(ctx) {
+			return OpsQueryModeAuto
+		}
+		return OpsQueryModeRaw
+	}
+	if s != nil && s.cfg != nil && (!s.cfg.Ops.Enabled || !s.cfg.Ops.Aggregation.Enabled) {
+		return OpsQueryModeRaw
+	}
+	return OpsQueryModeAuto
 }

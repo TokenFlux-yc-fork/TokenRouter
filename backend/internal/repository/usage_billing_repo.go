@@ -38,6 +38,13 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		return nil, service.ErrUsageBillingRequestIDRequired
 	}
 
+	return retryPostgresDeadlock(ctx, "usage_billing_apply", 0, func() (*service.UsageBillingApplyResult, error) {
+		return r.applyOnce(ctx, cmd)
+	})
+}
+
+// applyOnce 执行一次完整计费事务；死锁后必须由外层重开事务，不能复用已中止的事务。
+func (r *usageBillingRepository) applyOnce(ctx context.Context, cmd *service.UsageBillingCommand) (_ *service.UsageBillingApplyResult, err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -55,6 +62,9 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	if !applied {
 		return &service.UsageBillingApplyResult{Applied: false}, nil
 	}
+	if err := lockUsageBillingUser(ctx, tx, cmd.UserID); err != nil {
+		return nil, err
+	}
 
 	result := &service.UsageBillingApplyResult{Applied: true}
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
@@ -66,6 +76,25 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	}
 	tx = nil
 	return result, nil
+}
+
+// lockUsageBillingUser 先串行化付款用户写入，再访问订阅；NO KEY UPDATE 与日志外键的 KEY SHARE 兼容。
+func lockUsageBillingUser(ctx context.Context, tx *sql.Tx, userID int64) error {
+	// 账户额度维护测试和内部任务允许只携带 AccountID；没有付款用户时不存在本次锁环。
+	if userID <= 0 {
+		return nil
+	}
+	var lockedUserID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR NO KEY UPDATE
+	`, userID).Scan(&lockedUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.ErrUserNotFound
+	}
+	return err
 }
 
 func (r *usageBillingRepository) ResolveUsableSubscriptionForGroup(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
@@ -242,7 +271,26 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 	if cmd.RequestID == "" {
 		return nil, service.ErrUsageBillingRequestIDRequired
 	}
+	original := cloneBatchImageBalanceHoldCommand(cmd)
 
+	result, err := retryPostgresDeadlock(ctx, batchImageAllowanceOperationName(operation), 0, func() (*service.BatchImageBalanceHoldResult, error) {
+		attemptCmd := cloneBatchImageBalanceHoldCommand(&original)
+		attemptResult, attemptErr := r.applyBatchImageBalanceHoldOnce(ctx, &attemptCmd, operation, apply)
+		if attemptErr == nil {
+			*cmd = attemptCmd
+		}
+		return attemptResult, attemptErr
+	})
+	return result, err
+}
+
+// applyBatchImageBalanceHoldOnce 执行一次完整批量图片计费事务。
+func (r *usageBillingRepository) applyBatchImageBalanceHoldOnce(
+	ctx context.Context,
+	cmd *service.BatchImageBalanceHoldCommand,
+	operation batchImageAllowanceOperation,
+	apply func(context.Context, *sql.Tx, *service.BatchImageBalanceHoldCommand) (*service.BatchImageBalanceHoldResult, error),
+) (_ *service.BatchImageBalanceHoldResult, err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -259,6 +307,9 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 	}
 	if !applied {
 		return batchImageBillingResultForCommand(cmd, operation), nil
+	}
+	if err := lockUsageBillingUser(ctx, tx, cmd.UserID); err != nil {
+		return nil, err
 	}
 
 	result, err := apply(ctx, tx, cmd)
@@ -278,6 +329,30 @@ func (r *usageBillingRepository) applyBatchImageBalanceHold(
 	}
 	tx = nil
 	return result, nil
+}
+
+// cloneBatchImageBalanceHoldCommand 隔离失败尝试中的命令变更，保证重试从相同输入开始。
+func cloneBatchImageBalanceHoldCommand(cmd *service.BatchImageBalanceHoldCommand) service.BatchImageBalanceHoldCommand {
+	if cmd == nil {
+		return service.BatchImageBalanceHoldCommand{}
+	}
+	cloned := *cmd
+	cloned.SubscriptionHoldAllocations = append([]domain.BillingAllocation(nil), cmd.SubscriptionHoldAllocations...)
+	return cloned
+}
+
+// batchImageAllowanceOperationName 返回稳定的重试日志操作名。
+func batchImageAllowanceOperationName(operation batchImageAllowanceOperation) string {
+	switch operation {
+	case batchImageAllowanceReserve:
+		return "usage_billing_batch_image_reserve"
+	case batchImageAllowanceCapture:
+		return "usage_billing_batch_image_capture"
+	case batchImageAllowanceRelease:
+		return "usage_billing_batch_image_release"
+	default:
+		return "usage_billing_batch_image_unknown"
+	}
 }
 
 func applyBatchImageAllowance(ctx context.Context, tx *sql.Tx, cmd *service.BatchImageBalanceHoldCommand, operation batchImageAllowanceOperation) error {
@@ -1080,6 +1155,7 @@ func startOfDay(t time.Time) time.Time {
 }
 
 // usage billing 必须完整记录本次请求成本，余额不足时扣成负数作为欠费。
+// 此处不能升级为 FOR UPDATE，否则取得订阅锁后会再次与 usage_logs 的用户外键锁形成锁环。
 func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, float64, error) {
 	const query = `
 		WITH locked_user AS (
@@ -1087,7 +1163,7 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 			FROM users
 			WHERE id = $2
 				AND deleted_at IS NULL
-			FOR UPDATE
+				FOR NO KEY UPDATE
 		), updated AS (
 			UPDATE users
 			SET balance = locked_user.balance - $1,

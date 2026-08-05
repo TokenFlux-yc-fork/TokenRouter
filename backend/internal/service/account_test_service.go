@@ -873,13 +873,11 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 		return s.sendErrorAndEnd(c, "HTTP upstream not configured")
 	}
 
-	testModelID := strings.TrimSpace(modelID)
-	if testModelID == "" {
-		testModelID = grokDefaultResponsesModel
+	billingModel := strings.TrimSpace(modelID)
+	if mapped := strings.TrimSpace(account.GetMappedModel(billingModel)); mapped != "" {
+		billingModel = mapped
 	}
-	if mapped := strings.TrimSpace(account.GetMappedModel(testModelID)); mapped != "" {
-		testModelID = mapped
-	}
+	testModelID := normalizeOpenAIModelForUpstream(account, billingModel)
 
 	var authToken string
 	switch account.Type {

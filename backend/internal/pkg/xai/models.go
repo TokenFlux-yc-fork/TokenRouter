@@ -1,5 +1,23 @@
 package xai
 
+import "strings"
+
+// DefaultResponsesModel 是 Grok Responses 请求未指定模型时使用的默认模型。
+const DefaultResponsesModel = "grok-4.5"
+
+// modelIDAliases 只描述平台内置的上游 ID 标准化规则，不参与账号映射或模型发现。
+var modelIDAliases = map[string]string{
+	"grok":                    DefaultResponsesModel,
+	"grok-latest":             DefaultResponsesModel,
+	"grok-4.5-latest":         DefaultResponsesModel,
+	"grok-build":              "grok-build-0.1",
+	"grok-build-latest":       DefaultResponsesModel,
+	"grok-composer":           "grok-composer-2.5-fast",
+	"composer-2.5":            "grok-composer-2.5-fast",
+	"grok-4.20-reasoning":     "grok-4.20-0309-reasoning",
+	"grok-4.20-non-reasoning": "grok-4.20-0309-non-reasoning",
+}
+
 // Model 描述 xAI OpenAI 兼容 /models 响应里的模型。
 type Model struct {
 	ID          string `json:"id"`
@@ -40,19 +58,15 @@ func DefaultModelIDs() []string {
 	return ids
 }
 
-func DefaultModelMapping() map[string]string {
-	mapping := make(map[string]string, len(defaultModels)+5)
-	for _, model := range defaultModels {
-		mapping[model.ID] = model.ID
+// NormalizeModelID 在账号映射和白名单校验后，将 Grok 精确别名转换为上游模型 ID。
+// 未知模型保持透传，避免限制自定义 xAI 兼容上游。
+func NormalizeModelID(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return DefaultResponsesModel
 	}
-	mapping["grok"] = "grok-4.5"
-	mapping["grok-latest"] = "grok-4.5"
-	mapping["grok-4.5-latest"] = "grok-4.5"
-	mapping["grok-build"] = "grok-build-0.1"
-	mapping["grok-build-latest"] = "grok-4.5"
-	mapping["grok-composer"] = "grok-composer-2.5-fast"
-	mapping["composer-2.5"] = "grok-composer-2.5-fast"
-	mapping["grok-4.20-reasoning"] = "grok-4.20-0309-reasoning"
-	mapping["grok-4.20-non-reasoning"] = "grok-4.20-0309-non-reasoning"
-	return mapping
+	if mapped, ok := modelIDAliases[model]; ok {
+		return mapped
+	}
+	return model
 }

@@ -182,16 +182,7 @@ func (s *OpenAIGatewayService) applyOpenAIAccountUpstreamError(ctx context.Conte
 		if len(canonicalModel) > 0 {
 			model = canonicalModel[0]
 		}
-		decision := s.recordOpenAIAccountModelTransientFailure(account, model, time.Now())
-		if decision.FailureStreak > 0 {
-			slog.Warn("openai_model_transient_state",
-				"account_id", account.ID,
-				"model", openAIAccountModelTransientModel(model),
-				"failure_streak", decision.FailureStreak,
-				"cooldown_ms", decision.Cooldown.Milliseconds(),
-				"block_scope", "account_model",
-			)
-		}
+		s.recordOpenAICompatibleModelTransientFailure(account, model)
 	}
 	return decision
 }
@@ -359,7 +350,10 @@ func canonicalOpenAIAccountSchedulingModel(account *Account, requestedModel stri
 		return model
 	}
 	if mapped := strings.TrimSpace(account.GetMappedModel(model)); mapped != "" {
-		return mapped
+		model = mapped
+	}
+	if account.IsOpenAICompatible() {
+		return normalizeOpenAIModelForUpstream(account, model)
 	}
 	return model
 }
@@ -377,6 +371,23 @@ func (s *OpenAIGatewayService) recordOpenAIAccountModelTransientFailure(account 
 		return openAIAccountModelTransientDecision{}
 	}
 	return state.recordFailure(account.ID, openAIAccountModelTransientModel(canonicalModel), now)
+}
+
+// recordOpenAICompatibleModelTransientFailure 统一记录 OpenAI 兼容平台的账号与模型瞬态失败，
+// 调用方必须传入已经完成账号映射和平台规范化的最终上游模型。
+func (s *OpenAIGatewayService) recordOpenAICompatibleModelTransientFailure(account *Account, canonicalModel string) {
+	decision := s.recordOpenAIAccountModelTransientFailure(account, canonicalModel, time.Now())
+	if decision.FailureStreak == 0 {
+		return
+	}
+	slog.Warn("openai_model_transient_state",
+		"account_id", account.ID,
+		"platform", account.Platform,
+		"model", openAIAccountModelTransientModel(canonicalModel),
+		"failure_streak", decision.FailureStreak,
+		"cooldown_ms", decision.Cooldown.Milliseconds(),
+		"block_scope", "account_model",
+	)
 }
 
 func (s *OpenAIGatewayService) clearOpenAIAccountModelTransientState(accountID int64, model string) {

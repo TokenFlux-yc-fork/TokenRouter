@@ -369,9 +369,6 @@ func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
 			MinuteMetricsRetentionDays: 30,
 			HourlyMetricsRetentionDays: 30,
 		},
-		Aggregation: OpsAggregationSettings{
-			AggregationEnabled: false,
-		},
 		OpenAIAccountQuotaAutoPause:     OpsOpenAIAccountQuotaAutoPauseSettings{},
 		IgnoreCountTokensErrors:         true,  // count_tokens 404 是预期行为，默认忽略
 		IgnoreContextCanceled:           true,  // Default to true - client disconnects are not errors

@@ -443,9 +443,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpsRealtimeMonitoringEnabled != after.OpsRealtimeMonitoringEnabled {
 		changed = append(changed, "ops_realtime_monitoring_enabled")
 	}
-	if before.OpsQueryModeDefault != after.OpsQueryModeDefault {
-		changed = append(changed, "ops_query_mode_default")
-	}
 	if before.OpsMetricsIntervalSeconds != after.OpsMetricsIntervalSeconds {
 		changed = append(changed, "ops_metrics_interval_seconds")
 	}

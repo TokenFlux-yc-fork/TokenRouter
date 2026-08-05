@@ -92,7 +92,7 @@ const qoderGlobalModels = [
   'performance',
   'efficient',
   'lite',
-  'qwen3.8-max-preview',
+  'qwen3.8-max',
   'qwen3.7-max',
   'qwen3.7-plus',
   // Kimi-K3 与 Kimi-K2.7-Code 当前使用不同的 Qoder 路由。
@@ -106,7 +106,7 @@ const qoderGlobalModels = [
 
 const qoderCNModels = [
   'auto',
-  'qwen3.8-max-preview',
+  'qwen3.8-max',
   'qwen3.7-max',
   'qwen3.7-plus',
   'qwen3.6-flash',
@@ -342,7 +342,7 @@ const qoderGlobalPresetMappings = [
   { label: 'Performance', from: 'performance', to: 'performance', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-400' },
   { label: 'Efficient', from: 'efficient', to: 'efficient', color: 'bg-teal-100 text-teal-700 hover:bg-teal-200 dark:bg-teal-900/30 dark:text-teal-400' },
   { label: 'Lite', from: 'lite', to: 'lite', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },
-  { label: 'Qwen 3.8 Max Preview', from: 'qwen3.8-max-preview', to: 'qmodel_preview', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  { label: 'Qwen 3.8 Max', from: 'qwen3.8-max', to: 'qmodel_38max', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
   { label: 'Qwen 3.7 Max', from: 'qwen3.7-max', to: 'qmodel_latest', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
   { label: 'Qwen 3.7 Plus', from: 'qwen3.7-plus', to: 'qmodel', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
   // Kimi-K3 必须映射到 latest 路由，不能复用 Kimi-K2.7-Code 的 kmodel。
@@ -356,7 +356,7 @@ const qoderGlobalPresetMappings = [
 
 const qoderCNPresetMappings = [
   { label: 'Auto', from: 'auto', to: 'auto', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
-  { label: 'Qwen 3.8 Max Preview', from: 'qwen3.8-max-preview', to: 'qmodel_preview', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
+  { label: 'Qwen 3.8 Max', from: 'qwen3.8-max', to: 'qmodel_38max', color: 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-400' },
   { label: 'Qwen 3.7 Max', from: 'qwen3.7-max', to: 'qmodel_latest', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
   { label: 'Qwen 3.7 Plus', from: 'qwen3.7-plus', to: 'qmodel', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
   { label: 'Qwen 3.6 Flash', from: 'qwen3.6-flash', to: 'q36fmodel', color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400' },

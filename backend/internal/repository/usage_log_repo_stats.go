@@ -487,6 +487,11 @@ func (r *usageLogRepository) GetBatchUserUsageStats(ctx context.Context, userIDs
 	if endTime.IsZero() {
 		endTime = time.Now()
 	}
+	if stats, ok, err := r.getBatchUserUsageStatsFromAnalytics(ctx, normalizedUserIDs, startTime, endTime); err == nil && ok {
+		return stats, nil
+	} else if err != nil {
+		r.logUsageAnalyticsFallback("batch_user_usage", err)
+	}
 
 	for _, id := range normalizedUserIDs {
 		result[id] = &BatchUserUsageStats{UserID: id}
@@ -564,6 +569,11 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 	}
 	if endTime.IsZero() {
 		endTime = time.Now()
+	}
+	if stats, ok, err := r.getBatchAPIKeyUsageStatsFromAnalytics(ctx, normalizedAPIKeyIDs, startTime, endTime); err == nil && ok {
+		return stats, nil
+	} else if err != nil {
+		r.logUsageAnalyticsFallback("batch_api_key_usage", err)
 	}
 
 	for _, id := range normalizedAPIKeyIDs {
@@ -661,10 +671,25 @@ func (r *usageLogRepository) GetGlobalStats(ctx context.Context, startTime, endT
 
 // GetStatsWithFilters 按可选过滤条件获取用量统计。
 func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters UsageLogFilters) (*UsageStats, error) {
+	return r.getStatsWithFilters(ctx, filters, true)
+}
+
+// GetUserStatsWithFilters 跳过用户响应不会返回的上游端点和路径统计。
+func (r *usageLogRepository) GetUserStatsWithFilters(ctx context.Context, filters UsageLogFilters) (*UsageStats, error) {
+	return r.getStatsWithFilters(ctx, filters, false)
+}
+
+func (r *usageLogRepository) getStatsWithFilters(ctx context.Context, filters UsageLogFilters, includeRawEndpointDetails bool) (*UsageStats, error) {
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
-	conditions, args = appendUserUsageScopeWhereCondition(conditions, args, filters.UserID, filters.IncludeOwnedTeam, "")
+	source, scopeCondition, args, scopeErr := r.buildUsageLogScopeSource(ctx, args, filters.UserID, filters.IncludeOwnedTeam, "")
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	if scopeCondition != "" {
+		conditions = append(conditions, scopeCondition)
+	}
 	if filters.APIKeyID > 0 {
 		conditions = append(conditions, fmt.Sprintf("api_key_id = $%d", len(args)+1))
 		args = append(args, filters.APIKeyID)
@@ -712,12 +737,20 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
 			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as total_account_cost,
 			COALESCE(AVG(duration_ms), 0) as avg_duration_ms
-		FROM usage_logs
+		FROM %s
 		%s
-	`, buildWhere(conditions))
+	`, source, buildWhere(conditions))
 
 	stats := &UsageStats{}
 	var totalAccountCost float64
+	if aggregated, ok, aggregateErr := r.getUsageStatsFromAnalytics(ctx, filters); aggregateErr == nil && ok {
+		stats = aggregated
+		if aggregated.TotalAccountCost != nil {
+			totalAccountCost = *aggregated.TotalAccountCost
+		}
+	} else if aggregateErr != nil {
+		r.logUsageAnalyticsFallback("usage_stats", aggregateErr)
+	}
 
 	start := time.Unix(0, 0).UTC()
 	if filters.StartTime != nil {
@@ -732,6 +765,9 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 
 	// 汇总查询:失败即致命。
 	runSummary := func(c context.Context) error {
+		if stats.TotalAccountCost != nil {
+			return nil
+		}
 		return scanSingleRow(
 			c, r.sql, query, args,
 			&stats.TotalRequests,
@@ -783,8 +819,10 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		g, gctx := errgroup.WithContext(ctx)
 		g.Go(func() error { return runSummary(gctx) })
 		g.Go(func() error { runEndpoints(gctx); return nil })
-		g.Go(func() error { runUpstream(gctx); return nil })
-		g.Go(func() error { runPaths(gctx); return nil })
+		if includeRawEndpointDetails {
+			g.Go(func() error { runUpstream(gctx); return nil })
+			g.Go(func() error { runPaths(gctx); return nil })
+		}
 		if err := g.Wait(); err != nil {
 			return nil, err
 		}
@@ -794,8 +832,10 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 			return nil, err
 		}
 		runEndpoints(ctx)
-		runUpstream(ctx)
-		runPaths(ctx)
+		if includeRawEndpointDetails {
+			runUpstream(ctx)
+			runPaths(ctx)
+		}
 	}
 
 	stats.TotalAccountCost = &totalAccountCost
@@ -820,7 +860,25 @@ type AccountUsageStatsResponse = usagestats.AccountUsageStatsResponse
 type EndpointStat = usagestats.EndpointStat
 
 func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Context, endpointColumn string, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID, teamID int64, model string, modelSource string, requestType *int16, stream *bool, billingType *int8, billingMode string, personalOnly bool, includeOwnedTeam bool) (results []EndpointStat, err error) {
+	if endpointColumn == "inbound_endpoint" {
+		analyticsFilters := UsageLogFilters{
+			UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
+			TeamID: teamID, Model: model, ModelFilterSource: modelSource,
+			RequestType: requestType, Stream: stream, BillingType: billingType,
+			BillingMode: billingMode, PersonalOnly: personalOnly, IncludeOwnedTeam: includeOwnedTeam,
+		}
+		if aggregated, ok, aggregateErr := r.getInboundEndpointStatsFromAnalytics(ctx, startTime, endTime, analyticsFilters); aggregateErr == nil && ok {
+			return aggregated, nil
+		} else if aggregateErr != nil {
+			r.logUsageAnalyticsFallback("inbound_endpoint_stats", aggregateErr)
+		}
+	}
 	// 端点统计的“实际”保持用户扣费口径，不能因账号筛选切换为账号成本。
+	args := []any{startTime, endTime}
+	source, scopeCondition, args, scopeErr := r.buildUsageLogScopeSource(ctx, args, userID, includeOwnedTeam, "")
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
 	query := fmt.Sprintf(`
 		SELECT
 			COALESCE(NULLIF(TRIM(%s), ''), 'unknown') AS endpoint,
@@ -828,12 +886,13 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
 			COALESCE(SUM(actual_cost), 0) as actual_cost
-		FROM usage_logs
+		FROM %s
 		WHERE created_at >= $1 AND created_at < $2
-	`, endpointColumn)
+	`, endpointColumn, source)
 
-	args := []any{startTime, endTime}
-	query, args = appendUserUsageScopeQueryFilter(query, args, userID, includeOwnedTeam, "")
+	if scopeCondition != "" {
+		query += " AND " + scopeCondition
+	}
 	if apiKeyID > 0 {
 		query += fmt.Sprintf(" AND api_key_id = $%d", len(args)+1)
 		args = append(args, apiKeyID)
@@ -889,7 +948,12 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 
 func (r *usageLogRepository) getEndpointPathStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID, teamID int64, model string, modelSource string, requestType *int16, stream *bool, billingType *int8, billingMode string, personalOnly bool, includeOwnedTeam bool) (results []EndpointStat, err error) {
 	// 路径统计与单端点统计保持同一费用口径。
-	query := `
+	args := []any{startTime, endTime}
+	source, scopeCondition, args, scopeErr := r.buildUsageLogScopeSource(ctx, args, userID, includeOwnedTeam, "")
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	query := fmt.Sprintf(`
 		SELECT
 			CONCAT(
 				COALESCE(NULLIF(TRIM(inbound_endpoint), ''), 'unknown'),
@@ -900,12 +964,13 @@ func (r *usageLogRepository) getEndpointPathStatsWithFilters(ctx context.Context
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) AS total_tokens,
 			COALESCE(SUM(total_cost), 0) as cost,
 			COALESCE(SUM(actual_cost), 0) as actual_cost
-		FROM usage_logs
+		FROM %s
 		WHERE created_at >= $1 AND created_at < $2
-	`
+	`, source)
 
-	args := []any{startTime, endTime}
-	query, args = appendUserUsageScopeQueryFilter(query, args, userID, includeOwnedTeam, "")
+	if scopeCondition != "" {
+		query += " AND " + scopeCondition
+	}
 	if apiKeyID > 0 {
 		query += fmt.Sprintf(" AND api_key_id = $%d", len(args)+1)
 		args = append(args, apiKeyID)

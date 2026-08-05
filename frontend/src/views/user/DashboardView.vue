@@ -59,8 +59,11 @@ const onDateRangeChange = (range: { startDate: string; endDate: string }) => {
 const loadStats = async () => {
   loading.value = true
   try {
-    await authStore.refreshUser()
-    stats.value = await usageAPI.getDashboardStats()
+    const [, nextStats] = await Promise.all([
+      authStore.refreshUser(),
+      usageAPI.getDashboardStats(),
+    ])
+    stats.value = nextStats
   } catch (error) {
     console.error('Failed to load dashboard stats:', error)
   } finally {

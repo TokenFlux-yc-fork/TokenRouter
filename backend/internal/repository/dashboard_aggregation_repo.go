@@ -64,7 +64,7 @@ func (r *dashboardAggregationRepository) AggregateRange(ctx context.Context, sta
 	dayStart := truncateToDay(startLocal)
 	dayEnd := truncateToDay(endLocal)
 	if endLocal.After(dayEnd) {
-		dayEnd = dayEnd.Add(24 * time.Hour)
+		dayEnd = dayEnd.AddDate(0, 0, 1)
 	}
 
 	if db, ok := r.sql.(*sql.DB); ok {
@@ -111,16 +111,11 @@ func (r *dashboardAggregationRepository) RecomputeRange(ctx context.Context, sta
 	}
 
 	hourStart := startLocal.Truncate(time.Hour)
-	hourEnd := endLocal.Truncate(time.Hour)
-	if endLocal.After(hourEnd) {
-		hourEnd = hourEnd.Add(time.Hour)
-	}
+	// 清理过滤器的结束时间包含端点，整点记录属于以该整点开始的新桶。
+	hourEnd := endLocal.Truncate(time.Hour).Add(time.Hour)
 
 	dayStart := truncateToDay(startLocal)
-	dayEnd := truncateToDay(endLocal)
-	if endLocal.After(dayEnd) {
-		dayEnd = dayEnd.Add(24 * time.Hour)
-	}
+	dayEnd := truncateToDay(endLocal).AddDate(0, 0, 1)
 
 	// 尽量使用事务保证范围内的一致性（允许在非 *sql.DB 的情况下退化为非事务执行）。
 	if db, ok := r.sql.(*sql.DB); ok {
@@ -156,7 +151,8 @@ func (r *dashboardAggregationRepository) recomputeRangeInTx(ctx context.Context,
 	if err := r.insertHourlyActiveUsers(ctx, hourStart, hourEnd); err != nil {
 		return err
 	}
-	if err := r.insertDailyActiveUsers(ctx, hourStart, hourEnd); err != nil {
+	// 日活跃用户明细已按整日清空，必须从受影响的完整日期恢复，避免丢失范围外小时。
+	if err := r.insertDailyActiveUsers(ctx, dayStart, dayEnd); err != nil {
 		return err
 	}
 	if err := r.upsertHourlyAggregates(ctx, hourStart, hourEnd); err != nil {

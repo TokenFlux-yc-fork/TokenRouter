@@ -440,7 +440,7 @@ func TestOpenAINativeCompactionProbeRunnerBackoffIsBounded(t *testing.T) {
 	checked := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
 	next := checked.Add(40 * time.Second)
 	require.Equal(t, 80*time.Second, exponentialOpenAINativeCompactionProbeBackoff(time.Minute/2, 5*time.Minute, &checked, &next))
-	require.Equal(t, 5*time.Minute, exponentialOpenAINativeCompactionProbeBackoff(time.Minute, 5*time.Minute, &checked, timePointer(checked.Add(4*time.Minute))))
+	require.Equal(t, 5*time.Minute, exponentialOpenAINativeCompactionProbeBackoff(time.Minute, 5*time.Minute, &checked, nativeCompactionTimePointer(checked.Add(4*time.Minute))))
 }
 
 func TestOpenAINativeCompactionProbeRunnerStopJoinsActiveCycle(t *testing.T) {
@@ -538,4 +538,4 @@ func nativeCompactionProbeRunnerGroup(id int64) *Group {
 	return &Group{ID: id, Status: StatusActive}
 }
 
-func timePointer(value time.Time) *time.Time { return &value }
+func nativeCompactionTimePointer(value time.Time) *time.Time { return &value }

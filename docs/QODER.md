@@ -21,7 +21,7 @@ International public aliases are:
 - `performance`
 - `efficient`
 - `lite`
-- `qwen3.8-max-preview`
+- `qwen3.8-max`
 - `qwen3.7-max`
 - `qwen3.7-plus`
 - `kimi-k3`
@@ -34,7 +34,7 @@ International public aliases are:
 China public aliases are:
 
 - `auto`
-- `qwen3.8-max-preview`
+- `qwen3.8-max`
 - `qwen3.7-max`
 - `qwen3.7-plus`
 - `qwen3.6-flash`
@@ -46,6 +46,8 @@ China public aliases are:
 
 Account model lists and default alias resolution follow `credentials.site`. Lists without account context use a stable union with international models first. A mixed-site group exposes the union supported by its schedulable accounts, while site-specific aliases and route keys are not scheduled to an incompatible account. Explicit account mapping remains the override mechanism, and unknown raw route keys continue to pass through.
 
+On both sites, `qwen3.8-max` maps to the formal `qmodel_38max` route. The removed `qwen3.8-max-preview` alias and `qmodel_preview` route are not silently redirected. Accounts that still need the old request name must configure an explicit `model_mapping`, for example `qwen3.8-max-preview -> qmodel_38max`.
+
 Qoder account `model_mapping` follows the same rewrite-rule semantics as other platforms:
 
 - key: model name accepted at that routing layer;
@@ -54,22 +56,30 @@ Qoder account `model_mapping` follows the same rewrite-rule semantics as other p
 
 Use `model_whitelist` when an account must be limited to specific final route/upstream models. The gateway applies mapping first and then checks the whitelist. If no whitelist is configured, the account remains unrestricted. Channel-level mapping is also a one-step rewrite; do not configure alias chains such as `custom -> public alias -> route key`. Configure `model -> upstream route key` directly.
 
-## China Thinking Controls
+## Site Thinking Controls
 
-The China-site capability snapshot below was verified against Qoder CN 1.8.0. Capability lookup runs after account-level model mapping and alias resolution, so a custom request model mapped directly to a known route key receives the same handling. The snapshot is intentionally limited to `credentials.site=cn`; Global, `auto`, and unknown route keys are not modified.
+The site capability snapshots were verified against Qoder international 1.21.2 and Qoder CN 1.10.0. These versions are propagated through the OpenAPI User-Agent, `Cosy-Version`, the signed `cosyVersion` payload, and inference `business.version`.
 
-| Public model | Route key | Thinking capability | Downstream mapping |
-| --- | --- | --- | --- |
-| `auto` | `auto` | No user-editable control | No override |
-| `qwen3.8-max-preview` | `qmodel_preview` | Toggle only | Any valid effort, enabled/adaptive switch, or positive budget enables Thinking; no level is sent |
-| `qwen3.7-max` | `qmodel_latest` | Toggle only | Same as Qwen3.8-Max-Preview |
-| `qwen3.7-plus` | `qmodel` | Toggle only | Same as Qwen3.8-Max-Preview |
-| `qwen3.6-flash` | `q36fmodel` | No user-editable control | No override |
-| `deepseek-v4-pro` | `dmodel` | High / Max | Minimal, Low, and Medium become High; High, Very High, and Max become Max; any positive budget becomes Max |
-| `deepseek-v4-flash` | `dfmodel` | High / Max | Same as DeepSeek-V4-Pro |
-| `glm-5.2` | `gm51model` | High / Max | Same as DeepSeek-V4-Pro |
-| `kimi-k2.7-code` | `kmodel` | No user-editable control | No override |
-| `minimax-m2.7` | `mmodel` | No user-editable control | No override |
+Capability lookup runs after account-level model mapping and public alias resolution, so a custom request model mapped directly to a known route key receives the same handling. Shared international and China route keys use the same Thinking capabilities. Unknown route keys and international-only models without a verified capability are not modified.
+
+| Site | Public model | Route key | Thinking capability | Downstream mapping |
+| --- | --- | --- | --- | --- |
+| International | `qwen3.8-max` | `qmodel_38max` | Toggle only | Any valid effort, enabled/adaptive switch, or positive budget enables Thinking; no level is sent |
+| International | `qwen3.7-max` | `qmodel_latest` | Toggle only | Same as Qwen3.8-Max |
+| International | `qwen3.7-plus` | `qmodel` | Toggle only | Same as Qwen3.8-Max |
+| International | `deepseek-v4-pro` | `dmodel` | High / Max | Minimal, Low, and Medium become High; High, Very High, and Max become Max; any positive budget becomes Max |
+| International | `deepseek-v4-flash` | `dfmodel` | High / Max | Same as DeepSeek-V4-Pro |
+| International | `glm-5.2` | `gm51model` | High / Max | Same as DeepSeek-V4-Pro |
+| China | `auto` | `auto` | No user-editable control | No override |
+| China | `qwen3.8-max` | `qmodel_38max` | Toggle only | Same as international Qwen3.8-Max |
+| China | `qwen3.7-max` | `qmodel_latest` | Toggle only | Same as Qwen3.8-Max |
+| China | `qwen3.7-plus` | `qmodel` | Toggle only | Same as Qwen3.8-Max |
+| China | `qwen3.6-flash` | `q36fmodel` | No user-editable control | No override |
+| China | `deepseek-v4-pro` | `dmodel` | High / Max | Minimal, Low, and Medium become High; High, Very High, and Max become Max; any positive budget becomes Max |
+| China | `deepseek-v4-flash` | `dfmodel` | High / Max | Same as DeepSeek-V4-Pro |
+| China | `glm-5.2` | `gm51model` | High / Max | Same as DeepSeek-V4-Pro |
+| China | `kimi-k2.7-code` | `kmodel` | No user-editable control | No override |
+| China | `minimax-m2.7` | `mmodel` | No user-editable control | No override |
 
 The gateway reads the protocol-native controls from each inbound endpoint:
 
@@ -77,7 +87,25 @@ The gateway reads the protocol-native controls from each inbound endpoint:
 - Responses: `reasoning.effort`, with `reasoning_effort` accepted as a compatibility fallback.
 - Anthropic Messages: `output_config.effort`, `thinking.type`, and `thinking.budget_tokens`.
 
-Explicit `thinking.type=disabled` or effort `none` always wins. Otherwise an explicit valid effort wins over a positive budget, followed by `enabled` / `adaptive`; missing or invalid controls remain disabled. Toggle-capable models use Qoder's `reasoning_effort=none` override when disabled so the request cannot fall back to an upstream default. Unknown effort strings are ignored instead of rejecting the request.
+Explicit `thinking.type=disabled` or effort `none` always wins. Otherwise an explicit valid effort wins over a positive budget, followed by `enabled` / `adaptive`; missing or invalid controls remain disabled. Toggle-capable models use Qoder's `reasoning_effort=none` override when disabled so the request cannot fall back to an upstream default. This preserves TokenRouter's explicit-control contract even though Qoder marks Qwen3.8-Max Thinking as enabled by default. Unknown effort strings are ignored instead of rejecting the request.
+
+## Context Windows
+
+Context lookup runs after account-level model mapping and public alias resolution. Each request therefore selects the highest context verified for the final route and the selected account's site. A failover attempt that selects an account from another site recalculates the capability before rebuilding the Qoder payload.
+
+| Site | Maximum input tokens | Route keys |
+| --- | ---: | --- |
+| International | 1,000,000 | `ultimate`, `performance`, `qmodel_38max`, `qmodel_latest`, `qmodel`, `kmodel_latest`, `gm51model`, `dmodel`, `dfmodel`, `mmodel` |
+| International | 256,000 | `kmodel` |
+| International | 180,000 | `auto`, `efficient`, `lite` |
+| China | 1,000,000 | `qmodel_38max`, `qmodel_latest`, `qmodel`, `q36fmodel`, `dmodel`, `dfmodel`, `gm51model` |
+| China | 256,000 | `kmodel` |
+| China | 200,000 | `mmodel` |
+| China | 180,000 | `auto` |
+
+Routes with an official runtime `contextConfig` send the selected maximum in `model_config.max_input_tokens`, `chat_context.extra.ideModelConfigOverride.max_input_tokens`, and `parameters.context_length`. Routes with a fixed maximum send only `model_config.max_input_tokens`. Unknown, hidden, and removed raw route keys remain pass-through models, use a conservative 200,000-token fallback, and do not receive a fabricated runtime context selection.
+
+TokenRouter does not read a client-declared context limit. Chat Completions, Responses, and Anthropic Messages output-token fields continue to control output only. Clients retain their own model catalogs, compaction thresholds, and truncation behavior; `/v1/models` and `/models` do not expose non-standard context metadata.
 
 ## Billing Scope
 

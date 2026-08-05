@@ -392,12 +392,16 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		return nil, err
 	}
 	requestInfo := ParseGrokMediaRequest(contentType, body)
-	upstreamModel := requestInfo.Model
-	if endpoint.RequiresRequestBody() && gjson.ValidBytes(body) {
-		if mappedModel := strings.TrimSpace(account.GetMappedModel(requestInfo.Model)); mappedModel != "" {
-			upstreamModel = mappedModel
+	billingModel := requestInfo.Model
+	upstreamModel := billingModel
+	if endpoint.RequiresRequestBody() {
+		if gjson.ValidBytes(body) {
+			if mappedModel := strings.TrimSpace(account.GetMappedModel(requestInfo.Model)); mappedModel != "" {
+				billingModel = mappedModel
+			}
 		}
-		if upstreamModel != requestInfo.Model {
+		upstreamModel = normalizeOpenAIModelForUpstream(account, billingModel)
+		if gjson.ValidBytes(body) && upstreamModel != requestInfo.Model {
 			body, err = sjson.SetBytes(body, "model", upstreamModel)
 			if err != nil {
 				return nil, fmt.Errorf("rewrite grok media account mapped model: %w", err)
@@ -482,7 +486,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		ResponseID:           usage.ResponseID,
 		Usage:                usage.Usage,
 		Model:                requestModel,
-		BillingModel:         requestModel,
+		BillingModel:         billingModel,
 		UpstreamModel:        upstreamModel,
 		ResponseHeaders:      resp.Header.Clone(),
 		Duration:             time.Since(startTime),

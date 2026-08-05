@@ -219,10 +219,11 @@ func TestBuildQoderPayloadFromChatCompletions(t *testing.T) {
 	chatText, _ := chatContext["text"].(map[string]any)
 	require.Equal(t, 123, parameters["max_tokens"])
 	require.Equal(t, "auto", modelConfig["key"])
+	require.Equal(t, 180000, modelConfig["max_input_tokens"])
 	require.Equal(t, "hello", chatText["text"])
 	business, ok := payload["business"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, qoder.GlobalClientVersion, business["version"])
+	require.Equal(t, "1.21.2", business["version"])
 
 	messagesRaw, ok := payload["messages"].([]any)
 	require.True(t, ok)
@@ -262,7 +263,7 @@ func TestBuildQoderPayloadUsesCNModelAndClientVersion(t *testing.T) {
 	require.Equal(t, "q36fmodel", modelKey)
 	business, ok := payload["business"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, qoder.CNClientVersion, business["version"])
+	require.Equal(t, "1.10.0", business["version"])
 }
 
 func TestBuildQoderPayloadUserSystemReplacesBuiltInSystem(t *testing.T) {
@@ -626,6 +627,16 @@ func TestResolveQoderModelUsesOpus46AliasForUltimate(t *testing.T) {
 	require.Equal(t, "gpt-5-codex", codex.Key)
 }
 
+func TestResolveQoderModelUsesQwen38MaxAlias(t *testing.T) {
+	// 两站公开名必须解析到同一个正式 route，Preview 名称不能再被静默重定向。
+	for _, site := range []qoder.Site{qoder.SiteGlobal, qoder.SiteCN} {
+		info := resolveQoderModelForSite(site, "qwen3.8-max")
+		require.Equal(t, "qmodel_38max", info.Key)
+		require.Equal(t, "system", info.Source)
+		require.Equal(t, "Qwen3.8-Max", info.DisplayName)
+	}
+}
+
 func TestResolveQoderModelUsesKimiK3Alias(t *testing.T) {
 	// Qoder 1.15.0 新增的 Kimi-K3 必须解析到独立的 latest 路由。
 	info := resolveQoderModel("kimi-k3")
@@ -644,7 +655,7 @@ func TestResolveQoderModelUsesGLM52RouteKey(t *testing.T) {
 
 func TestResolveQoderModelDoesNotTranslateRemovedCompatibilityAliases(t *testing.T) {
 	// 原兼容表中的名称应进入透传路径，不再附加兼容映射元数据。
-	for _, model := range []string{"ultimate", "qwen3.5-plus", "glm-5", "glm-5.1", "kimi-k2.6"} {
+	for _, model := range []string{"ultimate", "qwen3.8-max-preview", "qmodel_preview", "qwen3.5-plus", "glm-5", "glm-5.1", "kimi-k2.6"} {
 		info := resolveQoderModel(model)
 		require.Equal(t, model, info.Key)
 		require.Equal(t, "system", info.Source)
@@ -652,7 +663,7 @@ func TestResolveQoderModelDoesNotTranslateRemovedCompatibilityAliases(t *testing
 	}
 }
 
-func TestQoderGatewayAppliesAccountModelMapping(t *testing.T) {
+func TestQoderGatewayAllowsExplicitPreviewCompatibilityMapping(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -663,7 +674,7 @@ func TestQoderGatewayAppliesAccountModelMapping(t *testing.T) {
 		Type:     AccountTypeCosy,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"claude-opus-4-6": "ultimate",
+				"qwen3.8-max-preview": "qmodel_38max",
 			},
 			"model_whitelist": []any{},
 		},
@@ -682,15 +693,16 @@ func TestQoderGatewayAppliesAccountModelMapping(t *testing.T) {
 			session:         &qoder.SessionContext{Identity: &qoder.AuthIdentity{SecurityOauthToken: "token"}},
 		},
 	}
-	body := []byte(`{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}],"stream":true}`)
+	body := []byte(`{"model":"qwen3.8-max-preview","messages":[{"role":"user","content":"hi"}],"stream":true}`)
 
 	result, err := svc.ForwardChatCompletions(context.Background(), c, account, body)
 
 	require.NoError(t, err)
-	require.Equal(t, "claude-opus-4-6", result.Model)
-	require.Equal(t, "ultimate", result.UpstreamModel)
-	require.Equal(t, "ultimate", client.headers["x-model-key"])
-	require.Contains(t, rec.Body.String(), `"model":"claude-opus-4-6"`)
+	require.Equal(t, "qwen3.8-max-preview", result.Model)
+	require.Equal(t, "qmodel_38max", result.UpstreamModel)
+	require.Equal(t, "qmodel_38max", client.headers["x-model-key"])
+	require.Contains(t, rec.Body.String(), `"model":"qwen3.8-max-preview"`)
+	assertQoderContextCapabilityForTest(t, qoderLastUpstreamPayloadForTest(t, client), 1000000, true)
 }
 
 func TestQoderGatewayForwardUsesOriginalModelAfterChannelMapping(t *testing.T) {

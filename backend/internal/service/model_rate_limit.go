@@ -67,7 +67,10 @@ func (a *Account) modelRateLimitKeysForRequest(ctx context.Context, requestedMod
 	}
 
 	modelKey := a.GetMappedModel(requestedModel)
-	if a.Platform == PlatformAntigravity {
+	switch a.Platform {
+	case PlatformOpenAI, PlatformGrok:
+		modelKey = canonicalOpenAIAccountSchedulingModel(a, requestedModel)
+	case PlatformAntigravity:
 		modelKey = resolveFinalAntigravityModelKey(ctx, a, requestedModel)
 	}
 	modelKey = strings.TrimSpace(modelKey)

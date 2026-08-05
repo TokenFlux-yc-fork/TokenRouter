@@ -70,6 +70,9 @@ var backupContentTableDataGroups = map[string][]string{
 		"public.usage_dashboard_hourly_users",
 		"public.usage_dashboard_daily_users",
 		"public.usage_dashboard_aggregation_watermark",
+		"public.usage_analytics_hourly",
+		"public.usage_analytics_daily",
+		"public.usage_analytics_aggregation_state",
 	},
 	"ops_logs": {
 		"public.ops_system_logs",

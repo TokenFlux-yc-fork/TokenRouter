@@ -228,7 +228,16 @@ ON CONFLICT (bucket_start, COALESCE(platform, ''), COALESCE(group_id, 0)) DO UPD
   computed_at = NOW()
 `
 
-	_, err := r.db.ExecContext(ctx, q, start, end)
+	if _, err := r.db.ExecContext(ctx, q, start, end); err != nil {
+		return err
+	}
+	// 即使某小时没有任何请求，也写入全局零值桶，供自动查询可靠判断连续覆盖。
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO ops_metrics_hourly (bucket_start, platform, group_id)
+		SELECT bucket_start, NULL, NULL
+		FROM generate_series($1::timestamptz, $2::timestamptz - INTERVAL '1 hour', INTERVAL '1 hour') AS bucket_start
+		ON CONFLICT DO NOTHING
+	`, start, end)
 	return err
 }
 

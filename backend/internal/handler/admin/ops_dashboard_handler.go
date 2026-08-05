@@ -34,7 +34,6 @@ func (h *OpsHandler) GetDashboardOverview(c *gin.Context) {
 		StartTime: startTime,
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
-		QueryMode: parseOpsQueryMode(c),
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -75,7 +74,6 @@ func (h *OpsHandler) GetDashboardThroughputTrend(c *gin.Context) {
 		StartTime: startTime,
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
-		QueryMode: parseOpsQueryMode(c),
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -117,7 +115,6 @@ func (h *OpsHandler) GetDashboardLatencyHistogram(c *gin.Context) {
 		StartTime: startTime,
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
-		QueryMode: parseOpsQueryMode(c),
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -187,7 +184,6 @@ func (h *OpsHandler) GetDashboardErrorTrend(c *gin.Context) {
 		StartTime: startTime,
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
-		QueryMode: parseOpsQueryMode(c),
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -229,7 +225,6 @@ func (h *OpsHandler) GetDashboardErrorDistribution(c *gin.Context) {
 		StartTime: startTime,
 		EndTime:   endTime,
 		Platform:  strings.TrimSpace(c.Query("platform")),
-		QueryMode: parseOpsQueryMode(c),
 	}
 	if v := strings.TrimSpace(c.Query("group_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
@@ -367,16 +362,4 @@ func pickThroughputBucketSeconds(window time.Duration) int {
 	default:
 		return 3600
 	}
-}
-
-func parseOpsQueryMode(c *gin.Context) service.OpsQueryMode {
-	if c == nil {
-		return ""
-	}
-	raw := strings.TrimSpace(c.Query("mode"))
-	if raw == "" {
-		// Empty means "use server default" (DB setting ops_query_mode_default).
-		return ""
-	}
-	return service.ParseOpsQueryMode(raw)
 }

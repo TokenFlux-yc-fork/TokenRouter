@@ -1551,9 +1551,6 @@ type OpsConfig struct {
 	// This config flag is the "hard switch" for deployments that want to disable ops completely.
 	Enabled bool `mapstructure:"enabled"`
 
-	// UsePreaggregatedTables prefers ops_metrics_hourly/daily for long-window dashboard queries.
-	UsePreaggregatedTables bool `mapstructure:"use_preaggregated_tables"`
-
 	// Cleanup controls periodic deletion of old ops data to prevent unbounded growth.
 	Cleanup OpsCleanupConfig `mapstructure:"cleanup"`
 
@@ -2194,7 +2191,6 @@ func setDefaults() {
 	viper.SetDefault("image_storage.max_download_bytes", 33554432)
 	// Ops (vNext)
 	viper.SetDefault("ops.enabled", true)
-	viper.SetDefault("ops.use_preaggregated_tables", true)
 	viper.SetDefault("ops.cleanup.enabled", true)
 	viper.SetDefault("ops.cleanup.schedule", "0 3 * * *")
 	viper.SetDefault("ops.cleanup.batch_size", 1000)

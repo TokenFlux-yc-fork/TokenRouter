@@ -18,7 +18,7 @@ const OpenAIResponsesMaxOutputTokensCapabilityVersion = "responses_max_output_to
 
 const (
 	OpenAIResponsesMaxOutputTokensUnsupportedReason        GatewayFailureReason = "openai_responses_max_output_tokens_unsupported"
-	OpenAIResponsesMaxOutputTokensUnsupportedClientMessage                      = "No available upstream account supports max_output_tokens"
+	OpenAIResponsesMaxOutputTokensUnsupportedClientMessage string               = "No available upstream account supports max_output_tokens"
 )
 
 type OpenAIResponsesMaxOutputTokensCapabilityKey struct {

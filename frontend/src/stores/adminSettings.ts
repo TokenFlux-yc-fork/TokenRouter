@@ -26,28 +26,9 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
     }
   }
 
-  const readCachedString = (key: string, defaultValue: string): string => {
-    try {
-      const raw = localStorage.getItem(key)
-      if (typeof raw === 'string' && raw.length > 0) return raw
-    } catch {
-      // ignore localStorage failures
-    }
-    return defaultValue
-  }
-
-  const writeCachedString = (key: string, value: string) => {
-    try {
-      localStorage.setItem(key, value)
-    } catch {
-      // ignore localStorage failures
-    }
-  }
-
   // Default open, but honor cached value to reduce UI flicker on first paint.
   const opsMonitoringEnabled = ref(readCachedBool('ops_monitoring_enabled_cached', true))
   const opsRealtimeMonitoringEnabled = ref(readCachedBool('ops_realtime_monitoring_enabled_cached', true))
-  const opsQueryModeDefault = ref(readCachedString('ops_query_mode_default_cached', 'auto'))
   const paymentEnabled = ref(readCachedBool('payment_enabled_cached', false))
   const customMenuItems = ref<CustomMenuItem[]>([])
 
@@ -66,9 +47,6 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
 
       opsRealtimeMonitoringEnabled.value = settings.ops_realtime_monitoring_enabled ?? true
       writeCachedBool('ops_realtime_monitoring_enabled_cached', opsRealtimeMonitoringEnabled.value)
-
-      opsQueryModeDefault.value = settings.ops_query_mode_default || 'auto'
-      writeCachedString('ops_query_mode_default_cached', opsQueryModeDefault.value)
 
       customMenuItems.value = Array.isArray(settings.custom_menu_items) ? settings.custom_menu_items : []
 
@@ -103,12 +81,6 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
     loaded.value = true
   }
 
-  function setOpsQueryModeDefaultLocal(value: string) {
-    opsQueryModeDefault.value = value || 'auto'
-    writeCachedString('ops_query_mode_default_cached', opsQueryModeDefault.value)
-    loaded.value = true
-  }
-
   // Keep UI consistent if we learn that ops is disabled via feature-gated 404s.
   // (event is dispatched from the axios interceptor)
   let eventHandlerCleanup: (() => void) | null = null
@@ -138,13 +110,11 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
     loading,
     opsMonitoringEnabled,
     opsRealtimeMonitoringEnabled,
-    opsQueryModeDefault,
     paymentEnabled,
     customMenuItems,
     fetch,
     setOpsMonitoringEnabledLocal,
     setOpsRealtimeMonitoringEnabledLocal,
-    setPaymentEnabledLocal,
-    setOpsQueryModeDefaultLocal
+    setPaymentEnabledLocal
   }
 })

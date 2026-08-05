@@ -17,11 +17,32 @@
               <p class="truncate font-mono text-sm text-gray-500">{{ key.key.substring(0, 20) }}...{{ key.key.substring(key.key.length - 8) }}</p>
             </div>
           </div>
-          <div class="mt-3 flex flex-wrap gap-4 text-xs text-gray-500">
-            <div class="flex items-center gap-1">
+          <div class="mt-3 flex flex-wrap items-start gap-4 text-xs text-gray-500">
+            <!-- 复合 Key 没有单一 group_id，需要展示完整的前缀分组映射。 -->
+            <div
+              v-if="key.is_composite"
+              data-testid="composite-group-mappings"
+              class="flex w-full min-w-0 items-start gap-1 sm:w-auto sm:min-w-80 sm:flex-1"
+            >
+              <span class="shrink-0 py-1">{{ t('admin.users.group') }}:</span>
+              <div v-if="key.composite_groups?.length" class="flex min-w-0 flex-wrap gap-1.5">
+                <span
+                  v-for="binding in key.composite_groups"
+                  :key="`${key.id}-${binding.group_id}-${binding.prefix}`"
+                  class="inline-flex max-w-full min-w-0 items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-1.5 py-1 dark:border-dark-600 dark:bg-dark-700"
+                >
+                  <span class="max-w-24 truncate font-mono font-semibold text-primary-700 dark:text-primary-300">{{ binding.prefix }}</span>
+                  <span class="text-gray-300 dark:text-dark-500">/</span>
+                  <span class="max-w-36 truncate text-gray-600 dark:text-dark-300">{{ binding.group?.name || `#${binding.group_id}` }}</span>
+                </span>
+              </div>
+              <span v-else class="py-1 text-gray-400 italic">{{ t('admin.users.none') }}</span>
+            </div>
+            <div v-else class="flex items-center gap-1">
               <span>{{ t('admin.users.group') }}:</span>
               <button
                 :ref="(el) => setGroupButtonRef(key.id, el)"
+                data-testid="api-key-group-selector"
                 @click="openGroupSelector(key)"
                 class="-mx-1 -my-0.5 flex cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-gray-100 dark:hover:bg-dark-700"
                 :disabled="updatingKeyIds.has(key.id)"
@@ -180,6 +201,8 @@ const DROPDOWN_HEIGHT = 272 // max-h-64 = 16rem = 256px + padding
 const DROPDOWN_GAP = 4
 
 const openGroupSelector = (key: ApiKey) => {
+  // 复合 Key 的分组由前缀映射维护，不能通过普通分组选择器修改。
+  if (key.is_composite) return
   if (groupSelectorKeyId.value === key.id) {
     closeGroupSelector()
   } else {

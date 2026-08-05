@@ -9,19 +9,26 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/usagestats"
 	"github.com/TokenFlux/TokenRouter/internal/service"
+	"golang.org/x/sync/errgroup"
 )
 
 // getPerformanceStats 获取 RPM 和 TPM（近5分钟平均值，可选纳入 Owner 团队）。
 func (r *usageLogRepository) getPerformanceStats(ctx context.Context, userID int64, includeOwnedTeam bool) (rpm, tpm int64, err error) {
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
+	args := []any{fiveMinutesAgo}
+	source, scopeCondition, args, err := r.buildUsageLogScopeSource(ctx, args, userID, includeOwnedTeam, "")
+	if err != nil {
+		return 0, 0, err
+	}
 	query := `
 		SELECT
 			COUNT(*) as request_count,
 			COALESCE(SUM(input_tokens + output_tokens), 0) as token_count
-		FROM usage_logs
+		FROM ` + source + `
 		WHERE created_at >= $1`
-	args := []any{fiveMinutesAgo}
-	query, args = appendUserUsageScopeQueryFilter(query, args, userID, includeOwnedTeam, "")
+	if scopeCondition != "" {
+		query += " AND " + scopeCondition
+	}
 
 	var requestCount int64
 	var tokenCount int64
@@ -75,19 +82,48 @@ func (r *usageLogRepository) GetUserStats(ctx context.Context, userID int64, sta
 // DashboardStats 仪表盘统计
 type DashboardStats = usagestats.DashboardStats
 
+// runDashboardQueries 仅在连接池上并行查询；事务等单连接执行器必须串行使用。
+func (r *usageLogRepository) runDashboardQueries(ctx context.Context, queries ...func(context.Context) error) error {
+	if r.db == nil {
+		for _, query := range queries {
+			if err := query(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	for _, query := range queries {
+		group.Go(func() error { return query(groupCtx) })
+	}
+	return group.Wait()
+}
+
 func (r *usageLogRepository) GetDashboardStats(ctx context.Context) (*DashboardStats, error) {
+	if r.preAggregation != nil && !r.preAggregation.UsageEnabled(ctx) {
+		return r.GetDashboardStatsWithRange(ctx, time.Unix(0, 0), time.Now())
+	}
 	stats := &DashboardStats{}
 	now := timezone.Now()
 	todayStart := timezone.Today()
 
-	if err := r.fillDashboardEntityStats(ctx, stats, todayStart, now); err != nil {
-		return nil, err
-	}
-	if err := r.fillDashboardUsageStatsAggregated(ctx, stats, todayStart, now); err != nil {
-		return nil, err
-	}
-
-	rpm, tpm, err := r.getPerformanceStats(ctx, 0, false)
+	// 实体、聚合用量和近五分钟性能彼此独立，并行读取可缩短接口关键路径。
+	var rpm, tpm int64
+	err := r.runDashboardQueries(
+		ctx,
+		func(queryCtx context.Context) error {
+			return r.fillDashboardEntityStats(queryCtx, stats, todayStart, now)
+		},
+		func(queryCtx context.Context) error {
+			return r.fillDashboardUsageStatsAggregated(queryCtx, stats, todayStart, now)
+		},
+		func(queryCtx context.Context) error {
+			var err error
+			rpm, tpm, err = r.getPerformanceStats(queryCtx, 0, false)
+			return err
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -133,17 +169,6 @@ func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats
 		FROM users
 		WHERE deleted_at IS NULL
 	`
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		userStatsQuery,
-		[]any{todayUTC},
-		&stats.TotalUsers,
-		&stats.TodayNewUsers,
-	); err != nil {
-		return err
-	}
-
 	apiKeyStatsQuery := `
 		SELECT
 			COUNT(*) as total_api_keys,
@@ -151,17 +176,6 @@ func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats
 		FROM api_keys
 		WHERE deleted_at IS NULL
 	`
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		apiKeyStatsQuery,
-		[]any{service.StatusActive},
-		&stats.TotalAPIKeys,
-		&stats.ActiveAPIKeys,
-	); err != nil {
-		return err
-	}
-
 	accountStatsQuery := `
 		SELECT
 			COUNT(*) as total_accounts,
@@ -172,94 +186,68 @@ func (r *usageLogRepository) fillDashboardEntityStats(ctx context.Context, stats
 		FROM accounts
 		WHERE deleted_at IS NULL
 	`
-	if err := scanSingleRow(
+	return r.runDashboardQueries(
 		ctx,
-		r.sql,
-		accountStatsQuery,
-		[]any{service.StatusActive, service.StatusError, now, now},
-		&stats.TotalAccounts,
-		&stats.NormalAccounts,
-		&stats.ErrorAccounts,
-		&stats.RateLimitAccounts,
-		&stats.OverloadAccounts,
-	); err != nil {
-		return err
-	}
-
-	return nil
+		func(queryCtx context.Context) error {
+			return scanSingleRow(queryCtx, r.sql, userStatsQuery, []any{todayUTC}, &stats.TotalUsers, &stats.TodayNewUsers)
+		},
+		func(queryCtx context.Context) error {
+			return scanSingleRow(queryCtx, r.sql, apiKeyStatsQuery, []any{service.StatusActive}, &stats.TotalAPIKeys, &stats.ActiveAPIKeys)
+		},
+		func(queryCtx context.Context) error {
+			return scanSingleRow(
+				queryCtx, r.sql, accountStatsQuery,
+				[]any{service.StatusActive, service.StatusError, now, now},
+				&stats.TotalAccounts, &stats.NormalAccounts, &stats.ErrorAccounts,
+				&stats.RateLimitAccounts, &stats.OverloadAccounts,
+			)
+		},
+	)
 }
 
 func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Context, stats *DashboardStats, todayUTC, now time.Time) error {
-	totalStatsQuery := `
+	combinedStatsQuery := `
 		SELECT
-			COALESCE(SUM(total_requests), 0) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens), 0) as total_cache_creation_tokens,
-			COALESCE(SUM(cache_read_tokens), 0) as total_cache_read_tokens,
-			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(SUM(account_cost), 0) as total_account_cost,
-			COALESCE(SUM(total_duration_ms), 0) as total_duration_ms
+			COALESCE(SUM(total_requests), 0), COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cache_creation_tokens), 0),
+			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(total_cost), 0),
+			COALESCE(SUM(actual_cost), 0), COALESCE(SUM(account_cost), 0),
+			COALESCE(SUM(total_duration_ms), 0),
+			COALESCE(SUM(total_requests) FILTER (WHERE bucket_date = $1::date), 0),
+			COALESCE(SUM(input_tokens) FILTER (WHERE bucket_date = $1::date), 0),
+			COALESCE(SUM(output_tokens) FILTER (WHERE bucket_date = $1::date), 0),
+			COALESCE(SUM(cache_creation_tokens) FILTER (WHERE bucket_date = $1::date), 0),
+			COALESCE(SUM(cache_read_tokens) FILTER (WHERE bucket_date = $1::date), 0),
+			COALESCE(SUM(total_cost) FILTER (WHERE bucket_date = $1::date), 0),
+			COALESCE(SUM(actual_cost) FILTER (WHERE bucket_date = $1::date), 0),
+			COALESCE(SUM(account_cost) FILTER (WHERE bucket_date = $1::date), 0),
+			COALESCE(MAX(active_users) FILTER (WHERE bucket_date = $1::date), 0)
 		FROM usage_dashboard_daily
 	`
 	var totalDurationMs int64
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		totalStatsQuery,
-		nil,
-		&stats.TotalRequests,
-		&stats.TotalInputTokens,
-		&stats.TotalOutputTokens,
-		&stats.TotalCacheCreationTokens,
-		&stats.TotalCacheReadTokens,
-		&stats.TotalCost,
-		&stats.TotalActualCost,
-		&stats.TotalAccountCost,
-		&totalDurationMs,
-	); err != nil {
-		return err
+	combinedStats := func(queryCtx context.Context) error {
+		return scanSingleRow(
+			queryCtx, r.sql, combinedStatsQuery, []any{todayUTC},
+			&stats.TotalRequests,
+			&stats.TotalInputTokens,
+			&stats.TotalOutputTokens,
+			&stats.TotalCacheCreationTokens,
+			&stats.TotalCacheReadTokens,
+			&stats.TotalCost,
+			&stats.TotalActualCost,
+			&stats.TotalAccountCost,
+			&totalDurationMs,
+			&stats.TodayRequests,
+			&stats.TodayInputTokens,
+			&stats.TodayOutputTokens,
+			&stats.TodayCacheCreationTokens,
+			&stats.TodayCacheReadTokens,
+			&stats.TodayCost,
+			&stats.TodayActualCost,
+			&stats.TodayAccountCost,
+			&stats.ActiveUsers,
+		)
 	}
-	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
-	if stats.TotalRequests > 0 {
-		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
-	}
-
-	todayStatsQuery := `
-		SELECT
-			total_requests as today_requests,
-			input_tokens as today_input_tokens,
-			output_tokens as today_output_tokens,
-			cache_creation_tokens as today_cache_creation_tokens,
-			cache_read_tokens as today_cache_read_tokens,
-			total_cost as today_cost,
-			actual_cost as today_actual_cost,
-			account_cost as today_account_cost,
-			active_users as active_users
-		FROM usage_dashboard_daily
-		WHERE bucket_date = $1::date
-	`
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		todayStatsQuery,
-		[]any{todayUTC},
-		&stats.TodayRequests,
-		&stats.TodayInputTokens,
-		&stats.TodayOutputTokens,
-		&stats.TodayCacheCreationTokens,
-		&stats.TodayCacheReadTokens,
-		&stats.TodayCost,
-		&stats.TodayActualCost,
-		&stats.TodayAccountCost,
-		&stats.ActiveUsers,
-	); err != nil {
-		if err != sql.ErrNoRows {
-			return err
-		}
-	}
-	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
 
 	hourlyActiveQuery := `
 		SELECT active_users
@@ -267,10 +255,21 @@ func (r *usageLogRepository) fillDashboardUsageStatsAggregated(ctx context.Conte
 		WHERE bucket_start = $1
 	`
 	hourStart := now.In(timezone.Location()).Truncate(time.Hour)
-	if err := scanSingleRow(ctx, r.sql, hourlyActiveQuery, []any{hourStart}, &stats.HourlyActiveUsers); err != nil {
-		if err != sql.ErrNoRows {
-			return err
+	hourlyActive := func(queryCtx context.Context) error {
+		if err := scanSingleRow(queryCtx, r.sql, hourlyActiveQuery, []any{hourStart}, &stats.HourlyActiveUsers); err != nil {
+			if err != sql.ErrNoRows {
+				return err
+			}
 		}
+		return nil
+	}
+	if err := r.runDashboardQueries(ctx, combinedStats, hourlyActive); err != nil {
+		return err
+	}
+	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
+	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
+	if stats.TotalRequests > 0 {
+		stats.AverageDurationMs = float64(totalDurationMs) / float64(stats.TotalRequests)
 	}
 
 	return nil
@@ -376,113 +375,101 @@ type PlatformDashboardStats = usagestats.PlatformDashboardStats
 
 // GetUserDashboardStats 获取用户专属的仪表盘统计
 func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID int64) (*UserDashboardStats, error) {
+	if stats, ok, err := r.getUserDashboardStatsFromAnalytics(ctx, userID); err == nil && ok {
+		return stats, nil
+	} else if err != nil {
+		r.logUsageAnalyticsFallback("user_dashboard", err)
+	}
 	stats := &UserDashboardStats{}
 	today := timezone.Today()
-
-	// API Key 统计；标量团队子查询依赖每个用户至多一个活跃团队的唯一约束。
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		`SELECT COUNT(*) FROM api_keys
-		 WHERE deleted_at IS NULL
-		   AND (user_id = $1 OR team_id = (
-		       SELECT tm.team_id FROM team_memberships tm
-		       WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
-		   ))`,
-		[]any{userID},
-		&stats.TotalAPIKeys,
-	); err != nil {
-		return nil, err
-	}
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		`SELECT COUNT(*) FROM api_keys
-		 WHERE status = $2 AND deleted_at IS NULL
-		   AND (user_id = $1 OR team_id = (
-		       SELECT tm.team_id FROM team_memberships tm
-		       WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
-		   ))`,
-		[]any{userID, service.StatusActive},
-		&stats.ActiveAPIKeys,
-	); err != nil {
-		return nil, err
-	}
-
-	// 累计 Token 统计
-	totalStatsQuery := `
-		SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens), 0) as total_cache_creation_tokens,
-			COALESCE(SUM(cache_read_tokens), 0) as total_cache_read_tokens,
-			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(AVG(duration_ms), 0) as avg_duration_ms
-		FROM usage_logs
-		WHERE user_id = $1 OR team_id = (
-			SELECT tm.team_id FROM team_memberships tm
-			WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
-		)
-	`
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		totalStatsQuery,
-		[]any{userID},
-		&stats.TotalRequests,
-		&stats.TotalInputTokens,
-		&stats.TotalOutputTokens,
-		&stats.TotalCacheCreationTokens,
-		&stats.TotalCacheReadTokens,
-		&stats.TotalCost,
-		&stats.TotalActualCost,
-		&stats.AverageDurationMs,
-	); err != nil {
-		return nil, err
-	}
-	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
-
-	// 今日 Token 统计
-	todayStatsQuery := `
-		SELECT
-			COUNT(*) as today_requests,
-			COALESCE(SUM(input_tokens), 0) as today_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as today_output_tokens,
-			COALESCE(SUM(cache_creation_tokens), 0) as today_cache_creation_tokens,
-			COALESCE(SUM(cache_read_tokens), 0) as today_cache_read_tokens,
-			COALESCE(SUM(total_cost), 0) as today_cost,
-			COALESCE(SUM(actual_cost), 0) as today_actual_cost
-		FROM usage_logs
-		WHERE created_at >= $2
-		  AND (user_id = $1 OR team_id = (
-			SELECT tm.team_id FROM team_memberships tm
-			WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL
-		  ))
-	`
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		todayStatsQuery,
-		[]any{userID, today},
-		&stats.TodayRequests,
-		&stats.TodayInputTokens,
-		&stats.TodayOutputTokens,
-		&stats.TodayCacheCreationTokens,
-		&stats.TodayCacheReadTokens,
-		&stats.TodayCost,
-		&stats.TodayActualCost,
-	); err != nil {
-		return nil, err
-	}
-	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
-
-	// 性能指标：RPM 和 TPM（最近5分钟，包含 Owner 团队请求）。
-	rpm, tpm, err := r.getPerformanceStats(ctx, userID, true)
+	teamID, err := r.getOwnedTeamID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
+	group, groupCtx := errgroup.WithContext(ctx)
+
+	// 用户和 Owner 团队分别使用索引扫描；第二分支排除用户本人，保证只统计一次。
+	group.Go(func() error {
+		return scanSingleRow(groupCtx, r.sql, `
+			WITH scoped AS (
+				SELECT status FROM api_keys
+				WHERE deleted_at IS NULL AND user_id = $1
+				UNION ALL
+				SELECT status FROM api_keys
+				WHERE deleted_at IS NULL AND $2 > 0 AND team_id = $2 AND user_id <> $1
+			)
+			SELECT COUNT(*), COUNT(*) FILTER (WHERE status = $3) FROM scoped
+		`, []any{userID, teamID, service.StatusActive}, &stats.TotalAPIKeys, &stats.ActiveAPIKeys)
+	})
+
+	// 累计和今日统计共用同一组可索引范围，避免重复扫描大型使用记录表。
+	var totalDuration, durationCount int64
+	usageStatsQuery := `
+		WITH scoped AS (
+			SELECT created_at, input_tokens, output_tokens, cache_creation_tokens,
+			       cache_read_tokens, total_cost, actual_cost, duration_ms
+			FROM usage_logs WHERE user_id = $1
+			UNION ALL
+			SELECT created_at, input_tokens, output_tokens, cache_creation_tokens,
+			       cache_read_tokens, total_cost, actual_cost, duration_ms
+			FROM usage_logs
+			WHERE $2 > 0 AND team_id = $2 AND user_id <> $1
+		)
+		SELECT
+			COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM(cache_read_tokens), 0),
+			COALESCE(SUM(total_cost), 0), COALESCE(SUM(actual_cost), 0),
+			COALESCE(SUM(COALESCE(duration_ms, 0)), 0), COUNT(duration_ms),
+			COUNT(*) FILTER (WHERE created_at >= $3),
+			COALESCE(SUM(input_tokens) FILTER (WHERE created_at >= $3), 0),
+			COALESCE(SUM(output_tokens) FILTER (WHERE created_at >= $3), 0),
+			COALESCE(SUM(cache_creation_tokens) FILTER (WHERE created_at >= $3), 0),
+			COALESCE(SUM(cache_read_tokens) FILTER (WHERE created_at >= $3), 0),
+			COALESCE(SUM(total_cost) FILTER (WHERE created_at >= $3), 0),
+			COALESCE(SUM(actual_cost) FILTER (WHERE created_at >= $3), 0)
+		FROM scoped
+	`
+	group.Go(func() error {
+		return scanSingleRow(
+			groupCtx,
+			r.sql,
+			usageStatsQuery,
+			[]any{userID, teamID, today},
+			&stats.TotalRequests,
+			&stats.TotalInputTokens,
+			&stats.TotalOutputTokens,
+			&stats.TotalCacheCreationTokens,
+			&stats.TotalCacheReadTokens,
+			&stats.TotalCost,
+			&stats.TotalActualCost,
+			&totalDuration,
+			&durationCount,
+			&stats.TodayRequests,
+			&stats.TodayInputTokens,
+			&stats.TodayOutputTokens,
+			&stats.TodayCacheCreationTokens,
+			&stats.TodayCacheReadTokens,
+			&stats.TodayCost,
+			&stats.TodayActualCost,
+		)
+	})
+
+	// 近五分钟窗口有独立时间索引，与累计统计并行执行。
+	var rpm, tpm int64
+	group.Go(func() error {
+		var performanceErr error
+		rpm, tpm, performanceErr = r.getPerformanceStatsForScope(groupCtx, userID, teamID)
+		return performanceErr
+	})
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	if durationCount > 0 {
+		stats.AverageDurationMs = float64(totalDuration) / float64(durationCount)
+	}
+	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheCreationTokens + stats.TotalCacheReadTokens
+	stats.TodayTokens = stats.TodayInputTokens + stats.TodayOutputTokens + stats.TodayCacheCreationTokens + stats.TodayCacheReadTokens
+
 	stats.Rpm = rpm
 	stats.Tpm = tpm
 

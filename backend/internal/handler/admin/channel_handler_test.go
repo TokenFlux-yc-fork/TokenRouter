@@ -443,7 +443,7 @@ func TestGetModelDefaultPricing_QoderAliasRequiresManualPricing(t *testing.T) {
 	billingSvc := service.NewBillingService(nil, nil)
 	router := setupModelDefaultPricingRouter(billingSvc)
 
-	for _, model := range []string{"claude-opus-4-6", "CLAUDE-OPUS-4-6"} {
+	for _, model := range []string{"claude-opus-4-6", "CLAUDE-OPUS-4-6", "qwen3.8-max", "QWEN3.8-MAX"} {
 		t.Run(model, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/channels/model-pricing?platform=qoder&model="+model, nil)
 			w := httptest.NewRecorder()
@@ -475,7 +475,7 @@ func TestGetModelDefaultPricing_QoderRouteKeysRequireManualPricing(t *testing.T)
 	billingSvc := service.NewBillingService(nil, nil)
 	router := setupModelDefaultPricingRouter(billingSvc)
 
-	for _, model := range []string{"qmodel", "ultimate", "q35model", "gmodel"} {
+	for _, model := range []string{"qmodel", "qmodel_38max", "ultimate", "q35model", "gmodel"} {
 		req := httptest.NewRequest(http.MethodGet, "/channels/model-pricing?platform=qoder&model="+model, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -572,7 +572,7 @@ func TestSyncPricingModels_QoderUsesDefaultAliases(t *testing.T) {
 		"performance",
 		"efficient",
 		"lite",
-		"qwen3.8-max-preview",
+		"qwen3.8-max",
 		"qwen3.7-max",
 		"qwen3.7-plus",
 		// 定价同步接口需要包含 Qoder 新增的 Kimi-K3 alias。

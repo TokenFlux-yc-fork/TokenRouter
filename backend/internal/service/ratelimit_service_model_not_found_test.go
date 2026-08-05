@@ -372,24 +372,28 @@ func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelUsesModelRateLi
 	require.WithinDuration(t, time.Now().Add(upstreamCodexPlanGatedModelCooldown), call.resetAt, 5*time.Second)
 }
 
-func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelRespectsModelMapping(t *testing.T) {
+func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelUsesFinalUpstreamModel(t *testing.T) {
 	repo := &modelNotFoundAccountRepoStub{}
 	svc := &RateLimitService{accountRepo: repo}
 	account := openAICodexPlanGatedOAuthAccount()
-	account.Credentials["model_mapping"] = map[string]any{"gpt-5.6-sol": "gpt-5.6-sol-upstream"}
+	// 状态入口接收实际发送的最终上游 ID，即使该 ID 也是映射键也不得再次映射。
+	account.Credentials["model_mapping"] = map[string]any{
+		"gpt-5.6-sol":       "external-model-v1",
+		"external-model-v1": "unexpected-remap",
+	}
 
 	handled := svc.HandleUpstreamError(
 		context.Background(),
 		account,
 		http.StatusBadRequest,
 		http.Header{},
-		[]byte(`{"detail":"The 'gpt-5.6-sol-upstream' model is not supported when using Codex with a ChatGPT account."}`),
-		"gpt-5.6-sol",
+		[]byte(`{"detail":"The 'external-model-v1' model is not supported when using Codex with a ChatGPT account."}`),
+		"external-model-v1",
 	)
 
 	require.True(t, handled)
 	require.Len(t, repo.modelRateLimitCalls, 1)
-	require.Equal(t, "gpt-5.6-sol-upstream", repo.modelRateLimitCalls[0].scope)
+	require.Equal(t, "external-model-v1", repo.modelRateLimitCalls[0].scope)
 }
 
 func TestRateLimitService_HandleUpstreamError_CodexPlanGatedModelIgnoresAPIKeyAccount(t *testing.T) {

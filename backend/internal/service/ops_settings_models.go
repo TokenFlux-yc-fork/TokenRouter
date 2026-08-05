@@ -90,10 +90,9 @@ type OpsAlertRuntimeSettings struct {
 	Thresholds      OpsMetricThresholds        `json:"thresholds"` // 指标阈值配置
 }
 
-// OpsAdvancedSettings stores advanced ops configuration (data retention, aggregation).
+// OpsAdvancedSettings 存储运维模块自身的高级配置；预聚合由统一设置单独管理。
 type OpsAdvancedSettings struct {
 	DataRetention               OpsDataRetentionSettings               `json:"data_retention"`
-	Aggregation                 OpsAggregationSettings                 `json:"aggregation"`
 	OpenAIAccountQuotaAutoPause OpsOpenAIAccountQuotaAutoPauseSettings `json:"openai_account_quota_auto_pause"`
 	IgnoreCountTokensErrors     bool                                   `json:"ignore_count_tokens_errors"`
 	IgnoreContextCanceled       bool                                   `json:"ignore_context_canceled"`
@@ -121,8 +120,4 @@ type OpsDataRetentionSettings struct {
 	ErrorLogRetentionDays      int    `json:"error_log_retention_days"`
 	MinuteMetricsRetentionDays int    `json:"minute_metrics_retention_days"`
 	HourlyMetricsRetentionDays int    `json:"hourly_metrics_retention_days"`
-}
-
-type OpsAggregationSettings struct {
-	AggregationEnabled bool `json:"aggregation_enabled"`
 }

@@ -7,8 +7,6 @@
 import { apiClient, buildGatewayUrl } from '../client'
 import type { PaginatedResponse } from '@/types'
 
-export type OpsQueryMode = 'auto' | 'raw' | 'preagg'
-
 export interface OpsRequestOptions {
   signal?: AbortSignal
 }
@@ -215,7 +213,6 @@ export interface OpsLatencyHistogramParams {
   end_time?: string
   platform?: string
   group_id?: number | null
-  mode?: OpsQueryMode
   bucket_boundaries_ms?: number[]
 }
 
@@ -833,7 +830,6 @@ export interface OpsOpenAIAccountQuotaAutoPauseSettings {
 
 export interface OpsAdvancedSettings {
   data_retention: OpsDataRetentionSettings
-  aggregation: OpsAggregationSettings
   openai_account_quota_auto_pause: OpsOpenAIAccountQuotaAutoPauseSettings
   ignore_count_tokens_errors: boolean
   ignore_context_canceled: boolean
@@ -855,10 +851,6 @@ export interface OpsDataRetentionSettings {
   error_log_retention_days: number
   minute_metrics_retention_days: number
   hourly_metrics_retention_days: number
-}
-
-export interface OpsAggregationSettings {
-  aggregation_enabled: boolean
 }
 
 export interface OpsRuntimeLogConfig {
@@ -1016,7 +1008,6 @@ export async function getDashboardOverview(
   end_time?: string
   platform?: string
   group_id?: number | null
-  mode?: OpsQueryMode
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsDashboardOverview> {
@@ -1034,7 +1025,6 @@ export async function getDashboardSnapshotV2(
   end_time?: string
   platform?: string
   group_id?: number | null
-  mode?: OpsQueryMode
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsDashboardSnapshotV2Response> {
@@ -1052,7 +1042,6 @@ export async function getThroughputTrend(
   end_time?: string
   platform?: string
   group_id?: number | null
-  mode?: OpsQueryMode
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsThroughputTrendResponse> {
@@ -1085,7 +1074,6 @@ export async function getErrorTrend(
   end_time?: string
   platform?: string
   group_id?: number | null
-  mode?: OpsQueryMode
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsErrorTrendResponse> {
@@ -1103,7 +1091,6 @@ export async function getErrorDistribution(
   end_time?: string
   platform?: string
   group_id?: number | null
-  mode?: OpsQueryMode
   },
   options: OpsRequestOptions = {}
 ): Promise<OpsErrorDistributionResponse> {

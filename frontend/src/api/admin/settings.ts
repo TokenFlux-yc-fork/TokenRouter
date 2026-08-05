@@ -605,7 +605,6 @@ export interface SystemSettings {
   // Ops Monitoring (vNext)
   ops_monitoring_enabled: boolean;
   ops_realtime_monitoring_enabled: boolean;
-  ops_query_mode_default: "auto" | "raw" | "preagg" | string;
   ops_metrics_interval_seconds: number;
 
   // Claude Code version check
@@ -900,7 +899,6 @@ export interface UpdateSettingsRequest {
   identity_patch_prompt?: string;
   ops_monitoring_enabled?: boolean;
   ops_realtime_monitoring_enabled?: boolean;
-  ops_query_mode_default?: "auto" | "raw" | "preagg" | string;
   ops_metrics_interval_seconds?: number;
   min_claude_code_version?: string;
   max_claude_code_version?: string;
@@ -1565,6 +1563,69 @@ export async function resetWebSearchUsage(payload: {
   );
 }
 
+// --- 预聚合统一配置 ---
+
+export interface PreAggregationTaskSettings {
+  enabled: boolean;
+}
+
+export interface PreAggregationUsageSettings extends PreAggregationTaskSettings {
+  interval_seconds: number;
+}
+
+export interface PreAggregationRuntimeStatus {
+  phase: string;
+  live_watermark?: string;
+  coverage_start?: string;
+  source_oldest_at?: string;
+  lag_seconds: number;
+  last_run_at?: string;
+  last_success_at?: string;
+  last_error_at?: string;
+  last_error?: string;
+  last_duration_ms: number;
+}
+
+export interface PreAggregationSettingsResponse {
+  settings: {
+    usage: PreAggregationUsageSettings;
+    ops: PreAggregationTaskSettings;
+  };
+  availability: {
+    usage_available: boolean;
+    usage_disabled_reason?: string;
+    ops_available: boolean;
+    ops_disabled_reason?: string;
+    manual_backfill_available: boolean;
+    manual_backfill_max_days: number;
+  };
+  usage_status: PreAggregationRuntimeStatus;
+  ops_status: PreAggregationRuntimeStatus;
+}
+
+export async function getPreAggregationSettings(): Promise<PreAggregationSettingsResponse> {
+  const { data } = await apiClient.get<PreAggregationSettingsResponse>(
+    "/admin/settings/pre-aggregation",
+  );
+  return data;
+}
+
+export async function updatePreAggregationSettings(payload: PreAggregationSettingsResponse["settings"]): Promise<PreAggregationSettingsResponse> {
+  const { data } = await apiClient.put<PreAggregationSettingsResponse>(
+    "/admin/settings/pre-aggregation",
+    payload,
+  );
+  return data;
+}
+
+export async function backfillPreAggregation(days: number): Promise<{ status: string; days: number }> {
+  const { data } = await apiClient.post<{ status: string; days: number }>(
+    "/admin/settings/pre-aggregation/backfill",
+    { days },
+  );
+  return data;
+}
+
 export const settingsAPI = {
   getSettings,
   updateSettings,
@@ -1598,6 +1659,9 @@ export const settingsAPI = {
   updateWebSearchEmulationConfig,
   testWebSearchEmulation,
   resetWebSearchUsage,
+  getPreAggregationSettings,
+  updatePreAggregationSettings,
+  backfillPreAggregation,
 };
 
 export default settingsAPI;

@@ -524,13 +524,6 @@ func (s *OpenAIGatewayService) recordOpenAIWSDialPassiveAccountFailure(ctx conte
 	s.recordOpenAIWSPassiveAccountFailure(ctx, account, dialErr.StatusCode, []byte(strings.TrimSpace(err.Error())))
 }
 
-func (s *OpenAIGatewayService) persistOpenAIWSForbiddenSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
-	if s == nil || s.rateLimitService == nil || account == nil || !account.IsOpenAIOAuth() {
-		return
-	}
-	s.rateLimitService.HandleUpstreamError(ctx, account, http.StatusForbidden, headers, responseBody)
-}
-
 func (e *openAIWSUpstreamWarningError) Error() string {
 	if e == nil || e.err == nil {
 		return "openai ws upstream warning"

@@ -121,10 +121,11 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 }
 
 // ProvideAdminSettingHandler 创建带通知邮件模板 API 的后台设置处理器。
-func ProvideAdminSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService, paymentService *service.PaymentService, userAttributeService *service.UserAttributeService, notificationEmailService *service.NotificationEmailService, totpService *service.TotpService, userService *service.UserService) *admin.SettingHandler {
+func ProvideAdminSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService, paymentService *service.PaymentService, userAttributeService *service.UserAttributeService, notificationEmailService *service.NotificationEmailService, totpService *service.TotpService, userService *service.UserService, preAggregationSettings *service.PreAggregationSettingsService, dashboardAggregation *service.DashboardAggregationService, opsAggregation *service.OpsAggregationService) *admin.SettingHandler {
 	h := admin.NewSettingHandler(settingService, emailService, turnstileService, opsService, paymentConfigService, paymentService, userAttributeService)
 	h.SetNotificationEmailService(notificationEmailService)
 	h.SetStepUpDeps(totpService, userService)
+	h.SetPreAggregationDeps(preAggregationSettings, dashboardAggregation, opsAggregation)
 	return h
 }
 

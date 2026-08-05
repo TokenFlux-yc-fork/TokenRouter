@@ -311,17 +311,17 @@ func TestAppendUsageLogBillingModeWhereCondition(t *testing.T) {
 		{
 			name:          "image includes explicit image and legacy image rows",
 			billingMode:   string(service.BillingModeImage),
-			wantCondition: "(billing_mode = $1 OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(image_count, 0) > 0))",
+			wantCondition: "(billing_mode = $1 OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(video_duration_seconds, 0) <= 0 AND COALESCE(image_count, 0) > 0))",
 		},
 		{
-			name:          "video remains exact",
+			name:          "video includes explicit video and legacy video rows",
 			billingMode:   string(service.BillingModeVideo),
-			wantCondition: "billing_mode = $1",
+			wantCondition: "(billing_mode = $1 OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(video_duration_seconds, 0) > 0))",
 		},
 		{
-			name:          "token includes legacy non-image rows",
+			name:          "token includes legacy non-media rows",
 			billingMode:   string(service.BillingModeToken),
-			wantCondition: "(billing_mode = $1 OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(image_count, 0) <= 0))",
+			wantCondition: "(billing_mode = $1 OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(video_duration_seconds, 0) <= 0 AND COALESCE(image_count, 0) <= 0))",
 		},
 		{
 			name:          "per request remains exact",
@@ -342,14 +342,14 @@ func TestAppendUsageLogBillingModeWhereCondition(t *testing.T) {
 func TestAppendUsageLogBillingModeWhereConditionWithAlias(t *testing.T) {
 	conditions, args := appendUsageLogBillingModeWhereConditionWithAlias(nil, nil, string(service.BillingModeImage), "ul")
 
-	require.Equal(t, []string{"(ul.billing_mode = $1 OR ((ul.billing_mode IS NULL OR ul.billing_mode = '') AND COALESCE(ul.image_count, 0) > 0))"}, conditions)
+	require.Equal(t, []string{"(ul.billing_mode = $1 OR ((ul.billing_mode IS NULL OR ul.billing_mode = '') AND COALESCE(ul.video_duration_seconds, 0) <= 0 AND COALESCE(ul.image_count, 0) > 0))"}, conditions)
 	require.Equal(t, []any{string(service.BillingModeImage)}, args)
 }
 
 func TestAppendUsageLogBillingModeQueryFilter(t *testing.T) {
 	query, args := appendUsageLogBillingModeQueryFilter("SELECT * FROM usage_logs WHERE user_id = $1", []any{int64(42)}, string(service.BillingModeToken), "")
 
-	require.Equal(t, "SELECT * FROM usage_logs WHERE user_id = $1 AND (billing_mode = $2 OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(image_count, 0) <= 0))", query)
+	require.Equal(t, "SELECT * FROM usage_logs WHERE user_id = $1 AND (billing_mode = $2 OR ((billing_mode IS NULL OR billing_mode = '') AND COALESCE(video_duration_seconds, 0) <= 0 AND COALESCE(image_count, 0) <= 0))", query)
 	require.Equal(t, []any{int64(42), string(service.BillingModeToken)}, args)
 }
 
@@ -492,8 +492,11 @@ func TestUsageLogRepositoryGetUserModelStatsUsesRequestedModel(t *testing.T) {
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
 
-	mock.ExpectQuery("(?s)SELECT\\s+COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) as model,.*WHERE created_at >= \\$1 AND created_at < \\$2\\s+AND \\(user_id = \\$3 OR team_id = \\(SELECT .*tm.role = 'owner'.*GROUP BY COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) ORDER BY total_tokens DESC").
-		WithArgs(start, end, int64(7)).
+	mock.ExpectQuery("(?s)SELECT \\(.*FROM team_memberships.*tm.user_id = \\$1.*tm.role = 'owner'").
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"team_id"}).AddRow(int64(42)))
+	mock.ExpectQuery("(?s)SELECT\\s+COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) as model,.*SELECT \\* FROM usage_logs WHERE user_id = \\$3.*UNION ALL.*SELECT \\* FROM usage_logs WHERE team_id = \\$4 AND user_id <> \\$3.*WHERE created_at >= \\$1 AND created_at < \\$2.*GROUP BY COALESCE\\(NULLIF\\(TRIM\\(requested_model\\), ''\\), model\\) ORDER BY total_tokens DESC").
+		WithArgs(start, end, int64(7), int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"model", "requests", "input_tokens", "output_tokens",
 			"cache_creation_tokens", "cache_read_tokens", "total_tokens",
@@ -567,60 +570,22 @@ func TestUsageLogRepositoryListPersonalOnlyExcludesTeamUsage(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestAppendUserUsageScopeWhereCondition 验证个人、Owner、别名和已有参数下的统一范围 SQL。
-func TestAppendUserUsageScopeWhereCondition(t *testing.T) {
-	ownerSubquery := "SELECT tm.team_id FROM team_memberships tm WHERE tm.user_id = $1 AND tm.role = 'owner' AND tm.left_at IS NULL"
-	tests := []struct {
-		name             string
-		conditions       []string
-		args             []any
-		includeOwnedTeam bool
-		alias            string
-		wantConditions   []string
-		wantArgs         []any
-	}{
-		{
-			name:           "普通用户只匹配本人",
-			wantConditions: []string{"user_id = $1"},
-			wantArgs:       []any{int64(42)},
-		},
-		{
-			name:             "Owner使用标量团队子查询",
-			includeOwnedTeam: true,
-			wantConditions:   []string{"(user_id = $1 OR team_id = (" + ownerSubquery + "))"},
-			wantArgs:         []any{int64(42)},
-		},
-		{
-			name:             "表别名覆盖两个索引字段",
-			includeOwnedTeam: true,
-			alias:            "ul",
-			wantConditions:   []string{"(ul.user_id = $1 OR ul.team_id = (" + ownerSubquery + "))"},
-			wantArgs:         []any{int64(42)},
-		},
-		{
-			name:             "沿用已有参数占位符",
-			conditions:       []string{"created_at >= $1"},
-			args:             []any{"existing"},
-			includeOwnedTeam: true,
-			wantConditions: []string{
-				"created_at >= $1",
-				"(user_id = $2 OR team_id = (SELECT tm.team_id FROM team_memberships tm WHERE tm.user_id = $2 AND tm.role = 'owner' AND tm.left_at IS NULL))",
-			},
-			wantArgs: []any{"existing", int64(42)},
-		},
-	}
+// TestBuildUsageLogScopeSource 验证 Owner 团队范围使用两个去重的索引分支。
+func TestBuildUsageLogScopeSource(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+	mock.ExpectQuery("(?s)SELECT \\(.*FROM team_memberships.*tm.user_id = \\$1.*tm.role = 'owner'").
+		WithArgs(int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"team_id"}).AddRow(int64(99)))
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			conditions, args := appendUserUsageScopeWhereCondition(tt.conditions, tt.args, 42, tt.includeOwnedTeam, tt.alias)
-
-			require.Equal(t, tt.wantConditions, conditions)
-			require.Equal(t, tt.wantArgs, args)
-			for _, condition := range conditions {
-				require.NotContains(t, condition, "team_id IN (")
-			}
-		})
-	}
+	source, condition, args, err := repo.buildUsageLogScopeSource(context.Background(), []any{"existing"}, 42, true, "ul")
+	require.NoError(t, err)
+	require.Empty(t, condition)
+	require.Contains(t, source, "SELECT * FROM usage_logs WHERE user_id = $2")
+	require.Contains(t, source, "SELECT * FROM usage_logs WHERE team_id = $3 AND user_id <> $2")
+	require.Contains(t, source, ") ul")
+	require.Equal(t, []any{"existing", int64(42), int64(99)}, args)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestUsageLogRepositoryGetStatsWithFiltersRequestTypePriority(t *testing.T) {

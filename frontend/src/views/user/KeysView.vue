@@ -205,6 +205,10 @@
 
           <template #cell-usage="{ row }">
             <div class="text-sm">
+              <div v-if="usageLoading && !usageStats[row.id]" class="flex h-10 items-center text-gray-400">
+                <Icon name="refresh" size="sm" class="animate-spin" />
+              </div>
+              <div v-else class="space-y-0.5">
               <div class="flex items-center gap-1.5">
                 <span class="text-gray-500 dark:text-gray-400">{{ t('keys.today') }}:</span>
                 <span class="font-medium text-gray-900 dark:text-white">
@@ -216,6 +220,7 @@
                 <span class="font-medium text-gray-900 dark:text-white">
                   {{ formatBalanceAmount(usageStats[row.id]?.total_actual_cost ?? 0, { fractionDigits: 4 }) }}
                 </span>
+              </div>
               </div>
               <!-- Quota progress (if quota is set) -->
               <div v-if="row.quota > 0" class="mt-1.5">
@@ -1305,6 +1310,7 @@ import type { DataShareNotice } from '@/api/dataSharing'
 import { formatDateTime } from '@/utils/format'
 import {
   buildCcSwitchImportDeeplink,
+  buildCcSwitchUsageScript,
   type CcSwitchClientType
 } from '@/utils/ccswitchImport'
 
@@ -1451,6 +1457,7 @@ const apiKeys = ref<ApiKey[]>([])
 const groups = ref<Group[]>([])
 // 首次 Key 请求开始前也保持加载态，避免公共设置请求期间误显示空列表。
 const loading = ref(true)
+const usageLoading = ref(false)
 const submitting = ref(false)
 const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
@@ -1751,6 +1758,9 @@ const loadApiKeys = async () => {
   abortController = controller
   const { signal } = controller
   loading.value = true
+  // 新一轮列表请求立即清理上一页用量状态，取消竞态不会留下过期单元格。
+  usageLoading.value = false
+  usageStats.value = {}
   try {
     // 构建筛选条件。
     const filters: {
@@ -1775,20 +1785,9 @@ const loadApiKeys = async () => {
     apiKeys.value = response.items
     pagination.value.total = response.total
     pagination.value.pages = response.pages
-
-    // 为当前列表中的 API Key 加载用量统计。
-    if (response.items.length > 0) {
-      const keyIds = response.items.map((k) => k.id)
-      try {
-        const usageResponse = await usageAPI.getDashboardApiKeysUsage(keyIds, { signal })
-        if (signal.aborted) return
-        usageStats.value = usageResponse.stats
-      } catch (e) {
-        if (!isAbortError(e)) {
-          console.error('Failed to load usage stats:', e)
-        }
-      }
-    }
+    // Key 列表先解除加载态，用量单元格在后台独立填充。
+    loading.value = false
+    void loadUsageStats(response.items, controller)
   } catch (error) {
     if (isAbortError(error)) {
       return
@@ -1797,6 +1796,29 @@ const loadApiKeys = async () => {
   } finally {
     if (abortController === controller) {
       loading.value = false
+    }
+  }
+}
+
+const loadUsageStats = async (items: ApiKey[], controller: AbortController) => {
+  usageStats.value = {}
+  if (items.length === 0) {
+    usageLoading.value = false
+    return
+  }
+  usageLoading.value = true
+  try {
+    const keyIds = items.map((key) => key.id)
+    const usageResponse = await usageAPI.getDashboardApiKeysUsage(keyIds, { signal: controller.signal })
+    if (controller.signal.aborted || abortController !== controller) return
+    usageStats.value = usageResponse.stats
+  } catch (error) {
+    if (!isAbortError(error)) {
+      console.error('Failed to load usage stats:', error)
+    }
+  } finally {
+    if (abortController === controller) {
+      usageLoading.value = false
     }
   }
 }
@@ -2401,34 +2423,11 @@ const importToCcswitch = (row: ApiKey) => {
   executeCcsImport(row, platform === 'gemini' ? 'gemini' : 'claude')
 }
 
-const toJsStringLiteral = (value: string) =>
-  JSON.stringify(value || 'USD')
-    .replace(/\u2028/g, '\\u2028')
-    .replace(/\u2029/g, '\\u2029')
-
 const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
   const baseUrl = publicSettings.value?.api_base_url || window.location.origin
   const platform = row.group?.platform || 'anthropic'
 
-  const fallbackUnitLiteral = toJsStringLiteral(balanceUnitName.value)
-  // Anthropic 导入的是根地址，客户端请求时会自行拼接 /v1，用量查询仍要走网关路由。
-  const usagePath = platform === 'anthropic' ? '/v1/usage' : '/usage'
-  const usageScript = `({
-    request: {
-      url: "{{baseUrl}}${usagePath}",
-      method: "GET",
-      headers: { "Authorization": "Bearer {{apiKey}}" }
-    },
-    extractor: function(response) {
-      const remaining = response?.remaining ?? response?.quota?.remaining ?? response?.balance;
-      const unit = response?.unit ?? response?.quota?.unit ?? ${fallbackUnitLiteral};
-      return {
-        isValid: response?.is_active ?? response?.isValid ?? true,
-        remaining,
-        unit
-      };
-    }
-  })`
+  const usageScript = buildCcSwitchUsageScript(baseUrl, balanceUnitName.value)
   const providerName = (publicSettings.value?.site_name || 'sub2api').trim() || 'sub2api'
   const deeplink = buildCcSwitchImportDeeplink({
     baseUrl,

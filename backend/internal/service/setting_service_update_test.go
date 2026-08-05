@@ -592,7 +592,7 @@ func TestSettingService_UpdateSettings_OpenAIQuotaAutoPauseMergesOpsAdvancedSett
 	require.Equal(t, true, got.DataRetention.CleanupEnabled)
 	require.Equal(t, "0 3 * * *", got.DataRetention.CleanupSchedule)
 	require.Equal(t, 14, got.DataRetention.ErrorLogRetentionDays)
-	require.True(t, got.Aggregation.AggregationEnabled)
+	require.NotContains(t, repo.updates[SettingKeyOpsAdvancedSettings], `"aggregation"`)
 	require.False(t, got.IgnoreCountTokensErrors)
 	require.True(t, got.DisplayOpenAITokenStats)
 	require.False(t, got.DisplayAlertEvents)

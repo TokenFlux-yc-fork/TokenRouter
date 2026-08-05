@@ -389,8 +389,8 @@ const (
 	// SettingKeyOpsRealtimeMonitoringEnabled controls realtime features (e.g. WS/QPS push).
 	SettingKeyOpsRealtimeMonitoringEnabled = "ops_realtime_monitoring_enabled"
 
-	// SettingKeyOpsQueryModeDefault controls the default query mode for ops dashboard (auto/raw/preagg).
-	SettingKeyOpsQueryModeDefault = "ops_query_mode_default"
+	// SettingKeyPreAggregationSettings 保存用量与运维预聚合的统一运行时配置。
+	SettingKeyPreAggregationSettings = "pre_aggregation_settings"
 
 	// SettingKeyOpsEmailNotificationConfig stores JSON config for ops email notifications.
 	SettingKeyOpsEmailNotificationConfig = "ops_email_notification_config"

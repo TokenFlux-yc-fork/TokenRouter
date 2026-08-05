@@ -623,12 +623,44 @@ func (r *usageLogRepository) flushBestEffortBatch(db *sql.DB, batch []usageLogBe
 	defer cancel()
 
 	query, args := buildUsageLogBestEffortInsertQuery(preparedList)
-	if _, err := db.ExecContext(ctx, query, args...); err != nil {
-		logger.LegacyPrintf("repository.usage_log", "best-effort batch insert failed: %v", err)
+	startedAt := time.Now()
+	_, err := retryPostgresDeadlock(ctx, "usage_log_best_effort_batch_insert", len(preparedList), func() (sql.Result, error) {
+		return db.ExecContext(ctx, query, args...)
+	})
+	if err != nil {
+		sqlState := postgresSQLState(err)
+		if sqlState == "" {
+			sqlState = "unknown"
+		}
+		attempts := 1
+		if isPostgresDeadlock(err) {
+			attempts = postgresDeadlockMaxAttempts
+		}
+		logger.LegacyPrintf(
+			"repository.usage_log",
+			"operation=usage_log_best_effort_batch_insert sqlstate=%s attempt=%d batch_size=%d retry_succeeded=false fallback_failed=false elapsed_ms=%d error=%v",
+			sqlState,
+			attempts,
+			len(preparedList),
+			time.Since(startedAt).Milliseconds(),
+			err,
+		)
+		fallbackFailures := 0
 		for _, group := range groupOrder {
 			singleErr := execUsageLogInsertNoResult(ctx, db, group.prepared)
 			if singleErr != nil {
-				logger.LegacyPrintf("repository.usage_log", "best-effort single fallback insert failed: %v", singleErr)
+				fallbackFailures++
+				fallbackSQLState := postgresSQLState(singleErr)
+				if fallbackSQLState == "" {
+					fallbackSQLState = "unknown"
+				}
+				logger.LegacyPrintf(
+					"repository.usage_log",
+					"operation=usage_log_best_effort_single_fallback sqlstate=%s attempt=1 batch_size=1 retry_succeeded=false fallback_failed=true elapsed_ms=%d error=%v",
+					fallbackSQLState,
+					time.Since(startedAt).Milliseconds(),
+					singleErr,
+				)
 			} else if group.prepared.requestID != "" && r != nil && r.bestEffortRecent != nil {
 				r.bestEffortRecent.SetDefault(group.key, struct{}{})
 			}
@@ -636,6 +668,15 @@ func (r *usageLogRepository) flushBestEffortBatch(db *sql.DB, batch []usageLogBe
 				sendUsageLogBestEffortResult(req.resultCh, singleErr)
 			}
 		}
+		logger.LegacyPrintf(
+			"repository.usage_log",
+			"operation=usage_log_best_effort_single_fallback sqlstate=%s attempt=1 batch_size=%d retry_succeeded=false fallback_failed=%t elapsed_ms=%d fallback_failures=%d",
+			sqlState,
+			len(groupOrder),
+			fallbackFailures > 0,
+			time.Since(startedAt).Milliseconds(),
+			fallbackFailures,
+		)
 		return
 	}
 	for _, group := range groupOrder {

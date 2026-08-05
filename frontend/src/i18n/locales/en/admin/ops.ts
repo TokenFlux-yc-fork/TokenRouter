@@ -757,11 +757,6 @@ export default {
         closed: 'Realtime closed',
         reconnectIn: 'retry in {seconds}s'
       },
-      queryMode: {
-        auto: 'Auto',
-        raw: 'Raw',
-        preagg: 'Preagg'
-      },
       accountAvailability: {
         available: 'Available',
         unavailable: 'Unavailable',

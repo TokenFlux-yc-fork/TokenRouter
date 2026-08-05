@@ -843,7 +843,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	const maxNeutralEdgeBlockRetries = 2
 	neutralEdgeBlockRetries := 0
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
-	maxOutputCapabilityKey := OpenAIResponsesMaxOutputTokensCapabilityKey{}
+	var maxOutputCapabilityKey OpenAIResponsesMaxOutputTokensCapabilityKey
 	maxOutputCapabilityKeyOK := false
 	for {
 

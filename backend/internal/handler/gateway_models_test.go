@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/TokenFlux/TokenRouter/internal/pkg/xai"
 	middleware2 "github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/gin-gonic/gin"
@@ -343,6 +344,68 @@ func TestGatewayModels_Grok45AdvertisesReasoningEffortForGrokBuild(t *testing.T)
 		{Value: "medium", Label: "Medium"},
 		{Value: "high", Label: "High", Default: true},
 	}, model.ReasoningEfforts)
+}
+
+// TestGatewayModels_GrokDefaultsExcludeBuiltinAliases 验证无显式账号范围时只展示默认模型目录。
+func TestGatewayModels_GrokDefaultsExcludeBuiltinAliases(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(4410)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{ID: 1, Platform: service.PlatformGrok, Credentials: map[string]any{}},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformGrok},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, xai.DefaultModelIDs(), modelIDsForTest(got.Data))
+	require.NotContains(t, modelIDsForTest(got.Data), "grok")
+	require.NotContains(t, modelIDsForTest(got.Data), "grok-latest")
+
+	mappedGroupID := int64(4411)
+	mappedHandler := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				mappedGroupID: {
+					{
+						ID:       2,
+						Platform: service.PlatformGrok,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{"grok": "grok-4.3"},
+						},
+					},
+				},
+			},
+		},
+	)
+	mappedRecorder := httptest.NewRecorder()
+	mappedContext, _ := gin.CreateTestContext(mappedRecorder)
+	mappedContext.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	mappedContext.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: mappedGroupID, Platform: service.PlatformGrok},
+	})
+
+	mappedHandler.Models(mappedContext)
+
+	require.Equal(t, http.StatusOK, mappedRecorder.Code)
+	var mapped gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(mappedRecorder.Body.Bytes(), &mapped))
+	require.Contains(t, modelIDsForTest(mapped.Data), "grok")
 }
 
 func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {

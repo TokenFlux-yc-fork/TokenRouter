@@ -369,6 +369,36 @@ func TestBillingService_GetModelPricing_FailsClosedForImageOnlyEntries(t *testin
 	require.InDelta(t, 0.04, raw.OutputCostPerImage, 1e-12)
 }
 
+// TestBillingService_GetDisplayPricing_ChatImageMetadataKeepsTokenMode 验证聊天模型携带按图元数据时仍展示 token 价格。
+func TestBillingService_GetDisplayPricing_ChatImageMetadataKeepsTokenMode(t *testing.T) {
+	pricingSvc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gemini-3.1-pro-high": {
+			InputCostPerToken:  2e-6,
+			OutputCostPerToken: 12e-6,
+			OutputCostPerImage: 0.00012,
+			Mode:               "chat",
+		},
+		"gemini-3.1-flash-image": {
+			OutputCostPerImage: 0.0672,
+			Mode:               "image_generation",
+		},
+	}}
+	billingSvc := NewBillingService(&config.Config{}, pricingSvc)
+
+	// 聊天模型必须优先展示 token 价格，不能被辅助的按图字段覆盖。
+	chatPricing := billingSvc.GetDisplayPricing("gemini-3.1-pro-high", 8, nil)
+	require.Equal(t, "token", chatPricing.PricingMode)
+	require.Equal(t, "priced", chatPricing.PriceStatus)
+	require.InDelta(t, 16e-6, chatPricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 96e-6, chatPricing.OutputPricePerToken, 1e-12)
+
+	// 明确标记为图片生成的模型仍须沿用按图展示路径。
+	imagePricing := billingSvc.GetDisplayPricing("gemini-3.1-flash-image", 2, nil)
+	require.Equal(t, "image", imagePricing.PricingMode)
+	require.Equal(t, "priced", imagePricing.PriceStatus)
+	require.InDelta(t, 0.1344, imagePricing.ImagePrice1K, 1e-12)
+}
+
 func TestPricingService_MergesFallbackOnlyModels(t *testing.T) {
 	dir := t.TempDir()
 	fallbackFile := filepath.Join(dir, "fallback.json")
@@ -549,6 +579,30 @@ func TestPricingService_Gemini36FlashThinkingTiersUseBasePricing(t *testing.T) {
 	}
 }
 
+// TestPricingService_Gemini35FlashThinkingTiersUseBasePricing 验证 3.5 Flash 思考档位复用基础模型价格。
+func TestPricingService_Gemini35FlashThinkingTiersUseBasePricing(t *testing.T) {
+	basePricing := &LiteLLMModelPricing{
+		InputCostPerToken:       1.5e-6,
+		OutputCostPerToken:      9e-6,
+		CacheReadInputTokenCost: 0.15e-6,
+	}
+	svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gemini-3.5-flash": basePricing,
+	}}
+
+	for _, model := range []string{
+		"gemini-3.5-flash",
+		"gemini-3.5-flash-high",
+		"gemini-3.5-flash-low",
+		"gemini-3.5-flash-medium",
+		"gemini-3.5-flash-tiered",
+	} {
+		t.Run(model, func(t *testing.T) {
+			require.Same(t, basePricing, svc.GetModelPricing(model))
+		})
+	}
+}
+
 func TestPricingService_Gemini36FlashTierSpecificPricingTakesPrecedence(t *testing.T) {
 	basePricing := &LiteLLMModelPricing{InputCostPerToken: 1.5e-6}
 	tierPricing := &LiteLLMModelPricing{InputCostPerToken: 2e-6}
@@ -558,6 +612,41 @@ func TestPricingService_Gemini36FlashTierSpecificPricingTakesPrecedence(t *testi
 	}}
 
 	require.Same(t, tierPricing, svc.GetModelPricing("models/gemini-3.6-flash-low"))
+}
+
+// TestPricingService_Gemini35FlashTierSpecificPricingTakesPrecedence 验证未来出现档位专属价格时优先精确匹配。
+func TestPricingService_Gemini35FlashTierSpecificPricingTakesPrecedence(t *testing.T) {
+	basePricing := &LiteLLMModelPricing{InputCostPerToken: 1.5e-6}
+	tierPricing := &LiteLLMModelPricing{InputCostPerToken: 2e-6}
+	svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gemini-3.5-flash":     basePricing,
+		"gemini-3.5-flash-low": tierPricing,
+	}}
+
+	require.Same(t, tierPricing, svc.GetModelPricing("models/gemini-3.5-flash-low"))
+}
+
+// TestBillingService_Gemini35FlashThinkingTierFallbacksAreBillable 验证远程价格不可用时各档位仍能安全计费。
+func TestBillingService_Gemini35FlashThinkingTierFallbacksAreBillable(t *testing.T) {
+	svc := NewBillingService(&config.Config{}, nil)
+	tokens := UsageTokens{InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 1_000_000}
+
+	for _, model := range []string{
+		"gemini-3.5-flash",
+		"gemini-3.5-flash-high",
+		"gemini-3.5-flash-low",
+		"gemini-3.5-flash-medium",
+		"gemini-3.5-flash-tiered",
+	} {
+		t.Run(model, func(t *testing.T) {
+			cost, err := svc.CalculateCost(model, tokens, 1)
+			require.NoError(t, err)
+			require.InDelta(t, 1.5, cost.InputCost, 1e-12)
+			require.InDelta(t, 9.0, cost.OutputCost, 1e-12)
+			require.InDelta(t, 0.15, cost.CacheReadCost, 1e-12)
+			require.InDelta(t, 10.65, cost.TotalCost, 1e-12)
+		})
+	}
 }
 
 func TestBillingService_Gemini36FlashThinkingTierFallbacksAreBillable(t *testing.T) {
@@ -598,6 +687,28 @@ func TestDefaultPricingIncludesGemini36FlashRates(t *testing.T) {
 			require.NoError(t, err)
 			require.InDelta(t, 1.5e-6, pricing.InputPricePerToken, 1e-12)
 			require.InDelta(t, 7.5e-6, pricing.OutputPricePerToken, 1e-12)
+			require.InDelta(t, 0.15e-6, pricing.CacheReadPricePerToken, 1e-12)
+		})
+	}
+}
+
+// TestDefaultPricingIncludesGemini35FlashRates 验证内置价格快照可覆盖 3.5 Flash 的思考档位别名。
+func TestDefaultPricingIncludesGemini35FlashRates(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"))
+	require.NoError(t, err)
+
+	pricingSvc := &PricingService{}
+	pricingData, err := pricingSvc.parsePricingData(data)
+	require.NoError(t, err)
+	pricingSvc.pricingData = pricingData
+	billingSvc := NewBillingService(&config.Config{}, pricingSvc)
+
+	for _, model := range []string{"gemini-3.5-flash", "gemini-3.5-flash-low", "gemini-3.5-flash-high"} {
+		t.Run(model, func(t *testing.T) {
+			pricing, err := billingSvc.GetModelPricing(model)
+			require.NoError(t, err)
+			require.InDelta(t, 1.5e-6, pricing.InputPricePerToken, 1e-12)
+			require.InDelta(t, 9e-6, pricing.OutputPricePerToken, 1e-12)
 			require.InDelta(t, 0.15e-6, pricing.CacheReadPricePerToken, 1e-12)
 		})
 	}

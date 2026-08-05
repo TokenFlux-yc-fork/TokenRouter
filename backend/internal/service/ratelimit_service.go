@@ -2394,7 +2394,7 @@ func (s *RateLimitService) HandleOpenAIImageRateLimit(ctx context.Context, accou
 		return false
 	}
 
-	resetAt := openAIImageRateLimitResetAt(headers, responseBody)
+	resetAt := s.openAIImageRateLimitResetAt(headers, responseBody)
 	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, openAIImageGenerationRateLimitKey, resetAt, openAIImageRateLimitReason); err != nil {
 		slog.Warn("openai_image_rate_limit_set_model_rate_limit_failed", "account_id", account.ID, "scope", openAIImageGenerationRateLimitKey, "error", err)
 		return true
@@ -2421,12 +2421,12 @@ func isOpenAIImageRateLimitError(statusCode int, body []byte) bool {
 	return false
 }
 
-func openAIImageRateLimitResetAt(headers http.Header, body []byte) time.Time {
+func (s *RateLimitService) openAIImageRateLimitResetAt(headers http.Header, body []byte) time.Time {
 	now := time.Now()
 	if resetAt := parseRetryAfterResetTime(headers, now); resetAt != nil && resetAt.After(now) {
 		return *resetAt
 	}
-	if resetAt := calculateOpenAI429ResetTime(headers); resetAt != nil && resetAt.After(now) {
+	if resetAt := s.calculateOpenAI429ResetTime(headers); resetAt != nil && resetAt.After(now) {
 		return *resetAt
 	}
 	if resetUnix := parseOpenAIRateLimitResetTime(body); resetUnix != nil {
@@ -2502,7 +2502,7 @@ const tempUnschedMessageMaxBytes = 2048
 // HandleUpstreamModelNotFound 在上游确定性无法提供目标模型时临时冷却账号与模型组合，
 // 包括 404 模型不存在及 ChatGPT OAuth 套餐门控返回的 Codex 400。返回 true 表示当前请求
 // 应切换账号；冷却结束前调度器会跳过该组合，避免反复选择必然失败的账号。
-func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, account *Account, requestedModel string, statusCode int, responseBody []byte) bool {
+func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, account *Account, upstreamModel string, statusCode int, responseBody []byte) bool {
 	if s == nil || account == nil || s.accountRepo == nil {
 		return false
 	}
@@ -2523,7 +2523,7 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	default:
 		return false
 	}
-	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel)
+	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, upstreamModel)
 	if modelKey == "" {
 		return false
 	}
@@ -2536,13 +2536,21 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	return true
 }
 
-func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Account, requestedModel string) string {
-	modelKey := strings.TrimSpace(requestedModel)
+func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Account, upstreamModel string) string {
+	modelKey := strings.TrimSpace(upstreamModel)
 	if account == nil || modelKey == "" {
 		return modelKey
 	}
 	if account.Platform == PlatformAntigravity {
 		if resolved := strings.TrimSpace(resolveFinalAntigravityModelKey(ctx, account, modelKey)); resolved != "" {
+			return resolved
+		}
+		return modelKey
+	}
+	if account.Platform == PlatformOpenAI || account.Platform == PlatformGrok {
+		// OpenAI 兼容入口传入的已经是最终上游模型，此处只做平台规范化，
+		// 不能再次应用账号映射，否则链式映射会把状态写到未实际请求的模型上。
+		if resolved := strings.TrimSpace(normalizeOpenAIModelForUpstream(account, modelKey)); resolved != "" {
 			return resolved
 		}
 		return modelKey

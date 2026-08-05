@@ -343,25 +343,30 @@ func TestRuntimeSanityReportsInvalidOverridesWithoutSecrets(t *testing.T) {
 	require.NotContains(t, report.ProxyPolicy, "client-secret-like-value")
 }
 
-func TestDefaultModelMappingIncludesGrokAliases(t *testing.T) {
+func TestNormalizeModelID(t *testing.T) {
 	t.Parallel()
 
-	mapping := DefaultModelMapping()
-	require.Equal(t, "grok-4.5", mapping["grok"])
-	require.Equal(t, "grok-4.5", mapping["grok-latest"])
-	require.Equal(t, "grok-4.5", mapping["grok-4.5"])
-	require.Equal(t, "grok-4.5", mapping["grok-4.5-latest"])
-	require.Equal(t, "grok-build-0.1", mapping["grok-build"])
-	require.Equal(t, "grok-4.5", mapping["grok-build-latest"])
-	require.Equal(t, "grok-composer-2.5-fast", mapping["grok-composer"])
-	require.Equal(t, "grok-composer-2.5-fast", mapping["composer-2.5"])
-	require.Equal(t, "grok-4.20-0309-reasoning", mapping["grok-4.20-reasoning"])
-	require.Equal(t, "grok-4.20-0309-non-reasoning", mapping["grok-4.20-non-reasoning"])
-	require.Equal(t, "grok-4.20-multi-agent-0309", mapping["grok-4.20-multi-agent-0309"])
-	require.Equal(t, "grok-imagine", mapping["grok-imagine"])
-	require.Equal(t, "grok-imagine-image", mapping["grok-imagine-image"])
-	require.Equal(t, "grok-imagine-image-quality", mapping["grok-imagine-image-quality"])
-	require.Equal(t, "grok-imagine-edit", mapping["grok-imagine-edit"])
-	require.Equal(t, "grok-imagine-video", mapping["grok-imagine-video"])
-	require.Equal(t, "grok-imagine-video-1.5", mapping["grok-imagine-video-1.5"])
+	tests := map[string]string{
+		"":                           DefaultResponsesModel,
+		"   ":                        DefaultResponsesModel,
+		"  grok  ":                   DefaultResponsesModel,
+		"grok-latest":                DefaultResponsesModel,
+		"grok-4.5-latest":            DefaultResponsesModel,
+		"grok-build":                 "grok-build-0.1",
+		"grok-build-latest":          DefaultResponsesModel,
+		"grok-composer":              "grok-composer-2.5-fast",
+		"composer-2.5":               "grok-composer-2.5-fast",
+		"grok-4.20-reasoning":        "grok-4.20-0309-reasoning",
+		"grok-4.20-non-reasoning":    "grok-4.20-0309-non-reasoning",
+		"grok-4.5":                   "grok-4.5",
+		"  grok-4.3  ":               "grok-4.3",
+		"grok-4.20-multi-agent-0309": "grok-4.20-multi-agent-0309",
+		"grok-imagine-image-quality": "grok-imagine-image-quality",
+		"GROK":                       "GROK",
+		"xai/grok":                   "xai/grok",
+		"  custom-grok-model  ":      "custom-grok-model",
+	}
+	for input, want := range tests {
+		require.Equal(t, want, NormalizeModelID(input), input)
+	}
 }

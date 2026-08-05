@@ -70,7 +70,7 @@ func (g *Group) ResolveMessagesDispatchModel(requestedModel string) string {
 
 	if g.Platform == PlatformGrok {
 		if claudeMessagesDispatchFamily(requestedModel) != "" {
-			return xai.DefaultModelMapping()["grok"]
+			return xai.DefaultResponsesModel
 		}
 		return ""
 	}

@@ -145,9 +145,10 @@ INSERT INTO ops_system_metrics (
 		opsNullInt(input.RedisConnTotal),
 		opsNullInt(input.RedisConnIdle),
 
-		opsNullInt(input.DBConnActive),
-		opsNullInt(input.DBConnIdle),
-		opsNullInt(input.DBConnWaiting),
+		// 连接池计数的零值表示当前没有连接，不能按缺失值写成 NULL。
+		opsNullableIntPointer(input.DBConnActive),
+		opsNullableIntPointer(input.DBConnIdle),
+		opsNullableIntPointer(input.DBConnWaiting),
 
 		opsNullInt(input.GoroutineCount),
 		opsNullInt(input.ConcurrencyQueueDepth),

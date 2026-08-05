@@ -1417,7 +1417,7 @@ func (s *GatewayService) qoderCanUseDefaultImagePricing(model string) bool {
 	if qoderKnownDefaultImagePricingModel(model) {
 		return true
 	}
-	return s != nil && s.billingService != nil && hasExplicitImagePricing(s.billingService.getRawModelPricing(model))
+	return s != nil && s.billingService != nil && hasExplicitImageGenerationPricing(s.billingService.getRawModelPricing(model))
 }
 
 func (s *GatewayService) resolveChannelPricingForUsage(

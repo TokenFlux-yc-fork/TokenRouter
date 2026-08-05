@@ -205,15 +205,6 @@ func TestPickThroughputBucketSeconds(t *testing.T) {
 	require.Equal(t, 3600, pickThroughputBucketSeconds(48*time.Hour))
 }
 
-func TestParseOpsQueryMode(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/?mode=raw", nil)
-	require.Equal(t, service.ParseOpsQueryMode("raw"), parseOpsQueryMode(c))
-	require.Equal(t, service.OpsQueryMode(""), parseOpsQueryMode(nil))
-}
-
 func TestOpsAlertRuleValidation(t *testing.T) {
 	raw := map[string]json.RawMessage{
 		"name":        json.RawMessage(`"High error rate"`),

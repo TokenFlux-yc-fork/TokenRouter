@@ -2,6 +2,7 @@ package qoder
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -302,7 +303,7 @@ func TestDefaultModels(t *testing.T) {
 		"performance",
 		"efficient",
 		"lite",
-		"qwen3.8-max-preview",
+		"qwen3.8-max",
 		"qwen3.7-max",
 		"qwen3.7-plus",
 		// 验证新增路由会通过默认模型接口对外展示。
@@ -388,12 +389,37 @@ func TestAESDecryptRejectsEmptyCiphertext(t *testing.T) {
 }
 
 func TestBuildPayloadB64(t *testing.T) {
-	b64, err := BuildPayloadB64("test_info", "request123")
-	if err != nil {
-		t.Fatalf("BuildPayloadB64: %v", err)
+	tests := []struct {
+		name  string
+		build func() (string, error)
+		want  string
+	}{
+		{name: "国际站默认版本", build: func() (string, error) {
+			return BuildPayloadB64("test_info", "request123")
+		}, want: "1.21.2"},
+		{name: "国内站显式版本", build: func() (string, error) {
+			return BuildPayloadB64WithVersion("test_info", "request123", CNClientVersion)
+		}, want: "1.10.0"},
 	}
-	if b64 == "" {
-		t.Error("expected non-empty payload")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := tt.build()
+			if err != nil {
+				t.Fatalf("BuildPayloadB64: %v", err)
+			}
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+			var payload map[string]string
+			if err := json.Unmarshal(decoded, &payload); err != nil {
+				t.Fatalf("unmarshal payload: %v", err)
+			}
+			if payload["cosyVersion"] != tt.want {
+				t.Fatalf("cosyVersion = %q, want %q", payload["cosyVersion"], tt.want)
+			}
+		})
 	}
 }
 

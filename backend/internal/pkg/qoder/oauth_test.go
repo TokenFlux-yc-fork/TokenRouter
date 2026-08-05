@@ -250,16 +250,16 @@ func TestDeviceTokenResponseNormalizesExpiryFormats(t *testing.T) {
 
 func TestQoderOAuthClientUsesSiteUserAgent(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		site Site
-		want string
+		name   string
+		site   Site
+		wantUA string
 	}{
-		{name: "国际站", site: SiteGlobal, want: "Qoder/" + GlobalClientVersion},
-		{name: "国内站", site: SiteCN, want: "Qoder CN/" + CNClientVersion},
+		{name: "国际站", site: SiteGlobal, wantUA: "Qoder/1.21.2"},
+		{name: "国内站", site: SiteCN, wantUA: "Qoder CN/1.10.0"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, tt.want, r.Header.Get("User-Agent"))
+				require.Equal(t, tt.wantUA, r.Header.Get("User-Agent"))
 				switch r.URL.Path {
 				case DevicePollPath:
 					_ = json.NewEncoder(w).Encode(DeviceTokenResponse{Token: "access-token"})

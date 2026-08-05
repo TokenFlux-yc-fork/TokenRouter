@@ -848,7 +848,6 @@ func TestAPIContracts(t *testing.T) {
 
 					service.SettingKeyOpsMonitoringEnabled:                               "false",
 					service.SettingKeyOpsRealtimeMonitoringEnabled:                       "true",
-					service.SettingKeyOpsQueryModeDefault:                                "auto",
 					service.SettingKeyOpsMetricsIntervalSeconds:                          "60",
 					service.SettingPaymentVisibleMethodAlipaySource:                      service.VisibleMethodSourceEasyPayAlipay,
 					service.SettingPaymentVisibleMethodWxpaySource:                       service.VisibleMethodSourceOfficialWechat,
@@ -953,7 +952,6 @@ func TestAPIContracts(t *testing.T) {
 						"google_oauth_frontend_redirect_url": "/auth/oauth/callback",
 						"ops_monitoring_enabled": false,
 						"ops_realtime_monitoring_enabled": true,
-						"ops_query_mode_default": "auto",
 						"ops_metrics_interval_seconds": 60,
 						"site_name": "Sub2API",
 						"site_logo": "",
@@ -1370,7 +1368,6 @@ func TestAPIContracts(t *testing.T) {
 					"identity_patch_prompt": "",
 					"ops_monitoring_enabled": false,
 					"ops_realtime_monitoring_enabled": true,
-					"ops_query_mode_default": "auto",
 					"ops_metrics_interval_seconds": 60,
 					"min_claude_code_version": "",
 					"max_claude_code_version": "",

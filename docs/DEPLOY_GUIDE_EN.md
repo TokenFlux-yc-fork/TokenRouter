@@ -1,6 +1,6 @@
-# TokenRouter Deployment Files
+# TokenRouter Deployment Guide
 
-This directory contains files for deploying TokenRouter on Linux servers and Apple-silicon Macs.
+This guide covers the files in [`deploy/`](../deploy/) for deploying TokenRouter on Linux servers and Apple-silicon Macs. The Chinese guide is available in [DEPLOY_GUIDE.md](./DEPLOY_GUIDE.md).
 
 ## Deployment Methods
 
@@ -14,20 +14,20 @@ This directory contains files for deploying TokenRouter on Linux servers and App
 
 | File | Description |
 |------|-------------|
-| `docker-compose.yml` | Docker Compose configuration (named volumes) |
-| `docker-compose.local.yml` | Docker Compose configuration (local directories, easy migration) |
-| `docker-deploy.sh` | **One-click Docker deployment script (recommended)** |
-| `apple-container.sh` | Native Apple `container` lifecycle script |
-| `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
-| `.env.example` | Container environment variables template |
-| `DOCKER.md` | Docker Hub documentation |
-| `install.sh` | One-click binary installation script |
-| `install-datamanagementd.sh` | datamanagementd 一键安装脚本 |
-| `sub2api.service` | Systemd service unit file |
-| `sub2api-datamanagementd.service` | datamanagementd systemd service unit file |
-| `DATAMANAGEMENTD_CN.md` | datamanagementd 部署与联动说明（中文） |
-| `config.example.yaml` | Example configuration file |
-| `EDGE_SECURITY.md` | Reverse proxy, CDN/WAF, trusted proxy, and ingress hardening guide |
+| [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) | Docker Compose configuration (named volumes) |
+| [`deploy/docker-compose.local.yml`](../deploy/docker-compose.local.yml) | Docker Compose configuration (local directories, easy migration) |
+| [`deploy/docker-deploy.sh`](../deploy/docker-deploy.sh) | **One-click Docker deployment script (recommended)** |
+| [`deploy/apple-container.sh`](../deploy/apple-container.sh) | Native Apple `container` lifecycle script |
+| [APPLE_CONTAINER.md](./APPLE_CONTAINER.md) | Apple `container` deployment and operations guide |
+| [`deploy/.env.example`](../deploy/.env.example) | Container environment variables template |
+| [DOCKER.md](./DOCKER.md) | Docker image documentation |
+| [`deploy/install.sh`](../deploy/install.sh) | One-click binary installation script |
+| [`deploy/install-datamanagementd.sh`](../deploy/install-datamanagementd.sh) | datamanagementd 一键安装脚本 |
+| [`deploy/sub2api.service`](../deploy/sub2api.service) | Systemd service unit file |
+| [`deploy/sub2api-datamanagementd.service`](../deploy/sub2api-datamanagementd.service) | datamanagementd systemd service unit file |
+| [DATAMANAGEMENTD_CN.md](./DATAMANAGEMENTD_CN.md) | datamanagementd 部署与联动说明（中文） |
+| [`deploy/config.example.yaml`](../deploy/config.example.yaml) | Example configuration file |
+| [EDGE_SECURITY.md](./EDGE_SECURITY.md) | Reverse proxy, CDN/WAF, trusted proxy, and ingress hardening guide |
 
 ---
 
@@ -176,7 +176,7 @@ SELECT
 
 - 主进程固定探测 `/tmp/sub2api-datamanagement.sock`
 - Docker 场景下需把宿主机 Socket 挂载到容器内同路径
-- 详细步骤见：`deploy/DATAMANAGEMENTD_CN.md`
+- 详细步骤见：[DATAMANAGEMENTD_CN.md](./DATAMANAGEMENTD_CN.md)
 
 ### Commands
 

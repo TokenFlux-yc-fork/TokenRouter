@@ -18,7 +18,6 @@
         :platform="platform"
         :group-id="groupId"
         :time-range="timeRange"
-        :query-mode="queryMode"
         :loading="loading"
         :last-updated="lastUpdated"
         :thresholds="metricThresholds"
@@ -31,7 +30,6 @@
         @update:time-range="onTimeRangeChange"
         @update:platform="onPlatformChange"
         @update:group="onGroupChange"
-        @update:query-mode="onQueryModeChange"
         @update:custom-time-range="onCustomTimeRangeChange"
         @refresh="fetchData"
         @open-request-details="handleOpenRequestDetails"
@@ -199,9 +197,6 @@ const opsEnabled = computed(() => adminSettingsStore.opsMonitoringEnabled)
 type TimeRange = '5m' | '30m' | '1h' | '6h' | '24h' | 'custom'
 const allowedTimeRanges = new Set<TimeRange>(['5m', '30m', '1h', '6h', '24h', 'custom'])
 
-type QueryMode = 'auto' | 'raw' | 'preagg'
-const allowedQueryModes = new Set<QueryMode>(['auto', 'raw', 'preagg'])
-
 const loading = ref(true)
 const hasLoadedOnce = ref(false)
 const errorMessage = ref('')
@@ -211,7 +206,6 @@ const timeRange = ref<TimeRange>('1h')
 const platform = ref<string>('')
 const groupId = ref<number | null>(null)
 const groups = ref<Array<{ id: number; name: string; platform: string }>>([])
-const queryMode = ref<QueryMode>('auto')
 const latencyBucketBoundaries = ref<number[]>(defaultLatencyBucketBoundaries())
 const invalidLatencyBoundsQuery = ref(false)
 const customStartTime = ref<string | null>(null)
@@ -224,7 +218,6 @@ const QUERY_KEYS = {
   timeRange: 'tr',
   platform: 'platform',
   groupId: 'group_id',
-  queryMode: 'mode',
   latencyBounds: 'latency_bounds',
   fullscreen: 'fullscreen',
 
@@ -314,14 +307,6 @@ const applyRouteQueryToState = () => {
   const groupIdRaw = readQueryNumber(QUERY_KEYS.groupId)
   groupId.value = typeof groupIdRaw === 'number' && groupIdRaw > 0 ? groupIdRaw : null
 
-  const nextMode = readQueryString(QUERY_KEYS.queryMode)
-  if (nextMode && allowedQueryModes.has(nextMode as QueryMode)) {
-    queryMode.value = nextMode as QueryMode
-  } else {
-    const fallback = adminSettingsStore.opsQueryModeDefault || 'auto'
-    queryMode.value = allowedQueryModes.has(fallback as QueryMode) ? (fallback as QueryMode) : 'auto'
-  }
-
   const rawLatencyBounds = readQueryString(QUERY_KEYS.latencyBounds)
   const parsedLatencyBounds = parseLatencyBucketBoundaries(rawLatencyBounds)
   invalidLatencyBoundsQuery.value = rawLatencyBounds !== '' && parsedLatencyBounds === null
@@ -356,7 +341,6 @@ const buildQueryFromState = () => {
   if (timeRange.value !== '1h') next[QUERY_KEYS.timeRange] = timeRange.value
   if (platform.value) next[QUERY_KEYS.platform] = platform.value
   if (typeof groupId.value === 'number' && groupId.value > 0) next[QUERY_KEYS.groupId] = String(groupId.value)
-  if (queryMode.value !== 'auto') next[QUERY_KEYS.queryMode] = queryMode.value
   if (!areDefaultLatencyBucketBoundaries(latencyBucketBoundaries.value)) {
     next[QUERY_KEYS.latencyBounds] = serializeLatencyBucketBoundaries(latencyBucketBoundaries.value)
   }
@@ -566,12 +550,6 @@ function onLatencyBucketBoundariesChange(values: number[]) {
   }
 }
 
-function onQueryModeChange(v: string | number | boolean | null) {
-  if (typeof v !== 'string') return
-  if (!allowedQueryModes.has(v as QueryMode)) return
-  queryMode.value = v as QueryMode
-}
-
 function openError(id: number) {
   selectedErrorId.value = id
   // Ensure only one modal visible at a time.
@@ -583,8 +561,7 @@ function openError(id: number) {
 function buildApiParams() {
   const params: any = {
     platform: platform.value || undefined,
-    group_id: groupId.value ?? undefined,
-    mode: queryMode.value
+    group_id: groupId.value ?? undefined
   }
 
   if (timeRange.value === 'custom') {
@@ -605,8 +582,7 @@ function buildApiParams() {
 function buildSwitchTrendParams() {
   const params: any = {
     platform: platform.value || undefined,
-    group_id: groupId.value ?? undefined,
-    mode: queryMode.value
+    group_id: groupId.value ?? undefined
   }
   const endTime = new Date()
   const startTime = new Date(endTime.getTime() - switchTrendWindowMs)
@@ -814,7 +790,7 @@ async function fetchData() {
 }
 
 watch(
-  () => [timeRange.value, platform.value, groupId.value, queryMode.value] as const,
+  () => [timeRange.value, platform.value, groupId.value] as const,
   () => {
     if (isApplyingRouteQuery.value) return
     if (opsEnabled.value) {
@@ -832,7 +808,6 @@ watch(
     const prevTimeRange = timeRange.value
     const prevPlatform = platform.value
     const prevGroupId = groupId.value
-    const prevQueryMode = queryMode.value
     const prevLatencyBounds = [...latencyBucketBoundaries.value]
 
     isApplyingRouteQuery.value = true
@@ -842,8 +817,7 @@ watch(
     const dashboardFiltersChanged =
       prevTimeRange !== timeRange.value ||
       prevPlatform !== platform.value ||
-      prevGroupId !== groupId.value ||
-      prevQueryMode !== queryMode.value
+      prevGroupId !== groupId.value
     const latencyBoundsChanged = !areLatencyBucketBoundariesEqual(prevLatencyBounds, latencyBucketBoundaries.value)
     if (dashboardFiltersChanged) {
       if (opsEnabled.value) {

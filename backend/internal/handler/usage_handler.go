@@ -482,7 +482,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 		return
 	}
 
-	stats, err := h.usageService.GetStatsWithFilters(c.Request.Context(), parsed.Filters)
+	stats, err := h.usageService.GetUserStatsWithFilters(c.Request.Context(), parsed.Filters)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

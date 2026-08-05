@@ -371,3 +371,18 @@ func (s *UsageService) GetStatsWithFilters(ctx context.Context, filters usagesta
 	}
 	return stats, nil
 }
+
+// GetUserStatsWithFilters 获取用户摘要，不执行响应中会被移除的上游端点和路径查询。
+func (s *UsageService) GetUserStatsWithFilters(ctx context.Context, filters usagestats.UsageLogFilters) (*usagestats.UsageStats, error) {
+	reader, ok := s.usageRepo.(interface {
+		GetUserStatsWithFilters(context.Context, usagestats.UsageLogFilters) (*usagestats.UsageStats, error)
+	})
+	if !ok {
+		return s.GetStatsWithFilters(ctx, filters)
+	}
+	stats, err := reader.GetUserStatsWithFilters(ctx, filters)
+	if err != nil {
+		return nil, fmt.Errorf("get user usage stats with filters: %w", err)
+	}
+	return stats, nil
+}

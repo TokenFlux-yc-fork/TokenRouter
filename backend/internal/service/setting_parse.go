@@ -199,7 +199,6 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		// Ops monitoring defaults (vNext)
 		SettingKeyOpsMonitoringEnabled:         "true",
 		SettingKeyOpsRealtimeMonitoringEnabled: "true",
-		SettingKeyOpsQueryModeDefault:          "auto",
 		SettingKeyOpsMetricsIntervalSeconds:    "60",
 
 		// Claude Code version check (default: empty = disabled)
@@ -784,7 +783,6 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	// Ops monitoring settings (default: enabled, fail-open)
 	result.OpsMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsMonitoringEnabled])
 	result.OpsRealtimeMonitoringEnabled = !isFalseSettingValue(settings[SettingKeyOpsRealtimeMonitoringEnabled])
-	result.OpsQueryModeDefault = string(ParseOpsQueryMode(settings[SettingKeyOpsQueryModeDefault]))
 	result.OpsMetricsIntervalSeconds = 60
 	if raw := strings.TrimSpace(settings[SettingKeyOpsMetricsIntervalSeconds]); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil {

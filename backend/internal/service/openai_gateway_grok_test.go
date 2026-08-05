@@ -672,6 +672,9 @@ func TestForwardGrokResponsesCompactRoundTrip(t *testing.T) {
 	require.Equal(t, "resp_grok_compact", result.ResponseID)
 	require.Equal(t, 12, result.Usage.InputTokens)
 	require.Equal(t, 5, result.Usage.OutputTokens)
+	require.Equal(t, "grok", result.BillingModel)
+	require.Equal(t, grokDefaultResponsesModel, result.UpstreamModel)
+	require.Equal(t, grokDefaultResponsesModel, gjson.GetBytes(upstream.lastBody, "model").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
 	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(upstream.lastBody, "include.0").String())
@@ -1035,6 +1038,7 @@ func TestForwardGrokMediaAppliesAccountModelMappingAfterEndpointNormalization(t 
 		body             string
 		modelMapping     map[string]any
 		wantRequestModel string
+		wantBillingModel string
 		wantUpstream     string
 		wantBody         string
 		responseBody     string
@@ -1046,6 +1050,7 @@ func TestForwardGrokMediaAppliesAccountModelMappingAfterEndpointNormalization(t 
 			body:             `{"model":"grok-imagine","prompt":"draw a cat"}`,
 			modelMapping:     map[string]any{"grok-imagine-image-quality": "vendor-image-model"},
 			wantRequestModel: "grok-imagine-image-quality",
+			wantBillingModel: "vendor-image-model",
 			wantUpstream:     "vendor-image-model",
 			wantBody:         `{"model":"vendor-image-model","prompt":"draw a cat"}`,
 			responseBody:     `{"data":[{"url":"https://images.test/mapped.png"}]}`,
@@ -1057,6 +1062,7 @@ func TestForwardGrokMediaAppliesAccountModelMappingAfterEndpointNormalization(t 
 			body:             `{"model":"grok-imagine-video-1.5","prompt":"waves"}`,
 			modelMapping:     map[string]any{"grok-imagine-video": "grok-image-video"},
 			wantRequestModel: "grok-imagine-video",
+			wantBillingModel: "grok-image-video",
 			wantUpstream:     "grok-image-video",
 			wantBody:         `{"model":"grok-image-video","prompt":"waves"}`,
 			responseBody:     `{"request_id":"video-request-mapped"}`,
@@ -1068,6 +1074,7 @@ func TestForwardGrokMediaAppliesAccountModelMappingAfterEndpointNormalization(t 
 			body:             `{"model":"grok-imagine-video-1.5","prompt":"animate","image":{"url":"https://example.com/input.png"}}`,
 			modelMapping:     map[string]any{"grok-imagine-video-1.5": "vendor-image-video"},
 			wantRequestModel: "grok-imagine-video-1.5",
+			wantBillingModel: "vendor-image-video",
 			wantUpstream:     "vendor-image-video",
 			wantBody:         `{"model":"vendor-image-video","prompt":"animate","image":{"url":"https://example.com/input.png"}}`,
 			responseBody:     `{"request_id":"image-video-request-mapped"}`,
@@ -1079,6 +1086,7 @@ func TestForwardGrokMediaAppliesAccountModelMappingAfterEndpointNormalization(t 
 			body:             `{"model":"grok-imagine","prompt":"draw","size":"1024x1024"}`,
 			modelMapping:     map[string]any{"grok-imagine-image-quality": "vendor-image-model"},
 			wantRequestModel: "grok-imagine-image-quality",
+			wantBillingModel: "vendor-image-model",
 			wantUpstream:     "vendor-image-model",
 			wantBody:         `{"model":"vendor-image-model","prompt":"draw"}`,
 			responseBody:     `{"data":[{"url":"https://images.test/mapped.png"}]}`,
@@ -1090,9 +1098,22 @@ func TestForwardGrokMediaAppliesAccountModelMappingAfterEndpointNormalization(t 
 			body:             `{"model":"grok-imagine","prompt":"draw"}`,
 			modelMapping:     map[string]any{"grok-imagine-image-quality": "   "},
 			wantRequestModel: "grok-imagine-image-quality",
+			wantBillingModel: "grok-imagine-image-quality",
 			wantUpstream:     "grok-imagine-image-quality",
 			wantBody:         `{"model":"grok-imagine-image-quality","prompt":"draw"}`,
 			responseBody:     `{"data":[{"url":"https://images.test/mapped.png"}]}`,
+		},
+		{
+			name:             "account mapping target continues through builtin normalization",
+			endpoint:         GrokMediaEndpointImagesGenerations,
+			path:             "/v1/images/generations",
+			body:             `{"model":"grok-imagine","prompt":"draw"}`,
+			modelMapping:     map[string]any{"grok-imagine-image-quality": "grok-build"},
+			wantRequestModel: "grok-imagine-image-quality",
+			wantBillingModel: "grok-build",
+			wantUpstream:     "grok-build-0.1",
+			wantBody:         `{"model":"grok-build-0.1","prompt":"draw"}`,
+			responseBody:     `{"data":[{"url":"https://images.test/normalized.png"}]}`,
 		},
 	}
 
@@ -1127,7 +1148,7 @@ func TestForwardGrokMediaAppliesAccountModelMappingAfterEndpointNormalization(t 
 			require.NoError(t, err)
 			require.JSONEq(t, tt.wantBody, string(upstream.lastBody))
 			require.Equal(t, tt.wantRequestModel, result.Model)
-			require.Equal(t, tt.wantRequestModel, result.BillingModel)
+			require.Equal(t, tt.wantBillingModel, result.BillingModel)
 			require.Equal(t, tt.wantUpstream, result.UpstreamModel)
 		})
 	}
@@ -1223,7 +1244,7 @@ func TestForwardGrokMediaImagesEditMultipartConvertsToJSON(t *testing.T) {
 	require.Equal(t, "edit this private image", gjson.GetBytes(upstream.lastBody, "prompt").String())
 	require.True(t, strings.HasPrefix(gjson.GetBytes(upstream.lastBody, "image.url").String(), "data:image/png;base64,"))
 	require.False(t, gjson.GetBytes(upstream.lastBody, "image.image_url").Exists())
-	require.Equal(t, "grok-imagine-edit", result.BillingModel)
+	require.Equal(t, "vendor-image-edit", result.BillingModel)
 	require.Equal(t, "vendor-image-edit", result.UpstreamModel)
 }
 
@@ -1442,7 +1463,7 @@ func TestForwardGrokMediaVideoMutationEndpoints(t *testing.T) {
 			require.Equal(t, "video-mutation-123", result.ResponseID)
 			require.Equal(t, 1, result.VideoCount)
 			require.Equal(t, 6, result.VideoDurationSeconds)
-			require.Equal(t, "grok-imagine-video", result.BillingModel)
+			require.Equal(t, "vendor-video-mutation", result.BillingModel)
 			require.Equal(t, "vendor-video-mutation", result.UpstreamModel)
 		})
 	}
@@ -2606,6 +2627,7 @@ func TestForwardAsAnthropicForGrokUsesXAIResponses(t *testing.T) {
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.NotContains(t, string(upstream.lastBody), "chatgpt.com")
 	require.Equal(t, "grok", result.Model)
+	require.Equal(t, "grok", result.BillingModel)
 	require.Equal(t, "grok-4.5", result.UpstreamModel)
 	require.Equal(t, 5, result.Usage.InputTokens)
 	require.Equal(t, 2, result.Usage.OutputTokens)

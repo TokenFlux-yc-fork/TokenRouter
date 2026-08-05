@@ -149,10 +149,12 @@ func TestModelMarketplaceQoderDefaultAliasesWithoutManualPricingRemainUnknown(t 
 	svc := NewModelMarketplaceService(nil, nil, nil, billingService, nil, nil, nil)
 	group := &Group{ID: 1, Platform: PlatformQoder, RateMultiplier: 1.25}
 
-	pricing := svc.getPublicModelDisplayPricing(context.Background(), group, "auto", nil)
-
-	if pricing.PricingMode != "unknown" || pricing.PriceStatus != "unpriced" {
-		t.Fatalf("Qoder default alias pricing = (%q, %q), want unknown/unpriced", pricing.PricingMode, pricing.PriceStatus)
+	// 正式公开名和 raw route 都不能从通用模型价格推断计费。
+	for _, model := range []string{"auto", "qwen3.8-max", "qmodel_38max"} {
+		pricing := svc.getPublicModelDisplayPricing(context.Background(), group, model, nil)
+		if pricing.PricingMode != "unknown" || pricing.PriceStatus != "unpriced" {
+			t.Fatalf("Qoder model %s pricing = (%q, %q), want unknown/unpriced", model, pricing.PricingMode, pricing.PriceStatus)
+		}
 	}
 }
 

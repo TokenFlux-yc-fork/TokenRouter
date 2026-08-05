@@ -758,11 +758,6 @@ export default {
         closed: '实时已关闭',
         reconnectIn: '重连 {seconds}s'
       },
-      queryMode: {
-        auto: 'Auto（自动）',
-        raw: 'Raw（不聚合）',
-        preagg: 'Preagg（聚合）'
-      },
       accountAvailability: {
         available: '可用',
         unavailable: '不可用',

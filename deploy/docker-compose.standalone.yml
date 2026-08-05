@@ -54,6 +54,7 @@ services:
       - RUN_MODE=${RUN_MODE:-standard}
       - GOMEMLIMIT=${GOMEMLIMIT:-8GiB}
       - UPDATE_GITHUB_TOKEN=${UPDATE_GITHUB_TOKEN:-}
+      - ALIPAY_MOBILE_PRECREATE_DEEP_LINK=${ALIPAY_MOBILE_PRECREATE_DEEP_LINK:-}
 
       # =======================================================================
       # Database Configuration (PostgreSQL) - Required
@@ -99,6 +100,11 @@ services:
       - SETUP_MIGRATION_TIMEOUT_SECONDS=${SETUP_MIGRATION_TIMEOUT_SECONDS:-0}
 
       # =======================================================================
+      # TOTP（双因素认证）配置
+      # =======================================================================
+      - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:-}
+
+      # =======================================================================
       # Timezone Configuration
       # =======================================================================
       - TZ=${TZ:-Asia/Shanghai}
@@ -116,6 +122,19 @@ services:
       - GEMINI_CLI_OAUTH_CLIENT_SECRET=${GEMINI_CLI_OAUTH_CLIENT_SECRET:-}
       - ANTIGRAVITY_OAUTH_CLIENT_SECRET=${ANTIGRAVITY_OAUTH_CLIENT_SECRET:-}
       - ANTIGRAVITY_USER_AGENT_VERSION=${ANTIGRAVITY_USER_AGENT_VERSION:-}
+
+      # =======================================================================
+      # URL 白名单安全配置
+      # =======================================================================
+      - SECURITY_URL_ALLOWLIST_ENABLED=${SECURITY_URL_ALLOWLIST_ENABLED:-false}
+      - SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=${SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP:-true}
+      - SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=${SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS:-true}
+      - SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=${SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS:-}
+
+      # =======================================================================
+      # 在线更新代理配置
+      # =======================================================================
+      - UPDATE_PROXY_URL=${UPDATE_PROXY_URL:-}
 
       # =======================================================================
       # Image Generation Stream & Concurrency
